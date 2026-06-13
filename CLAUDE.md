@@ -65,13 +65,34 @@ SoA primitive component arrays the canonical state and keeps that state device-r
 
 ## Build / run (aorus)
 Java 21 + TornadoVM 4.0.1-dev PTX backend, same environment as v1's `-gpu` path
-(`$TORNADOVM_HOME`, `@tornado-argfile`, `--enable-preview`, `-g`). Concrete build/run commands to be
-filled in once the first kernel exists (increment 1).
+(`$TORNADOVM_HOME`, `@tornado-argfile`, `--enable-preview`, `-g`). Sources live in the `softbox/`
+package. Two helper scripts:
+
+```
+./build.sh                 # javac -g --release 21 --enable-preview, tornado-api on the classpath
+./run_gpu.sh [N [M_trans]] # java @tornado-argfile … softbox.DiffusionHarness   (FDT validation)
+```
+
+The increment-1 entry point is `softbox.DiffusionHarness` (free-rod diffusion harness + FDT check).
+Two TornadoVM gotchas, both load-bearing (see JOURNAL 2026-06-13 inc 1): a kernel method may **not**
+be named `kernel` (collides with an OpenCL/PTX token); and these RNG-/trig-heavy kernels need an
+explicit `WorkerGrid1D` localWork = 64 via a `GridScheduler` keyed `"<graph>.<task>"`, else the
+default block size overflows the register file → CUDA 701 (LAUNCH_OUT_OF_RESOURCES). TornadoVM's
+`task()` tops out at 15 args, which is why each vector quantity is one planar-SoA buffer rather than
+three per-component arrays (see the FilamentStore layout note + JOURNAL).
 
 ## Documentation conventions
 Same as v1: `CLAUDE.md` = cross-session context (this file); `JOURNAL.md` = terse, newest-first,
 what-was-done / what-was-learned / what's-open. Do not archive JOURNAL entries autonomously.
 
 ## Status
-Increment 0 (scaffold) complete. Next: increment 1 (filament slice) — the planner designs the
-component-array layout + system list before implementation begins.
+Increment 1 (filament rigid-rod overdamped Langevin slice) complete and **FDT-validated** on the
+aorus RTX 5070: a single free rod's measured translational (per body axis) and rotational diffusion
+match the Einstein prediction D = kT/γ from the same drag tensors the kernel used, within 5%
+(−2.5% / −1.2% / +0.1% / −1.8%). The SoA `FilamentStore` + four named systems (`DragTensorSystem`,
+`BrownianForceSystem`, `RigidRodLangevinIntegrationSystem`, `DerivedGeometrySystem`) stand as the
+SoA-canonical core, with inert integer chain-topology arrays ready for increment 2. See JOURNAL
+2026-06-13 (inc 1) for the layout, the force-coverage audit, the γ code-fidelity diff, and numbers.
+
+Next: increment 2 (actin chain / bending-force system) — starts reading the inert
+`end1Nbr*/end2Nbr*` topology without reshaping its storage.
