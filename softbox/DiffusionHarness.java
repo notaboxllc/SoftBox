@@ -44,21 +44,27 @@ public final class DiffusionHarness {
     // MOVE_KERNEL_BLOCK_SIZE (GPUMoveThing.java:985).
     static final int BLOCK_SIZE = 64;
     static GridScheduler sched;
+    // chain-coefficient overrides for sign/behavior diagnosis (NaN = use v1 default)
+    static double fracROverride = Double.NaN, fmtOverride = Double.NaN;
 
     public static void main(String[] args) {
         // parse flags: "-3js <dir>" (free-rod viz), "-chain <dir>" (free Brownian chain, inc 2a);
         // remaining args are positional N [M].
         String jsDir = null, chainDir = null;
+        double dt = Constants.deltaT;   // overridable with "-dt <seconds>" (chain run)
         java.util.List<String> pos = new java.util.ArrayList<>();
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("-3js")) { jsDir = args[++i]; }
             else if (args[i].equals("-chain")) { chainDir = args[++i]; }
+            else if (args[i].equals("-dt")) { dt = Double.parseDouble(args[++i]); }
+            else if (args[i].equals("-fracR")) { fracROverride = Double.parseDouble(args[++i]); }
+            else if (args[i].equals("-fmt")) { fmtOverride = Double.parseDouble(args[++i]); }
             else pos.add(args[i]);
         }
         if (chainDir != null) {
             int nSeg = pos.size() >= 1 ? Integer.parseInt(pos.get(0)) : 16;
             int chainM = pos.size() >= 2 ? Integer.parseInt(pos.get(1)) : 40000;
-            runChain(chainDir, nSeg, chainM);
+            runChain(chainDir, nSeg, chainM, dt);
             return;
         }
         if (jsDir != null) {
@@ -163,12 +169,12 @@ public final class DiffusionHarness {
      * deflection assay (deferred to 2b). Validates connectivity via the joint-continuity
      * gap + frame output for the visual gate.
      */
-    private static void runChain(String dir, int nSeg, int chainM) {
+    private static void runChain(String dir, int nSeg, int chainM, double dt) {
         int cad = Math.max(1, chainM / 200);
         double L = (MONOMER_CT + 1) * Constants.actinMonoRadius;   // segLength (microns)
         System.out.println("=== Soft Box increment 2a — free Brownian filament chain ===");
         System.out.printf("nSeg=%d, monomerCt=%d, segLen=%.4f um, M=%d, cadence=%d, dt=%.1e s%n",
-                nSeg, MONOMER_CT, L, chainM, cad, Constants.deltaT);
+                nSeg, MONOMER_CT, L, chainM, cad, dt);
 
         FilamentStore s = new FilamentStore(nSeg);
         double spacing = L;
@@ -179,14 +185,24 @@ public final class DiffusionHarness {
             s.setYVec(k, 0f, 1f, 0f);
             s.setCoord(k, (float) (x0 + k * spacing), 0f, 0f);
             s.brownTransScale.set(k, 1.0f);
-            s.brownRotScale.set(k, 1.0f);
+            // Rotational Brownian ONLY on chain-end segments (>=1 free end), matching v1:
+            //   rScale = (filAtEnd1 && filAtEnd2) ? 0 : rs  ("only apply brownian torques to end
+            //   filaments.. best matches expected angular correlations"). Kicking interior segments
+            //   rotationally makes adjacent joints zigzag -> a jagged, non-smooth bend.
+            boolean interior = (k > 0 && k < nSeg - 1);
+            s.brownRotScale.set(k, interior ? 0f : 1f);
             // wire topology (no storage reshape): my end2 -> next.end1 (side 0); my end1 -> prev.end2 (side 1)
             if (k < nSeg - 1) { s.end2NbrSlot.set(k, k + 1); s.end2NbrSide.set(k, 0); }
             if (k > 0)        { s.end1NbrSlot.set(k, k - 1); s.end1NbrSide.set(k, 1); }
         }
         DragTensorSystem.run(s);    // segLength + drag (topology already wired -> filAtEnd correct)
-        s.setParams(Constants.deltaT, Constants.brownianForceMag());
+        s.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt));   // brownianForceMag = sqrt(2kT/dt)
         s.setChainParams();
+        s.chainParams.set(0, (float) dt);   // override chain dt with the requested timestep
+        if (!Double.isNaN(fracROverride)) s.chainParams.set(2, (float) fracROverride);
+        if (!Double.isNaN(fmtOverride))   s.chainParams.set(3, (float) fmtOverride);
+        System.out.printf("  chain coeffs: fracMove=%.4g fracR=%.4g fracMoveTorq=%.4g%n",
+                s.chainParams.get(1), s.chainParams.get(2), s.chainParams.get(3));
 
         // --- side-decode code check (must match v1 FilSegment.setEnd*Links) ---
         boolean sideOK = true;
@@ -205,9 +221,11 @@ public final class DiffusionHarness {
         double maxGap = 0;     // max over interior joints, over the whole run
         boolean nan = false;
         java.util.List<Double> meanGaps = new java.util.ArrayList<>();   // per-frame mean joint gap (stationarity)
+        double bendSumSq = 0; int bendCnt = 0;   // bending stiffness: RMS adjacent-segment angle (equilibrated)
         fw.writeFrame(s, 0.0);
 
         TornadoExecutionResult res = null;
+        int frame = 0;
         for (int step = 0; step < chainM; step++) {
             s.counts.set(1, step);
             res = plan.withGridScheduler(sched).execute();
@@ -216,9 +234,14 @@ public final class DiffusionHarness {
                 if (hasNaN(s, nSeg)) { nan = true; break; }
                 maxGap = Math.max(maxGap, jointGap(s, nSeg, L, true));
                 meanGaps.add(jointGap(s, nSeg, L, false));
-                fw.writeFrame(s, (step + 1) * Constants.deltaT);
+                frame++;
+                if (frame > (chainM / cad) / 4) {   // skip straight->equilibrium transient
+                    for (int k = 0; k < nSeg - 1; k++) { double a = bendAngleDeg(s, k); bendSumSq += a * a; bendCnt++; }
+                }
+                fw.writeFrame(s, (step + 1) * dt);
             }
         }
+        double bendRms = bendCnt > 0 ? Math.sqrt(bendSumSq / bendCnt) : 0;
 
         // Stationarity: late-window mean gap must not exceed the post-transient middle window
         // (a slow detachment grows; a healthy thermal joint is stationary). Skip the first quarter
@@ -233,8 +256,10 @@ public final class DiffusionHarness {
 
         System.out.printf("  joint-continuity gap: max=%.5f um  mean(mid->late)=%.5f->%.5f um  (eq breathing ~%.4f; 0.5*segLen=%.4f)%n",
                 maxGap, midMean, lateMean, Constants.actinMonoRadius, 0.5 * L);
-        System.out.printf("  end-to-end=%.3f um / contour=%.3f um (ratio %.2f: <1 bends, >0 not collapsed => semiflexible)%n",
+        System.out.printf("  end-to-end=%.3f um / contour=%.3f um (ratio %.3f: higher=stiffer)%n",
                 e2e, contour, e2e / contour);
+        System.out.printf("  STIFFNESS: RMS adjacent-segment bend angle = %.2f deg  (higher=softer; WLC Lp=15um => %.2f)%n",
+                bendRms, Math.toDegrees(Math.sqrt(2 * L / 15.0)));
         System.out.println("  NaN: " + nan + " ;  segment count conserved: " + s.n + " == " + nSeg
                 + " ;  gap bounded<0.5segLen: " + boundedGap + " ;  stationary: " + stationary);
         System.out.printf("wrote %d frames to %s%n", fw.framesWritten(), fw.dir());
@@ -278,6 +303,13 @@ public final class DiffusionHarness {
             sum += d;
         }
         return max ? mx : (nSeg > 1 ? sum / (nSeg - 1) : 0);
+    }
+
+    /** Angle (deg) between segment k's and k+1's long axes (uVec). Bigger => softer filament. */
+    private static double bendAngleDeg(FilamentStore s, int k) {
+        double d = s.uVecX(k) * s.uVecX(k + 1) + s.uVecY(k) * s.uVecY(k + 1) + s.uVecZ(k) * s.uVecZ(k + 1);
+        if (d > 1) d = 1; if (d < -1) d = -1;
+        return Math.toDegrees(Math.acos(d));
     }
 
     private static boolean hasNaN(FilamentStore s, int nSeg) {

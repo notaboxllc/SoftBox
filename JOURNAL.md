@@ -2,6 +2,29 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 — Increment 2a FIX: smooth bend (interior rotational Brownian)
+jba reported the chain bent with a visually "not smooth" awkwardness. Root cause: the harness set
+`brownRotScale = 1` for **every** segment, so interior segments each got an independent rotational
+Brownian kick — rotating segment k+1 opens joint k and closes joint k+1, making **adjacent joints
+bend in opposite directions (zigzag)**. v1 deliberately gates this: `rScale = (filAtEnd1 &&
+filAtEnd2) ? 0 : rs` ("only apply brownian torques to end filaments.. best matches expected angular
+correlations"). Fix: rotational Brownian only on chain-end segments (≥1 free end); interior segments
+reorient only via the deterministic chain torques responding to (collective, smooth) translational
+Brownian. Objective confirmation — adjacent-joint bend-vector correlation: **−0.157 (zigzag) →
++0.652 (smooth arc)**; bend RMS 9.6°→3.5°, end-to-end/contour 0.984→0.992; connectivity still PASS,
+FDT free-rod path unchanged. (The 3.5° vs WLC 8.76° gap is a Brownian-magnitude/fracMoveTorq
+**calibration** matter for 2b, not a 2a smoothness/connectivity concern.)
+
+Also added diagnostics this session: `-dt <s>`, `-fracR <v>`, `-fmt <v>` overrides and an RMS-bend
+stiffness readout. Sign audit (prompted by jba): the F3 lever (end2 `+uVec`, end1 `−uVec`) and F4
+torsion (both ends) in `ChainBendingForceSystem` are **byte-identical to v1's device
+`chainPairForcesKernel`** (and agree with v1 CPU) — no porting sign error. Sweeps: decreasing
+fracMoveTorq softens (19.9°@0.05 → 7.7°@0.6) as expected (F4 restoring, confirmed); fracR has a weak,
+non-monotonic effect on free-chain bending (min near 0.4) — note this is the opposite of "increasing
+fracR softens"; v1's own Env.java comment says "bigger numbers are stiffer", so flag for jba whether
+v1's fracR convention is intended (its calibrated role is the pinned deflection test = 2b, not the
+free thermal chain).
+
 ## 2026-06-13 — Increment 2a: linked filament chain (connectivity first) — PASS
 Activated the inert `end1Nbr*/end2Nbr*` topology (no storage reshape) and ported v1's real PAIRS
 chain force law. A free Brownian chain holds together as a connected, semiflexible filament.
