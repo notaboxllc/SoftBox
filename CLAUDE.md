@@ -73,6 +73,20 @@ package. Two helper scripts:
 ./run_gpu.sh [N [M_trans]] # java @tornado-argfile … softbox.DiffusionHarness   (FDT validation)
 ```
 
+**Watch the rods (inc 1.5, file-based Three.js playback).** `-3js <dir>` dumps per-frame JSON in the
+v1 viewer's schema; off by default, the FDT path is byte-for-byte unaffected.
+
+```
+./view_run.sh [N [M]]      # dump a small viz run (default N=200, M=20000) to threejs_output/
+python3 sim_server.py 8000 # serve from ~/Code/SoftBox; then open
+                           #   http://localhost:8000/sim_viewer_boa.html  (Recent picker, newest)
+```
+
+`sim_server.py` + `sim_viewer_boa.html` are copied **verbatim** from v1 (do not fork/modify the
+viewer). `softbox/FrameWriter.java` emits `segments` only (no myosins/minifilaments/nodes — deferred
+to the planner pre-motors); it reads the already-pulled host pose, adds no device sync, and is gated
+behind `-3js`. Frame output (`threejs_output*/`) is gitignored.
+
 The increment-1 entry point is `softbox.DiffusionHarness` (free-rod diffusion harness + FDT check).
 Two TornadoVM gotchas, both load-bearing (see JOURNAL 2026-06-13 inc 1): a kernel method may **not**
 be named `kernel` (collides with an OpenCL/PTX token); and these RNG-/trig-heavy kernels need an

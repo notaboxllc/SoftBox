@@ -2,6 +2,38 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 — Increment 1.5: file-based Three.js frame output (watch the rods)
+Output-only — get eyes on the sim before chain/bending. Ported v1 `ThreeJSWriter`'s `segments`
+emission into `softbox/FrameWriter.java` (a host IO utility, not a device system) and reuse the v1
+viewer + server **verbatim** (`sim_server.py`, `sim_viewer_boa.html` copied unchanged, md5 confirmed).
+
+- **Schema** (`segments` only, per constraint): `{"frame":N,"t":T,"bounds":{xDim,yDim,zDim},
+  "segments":[{"id","end1":[x,y,z],"end2":[x,y,z],"r","notADPRatio":1.0,"cofilinCount":0}]}`,
+  files `frame_%06d.json`, output-dir auto-increment (`.NNN`) ported from v1. Verified in the viewer
+  JS that `myosins`/`minifilaments`/`nodes`/`contractility` are all `if(...)`-guarded and `bounds` is
+  optional — a segments-only frame renders with **no viewer modification** (no empty arrays needed).
+  `r = actinWidth/2 = 0.0035 µm` (Constants.radius), as v1. Per-segment JSON is one method so a future
+  generic "bodies+links" schema is a localized swap (deferred to the planner, pre-motors).
+- **end1/end2** are the derived geometry (end1 = coord − L/2·uVec, end2 = coord + L/2·uVec — same
+  formula as `DerivedGeometrySystem`). FrameWriter reconstructs them on the host from the
+  already-pulled canonical pose (coord+uVec) + segLength, so the output path adds **no device
+  transfer** beyond the harness's existing output-cadence `coord/uVec` `UNDER_DEMAND` pull.
+- **Bounds:** fixed cube, side = 2·(clusterHalf + 5·√(2·D∥·T_total)) — sized to ~5σ of the expected
+  diffusive spread over the run; framing only, not physics (free rods have no walls). Viewer builds
+  the box from frame 0.
+- **Wiring:** `-3js <dir>` flag in `DiffusionHarness`. Present → a dedicated viz run (default N=200 in
+  a compact 0.3-µm cluster, random orientations, both Brownian components ON at bare amplitude),
+  frames written at the existing output-cadence pull. **Absent → FDT path byte-for-byte unchanged**:
+  re-ran `./run_gpu.sh`, got the identical inc-1 numbers (−2.52 / −1.15 / +0.08 / −1.80 %, PASS).
+- **Verified render-ready:** `./view_run.sh 200 4000` → 201 frames, 0 non-finite coords across
+  241 200 values, segment length 0.1755 µm, midpoint spread grew isotropically 0.17→0.32 µm std
+  (anisotropy 1.05); the magnitude matches FDT (effective isotropic D≈0.088 µm²/s ⇒ predicted final
+  std 0.317 vs measured ~0.32). `sim_server.py scan_runs` detects the folder (201 frames). Frame
+  output is gitignored (`threejs_output*/`).
+
+Open / next: increment 2 (actin chain / bending forces) — unchanged from inc-1's note. The generic-vs-
+per-type frame schema decision is deferred to the planner, before motors land.
+
 ## 2026-06-13 — Increment 1: filament rigid-rod overdamped Langevin slice — FDT PASS
 First real code. `softbox/` package: SoA component-array core + four named systems as TornadoVM PTX
 kernels, validated against the fluctuation–dissipation (Einstein) relation on the aorus RTX 5070.

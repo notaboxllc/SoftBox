@@ -2,3 +2,6 @@
 libs/
 RUN_LOGS/
 *.jar
+threejs_output*/
+source.zip
+__pycache__/

@@ -46,8 +46,22 @@ public final class DiffusionHarness {
     static GridScheduler sched;
 
     public static void main(String[] args) {
-        if (args.length >= 1) N = Integer.parseInt(args[0]);
-        if (args.length >= 2) { M_TRANS = Integer.parseInt(args[1]); M_ROT = M_TRANS / 5; }
+        // parse optional "-3js <dir>" (frame-dump viz mode); remaining args are positional N [M].
+        String jsDir = null;
+        java.util.List<String> pos = new java.util.ArrayList<>();
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("-3js")) { jsDir = args[++i]; }
+            else pos.add(args[i]);
+        }
+        if (jsDir != null) {
+            int vizN = pos.size() >= 1 ? Integer.parseInt(pos.get(0)) : 200;
+            int vizM = pos.size() >= 2 ? Integer.parseInt(pos.get(1)) : 20000;
+            runViz(jsDir, vizN, vizM);
+            return;
+        }
+        // --- FDT path: byte-for-byte unchanged from inc 1 when -3js is absent ---
+        if (pos.size() >= 1) N = Integer.parseInt(pos.get(0));
+        if (pos.size() >= 2) { M_TRANS = Integer.parseInt(pos.get(1)); M_ROT = M_TRANS / 5; }
 
         System.out.println("=== Soft Box increment 1 — filament rigid-rod Langevin FDT validation ===");
         System.out.printf("N=%d rods, monomerCt=%d, dt=%.1e s, aeta=%.3g Pa-s, kT=%.4e J%n",
@@ -98,6 +112,74 @@ public final class DiffusionHarness {
 
         ImmutableTaskGraph itg = tg.snapshot();
         return new TornadoExecutionPlan(itg);
+    }
+
+    // ----------------------------------------------------------------- viz (frame dump)
+    /**
+     * Viz run (increment 1.5): low rod count in a compact cluster, both Brownian
+     * components ON (bare FDT amplitude), frames written at output cadence for the v1
+     * viewer. Separate from the FDT validation; reuses the same device graph + the
+     * existing output-cadence UNDER_DEMAND pose pull (no new sync, no per-step pull).
+     */
+    private static void runViz(String dir, int vizN, int vizM) {
+        int cad = Math.max(1, vizM / 200);   // aim for ~200 frames
+        System.out.println("=== Soft Box increment 1.5 — Three.js frame dump (viz run) ===");
+        System.out.printf("N=%d rods, M=%d steps, cadence=%d, dt=%.1e s%n",
+                vizN, vizM, cad, Constants.deltaT);
+
+        FilamentStore s = new FilamentStore(vizN);
+        java.util.Random rng = new java.util.Random(20260613L);
+        final double clusterHalf = 0.3;   // microns — compact starting cluster
+        for (int i = 0; i < vizN; i++) {
+            s.monomerCount.set(i, MONOMER_CT);
+            // random unit uVec (uniform on sphere)
+            double z = 2 * rng.nextDouble() - 1, phi = 2 * Math.PI * rng.nextDouble();
+            double rr = Math.sqrt(Math.max(0.0, 1 - z * z));
+            double ux = rr * Math.cos(phi), uy = rr * Math.sin(phi), uz = z;
+            // yVec: any unit vector perpendicular to uVec
+            double ax, ay, az;
+            if (Math.abs(uz) < 0.9) { ax = 0; ay = 0; az = 1; } else { ax = 1; ay = 0; az = 0; }
+            double dot = ax * ux + ay * uy + az * uz;
+            double yx = ax - dot * ux, yy = ay - dot * uy, yz = az - dot * uz;
+            double yn = Math.sqrt(yx * yx + yy * yy + yz * yz);
+            yx /= yn; yy /= yn; yz /= yn;
+            s.setUVec(i, (float) ux, (float) uy, (float) uz);
+            s.setYVec(i, (float) yx, (float) yy, (float) yz);
+            s.setCoord(i,
+                    (float) ((rng.nextDouble() - 0.5) * 2 * clusterHalf),
+                    (float) ((rng.nextDouble() - 0.5) * 2 * clusterHalf),
+                    (float) ((rng.nextDouble() - 0.5) * 2 * clusterHalf));
+            s.brownTransScale.set(i, 1.0f);
+            s.brownRotScale.set(i, 1.0f);
+        }
+        DragTensorSystem.run(s);
+        s.setParams(Constants.deltaT, Constants.brownianForceMag());
+
+        // View box: FIXED, sized to ~5 sigma of the expected diffusive spread over the run.
+        // Framing only (no walls; not physics). The viewer builds the box from frame 0.
+        double Dpar = DragTensorSystem.fdtPrediction(s, 0)[0] * 1e12;   // um^2/s
+        double rms = Math.sqrt(2 * Dpar * vizM * Constants.deltaT);
+        double dim = 2 * (clusterHalf + 5 * rms);
+        System.out.printf("  view box %.3g um cube (clusterHalf %.2f + 5*sqrt(2 Dpar T) %.2f); framing only%n",
+                dim, clusterHalf, 5 * rms);
+
+        TornadoExecutionPlan plan = buildPlan(s);
+        s.setCounts(0, 4242);
+        FrameWriter fw = new FrameWriter(dir, dim, dim, dim);
+
+        fw.writeFrame(s, 0.0);   // frame 0 = initial pose (host already holds coord/uVec)
+        TornadoExecutionResult res = null;
+        for (int step = 0; step < vizM; step++) {
+            s.counts.set(1, step);
+            res = plan.withGridScheduler(sched).execute();
+            if ((step + 1) % cad == 0) {
+                res.transferToHost(s.coord, s.uVec);   // existing output-cadence pull
+                fw.writeFrame(s, (step + 1) * Constants.deltaT);
+            }
+        }
+        System.out.printf("wrote %d frames to %s%n", fw.framesWritten(), fw.dir());
+        System.out.println("view: cd ~/Code/SoftBox && python3 sim_server.py 8000");
+        System.out.println("then open http://localhost:8000/sim_viewer_boa.html  (Recent picker -> newest)");
     }
 
     private static FilamentStore freshStore(double transScale, double rotScale) {
