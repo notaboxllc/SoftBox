@@ -1,0 +1,4 @@
+*.class
+libs/
+RUN_LOGS/
+*.jar
