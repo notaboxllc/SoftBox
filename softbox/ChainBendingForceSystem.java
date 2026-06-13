@@ -71,6 +71,37 @@ public final class ChainBendingForceSystem {
         return y;
     }
 
+    // Stable arcsin via Taylor seed + Newton (PTX has no Math.asin/atan2). Accurate for
+    // s in [0, ~0.71]. Seed: asin(s) = s + s^3/6 + 3s^5/40 + 15s^7/336 + ...
+    private static double accurateAsin(double s) {
+        double s2 = s * s;
+        double y = s * (1.0 + s2 * (0.16666666666666666 + s2 * (0.075 + s2 * 0.044642857142857)));
+        double cy = Math.cos(y);
+        if (cy > 1.0e-12) y = y + (s - Math.sin(y)) / cy;
+        cy = Math.cos(y);
+        if (cy > 1.0e-12) y = y + (s - Math.sin(y)) / cy;
+        return y;
+    }
+
+    /**
+     * Angle between two unit vectors from sin^2 (=|cross|^2) and cos (=dot), float32-stable
+     * for SMALL angles. acos(dot) loses ~half the digits near dot=1 (cos t = 1 - t^2/2 -> the
+     * angle is the cancelling 1-dot part); |cross| = sin t ~ t is first-order and keeps full
+     * precision. Use asin(|cross|) in the small-angle regime (|cross| <= |dot|, i.e. t<=45 or
+     * >=135 deg) and accurateAcos(dot) mid-range (where dot is well-conditioned). This is a v2
+     * numerical-robustness improvement over v1's plain acos — mathematically the same angle,
+     * needed for stiff filaments (microtubules: per-joint angles ~100x smaller than actin).
+     */
+    static double angleFromSinCos(double sin2, double cos) {
+        double s = Math.sqrt(sin2);
+        double ac = (cos < 0.0) ? -cos : cos;
+        if (s <= ac) {
+            double base = accurateAsin(s);
+            return (cos >= 0.0) ? base : (Math.PI - base);
+        }
+        return accurateAcos(cos);
+    }
+
     public static void chainForces(
             FloatArray coord,
             FloatArray uVec,
@@ -191,7 +222,7 @@ public final class ChainBendingForceSystem {
                     tvx *= invMag; tvy *= invMag; tvz *= invMag;
                     double dotV = ux * nuxE + uy * nuyE + uz * nuzE;
                     if (dotV > 1.0) dotV = 1.0; if (dotV < -1.0) dotV = -1.0;
-                    double angTween = accurateAcos(dotV) * RAD2DEG;
+                    double angTween = angleFromSinCos(tvMag2, dotV) * RAD2DEG;
                     double torsionMag;
                     if (filTorqSpringActive > 0.5) {
                         torsionMag = fracMoveTorq * filTorqSpring * angTween;
@@ -277,7 +308,7 @@ public final class ChainBendingForceSystem {
                     tvx *= invMag; tvy *= invMag; tvz *= invMag;
                     double dotV = mux * nuxE + muy * nuyE + muz * nuzE;
                     if (dotV > 1.0) dotV = 1.0; if (dotV < -1.0) dotV = -1.0;
-                    double angTween = accurateAcos(dotV) * RAD2DEG;
+                    double angTween = angleFromSinCos(tvMag2, dotV) * RAD2DEG;
                     double torsionMag;
                     if (filTorqSpringActive > 0.5) {
                         torsionMag = fracMoveTorq * filTorqSpring * angTween;

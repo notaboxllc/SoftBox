@@ -8,6 +8,8 @@ import uk.ac.manchester.tornado.api.TornadoExecutionResult;
 import uk.ac.manchester.tornado.api.WorkerGrid;
 import uk.ac.manchester.tornado.api.WorkerGrid1D;
 import uk.ac.manchester.tornado.api.enums.DataTransferMode;
+import uk.ac.manchester.tornado.api.types.arrays.FloatArray;
+import uk.ac.manchester.tornado.api.types.arrays.IntArray;
 
 /**
  * Increment-1 diffusion harness + FDT (Einstein) validation.
@@ -46,6 +48,7 @@ public final class DiffusionHarness {
     static GridScheduler sched;
     // chain-coefficient overrides for sign/behavior diagnosis (NaN = use v1 default)
     static double fracROverride = Double.NaN, fmtOverride = Double.NaN;
+    static boolean deflect = false;
 
     public static void main(String[] args) {
         // parse flags: "-3js <dir>" (free-rod viz), "-chain <dir>" (free Brownian chain, inc 2a);
@@ -59,7 +62,14 @@ public final class DiffusionHarness {
             else if (args[i].equals("-dt")) { dt = Double.parseDouble(args[++i]); }
             else if (args[i].equals("-fracR")) { fracROverride = Double.parseDouble(args[++i]); }
             else if (args[i].equals("-fmt")) { fmtOverride = Double.parseDouble(args[++i]); }
+            else if (args[i].equals("-deflect")) { deflect = true; }
             else pos.add(args[i]);
+        }
+        if (deflect) {
+            int nSeg = pos.size() >= 1 ? Integer.parseInt(pos.get(0)) : 11;   // v1 benchmarkNSegs
+            int defM = pos.size() >= 2 ? Integer.parseInt(pos.get(1)) : 60000;
+            runDeflection(nSeg, defM, dt);
+            return;
         }
         if (chainDir != null) {
             int nSeg = pos.size() >= 1 ? Integer.parseInt(pos.get(0)) : 16;
@@ -126,6 +136,125 @@ public final class DiffusionHarness {
 
         ImmutableTaskGraph itg = tg.snapshot();
         return new TornadoExecutionPlan(itg);
+    }
+
+    // ----------------------------------------------------------------- deflection (v1 compare)
+    // tiny side-channel arrays for the two pins (created per run)
+    static IntArray   pinSeg, pinEnd;
+    static FloatArray pinAnchor;
+
+    /** Per-step deflection graph: seed(extForce load) -> chain -> integrate -> pin -> derived.
+     *  No Brownian (deflection chain is Brownian-off in v1). Matches v1's loop order. */
+    private static TornadoExecutionPlan buildDeflectionPlan(FilamentStore s) {
+        TaskGraph tg = new TaskGraph("deflect")
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION,
+                    s.coord, s.uVec, s.yVec, s.zVec, s.end1, s.end2, s.segLength,
+                    s.extForce, s.forceSum, s.torqueSum, s.randForce, s.randTorque,
+                    s.bTransGam, s.bRotGam, s.params, s.chainParams,
+                    s.end1NbrSlot, s.end1NbrSide, s.end2NbrSlot, s.end2NbrSide,
+                    pinSeg, pinEnd, pinAnchor)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, s.counts)
+            .task("seed", DeflectionSupport::seedAccumulators, s.forceSum, s.torqueSum, s.extForce, s.counts)
+            .task("chain", ChainBendingForceSystem::chainForces,
+                    s.coord, s.uVec, s.segLength, s.end2NbrSlot, s.end2NbrSide,
+                    s.end1NbrSlot, s.end1NbrSide, s.bTransGam, s.bRotGam,
+                    s.forceSum, s.torqueSum, s.chainParams, s.counts)
+            .task("integrate", RigidRodLangevinIntegrationSystem::integrate,
+                    s.coord, s.uVec, s.yVec, s.forceSum, s.torqueSum,
+                    s.randForce, s.randTorque, s.bTransGam, s.bRotGam, s.params, s.counts)
+            .task("pin", DeflectionSupport::pinEndpoints,
+                    s.coord, s.uVec, s.segLength, pinSeg, pinEnd, pinAnchor, s.counts)
+            .task("derived", DerivedGeometrySystem::derive,
+                    s.coord, s.uVec, s.yVec, s.zVec, s.end1, s.end2, s.segLength, s.counts)
+            .transferToHost(DataTransferMode.UNDER_DEMAND, s.coord, s.uVec, s.yVec, s.zVec, s.end1, s.end2);
+
+        int lw = Math.min(BLOCK_SIZE, s.n);
+        sched = new GridScheduler();
+        for (String t : new String[]{"seed", "chain", "integrate", "derived"}) {
+            WorkerGrid w = new WorkerGrid1D(s.n); w.setLocalWork(lw, 1, 1);
+            sched.addWorkerGrid("deflect." + t, w);
+        }
+        WorkerGrid wp = new WorkerGrid1D(pinSeg.getSize()); wp.setLocalWork(pinSeg.getSize(), 1, 1);
+        sched.addWorkerGrid("deflect.pin", wp);
+        return new TornadoExecutionPlan(tg.snapshot());
+    }
+
+    /**
+     * Deflection benchmark replicating v1's -bmDiag setup EXACTLY (BoxOfActin / FilSegment
+     * makeBenchmarkChain + applyBenchmarkPins): nSeg segments of stdSegLength monomers,
+     * straight along x centered, end2->next.end1 wired, ends pinned (free rotation),
+     * Brownian OFF, transverse load F=48*EI*frac/span^2 on the midpoint segment's center.
+     * Measures obs = perpendicular distance of the midpoint center from the anchor line;
+     * ratio = obs / (frac*span). v1 gives ratio≈0.998 at fracR=0.1; this lets us compare
+     * v2's deflection directly to v1's (a strong identical-physics check).
+     */
+    private static void runDeflection(int nSeg, int defM, double dt) {
+        final int monomerCt = Constants.stdSegLength;        // 32, matching v1 benchmark
+        final double frac = 0.01;                            // benchmarkForceFrac
+        double segLen = (monomerCt + 1) * Constants.actinMonoRadius;   // microns (=0.0891)
+        double totalLen = nSeg * segLen;                     // span (microns)
+        double spanM = totalLen * 1.0e-6;
+        double forceN = 48.0 * Constants.EI * frac / (spanM * spanM);
+        double analyticDefl = frac * totalLen;               // microns (= frac*span)
+        int mid = nSeg / 2;
+
+        System.out.println("=== Soft Box deflection benchmark (replicating v1 -bmDiag) ===");
+        System.out.printf("nSeg=%d, monomerCt=%d, segLen=%.4f um, span=%.4f um, EI=%.4e, F=%.4e N, analyticDefl=%.6f um%n",
+                nSeg, monomerCt, segLen, totalLen, Constants.EI, forceN, analyticDefl);
+
+        FilamentStore s = new FilamentStore(nSeg);
+        double x0 = -0.5 * totalLen + 0.5 * segLen;          // center of seg 0
+        for (int k = 0; k < nSeg; k++) {
+            s.monomerCount.set(k, monomerCt);
+            s.setUVec(k, 1f, 0f, 0f);
+            s.setYVec(k, 0f, 1f, 0f);
+            s.setCoord(k, (float) (x0 + k * segLen), 0f, 0f);
+            s.brownTransScale.set(k, 0f);   // Brownian OFF (deflection chain)
+            s.brownRotScale.set(k, 0f);
+            if (k < nSeg - 1) { s.end2NbrSlot.set(k, k + 1); s.end2NbrSide.set(k, 0); }
+            if (k > 0)        { s.end1NbrSlot.set(k, k - 1); s.end1NbrSide.set(k, 1); }
+        }
+        DragTensorSystem.run(s);
+        s.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt));
+        s.setChainParams();
+        s.chainParams.set(0, (float) dt);
+        if (!Double.isNaN(fracROverride)) s.chainParams.set(2, (float) fracROverride);
+        if (!Double.isNaN(fmtOverride))   s.chainParams.set(3, (float) fmtOverride);
+        System.out.printf("  coeffs: fracMove=%.4g fracR=%.4g fracMoveTorq=%.4g%n",
+                s.chainParams.get(1), s.chainParams.get(2), s.chainParams.get(3));
+
+        // external load on the midpoint segment center: (0, -forceN, 0)
+        s.extForce.set(s.planeY(mid), (float) (-forceN));
+
+        // pins: seg0.end1 -> anchor1 (=(-span/2,0,0)); seg(last).end2 -> anchor2 (=(+span/2,0,0))
+        pinSeg = IntArray.fromElements(0, nSeg - 1);
+        pinEnd = IntArray.fromElements(1, 2);
+        pinAnchor = FloatArray.fromElements(
+                (float) (-0.5 * totalLen), 0f, 0f,
+                (float) ( 0.5 * totalLen), 0f, 0f);
+
+        TornadoExecutionPlan plan = buildDeflectionPlan(s);
+        s.setCounts(0, 1);
+
+        TornadoExecutionResult res = null;
+        int half = defM / 2, stride = 2;     // average/jitter over the converged 2nd half
+        double sum = 0, sumsq = 0, mn = 1e30, mx = -1e30; int cnt = 0;
+        for (int step = 0; step < defM; step++) {
+            s.counts.set(1, step);
+            res = plan.withGridScheduler(sched).execute();
+            if (step + 1 > half && (step + 1) % stride == 0) {
+                res.transferToHost(s.coord);
+                double obs = Math.sqrt(s.coordY(mid) * s.coordY(mid) + s.coordZ(mid) * s.coordZ(mid));
+                sum += obs; sumsq += obs * obs; cnt++;
+                if (obs < mn) mn = obs; if (obs > mx) mx = obs;
+            }
+        }
+        double mean = sum / cnt, var = sumsq / cnt - mean * mean;
+        double std = var > 0 ? Math.sqrt(var) : 0;
+        System.out.printf("=== v2 deflection (avg over %d samples, 2nd half): obs=%.6f +/- %.6f um  (min=%.6f max=%.6f, jitter=%.2f%% pk-pk)%n",
+                cnt, mean, std, mn, mx, 100 * (mx - mn) / mean);
+        System.out.printf("    mean ratio=%.5f +/- %.5f   (analyticDefl=%.6f um) ===%n",
+                mean / analyticDefl, std / analyticDefl, analyticDefl);
     }
 
     // ----------------------------------------------------------------- chain (inc 2a)

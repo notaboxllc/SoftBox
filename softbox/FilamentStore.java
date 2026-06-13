@@ -49,6 +49,9 @@ public final class FilamentStore {
     public final FloatArray bTransDiff;  // = kT / bTransGam   (Einstein)
     public final FloatArray bRotDiff;    // = kT / bRotGam
 
+    // ---- External load (deflection test only; planar 3N, init 0; seeds forceSum) ----
+    public final FloatArray extForce;
+
     // ---- Per-step accumulators, planar 3N ----
     public final FloatArray forceSum;    // deterministic lab-frame force (zeroed each step)
     public final FloatArray torqueSum;   // deterministic lab-frame torque
@@ -95,6 +98,7 @@ public final class FilamentStore {
         bTransDiff = new FloatArray(3 * n);
         bRotDiff   = new FloatArray(3 * n);
 
+        extForce   = new FloatArray(3 * n);
         forceSum   = new FloatArray(3 * n);
         torqueSum  = new FloatArray(3 * n);
         randForce  = new FloatArray(3 * n);
@@ -113,6 +117,7 @@ public final class FilamentStore {
         chainParams = new FloatArray(7);
 
         // zero the accumulators explicitly (free rod: forceSum/torqueSum stay zero)
+        extForce.init(0f);
         forceSum.init(0f);
         torqueSum.init(0f);
         randForce.init(0f);

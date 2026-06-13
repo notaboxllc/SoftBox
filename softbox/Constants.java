@@ -41,6 +41,10 @@ public final class Constants {
     // --- segment defaults ---
     public static final int stdSegLength = 32;         // monomers/segment (Env.java:574)
 
+    // --- wormlike-chain bending (Env.java:572-573): EI = kT*Lp ---
+    public static final double persistenceLength = 15.0;          // microns (Env.java:572)
+    public static final double EI = kT * (persistenceLength * 1.0e-6);  // N*m^2 (SI)
+
     // --- empirical rod-drag fit constants (dimensionless) FilSegment.java:89-91 ---
     public static final double aParallel = -0.20;
     public static final double aOrthog   =  0.84;

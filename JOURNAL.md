@@ -2,6 +2,56 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 — Deflection benchmark: v2 ≡ v1 force/torque coding (+ low-fracR float32 fix)
+Validated the 2a chain force law against v1's deflection benchmark, settled a fracR-direction
+puzzle, and found+fixed a float32 precision limit at very low fracR (stiff filaments). This is the
+foundation of 2b (pins + load); the full ratio/τ/LP fixture is still 2b.
+
+**Setup (replicates v1 -bmDiag exactly).** `softbox/DeflectionSupport.java` (seedAccumulators puts the
+load on the midpoint forceSum; pinEndpoints does v1's `incCoord(anchor-endpoint)` hard endpoint
+snap-back each step -> pinned-pinned, free rotation) + `runDeflection` (-deflect flag). 11 seg ×
+32-mon (segLen 0.0891 µm, span 0.9801), Brownian off, F = 48·EI·frac/span² on the midpoint center,
+EI = kT·Lp (Constants.EI, Lp=15 µm), frac=0.01. v1 built read-only to /tmp/v1classes (worktree never
+touched). Measured obs = perpendicular distance of the midpoint center from the anchor line, averaged
+over the converged 2nd half (jitter quantified — both v1 and v2 are steady, ≤1.3% pk-pk at default
+coeffs; jitter is parameter-dependent in general).
+
+**fracR direction — RESOLVED: bigger fracR = softer (jba was right).** v1 deflection ratio rises
+0.392→0.998→2.190→2.777 as fracR 0.025→0.1→0.4→0.8 (the loaded benchmark; v1's Env.java:135 "bigger
+= stiffer" comment is misleading). The earlier free-chain sweep looked flat/opposite ONLY because
+interior rotational Brownian (the 2a-FIX bug) swamped the fracR signal; post-fix the free chain
+softens with fracR too (v2 3.50°@0.1 → 6.23°@0.8), matching v1's free LP chain (2.71°→9.83°). No sign
+error — fracR enters only via the (byte-identical) F3 lever torque; in a *free* chain its effect is
+weak (link forces are tiny without a load), strong under *load*.
+
+**Identical-coding proof + low-fracR float32 limit + fix.** v2 reproduces v1's deflection ratio:
+| fracR | v1 | v2 acos(dot) | v2 asin(\|cross\|) poly |
+|---|---|---|---|
+| 0.025 | 0.39198 | 0.40038 (2.1%) | **0.39184 (0.04%)** |
+| 0.1 | 0.99842 | 0.99986 (0.14%) | **0.99831 (0.01%)** |
+| 0.4 | 2.19003 | 2.19046 (0.02%) | **2.18990 (0.006%)** |
+| 0.8 | 2.77652 | 2.77681 (0.01%) | **2.77639 (0.005%)** |
+With the original `acos(dot)` bending-angle calc, v2 matched v1 to ≤0.14% for fracR≥0.1 but drifted
+to 2.1% at fracR=0.025 — a real, converged gap growing as fracR→0. Root cause: **float32 catastrophic
+cancellation in acos(dot)** for small joint angles (cos t = 1 − t²/2, so the angle lives in the
+cancelling 1−dot part; ~half the digits lost). Fix (`ChainBendingForceSystem.angleFromSinCos`):
+recover the angle from `|cross| = sin t ~ t` (first-order, float32-safe) via a hand-rolled
+`accurateAsin` (Taylor seed + 2 Newton passes — PTX has no Math.asin/atan2, same reason v1 hand-rolled
+accurateAcos; verified Math.atan2 throws "unimplemented" on the PTX backend). Hybrid: asin(|cross|)
+for small angles (|cross|≤|dot|), accurateAcos(dot) mid-range. Result: low-fracR gap 2.1%→**0.04%**,
+and it tightened every other point + killed the residual jitter. So the force/torque CODING is
+identical to v1 (≤0.04% across the loaded range); the prior low-fracR drift was float32, now mitigated.
+
+**Why it matters going forward (jba):** stiff filaments — microtubules (Lp ~ 1–6 mm, ~100× actin) —
+live in the small-joint-angle regime where acos(dot) float32 breaks down. The asin-polynomial keeps
+the angle accurate ~100s× stiffer before float32 bites, without going to a full double-precision
+pose. Kept as the default (a v2 numerical-robustness improvement over v1's plain acos; mathematically
+the same angle). Free-chain connectivity + FDT re-verified PASS after the change.
+
+Open / next: ready to move on to the **next BoA→SoftBox port**. Still-open 2b items: the full
+deflection ratio/τ + LP/persistence-length fixture, and the `BRotCoeff=0.5` end-segment rotational
+Brownian calibration (v2 currently uses 1.0).
+
 ## 2026-06-13 — Increment 2a FIX: smooth bend (interior rotational Brownian)
 jba reported the chain bent with a visually "not smooth" awkwardness. Root cause: the harness set
 `brownRotScale = 1` for **every** segment, so interior segments each got an independent rotational

@@ -112,6 +112,12 @@ Increment 1 (rigid-rod Langevin slice) FDT-validated; 1.5 (Three.js frame output
   filament (max joint gap 0.069 µm bounded+stationary; end-to-end/contour 0.98). TaskGraph: zero →
   brownian + chain → integrate → derived. No pins, no applied force, no ratio/τ. FDT path unchanged.
   See JOURNAL 2026-06-13 (inc 2a).
-- **2b — NEXT.** Pins + midpoint applied force + the deflection ratio/τ (and LP/persistence-length)
-  fixture, layered on the already-correct 2a chain force law. The deflection-benchmark calibration
-  (`fracMove`/`fracR`/`fracMoveTorq` carry over) is gated here, not in 2a.
+- **2a chain force law cross-validated against v1's deflection benchmark** (`-deflect`,
+  `softbox/DeflectionSupport.java`): v2 reproduces v1's deflection ratio to ≤0.04% across fracR
+  (0.025→0.8), proving the F3/F4 force+torque coding is identical. Confirmed bigger fracR = softer.
+  Found+fixed a float32 limit at very low fracR (stiff filaments): the bending angle now uses
+  `asin(|cross|)` (hand-rolled `accurateAsin` poly) instead of `acos(dot)` to dodge small-angle
+  cancellation — important for microtubules (Lp~mm). See JOURNAL 2026-06-13 (deflection benchmark).
+- **2b — NEXT.** The full deflection ratio/τ + LP/persistence-length *fixture* (the `-deflect` harness
+  is its foundation), plus the `BRotCoeff=0.5` end-segment rotational-Brownian calibration (v2 uses
+  1.0 now). `fracMove`/`fracR`/`fracMoveTorq` carry over.
