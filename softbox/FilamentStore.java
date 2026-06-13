@@ -70,6 +70,11 @@ public final class FilamentStore {
     public final FloatArray params;
     // counts (int):   [0]=n, [1]=stepCount, [2]=runSeed
     public final IntArray   counts;
+    // chainParams (float, inc 2a): [0]=dt [1]=fracMove [2]=fracR [3]=fracMoveTorq
+    //   [4]=filTorqSpringActive(0/1) [5]=filTorqSpring [6]=actinMonoRadius. Allocated
+    //   always (tiny); only referenced by the chain TaskGraph, so the FDT path is
+    //   unaffected. NOT a topology reshape — the end*Nbr* arrays are unchanged.
+    public final FloatArray chainParams;
 
     public static final int SENTINEL_NO_NBR = -1;
 
@@ -105,6 +110,7 @@ public final class FilamentStore {
 
         params = new FloatArray(2);
         counts = new IntArray(3);
+        chainParams = new FloatArray(7);
 
         // zero the accumulators explicitly (free rod: forceSum/torqueSum stay zero)
         forceSum.init(0f);
@@ -154,5 +160,17 @@ public final class FilamentStore {
         counts.set(0, n);
         counts.set(1, stepCount);
         counts.set(2, runSeed);
+    }
+
+    /** v1 deflection defaults (FilSegment/Env): fracMove=0.5, fracR=0.1, fracMoveTorq=0.265,
+     *  filTorqSpring inactive (damped F4 branch). Carries continuously into 2b. */
+    public void setChainParams() {
+        chainParams.set(0, (float) Constants.deltaT);
+        chainParams.set(1, 0.5f);     // fracMove
+        chainParams.set(2, 0.1f);     // fracR
+        chainParams.set(3, 0.265f);   // fracMoveTorq
+        chainParams.set(4, 0.0f);     // filTorqSpring inactive -> damped torsion branch
+        chainParams.set(5, 1.0e-20f); // filTorqSpring (unused while inactive)
+        chainParams.set(6, (float) Constants.actinMonoRadius);
     }
 }

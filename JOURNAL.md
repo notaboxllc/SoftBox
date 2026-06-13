@@ -2,6 +2,58 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 — Increment 2a: linked filament chain (connectivity first) — PASS
+Activated the inert `end1Nbr*/end2Nbr*` topology (no storage reshape) and ported v1's real PAIRS
+chain force law. A free Brownian chain holds together as a connected, semiflexible filament.
+**Deflection assay (ratio/τ) and persistence length are deliberately deferred to 2b** — this increment
+gates only on connectivity (visual + joint-gap), not calibration.
+
+- **Force law ported:** v1 **device** kernel `GPUMoveThing.chainPairForcesKernel`
+  (`GPUMoveThing.java:1551-1896`) — F3 link spring + F4 bending/torsion — into
+  `softbox/ChainBendingForceSystem.java`, cross-checked against the CPU reference
+  `FilSegment.addLinkForces`/`addTorsionSpringForces`. Ported the device version because it is
+  already the per-segment, self-write, read-only-neighbor, NO-atomic kernel: each joint is computed
+  from both segments' perspectives, **owner = lower slot index** defines the canonical link direction
+  so the two are exactly anti-parallel (Newton-3); each segment applies +F (owner) / −F (non-owner)
+  to its OWN slot only. `accurateAcos` ported verbatim. Internals double (as v1), pose read float,
+  forceSum written float. Lab-frame forces → forceSum/torqueSum; integration transforms lab→body.
+- **Side decode (the A1 trap) — mapping + verification.** `end?NbrSide==0` → my end glued to
+  neighbor's **end1** (tip = ncoord − L/2·nu); `==1` → neighbor's **end2** (+L/2·nu). Matches v1
+  `FilSegment.setEnd*Links:2818-2832`. Chain wired head-to-tail: my end2→next.end1 (side 0), my
+  end1→prev.end2 (side 1), sentinel −1 at the two free ends. Verified THREE ways: (1) code-level check
+  of the wired side values vs v1's derivation (OK); (2) runtime joint-continuity gap stays bounded;
+  (3) **negative control** — deliberately flipping the side flags makes the gap diverge to 0.20 µm
+  (>0.5·segLen) and the chain collapse (end-to-end/contour 0.16), which the test correctly FAILS. So
+  the bounded PASS is meaningful, not trivial.
+- **TaskGraph order:** `zero accumulators → brownian + chain (fill; independent/self-only writes) →
+  integrate (reads forceSum+randForce) → derived (refreshes end1/end2 for next step's chain reads)`.
+  Chain forces at step N read step-(N−1) derived geometry, as in v1. `zeroAccumulators` is a new first
+  task (forceSum/torqueSum are now written, so they must be cleared each step).
+- **Force-coverage audit** (each force applied exactly once):
+  | source | frame | path | applied |
+  |---|---|---|---|
+  | Brownian randForce/randTorque | body | BrownianForceSystem writes → integration reads | once |
+  | F3 link spring | lab | ChainBendingForceSystem self-write `+=` → integration reads | once / joint / segment |
+  | F4 bending/torsion | lab | same | once / joint / segment |
+  Action-reaction: for a joint (i,j), both threads compute the SAME owner-perspective `linkUVec` from
+  the same geometry, so segment i gets +F and j gets −F (equal-and-opposite); each writes only its own
+  slot → no atomics, no double-count. F4 torsion likewise (+/− across the pair by the side-consistent
+  cross products).
+- **Validation (16-segment free chain, monomerCt=64, segLen 0.1755 µm, 40 000 steps, fracMove=0.5,
+  fracR=0.1, fracMoveTorq=0.265, aeta=0.1, filTorqSpring inactive → damped F4):** side-decode OK; max
+  joint-continuity gap **0.0685 µm**, bounded (<0.5·segLen=0.0878) and **stationary** (mean
+  0.0223→0.0238 µm, no growth over 4 s); no NaN; segment count conserved. The equilibrium joint
+  "breathing" is ~0.022 µm thermal (≈8× actinMonoRadius — actinMonoRadius is just the spring's
+  link-point offset, not the thermal amplitude). **Visually connected + semiflexible.** Bonus sign:
+  end-to-end/contour = 0.98, matching the wormlike-chain value for L=2.8 µm at Lp=15 µm (v1's
+  persistence length) — bending stiffness already in the right regime, though calibration is 2b's job.
+- FDT free-rod path (inc 1) re-verified **unchanged** (−2.52/−1.15/+0.08/−1.80 %, PASS). Adding
+  `chainParams` to FilamentStore is additive (not in the FDT graph). `view_run.sh`-style watch:
+  `./run_gpu.sh -chain <dir> [nSeg [M]]` dumps frames + reports the gap; `threejs_chain*/` gitignored.
+
+Open / next: increment **2b** — pins + midpoint force + the deflection ratio/τ (and LP) fixture, layered
+on this already-correct chain force law.
+
 ## 2026-06-13 — Increment 1.5: file-based Three.js frame output (watch the rods)
 Output-only — get eyes on the sim before chain/bending. Ported v1 `ThreeJSWriter`'s `segments`
 emission into `softbox/FrameWriter.java` (a host IO utility, not a device system) and reuse the v1

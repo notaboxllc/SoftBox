@@ -3,5 +3,6 @@ libs/
 RUN_LOGS/
 *.jar
 threejs_output*/
+threejs_chain*/
 source.zip
 __pycache__/

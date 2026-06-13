@@ -77,7 +77,9 @@ package. Two helper scripts:
 v1 viewer's schema; off by default, the FDT path is byte-for-byte unaffected.
 
 ```
-./view_run.sh [N [M]]      # dump a small viz run (default N=200, M=20000) to threejs_output/
+./view_run.sh [N [M]]      # dump a small free-rod viz run (default N=200, M=20000) to threejs_output/
+./run_gpu.sh -chain <dir> [nSeg [M]]   # inc 2a: free Brownian filament chain (default 16 seg, 40000)
+                                       #   dumps frames to <dir> + reports the joint-continuity gap
 python3 sim_server.py 8000 # serve from ~/Code/SoftBox; then open
                            #   http://localhost:8000/sim_viewer_boa.html  (Recent picker, newest)
 ```
@@ -100,13 +102,16 @@ Same as v1: `CLAUDE.md` = cross-session context (this file); `JOURNAL.md` = ters
 what-was-done / what-was-learned / what's-open. Do not archive JOURNAL entries autonomously.
 
 ## Status
-Increment 1 (filament rigid-rod overdamped Langevin slice) complete and **FDT-validated** on the
-aorus RTX 5070: a single free rod's measured translational (per body axis) and rotational diffusion
-match the Einstein prediction D = kT/γ from the same drag tensors the kernel used, within 5%
-(−2.5% / −1.2% / +0.1% / −1.8%). The SoA `FilamentStore` + four named systems (`DragTensorSystem`,
-`BrownianForceSystem`, `RigidRodLangevinIntegrationSystem`, `DerivedGeometrySystem`) stand as the
-SoA-canonical core, with inert integer chain-topology arrays ready for increment 2. See JOURNAL
-2026-06-13 (inc 1) for the layout, the force-coverage audit, the γ code-fidelity diff, and numbers.
+Increment 1 (rigid-rod Langevin slice) FDT-validated; 1.5 (Three.js frame output) done.
 
-Next: increment 2 (actin chain / bending-force system) — starts reading the inert
-`end1Nbr*/end2Nbr*` topology without reshaping its storage.
+**Increment 2 is split into 2a (connectivity) and 2b (deflection assay):**
+- **2a — DONE.** `ChainBendingForceSystem` ports v1's PAIRS chain force law (F3 link spring + F4
+  bending/torsion) from the device `chainPairForcesKernel`; the inert `end1Nbr*/end2Nbr*` topology is
+  now actively + correctly read (side decode verified by code check, bounded joint-gap, and a
+  negative control). A free Brownian 16-segment chain holds together as a connected, semiflexible
+  filament (max joint gap 0.069 µm bounded+stationary; end-to-end/contour 0.98). TaskGraph: zero →
+  brownian + chain → integrate → derived. No pins, no applied force, no ratio/τ. FDT path unchanged.
+  See JOURNAL 2026-06-13 (inc 2a).
+- **2b — NEXT.** Pins + midpoint applied force + the deflection ratio/τ (and LP/persistence-length)
+  fixture, layered on the already-correct 2a chain force law. The deflection-benchmark calibration
+  (`fracMove`/`fracR`/`fracMoveTorq` carry over) is gated here, not in 2a.
