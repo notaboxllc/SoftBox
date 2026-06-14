@@ -39,6 +39,14 @@ SoA primitive component arrays the canonical state and keeps that state device-r
   source of truth.
 - **Do NOT build extensibility yet** (no plugin loader, no component registry). First reproduce the
   physics; generalization is a later phase.
+- **One physics implementation; device-agnostic systems.** Each system is written once as a kernel
+  method over the SoA arrays. The GPU TaskGraph is the production path; the *same* system methods
+  run sequentially on the CPU (plain Java, no TaskGraph) as a debugging/validation runner —
+  identical arithmetic, identical RNG. **Never hand-write a CPU or double-precision reimplementation
+  of a system's physics** — that recreates v1's two-sources-of-truth drift. CPU execution = the same
+  code on a different runner. Stay single-precision; fix float problems with better algorithms (cf.
+  the `asin(|cross|)` bending angle), not a parallel double path. One-off double checks for a
+  specific diagnosis are fine if thrown away.
 
 ## Porting discipline (per v1 GPU_MIGRATION_LESSONS.md)
 - **Force-coverage audit** for every ported subsystem: every force applied on exactly one path —
@@ -72,6 +80,21 @@ package. Two helper scripts:
 ./build.sh                 # javac -g --release 21 --enable-preview, tornado-api on the classpath
 ./run_gpu.sh [N [M_trans]] # java @tornado-argfile … softbox.DiffusionHarness   (FDT validation)
 ```
+
+**CPU validation runner (`-cpu`).** Any harness mode accepts `-cpu`, which runs the *same* system
+methods sequentially over the host SoA arrays — no TaskGraph, no device transfers (the `@Parallel`
+loops execute as plain Java for-loops when called directly). This is the device-agnostic invariant
+made executable: one physics implementation, two runners. It is a debug/triage instrument for
+increment 3+ (physics-logic bug vs PTX-lowering bug), not a production path. Append `-cpu` to any
+invocation:
+```
+./run_gpu.sh -cpu                  # FDT on the CPU runner
+./run_gpu.sh -deflect -cpu         # static deflection ratio on the CPU runner
+./run_gpu.sh -chain <dir> -cpu     # free chain / connectivity on the CPU runner
+```
+GPU≡CPU agreement (validated): FDT D's bit-identical to printed precision; deflection ratio
+0.99831(GPU)/0.99832(CPU); chain joint-gap/end-to-end/bend-RMS bit-identical — all within float32
+last-bit tolerance (see JOURNAL 2026-06-13, CPU validation runner).
 
 **Characterize a filament (inc 2b, manual tuning).** One command → `{deflection ratio, τ_meas/τ_theo,
 Lp_meas}` for the current coefficients (override `-fracR <v>`/`-fmt <v>`; BRotCoeff via Constants):
@@ -136,5 +159,14 @@ Increment 1 (rigid-rod Langevin slice) FDT-validated; 1.5 (Three.js frame output
   **auto-tune coefficient-search loop was deliberately NOT ported** (left in v1; planner decision).
   See JOURNAL 2026-06-13 (inc 2b) + fixtures/.
 
-Increment 2 (chain physics + manual-tuning instrument) is complete. **Next: increment 3 — spatial grid
-+ broad-phase** (entity-agnostic, anticipating surfaces/membranes).
+Increment 2 (chain physics + manual-tuning instrument) is complete.
+
+**Pre-3 interlude — DONE.** CPU validation runner (`-cpu`): a sequential runner that calls the same
+system methods in the same per-step order over the host SoA arrays, no TaskGraph. Audit confirmed
+every system body (Brownian / integrate / derived / chain / drag-init + the deflection seed/pin
+support kernels) was already dispatch-agnostic — plain methods over `FloatArray`/`IntArray`, zero
+TaskGraph/WorkerGrid/DataTransferMode references in any kernel body; **no refactor needed**. GPU≡CPU
+on FDT / static ratio / connectivity within float32 last-bit tolerance. A CPU reference is now in hand
+for triaging increment-3 broad-phase bugs as physics-logic vs PTX-lowering. See JOURNAL 2026-06-13.
+
+**Next: increment 3 — spatial grid + broad-phase** (entity-agnostic, anticipating surfaces/membranes).

@@ -49,6 +49,10 @@ public final class DiffusionHarness {
     // chain-coefficient overrides for sign/behavior diagnosis (NaN = use v1 default)
     static double fracROverride = Double.NaN, fmtOverride = Double.NaN;
     static boolean deflect = false, lpOnly = false, characterize = false;
+    // -cpu: run the SAME system methods on the sequential CPU runner (no TaskGraph, no
+    // device transfers) instead of the GPU TaskGraph. Dev/debug validation mode; the GPU
+    // production path is untouched (cpu=false leaves every code path byte-for-byte as before).
+    static boolean cpu = false;
     // Lp-chain defaults (match v1: monomerCt=32, ~48 µm contour). alpha matched to v1 -pf for x-val.
     static final int LP_NSEG = 539, LP_STEPS = 60000, LP_CAD = 50;
     static final double LP_ALPHA = 0.02;
@@ -68,6 +72,7 @@ public final class DiffusionHarness {
             else if (args[i].equals("-deflect")) { deflect = true; }
             else if (args[i].equals("-lp")) { lpOnly = true; }
             else if (args[i].equals("-characterize")) { characterize = true; }
+            else if (args[i].equals("-cpu")) { cpu = true; }
             else pos.add(args[i]);
         }
         if (characterize) { runCharacterize(dt); return; }
@@ -100,6 +105,7 @@ public final class DiffusionHarness {
         if (pos.size() >= 2) { M_TRANS = Integer.parseInt(pos.get(1)); M_ROT = M_TRANS / 5; }
 
         System.out.println("=== Soft Box increment 1 — filament rigid-rod Langevin FDT validation ===");
+        System.out.println("runner: " + runnerName());
         System.out.printf("N=%d rods, monomerCt=%d, dt=%.1e s, aeta=%.3g Pa-s, kT=%.4e J%n",
                 N, MONOMER_CT, Constants.deltaT, Constants.aeta, Constants.kT);
 
@@ -114,6 +120,79 @@ public final class DiffusionHarness {
                     + "amplitude coupling is wrong. Commit nothing; report.");
             System.exit(1);
         }
+    }
+
+    // ============================================================================
+    //  Runner abstraction — ONE physics, TWO runners (the device-agnostic invariant).
+    //
+    //  A Stepper advances the simulation one step. The GPU runner submits the
+    //  TornadoVM TaskGraph; the CPU runner calls the *same* system methods, in the
+    //  *same* order, directly over the host SoA FloatArrays — the @Parallel loops run
+    //  sequentially when invoked as plain Java. The ONLY difference between the two is
+    //  dispatch (sequential loop vs TaskGraph) — never the physics, never the RNG.
+    //
+    //  execute() runs one step. pull(arrays) brings device buffers to the host at output
+    //  cadence; on CPU the host arrays ARE the truth, so pull() is a no-op.
+    // ============================================================================
+    interface Stepper {
+        void execute();
+        void pull(FloatArray... arrays);
+    }
+
+    /** GPU runner: submit the resident TaskGraph; pull = device->host transfer. */
+    static final class GpuStepper implements Stepper {
+        private final TornadoExecutionPlan plan;
+        private final GridScheduler grid;
+        private TornadoExecutionResult res;
+        GpuStepper(TornadoExecutionPlan plan, GridScheduler grid) { this.plan = plan; this.grid = grid; }
+        public void execute() { res = plan.withGridScheduler(grid).execute(); }
+        public void pull(FloatArray... arrays) { if (res != null) res.transferToHost(arrays); }
+    }
+
+    /** CPU runner: run one step's system-method sequence directly. Host = source of truth. */
+    static final class CpuStepper implements Stepper {
+        private final Runnable step;
+        CpuStepper(Runnable step) { this.step = step; }
+        public void execute() { step.run(); }
+        public void pull(FloatArray... arrays) { /* host arrays already hold the truth */ }
+    }
+
+    /** Same task sequence as buildPlan (FDT/viz): brownian -> integrate -> derived. */
+    private static Runnable cpuStepFdt(FilamentStore s) {
+        return () -> {
+            BrownianForceSystem.brownianForce(s.randForce, s.randTorque, s.bTransGam, s.bRotGam,
+                    s.brownTransScale, s.brownRotScale, s.params, s.counts);
+            RigidRodLangevinIntegrationSystem.integrate(s.coord, s.uVec, s.yVec, s.forceSum, s.torqueSum,
+                    s.randForce, s.randTorque, s.bTransGam, s.bRotGam, s.params, s.counts);
+            DerivedGeometrySystem.derive(s.coord, s.uVec, s.yVec, s.zVec, s.end1, s.end2, s.segLength, s.counts);
+        };
+    }
+
+    /** Same task sequence as buildDeflectionPlan: seed -> chain -> integrate -> pin -> derived. */
+    private static Runnable cpuStepDeflect(FilamentStore s) {
+        return () -> {
+            DeflectionSupport.seedAccumulators(s.forceSum, s.torqueSum, s.extForce, s.counts);
+            ChainBendingForceSystem.chainForces(s.coord, s.uVec, s.segLength, s.end2NbrSlot, s.end2NbrSide,
+                    s.end1NbrSlot, s.end1NbrSide, s.bTransGam, s.bRotGam, s.forceSum, s.torqueSum, s.chainParams, s.counts);
+            RigidRodLangevinIntegrationSystem.integrate(s.coord, s.uVec, s.yVec, s.forceSum, s.torqueSum,
+                    s.randForce, s.randTorque, s.bTransGam, s.bRotGam, s.params, s.counts);
+            DeflectionSupport.pinEndpoints(s.coord, s.uVec, s.segLength, pinSeg, pinEnd, pinAnchor, s.counts);
+            DerivedGeometrySystem.derive(s.coord, s.uVec, s.yVec, s.zVec, s.end1, s.end2, s.segLength, s.counts);
+        };
+    }
+
+    /** Same task sequence as buildChainPlan: zero -> brownian -> chain -> integrate -> derived. */
+    private static Runnable cpuStepChain(FilamentStore s) {
+        return () -> {
+            ChainBendingForceSystem.zeroAccumulators(s.forceSum, s.torqueSum, s.counts);
+            BrownianForceSystem.brownianForce(s.randForce, s.randTorque, s.bTransGam, s.bRotGam,
+                    s.brownTransScale, s.brownRotScale, s.params, s.counts);
+            ChainBendingForceSystem.chainForces(s.coord, s.uVec, s.segLength, s.end2NbrSlot, s.end2NbrSide,
+                    s.end1NbrSlot, s.end1NbrSide, s.bTransGam, s.bRotGam, s.forceSum, s.torqueSum, s.chainParams, s.counts);
+            RigidRodLangevinIntegrationSystem.integrate(s.coord, s.uVec, s.yVec, s.forceSum, s.torqueSum,
+                    s.randForce, s.randTorque, s.bTransGam, s.bRotGam, s.params, s.counts);
+            DerivedGeometrySystem.derive(s.coord, s.uVec, s.yVec, s.zVec, s.end1, s.end2, s.segLength, s.counts);
+        };
     }
 
     /** Build the per-step device graph: brownian -> integrate -> derived, pose resident. */
@@ -216,6 +295,7 @@ public final class DiffusionHarness {
         int mid = nSeg / 2;
 
         System.out.println("=== Soft Box deflection benchmark (replicating v1 -bmDiag) ===");
+        System.out.println("runner: " + runnerName());
         System.out.printf("nSeg=%d, monomerCt=%d, segLen=%.4f um, span=%.4f um, EI=%.4e, F=%.4e N, analyticDefl=%.6f um%n",
                 nSeg, monomerCt, segLen, totalLen, Constants.EI, forceN, analyticDefl);
 
@@ -250,7 +330,7 @@ public final class DiffusionHarness {
                 (float) (-0.5 * totalLen), 0f, 0f,
                 (float) ( 0.5 * totalLen), 0f, 0f);
 
-        TornadoExecutionPlan plan = buildDeflectionPlan(s);
+        Stepper stepper = cpu ? new CpuStepper(cpuStepDeflect(s)) : new GpuStepper(buildDeflectionPlan(s), sched);
         s.setCounts(0, 1);
         s.counts.set(3, 1);   // load ON
 
@@ -260,14 +340,13 @@ public final class DiffusionHarness {
         double tauTheo = nSeg * zetaPerp * (spanM * spanM * spanM) / (Constants.EI * pi4);
 
         // --- phase 1: load on, reach steady deflection; average ratio over 2nd half ---
-        TornadoExecutionResult res = null;
         int half = loadM / 2, stride = 2;
         double sum = 0; int cnt = 0; double obs = 0;
         for (int step = 0; step < loadM; step++) {
             s.counts.set(1, step);
-            res = plan.withGridScheduler(sched).execute();
+            stepper.execute();
             if (step + 1 > half && (step + 1) % stride == 0) {
-                res.transferToHost(s.coord);
+                stepper.pull(s.coord);
                 obs = Math.sqrt(s.coordY(mid) * s.coordY(mid) + s.coordZ(mid) * s.coordZ(mid));
                 sum += obs; cnt++;
             }
@@ -283,9 +362,9 @@ public final class DiffusionHarness {
         int relStride = 4;
         for (int step = 0; step < releaseM; step++) {
             s.counts.set(1, loadM + step);
-            res = plan.withGridScheduler(sched).execute();
+            stepper.execute();
             if ((step + 1) % relStride == 0) {
-                res.transferToHost(s.coord);
+                stepper.pull(s.coord);
                 double o = Math.sqrt(s.coordY(mid) * s.coordY(mid) + s.coordZ(mid) * s.coordZ(mid));
                 double t = (step + 1) * dt;
                 if (o / releaseDefl <= INV_E) {
@@ -444,6 +523,7 @@ public final class DiffusionHarness {
         int cad = Math.max(1, chainM / 200);
         double L = (MONOMER_CT + 1) * Constants.actinMonoRadius;   // segLength (microns)
         System.out.println("=== Soft Box increment 2a — free Brownian filament chain ===");
+        System.out.println("runner: " + runnerName());
         System.out.printf("nSeg=%d, monomerCt=%d, segLen=%.4f um, M=%d, cadence=%d, dt=%.1e s%n",
                 nSeg, MONOMER_CT, L, chainM, cad, dt);
 
@@ -485,7 +565,7 @@ public final class DiffusionHarness {
         System.out.println("  side-decode code check (end2->next.end1=side0, end1->prev.end2=side1, ends=-1): "
                 + (sideOK ? "OK" : "*** MISMATCH ***"));
 
-        TornadoExecutionPlan plan = buildChainPlan(s);
+        Stepper stepper = cpu ? new CpuStepper(cpuStepChain(s)) : new GpuStepper(buildChainPlan(s), sched);
         s.setCounts(0, 909090);
         FrameWriter fw = new FrameWriter(dir, 4.0, 4.0, 4.0);
 
@@ -495,13 +575,12 @@ public final class DiffusionHarness {
         double bendSumSq = 0; int bendCnt = 0;   // bending stiffness: RMS adjacent-segment angle (equilibrated)
         fw.writeFrame(s, 0.0);
 
-        TornadoExecutionResult res = null;
         int frame = 0;
         for (int step = 0; step < chainM; step++) {
             s.counts.set(1, step);
-            res = plan.withGridScheduler(sched).execute();
+            stepper.execute();
             if ((step + 1) % cad == 0) {
-                res.transferToHost(s.coord, s.uVec);
+                stepper.pull(s.coord, s.uVec);
                 if (hasNaN(s, nSeg)) { nan = true; break; }
                 maxGap = Math.max(maxGap, jointGap(s, nSeg, L, true));
                 meanGaps.add(jointGap(s, nSeg, L, false));
@@ -682,18 +761,17 @@ public final class DiffusionHarness {
         // force the FDT-bare amplitude: trans scale = 1 exactly
         for (int i = 0; i < N; i++) s.brownTransScale.set(i, 1.0f);
 
-        TornadoExecutionPlan plan = buildPlan(s);
+        Stepper stepper = cpu ? new CpuStepper(cpuStepFdt(s)) : new GpuStepper(buildPlan(s), sched);
         s.setCounts(0, 12345);
 
         int samples = M_TRANS / CAD_TRANS + 1;
         double[] t = new double[samples];
         double[] msdX = new double[samples], msdY = new double[samples], msdZ = new double[samples];
         int rec = 0;
-        TornadoExecutionResult res = null;
 
         for (int step = 0; step <= M_TRANS; step++) {
             if (step % CAD_TRANS == 0) {
-                if (step > 0) res.transferToHost(s.coord);  // UNDER_DEMAND pose pull (cadence only)
+                if (step > 0) stepper.pull(s.coord);  // UNDER_DEMAND pose pull (cadence only)
                 double sx = 0, sy = 0, sz = 0;
                 for (int i = 0; i < N; i++) {
                     double x = s.coordX(i), y = s.coordY(i), z = s.coordZ(i);
@@ -705,7 +783,7 @@ public final class DiffusionHarness {
             }
             if (step == M_TRANS) break;
             s.counts.set(1, step);
-            res = plan.withGridScheduler(sched).execute();
+            stepper.execute();
         }
 
         // MSD_axis = 2 D_axis t  -> slope through origin / 2
@@ -731,18 +809,17 @@ public final class DiffusionHarness {
         System.out.println("\n--- Config R: rotational (trans Brownian OFF) ---");
         FilamentStore s = freshStore(0.0, 1.0);  // rot scale = 1 exactly (bare FDT)
 
-        TornadoExecutionPlan plan = buildPlan(s);
+        Stepper stepper = cpu ? new CpuStepper(cpuStepFdt(s)) : new GpuStepper(buildPlan(s), sched);
         s.setCounts(0, 67890);
 
         int samples = M_ROT / CAD_ROT + 1;
         double[] t = new double[samples];
         double[] c = new double[samples];   // C(t) = <uVec_x>
         int rec = 0;
-        TornadoExecutionResult res = null;
 
         for (int step = 0; step <= M_ROT; step++) {
             if (step % CAD_ROT == 0) {
-                if (step > 0) res.transferToHost(s.uVec);
+                if (step > 0) stepper.pull(s.uVec);
                 double su = 0;
                 for (int i = 0; i < N; i++) su += s.uVecX(i);
                 t[rec] = step * Constants.deltaT;
@@ -751,7 +828,7 @@ public final class DiffusionHarness {
             }
             if (step == M_ROT) break;
             s.counts.set(1, step);
-            res = plan.withGridScheduler(sched).execute();
+            stepper.execute();
         }
 
         // C(t) = exp(-2 D_rot t) -> fit ln C vs t over the resolved window
@@ -774,6 +851,11 @@ public final class DiffusionHarness {
     }
 
     // ----------------------------------------------------------------- helpers
+    private static String runnerName() {
+        return cpu ? "CPU sequential (same system methods, no TaskGraph)"
+                   : "GPU TaskGraph (TornadoVM PTX)";
+    }
+
     private static double slopeThroughOrigin(double[] x, double[] y) {
         double sxy = 0, sxx = 0;
         for (int i = 0; i < x.length; i++) { sxy += x[i] * y[i]; sxx += x[i] * x[i]; }

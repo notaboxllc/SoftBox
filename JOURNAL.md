@@ -2,6 +2,64 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 — Pre-inc-3 interlude: CPU validation runner + device-agnostic invariant
+A debugging/validation interlude before the broad-phase. Stood up a **sequential CPU runner that
+executes the SAME system methods** (no TaskGraph) as a second runner, and recorded the
+device-agnostic invariant in CLAUDE.md. **One physics implementation, two runners** — NOT a second
+engine. This is the CPU reference for triaging increment-3 bugs as physics-logic vs PTX-lowering.
+
+**Invariant recorded** (CLAUDE.md → Architecture invariants): one physics implementation; each system
+written once as a kernel method over the SoA arrays; the GPU TaskGraph is production, the same methods
+run sequentially on the CPU as a debug runner; never hand-write a CPU/double reimplementation (that
+recreates v1's two-sources-of-truth drift); stay single-precision, fix float problems with better
+algorithms not a parallel double path.
+
+**Audit — kernel/orchestration split (a finding: clean, NO refactor needed).** Confirmed every system
+body is a plain static method over `FloatArray`/`IntArray`/primitives with `@Parallel` loops, and
+contains **zero** TaskGraph-only constructs — no `TaskGraph`/`WorkerGrid`/`GridScheduler`,
+no `DataTransferMode`/`FIRST_EXECUTION`/`UNDER_DEMAND`. All orchestration (transfers, per-task worker
+grids, block-size-64 launch config) lives in the harness's `build*Plan` methods, never in a kernel.
+Systems checked: `BrownianForceSystem.brownianForce`, `RigidRodLangevinIntegrationSystem.integrate`,
+`DerivedGeometrySystem.derive`, `ChainBendingForceSystem.zeroAccumulators/chainForces`,
+`DragTensorSystem.run` (host init), + the deflection support kernels
+`DeflectionSupport.seedAccumulators/pinEndpoints`. The architecture the invariant asserts was already
+in place; the runner is the proof. (`@Parallel` is a marker annotation with no effect outside Tornado
+compilation, so a direct call runs the loop sequentially as plain Java.)
+
+**Runner abstraction (`Stepper`).** Added a 2-method `Stepper` interface in `DiffusionHarness`:
+`execute()` (one step) + `pull(arrays...)` (device→host at output cadence). `GpuStepper` wraps the
+existing `TornadoExecutionPlan.withGridScheduler(sched).execute()` and `res.transferToHost(...)`;
+`CpuStepper` runs a `Runnable` that calls the same system methods in the same per-step order, with
+`pull()` a no-op (host arrays ARE the truth). Three CPU step sequences mirror the three TaskGraphs
+exactly: FDT `brownian→integrate→derived`; deflection `seed→chain→integrate→pin→derived`; chain
+`zero→brownian→chain→integrate→derived`. `-cpu` flag selects the runner. **GPU production path
+untouched** — `cpu=false` issues the identical TaskGraph calls in the identical order, and the GPU
+numbers below match the pre-change baseline exactly.
+
+**GPU≡CPU agreement (same N/M/seed; float32 last-bit tolerance):**
+
+| check                | quantity                | GPU         | CPU         | delta             |
+|----------------------|-------------------------|-------------|-------------|-------------------|
+| FDT (N=2048, M=8000) | D_trans_par (µm²/s)     | 1.11676e-1  | 1.11676e-1  | 0 (to 6 sig figs) |
+|                      | D_trans_perp y / z      | 7.36203e-2 / 7.53293e-2 | 7.36203e-2 / 7.53293e-2 | 0 |
+|                      | D_rot_perp (rad²/s)     | 1.89712e+1  | 1.89712e+1  | 0 (to 6 sig figs) |
+| static deflection    | ratio obs/analytic      | 0.99831     | 0.99832     | 1e-5 (5th decimal)|
+|                      | τ_meas / τ_theo         | 0.9920      | 0.9920      | 0                 |
+| free chain (16 seg)  | joint-gap max (µm)      | 0.04262     | 0.04262     | 0                 |
+|                      | mean gap mid→late (µm)  | 0.01397→0.01376 | 0.01397→0.01376 | 0           |
+|                      | end-to-end / bend-RMS   | 2.785 µm / 2.02° | 2.785 µm / 2.02° | 0          |
+
+Agreement is bit-identical to printed precision on FDT and the chain; the lone visible divergence is
+the deflection ratio's 5th decimal (0.99831 vs 0.99832) — exactly the expected fma/transcendental
+ordering difference, not a logic divergence. The integer Wang-hash RNG is bit-for-bit identical on
+both paths, so the only source of difference is float op ordering, which stays sub-ulp on the
+aggregate statistics even after 10⁴–10⁵ steps. **Every system proven dispatch-agnostic; the invariant
+demonstrably holds.** No bail-out triggered.
+
+Open: `runViz`/`measureLp` still GPU-only (not part of the 3 validation checks; both reuse systems
+already covered by FDT+chain, so coverage is complete). `Stepper.pull` varargs emits one benign javac
+warning (passthrough of `FloatArray[]` to the varargs `transferToHost`).
+
 ## 2026-06-13 — Increment 2b: filament characterization toolkit (manual tuning)
 Ported v1's filament-characterization MEASUREMENT side (deflection ratio, relaxation time τ,
 persistence length Lp) as a manual-tuning instrument + the BRotCoeff fidelity fix. **The auto-tune /
