@@ -2,6 +2,40 @@
 
 Last updated: 2026-06-14
 
+## 2026-06-14 — Increment 4b-iv (gliding assay): assembled + works, velocity an OPEN FINDING
+The gliding payoff — assemble 4a–4b-iii + the inc-2 chain filament into v1's gliding assay. **The
+assembly works end-to-end: the filament glides −x, stably, with avgBound matching v1 — but the gliding
+VELOCITY is below the v1 fixture, an open finding (NOT tuned).** Committed as a checkpoint at the
+planner's explicit direction (the bail-out default was commit-nothing). Full report: `GLIDING_4biv_
+FINDINGS.md`. New: `softbox/GlidingHarness.java`, `BindingDetectionSystem.bindNearest`, `run_gliding.sh`.
+
+**What works (faithful config — density 500/µm², dt=1e-5, filament z=0 along +x, 11-seg 64-mono chain,
+`fracMoveTorq=0.2`, surface = tail anchor + bound motors):** glides −x; stable over 30k steps (no NaN);
+**avgBound 7.47 vs v1's 7.6** (big box); dwell-times/stroke/catch-slip/gather all from the validated
+4b-i/ii/iii. A cheap-probe bug was caught + fixed early (motor Brownian had been omitted → heads stood
+upright → avgBound=0; not a physics issue).
+
+**The velocity finding.** v2 −4.0 µm/s vs the v1 fixture 8.33 (full 14×2 box). BUT — running v1 itself
+at a matched small box (4×1) gives **6.66**, not 8.33: v1 drops ~20% from finite-size (the filament's
+ends rotate toward the bed edges and lose support — the planner spotted this from the viewer). So the
+gap vs a same-box v1 is **~0.64× (4.27 vs 6.66), the genuine remainder ~1.5× not 2×.** Localized by the
+`-diag` instrument to the velocity coupling: **advance per power stroke 2.33 nm vs the 7 nm unloaded
+stroke**, from a ~50/50 assist/resist tug-of-war among co-bound motors (weak net force). The big-box run
+showed higher avgBound → slightly LOWER velocity (more drag) — v1 instead sustains high avgBound AND high
+velocity, i.e. its bound population is coordinated/net-assisting. The levers (chain stiffness, myoSpring,
+catch-slip, stroke) are all frozen validated constants ⇒ a faithful-config physics finding, not tuning.
+
+**Direct v1 comparison (read-only v1ref built with `-encoding ISO-8859-1`; libs/.class are gitignored
+build artifacts — worktree left clean):** v1 `glidingAssay500_val` at box 4×1 → 6.66 µm/s; viewer runs
+`threejs_v1_gliding` vs `threejs_gliding` for side-by-side. Open for the planner (see the doc): the ~1.5×
+coupling (chain-stiffness faithfulness at 0.2 vs the inc-2 deflection-calibrated 0.265; resisting-motor
+release timing; filament-z); the GlidingHarness **GPU TaskGraph is not yet built** (CPU-only → needed
+for the full-box fixture comparison + the GPU-throughput gate); a biochem-cadence sanity check.
+
+**Existing paths unaffected:** 4b-iii stroke checkpoint PASS, 4a binding PASS, FDT 1.11676e-1 — bindNearest
+is additive. **Increment 4 is NOT complete** (gliding velocity open); 4a binding + 4b-i/ii/iii physics
+stand validated.
+
 ## 2026-06-14 — Increment 4b-iii (new physics): nucleotide cycle + the power stroke (pinned checkpoint)
 Added the genuinely-new physics of the stroke — the 4-state nucleotide cycle + the state-dependent
 rest-angle switch (the stroke EMERGES from this, not a force law) + the full force-dependent catch-slip

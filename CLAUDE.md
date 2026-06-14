@@ -332,6 +332,22 @@ into the pinned filament (the glide direction); (5) catch-slip unbind rate respo
 (100→59→37→20 /s at 0→4 pN); (6) CPU≡GPU aggregate-within-SEM (force-gated cycle decorrelates). New:
 `NucleotideCycleSystem` + state-switching in `MotorJointSystem`/`CrossBridgeSystem` + `MotorStrokeHarness`
 + `run_stroke.sh`. Existing paths bit-identical (FDT/deflection/broad-phase/4a/4b-i/ii). See JOURNAL
-2026-06-14 (inc 4b-iii). **Deferred: the gliding run** (4b-iv) — unpin + surface + chain filament +
-dynamic binding → velocity + avgBound vs the v1 fixture; everything physical is now validated, the
-gliding run is the integration.
+2026-06-14 (inc 4b-iii).
+
+**Increment 4b-iv (gliding assay) — PARTIAL.** Assembled 4a–4b-iii + the inc-2 chain filament into v1's
+gliding assay. **Works end-to-end — filament glides −x, stable, avgBound matching v1 (7.47 vs 7.6) — but
+the gliding VELOCITY is below the v1 fixture, an OPEN FINDING (not tuned).** v2 ~−4.0 µm/s vs the full-box
+fixture 8.33; v1 itself is 6.66 at a matched small box (finite-size: filament ends rotate toward the bed
+edges), so the same-box gap is ~0.64×, genuine remainder ~1.5×. Localized (`-diag`) to the velocity
+coupling: advance/power-stroke 2.33 nm vs the 7 nm stroke, a ~50/50 assist/resist tug-of-war vs v1's
+coordinated net-assisting population — levers all frozen validated constants ⇒ faithful-config finding.
+Full report: `GLIDING_4biv_FINDINGS.md`. New: `GlidingHarness`, `BindingDetectionSystem.bindNearest`,
+`run_gliding.sh`:
+```
+./run_gliding.sh [M]            # CPU gliding probe (default 2000); velocity + avgBound + y-spread
+./run_gliding.sh -diag 10000    # mechanism instrument (state dist, force balance, advance/stroke)
+./run_gliding.sh -3js threejs_gliding   # viewer
+```
+**Increment 4 is NOT complete** (gliding velocity open). Next: a GlidingHarness **GPU TaskGraph**
+(CPU-only today) for the full-box fixture comparison + the GPU-throughput gate; the ~1.5× coupling burrow;
+a biochem-cadence sanity check. See JOURNAL 2026-06-14 (inc 4b-iv).
