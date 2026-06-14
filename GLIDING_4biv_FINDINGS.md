@@ -131,7 +131,7 @@ motion, sized at ~0.76×.
 | `instantaneousSpeed` vs v1 (matched box, multi-seed) | ✓ 6.69 vs 7.54 @14×2; 6.81 vs 6.85 @4×1 |
 | Box-size NET scaling vs v1 | ✓ both weak (+3–6%); v2 reproduces it |
 | GPU TaskGraph (23 kernels, device-resident, full 14×2 box) | ✓ builds, runs, stable, no per-step pull |
-| GPU throughput | ✓ 386 steps/s @ 13.4k motors (~19× CPU runner) |
+| GPU throughput | ✓ 386 steps/s @ 13.4k motors (~7.3× CPU runner: GPU 386 vs CPU 52.6 steps/s) |
 | CPU≡GPU on gliding (aggregate-within-SEM) | ✓ avgBound matches; velocity in chaotic spread |
 | **Gliding NET velocity vs v1 (matched box+statistic)** | ◑ **0.76× box-uniform residual** (was mis-framed as 0.51×) — small, sharp, in net directedness |
 

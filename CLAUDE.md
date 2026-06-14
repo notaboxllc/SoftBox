@@ -354,7 +354,8 @@ New: `GlidingHarness` (+ `-grid` v1-style measurement), `BindingDetectionSystem.
 ./run_gliding.sh -gpu -3js threejs_gliding 20000   # viewer (full motor carpet)
 ```
 **Full-scale GPU TaskGraph (23 kernels, device-resident, no per-step host pull):** full 14×2 box (~13.4k
-motors), stable; GPU throughput **386 steps/s @ 13.4k motors (~19× the CPU runner)**. Binding + assembly +
+motors), stable; GPU throughput **386 steps/s @ 13.4k motors (~7.3× the CPU runner — measured: GPU 386 vs
+CPU 52.6 steps/s, difference-method)**. Binding + assembly +
 residency validated at scale; the gliding velocity is now a **small, sharp, correctly-sized ~0.76×
 box-uniform residual** in net directedness (re-scoped from the mis-framed 0.51×). See JOURNAL 2026-06-14
 (inc 4b-iv RECONCILED) + `GLIDING_4biv_FINDINGS.md`.

@@ -74,7 +74,8 @@ only dispatch differs). Runs at the **full 14×2 box (~13.4k motors)**, stable, 
 Full-box multi-seed (3 seeds, 10k steps): **velocity 4.25 ± 0.32 µm/s vs the v1 fixture 8.33 ± 0.18 —
 0.51×, a clean MISS outside SEM; avgBound 7.53 ± 0.50 MATCHES v1's 7.64 within SEM.** So binding is
 faithful, the velocity coupling is ~half — the clean full-scale finding (NOT tuned; the mechanism burrow
-is the scoped next move). **GPU throughput 386 steps/s @ 13.4k motors (~19× the CPU runner)** — residency
+is the scoped next move). **GPU throughput 386 steps/s @ 13.4k motors (~7.3× the CPU runner — measured GPU
+386 vs CPU 52.6 steps/s; the earlier "~19×" was startup-contaminated)** — residency
 wins this dense-proximity workload. CPU≡GPU aggregate-within-SEM (6×2 box: CPU 4.0/7.47 vs GPU 4.58/7.40).
 
 **Existing paths unaffected:** 4b-iii stroke checkpoint PASS, 4a binding PASS, FDT 1.11676e-1 — bindNearest
