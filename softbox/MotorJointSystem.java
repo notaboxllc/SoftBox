@@ -73,12 +73,12 @@ public final class MotorJointSystem {
             FloatArray coord, FloatArray uVec, FloatArray segLength,
             FloatArray bTransGam, FloatArray bRotGam,
             FloatArray forceSum, FloatArray torqueSum,
-            FloatArray jointParams, IntArray counts) {
+            IntArray nucleotideState, FloatArray jointParams, IntArray counts) {
 
         int nB = coord.getSize() / 3;
         double dt = jointParams.get(0);
         double j1FracMove = jointParams.get(1), j1FracR = jointParams.get(2);
-        double j1FracMoveTorq = jointParams.get(3), j1Rest = jointParams.get(4);
+        double j1FracMoveTorq = jointParams.get(3);
         double j2FracMove = jointParams.get(5), j2FracR = jointParams.get(6);
         double j2FracMoveTorq = jointParams.get(7), j2Rest = jointParams.get(8);
         double stallPN = jointParams.get(10);
@@ -87,6 +87,8 @@ public final class MotorJointSystem {
         for (@Parallel int s = 0; s < nB; s++) {
             int m = s / 3;
             int role = s - 3 * m;
+            // J1 lever-motor rest angle switches by nucleotide state (the stroke): cocked (≠ADPPi) 60°, uncocked 0°.
+            double j1Rest = (nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? 60.0 : 0.0;
             int rod = 3 * m, lever = 3 * m + 1, head = 3 * m + 2;
 
             // sub-body poses (double, like the chain)

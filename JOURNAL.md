@@ -2,6 +2,56 @@
 
 Last updated: 2026-06-14
 
+## 2026-06-14 — Increment 4b-iii (new physics): nucleotide cycle + the power stroke (pinned checkpoint)
+Added the genuinely-new physics of the stroke — the 4-state nucleotide cycle + the state-dependent
+rest-angle switch (the stroke EMERGES from this, not a force law) + the full force-dependent catch-slip
+— and validated it on a PINNED filament. **Scoped decision (planner): the gliding run itself (unpin +
+surface + chain filament + dynamic binding + velocity/avgBound vs the v1 fixture) is deferred to a
+dedicated increment (4b-iv); everything physical is now in place.** New: `softbox/NucleotideCycleSystem.
+java`, `MotorStrokeHarness.java`, `run_stroke.sh`; rest-angle switching folded into `MotorJointSystem` +
+`CrossBridgeSystem`; nucleotide state + the forceDotFil tracker added to `MotorStore`.
+
+**Nucleotide cycle (`NucleotideCycleSystem.cycle`) — faithful MyoMotor.biochemStep port.** Per-motor
+4-state machine NONE→ATP→ADPPi→ADP→NONE, run EVERY step (biochemStep cadence = 1; confirmed by the rate
+analysis — at cadence 1000 the cycle would be 1000× too slow to glide), per-step transition probability
+rate·dt with on/off-filament rates (Env.java:836-855: atpOnMyo 2e4, ATP→ADPPi 100, ADPPi→ADP 1e4,
+ADP→NONE 1e3 /s). ADP→NONE is **load-gated**: it returns while the cross-bridge load's 10-window average
+forceDotFil > 0 (the mechanochemical coupling, MyoMotor.java:271; ported as a per-motor ring buffer =
+v1 ValueTracker(10)). `isCocked() = !isADPPi`. One wang-hash RNG draw per motor per step (distinct salt).
+
+**Rest-angle switch (the stroke).** `MotorJointSystem` J1 lever-motor rest 0°(uncocked/ADPPi)↔60°(cocked)
+and `CrossBridgeSystem` F9 motor-actin rest 90°↔120°, both keyed by the per-motor state. State flip →
+rest angle changes → the F9/J1 alignment torques swing the head → the cross-bridge transmits a directional
+pulse. The 4b-ii cross-bridge was restructured: `bondForces` now computes the bond once and stores
+head-side(6)+seg-side(6)+forceDotFil(1) in bondData[13/motor]; `applyHeadForce` does the head self-write;
+`registerForceDot` tracks the load; `segGather` sums seg-side over the CSR-inverse (the proven gather).
+
+**Force-dependent catch-slip (`NucleotideCycleSystem.catchSlipRelease`).** The full Guo–Guilford form
+rate = kOff·(αCatch·e^(−F·xCatch/kT)+αSlip·e^(+F·xSlip/kT)), F = forceDotFil (4a/4b-ii used the F=0 limit).
+
+**Stroke checkpoint (`run_stroke.sh`) — 6 sharpened gates, ALL PASS:**
+
+| gate | result |
+|---|---|
+| 1. cycle dwell == rate·dt | NONE 5.03 / ATP 984 / ADPPi 9.95 / ADP 98.8 steps vs 5/1000/10/100 (≤1.6%); cycle 0.0112 s — the 4-state analog of 4a's residence-time check |
+| 2. regression guard | constant-ADPPi reproduces 4b-i (PASS) and 4b-ii (gather EXACT, segForce 3.6e-11→3.7e-12) exactly |
+| 3. unloaded stroke | head tip Δ = (−5.87, 0, −3.75) nm ⇒ **6.96 nm** — a realistic myosin working stroke (lever 8 nm) |
+| 4. directional force | cycling motors pulse net Σ filForce_x = −1.05e-8 N into the pinned filament (**−x**, the glide direction) |
+| 5. catch-slip F-dependence | unbind rate 100→59→37→20 /s at load 0→1→2→4 pN (catch: +load stabilizes the bond), empirical == analytic |
+| 6. CPU≡GPU | aggregate-within-SEM: mean filForce_x agrees 0.4%, avgBound 12.00/12.00 (the force-gated cycle decorrelates the microstate — banked standard) |
+
+Gate 3 subtlety: in the loaded/pinned case the head tip is pinned by the cross-bridge spring so the
+stroke is FORCE (gate 4), not tip motion; the unloaded stroke (F8 off, head swings freely under F9/J1)
+is the ~7 nm working stroke — measured that. The −x/−z swing direction is the power-stroke geometry.
+
+**CPU≡GPU validation standard applied.** Cycle-only (cross-bridge off, forceDotFil=0) is bit-identical
+(pure integer RNG); the force-gated stroke (a float forceDotFil comparison flips gated transitions) is
+aggregate-within-SEM — exactly the standard banked in 4b-ii.
+
+**Existing paths unaffected (verified):** FDT D_par 1.11676e-1 (bit-identical), 4a binding off-rate
+0.00999, broad-phase EXACT, 4b-i/ii reproduced via the regression guard. No bail-out triggered. The
+stroke physics is validated; the gliding integration (4b-iv) is the next increment.
+
 ## 2026-06-14 — Increment 4b-ii: cross-bridge + the cross-entity gather (pinned)
 Connected the articulated motor head (4b-i) to a **pinned** filament via the cross-bridge spring +
 alignment torques, and built the **cross-entity motor→segment force+torque gather** — the design-risk

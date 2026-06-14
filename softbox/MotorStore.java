@@ -88,11 +88,30 @@ public final class MotorStore {
     public static final int FREE_BINDABLE = -1;
     public static final int FREE_COOLDOWN = -2;
 
+    // ================= Nucleotide cycle (increment 4b-iii) =================
+    // 4-state mechanochemical machine (MyoMotor.biochemStep): NONE→ATP→ADPPi→ADP→NONE.
+    // isCocked() = !isADPPi ⇒ the rest angle switches by state (the power stroke).
+    public static final int NUC_NONE = 0, NUC_ATP = 1, NUC_ADPPI = 2, NUC_ADP = 3;
+    public final IntArray   nucleotideState;   // nMotors
+    public final FloatArray forceDotFil;       // nMotors (instantaneous cross-bridge load; catch-slip)
+    public final FloatArray forceDotHist;      // 10*nMotors (v1 ValueTracker(10); the ADP→NONE gate average)
+    public final IntArray   forceDotPlace;     // nMotors (ring index)
+    // nucParams (float): [0]=dt [1]=atpOnMyo [2]=onFilATP_ADPPi [3]=offFilATP_ADPPi
+    //   [4]=onFilADPPi_ADP [5]=offFilADPPi_ADP [6]=onFilADP_None [7]=offFilADP_None  (Env.java:836-855)
+    public final FloatArray nucParams;
+    /** isCocked() = !isADPPi (Myosin.java:277). Cocked ⇒ J1 rest 60°, motor-actin rest 120°. */
+    public boolean isCocked(int m) { return nucleotideState.get(m) != NUC_ADPPI; }
+
     public MotorStore(int nMotors) {
         this.nMotors = nMotors;
         body = new RigidRodBody(3 * nMotors);
         bodyParams  = new FloatArray(2);
         jointParams = new FloatArray(11);
+        nucleotideState = new IntArray(nMotors);   nucleotideState.init(NUC_NONE);
+        forceDotFil   = new FloatArray(nMotors);   forceDotFil.init(0f);
+        forceDotHist  = new FloatArray(10 * nMotors); forceDotHist.init(0f);
+        forceDotPlace = new IntArray(nMotors);     forceDotPlace.init(0);
+        nucParams = new FloatArray(8);
         head    = new FloatArray(3 * nMotors);
         uVec    = new FloatArray(3 * nMotors);
         rodUVec = new FloatArray(3 * nMotors);
@@ -175,6 +194,20 @@ public final class MotorStore {
         jointParams.set(9, 0.4f);    // anchor spring coeff (= myoJ2FracMove)
         jointParams.set(10, 6.0f);   // myosinStallForce (pN) — J1 torque cap
     }
+
+    /** Nucleotide on/off-filament rate constants (Env.java:836-855). biochemStep runs every step;
+     *  per-step transition probability = rate·dt. */
+    public void setNucParams(double dt) {
+        nucParams.set(0, (float) dt);
+        nucParams.set(1, 2.0e4f);   // atpOnMyo          NONE→ATP
+        nucParams.set(2, 100.0f);   // myoOnFilATP_ADPPi  ATP→ADPPi (on fil)
+        nucParams.set(3, 100.0f);   // myoOffFilATP_ADPPi (off fil)
+        nucParams.set(4, 1.0e4f);   // myoOnFilADPPi_ADP  ADPPi→ADP (on fil) — the power-stroke transition
+        nucParams.set(5, 0.0f);     // myoOffFilADPPi_ADP (off fil; v1 = 0)
+        nucParams.set(6, 1.0e3f);   // myoOnFilADP_None   ADP→NONE (on fil; load-gated)
+        nucParams.set(7, 1.0e3f);   // myoOffFilADP_None  (off fil)
+    }
+    public void setAllStates(int state) { for (int m = 0; m < nMotors; m++) nucleotideState.set(m, state); }
 
     /**
      * Assemble motor m standing on the bed: rod tail (rod.end1) at the anchor point, all

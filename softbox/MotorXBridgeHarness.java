@@ -98,7 +98,7 @@ public final class MotorXBridgeHarness {
     // ============================================================== build + bind
     static final class Scene {
         FilamentStore fil; MotorStore mot;
-        FloatArray bondSeg6, xbParams;
+        FloatArray bondData, xbParams;
         IntArray segMotorCount, segMotorOffsets, segMotorMyo;
         FloatArray bruteForceSum, bruteTorqueSum;
         IntArray bruteReachSeg, bruteReachCount;
@@ -144,10 +144,11 @@ public final class MotorXBridgeHarness {
         mot.setBodyParams(dt);
         mot.setJointParams(dt);
         mot.setKinParams(0.006, -0.4, dt);     // v1 myoColTol / align tol (4a binding)
+        mot.setAllStates(MotorStore.NUC_ADPPI);   // uncocked ⇒ F9 rest 90° (the 4b-ii fixed angle)
 
         // cross-bridge + gather scratch
         int MAXC = SpatialGrid.MAX_CAND;
-        sc.bondSeg6 = new FloatArray(nMot * 6); sc.bondSeg6.init(0f);
+        sc.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
         sc.xbParams = FloatArray.fromElements((float) MYO_SPRING, (float) REST_DEG, (float) J1_FMT,
                 (float) dt, (float) MotorStore.HEAD_LEN);
         sc.segMotorCount   = new IntArray(nSeg);
@@ -246,19 +247,20 @@ public final class MotorXBridgeHarness {
             .transferToDevice(DataTransferMode.FIRST_EXECUTION,
                     b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength,
                     b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, b.randForce, b.randTorque,
-                    b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.jointParams, mot.anchor,
-                    mot.boundSeg, mot.bindArc, sc.bondSeg6, sc.xbParams,
+                    b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.jointParams, mot.anchor, mot.nucleotideState,
+                    mot.boundSeg, mot.bindArc, sc.bondData, sc.xbParams,
                     f.coord, f.uVec, f.yVec, f.bRotGam, f.end1, f.end2, f.segLength, f.forceSum, f.torqueSum,
                     sc.segMotorCount, sc.segMotorOffsets, sc.segMotorMyo, sc.bruteForceSum, sc.bruteTorqueSum)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts)
             .task("zero", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
             .task("brownian", BrownianForceSystem::brownianForce,
                     b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
-            .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.jointParams, mot.counts)
+            .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
             .task("anchor", TailAnchorSystem::anchor, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts)
             .task("bond", CrossBridgeSystem::bondForces,
                     b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
-                    mot.boundSeg, mot.bindArc, b.forceSum, b.torqueSum, sc.bondSeg6, sc.xbParams)
+                    mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams)
+            .task("applyHead", CrossBridgeSystem::applyHeadForce, sc.bondData, b.forceSum, b.torqueSum, mot.counts)
             .task("integrate", RigidRodLangevinIntegrationSystem::integrate,
                     b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
             .task("derive", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts)
@@ -266,15 +268,15 @@ public final class MotorXBridgeHarness {
             .task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, sc.segMotorCount)
             .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, sc.segMotorCount, sc.segMotorOffsets)
             .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo)
-            .task("gather", CrossBridgeSystem::segGather, sc.segMotorOffsets, sc.segMotorMyo, sc.bondSeg6, f.forceSum, f.torqueSum, mot.counts)
-            .task("brute", CrossBridgeSystem::bruteGather, mot.boundSeg, sc.bondSeg6, sc.bruteForceSum, sc.bruteTorqueSum, mot.counts)
-            .transferToHost(DataTransferMode.UNDER_DEMAND, f.forceSum, f.torqueSum, sc.bruteForceSum, sc.bruteTorqueSum, sc.bondSeg6);
+            .task("gather", CrossBridgeSystem::segGather, sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts)
+            .task("brute", CrossBridgeSystem::bruteGather, mot.boundSeg, sc.bondData, sc.bruteForceSum, sc.bruteTorqueSum, mot.counts)
+            .transferToHost(DataTransferMode.UNDER_DEMAND, f.forceSum, f.torqueSum, sc.bruteForceSum, sc.bruteTorqueSum, sc.bondData);
 
         int nB = 3 * mot.nMotors, nM = mot.nMotors, nSeg = f.n;
         sched = new GridScheduler();
         addWorker("xbridge.zero", pad(nB)); addWorker("xbridge.brownian", pad(nB));
         addWorker("xbridge.joints", pad(nB)); addWorker("xbridge.anchor", pad(nM));
-        addWorker("xbridge.bond", pad(nM));
+        addWorker("xbridge.bond", pad(nM)); addWorker("xbridge.applyHead", pad(nM));
         addWorker("xbridge.integrate", pad(nB)); addWorker("xbridge.derive", pad(nB));
         addWorker("xbridge.zeroFil", pad(nSeg));
         addSingle("xbridge.csrHist"); addSingle("xbridge.csrScan"); addSingle("xbridge.csrScatter");
@@ -291,18 +293,19 @@ public final class MotorXBridgeHarness {
         return () -> {
             ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
             BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
-            MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.jointParams, mot.counts);
+            MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
             TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts);
             CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
-                    mot.boundSeg, mot.bindArc, b.forceSum, b.torqueSum, sc.bondSeg6, sc.xbParams);
+                    mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
+            CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
             RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
             DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
             ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
             CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sc.segMotorCount);
             CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
             CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
-            CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondSeg6, f.forceSum, f.torqueSum, mot.counts);
-            CrossBridgeSystem.bruteGather(mot.boundSeg, sc.bondSeg6, sc.bruteForceSum, sc.bruteTorqueSum, mot.counts);
+            CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
+            CrossBridgeSystem.bruteGather(mot.boundSeg, sc.bondData, sc.bruteForceSum, sc.bruteTorqueSum, mot.counts);
         };
     }
 
@@ -322,7 +325,7 @@ public final class MotorXBridgeHarness {
     static boolean reportCoverage(Scene sc, Snap[] snaps) {
         // Force-coverage: each bond's F8 force is +F on the head (self) and -F on the segment (gathered).
         // Σ over bonds of (head F + seg F) = 0 by construction; the seg-side total is the gathered force.
-        // (Verified by code: bondForces applies +F to the head sub-body and stores -F in bondSeg6.)
+        // (Verified by code: bondForces stores +F head-side / -F seg-side in bondData; applyHeadForce + gather apply them.)
         System.out.println("\n--- force-coverage audit ---");
         System.out.println("  cross-bridge F8 force: +F on head (self-write, once) / -F on segment (gathered, once) — equal-opposite by construction.");
         System.out.println("  F9/F10 alignment torques: -T on head / +T on segment (once each). Gather == brute (above) ⇒ applied exactly once.");

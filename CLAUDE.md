@@ -85,8 +85,10 @@ SoA primitive component arrays the canonical state and keeps that state device-r
    DONE (binding, no force). **4b-i — DONE: the articulated motor BODY** (rod→lever→head + 2 joints +
    bed anchor, shared rigid-rod integration, validated isometrically). **4b-ii — DONE: cross-bridge
    spring + alignment torques + the cross-entity force+torque gather** (head ↔ pinned filament, fixed
-   rest angles). 4b-iii: nucleotide cycle + rest-angle switching (the stroke) + force-dependent
-   catch-slip + surface → unpin → gliding velocity/avgBound vs the v1 fixture.
+   rest angles). **4b-iii (new physics) — DONE: nucleotide cycle + rest-angle switching (the stroke) +
+   F-catch-slip, validated on a pinned filament (stroke checkpoint).** 4b-iv (the gliding payoff,
+   deferred): unpin + surface + the chain filament + dynamic binding → gliding velocity/avgBound vs the
+   v1 fixture (8.33/8.23 µm/s, avgBound 7.64/7.21).
 5. Crosslinkers / Arp2/3 branching.
 6. Protein-node contractile path — validate against the v1 node-tension fixture.
 7. Membrane — StickyNode bodies + NodeLink springs + the iterative relaxation solver (the
@@ -191,6 +193,20 @@ coupling — the template every future multi-store coupling reuses). FIXED rest 
 The gather (`CrossBridgeSystem.csrHistogram/csrScan/csrScatter` → `segGather`) is general infrastructure
 — it builds the segment→bound-motors CSR-inverse (inc-3 pattern keyed by `boundSeg`) and each segment
 sums its motors' stored bond reactions into its own forceSum/torqueSum (no atomics, no `KernelContext`).
+
+**Power-stroke checkpoint (inc 4b-iii, the new physics; gliding deferred).** The nucleotide cycle
+(`NucleotideCycleSystem`: 4-state NONE→ATP→ADPPi→ADP, load-gated ADP→NONE) + the state-dependent
+rest-angle switch (J1 0°↔60° in `MotorJointSystem`, motor–actin 90°↔120° in `CrossBridgeSystem`, keyed
+by `isCocked()=!isADPPi`) generate the power stroke (it EMERGES, not a force law) + the full
+force-dependent catch-slip release. Validated on a PINNED filament (no unpinning/gliding yet):
+```
+./run_stroke.sh                    # 5 gates: dwell times, catch-slip F-dependence, stroke, force dir, CPU≡GPU
+./run_stroke.sh -3js threejs_stroke   # viewer (cycling motors colored by state, stroking on a pinned filament)
+```
+Constant-ADPPi reproduces 4b-i/ii exactly (the regression guard). The stochastic machine is exact
+(dwell times 5.0/984/9.95/98.8 vs 5/1000/10/100 steps); the unloaded stroke is ~7 nm (a realistic
+myosin working stroke); the cycling motors pulse a net −x force into the pinned filament (the glide
+direction). The gliding run (unpin + surface + velocity/avgBound vs the v1 fixture) is the next increment.
 
 `SpatialBodyView` is the extensible seam (center+boundingRadius+ownerStore/ownerSlot); two publishers
 now register into it (`FilamentStore.publishToBodyView` + `MotorStore.publishToBodyView`). `SpatialGrid`
@@ -304,7 +320,18 @@ Fixed rest angles + pinned filament ⇒ no stroke, no motion, no gliding. Existi
 new files added). New: `CrossBridgeSystem`, `MotorXBridgeHarness`, `run_xbridge.sh`; +CLAUDE.md CPU≡GPU
 validation-standard note. See JOURNAL 2026-06-14 (inc 4b-ii).
 
-**Next: increment 4b-iii** — the 4-state nucleotide cycle + rest-angle switching (90°↔120° / 0°↔60°,
-the power stroke) + force-dependent catch-slip → unpin the filament + surface confinement → measure
-gliding velocity + avgBound vs the v1 fixture (8.33 µm/s, meanBound 7.6). This is where the cross-entity
-gather (4b-ii) carries the real stroke force and the filament glides.
+**Increment 4b-iii (new physics) — DONE.** The nucleotide cycle (`NucleotideCycleSystem`, 4-state
+NONE→ATP→ADPPi→ADP, ~5 rates from Env.java, load-gated ADP→NONE via the forceDotFil 10-window average)
++ the state-dependent rest-angle switch (J1 0°↔60°, motor–actin 90°↔120°, by `isCocked()`) generate the
+power stroke (emergent, not an invented force) + the full force-dependent catch-slip release. Validated
+on a PINNED filament (the stroke checkpoint, `run_stroke.sh`), 5 sharpened gates PASS: (1) cycle dwell
+times == rate·dt (5.0/984/9.95/98.8 vs 5/1000/10/100 steps; cycle ≈0.011 s) — the 4-state analog of 4a's
+residence-time check; (2) regression guard — constant ADPPi reproduces 4b-i/ii exactly; (3) unloaded
+stroke ≈7 nm (realistic myosin working stroke, lever-scale); (4) the cycling motors pulse a net −x force
+into the pinned filament (the glide direction); (5) catch-slip unbind rate responds to forceDotFil load
+(100→59→37→20 /s at 0→4 pN); (6) CPU≡GPU aggregate-within-SEM (force-gated cycle decorrelates). New:
+`NucleotideCycleSystem` + state-switching in `MotorJointSystem`/`CrossBridgeSystem` + `MotorStrokeHarness`
++ `run_stroke.sh`. Existing paths bit-identical (FDT/deflection/broad-phase/4a/4b-i/ii). See JOURNAL
+2026-06-14 (inc 4b-iii). **Deferred: the gliding run** (4b-iv) — unpin + surface + chain filament +
+dynamic binding → velocity + avgBound vs the v1 fixture; everything physical is now validated, the
+gliding run is the integration.

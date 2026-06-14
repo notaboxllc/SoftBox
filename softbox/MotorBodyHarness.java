@@ -96,6 +96,7 @@ public final class MotorBodyHarness {
         DragTensorSystem.run(mot);
         mot.setBodyParams(dt);
         mot.setJointParams(dt);
+        mot.setAllStates(MotorStore.NUC_ADPPI);   // uncocked ⇒ J1 rest 0° (the 4b-i fixed angle)
         return mot;
     }
 
@@ -166,7 +167,7 @@ public final class MotorBodyHarness {
             .transferToDevice(DataTransferMode.FIRST_EXECUTION,
                     b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength,
                     b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, b.randForce, b.randTorque,
-                    b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.jointParams, mot.anchor)
+                    b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.jointParams, mot.anchor, mot.nucleotideState)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts)
             .task("zero", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
             .task("brownian", BrownianForceSystem::brownianForce,
@@ -174,7 +175,7 @@ public final class MotorBodyHarness {
                     b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
             .task("joints", MotorJointSystem::joints,
                     b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum,
-                    mot.jointParams, mot.counts)
+                    mot.nucleotideState, mot.jointParams, mot.counts)
             .task("anchor", TailAnchorSystem::anchor,
                     b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor,
                     mot.jointParams, mot.counts)
@@ -208,7 +209,7 @@ public final class MotorBodyHarness {
             BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam,
                     b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
             MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam,
-                    b.forceSum, b.torqueSum, mot.jointParams, mot.counts);
+                    b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
             TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam,
                     b.forceSum, mot.anchor, mot.jointParams, mot.counts);
             RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum,
