@@ -4,8 +4,8 @@ Last updated: 2026-06-14
 
 ## 2026-06-14 — Increment 4b-iv RECONCILED: the "0.51× velocity miss" was dominantly measurement-method
 **The gliding-velocity "0.51× miss" was comparing two different MEASUREMENTS, not two physics.** Measured
-the same way, multi-seed, at matched boxes, **v2 = 0.76× v1** — small, box-uniform, NOT a 2× miss and NOT
-box-scaling. Measurement/protocol only — **no physics changed**. Full report + grid: `GLIDING_4biv_
+the same way, multi-seed (n=8), at matched boxes, **v2 = 0.87× v1** — small, box-uniform, NOT a 2× miss
+and NOT box-scaling. Measurement/protocol only — **no physics changed**. Full report + grid: `GLIDING_4biv_
 FINDINGS.md`; raw `RUN_LOGS/2026-06-14_4biv_grid_reconciliation.txt`.
 
 **Provenance of "8.33" (resolved).** It is v1's `longWindowSpeedXY` **at the end of a 0.1 s run** (BoA-v1ref
@@ -17,23 +17,24 @@ window/run-length + an initial **settling jump** (v1's first interval literally 
 BOTH codes.
 
 **The matched grid (NET = net displacement/time, v2 measured v1's exact `GlidingAssayEvaluator` way via the
-new `GlidingHarness -grid`; v1 = real `BoxOfActin -r -gpu`, BOA_RNG_SEED 1–3; ±SEM, n=3):**
+new `GlidingHarness -grid`; v1 = real `BoxOfActin -r -gpu`, BOA_RNG_SEED 1–8; ±SEM, n=8):**
 
 | box | v1 NET | v2 NET | v2/v1 | v1 inst | v2 inst | v1 avgB | v2 avgB |
 |---|---|---|---|---|---|---|---|
-| 4×1  | 4.71 ± 0.14 | 3.66 ± 0.11 | 0.78 | 6.85 | 6.81 | 7.32 | 6.79 |
-| 14×2 | 5.02 ± 0.16 | 3.76 ± 0.17 | 0.75 | 7.54 | 6.69 | 7.22 | 7.50 |
+| 4×1  | 4.61 ± 0.13 | 4.02 ± 0.15 | 0.87 | 7.39 | 6.88 | 7.47 | 7.20 |
+| 14×2 | 4.69 ± 0.13 | 4.10 ± 0.18 | 0.87 | 7.33 | 6.92 | 7.29 | 7.60 |
 
 **Decomposition.** (a) *Measurement method* dominates: v1's own NET @14×2 is **5.0, not 8.33** (8.33 is its
-inflated lwEnd-of-short-run). (b) *Box scaling — NO mismatch*: v1 net +6.5 %, v2 net +2.8 % across box;
+inflated lwEnd-of-short-run). (b) *Box scaling — NO mismatch*: v1 net +1.7 %, v2 net +2.0 % across box;
 v2 reproduces v1's weak net box-scaling. The old "v1 climbs 4.4→8.33 while v2 flat" mixed v1's lwEnd with
-v2's net. (c) *Residual*: a real but small **0.76× box-uniform** shortfall (>5σ), specifically in **net
+v2's net. (c) *Residual*: a real but small **0.87× box-uniform** shortfall (~3σ/box, ~4σ pooled), specifically in **net
 directedness** — `instantaneousSpeed` (total motion) and avgBound MATCH v1, but v2 converts less of that
-motion into forward glide (the §5 co-bound tug-of-war, now sized at ~0.76× not ~0.5×). The burrow target
+motion into forward glide (the §5 co-bound tug-of-war, now sized at ~0.87× not ~0.5×; the n=3 snapshot's 0.76×/>5σ regressed to
+0.87×/~3–4σ with the larger ensemble). The burrow target
 is re-scoped from box-size/advance-per-stroke-2× to *coordination of the co-bound population*, ~−24 %.
 
-**Decisive cell (v1 NET @ 14×2 = 5.02 ± 0.16)** — the apples-to-apples partner of v2's 3.76 — is ~5, not
-~8.3. **No physics edits**; committed the v1-style `measureGrid` measurement (instantaneous + net +
+**Decisive cell (v1 NET @ 14×2 = 4.69 ± 0.13, n=8)** — the apples-to-apples partner of v2's 4.10 — is ~4.7,
+not ~8.3. **No physics edits**; committed the v1-style `measureGrid` measurement (instantaneous + net +
 longWindow, sampled at v1's 100-step cadence) + the full-carpet viewer fix. v1ref left untouched (runs to a
 scratch dir; the `-r` flag is required for headless, else BoxOfActin hangs after phase-plan).
 
