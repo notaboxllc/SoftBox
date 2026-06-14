@@ -19,13 +19,15 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
 public final class DeflectionSupport {
     private DeflectionSupport() {}
 
-    /** Seed forceSum from a constant external-force field (the load); zero torqueSum. */
+    /** Seed forceSum from the external-force field (the load) gated by counts[3] (loadOn=1/0);
+     *  zero torqueSum. Setting counts[3]=0 mid-run releases the load (for the tau decay). */
     public static void seedAccumulators(FloatArray forceSum, FloatArray torqueSum,
                                         FloatArray extForce, IntArray counts) {
         int N = forceSum.getSize() / 3;
+        float load = counts.get(3);
         for (@Parallel int i = 0; i < N; i++) {
             int iy = N + i, iz = 2 * N + i;
-            forceSum.set(i, extForce.get(i)); forceSum.set(iy, extForce.get(iy)); forceSum.set(iz, extForce.get(iz));
+            forceSum.set(i, load * extForce.get(i)); forceSum.set(iy, load * extForce.get(iy)); forceSum.set(iz, load * extForce.get(iz));
             torqueSum.set(i, 0f); torqueSum.set(iy, 0f); torqueSum.set(iz, 0f);
         }
     }

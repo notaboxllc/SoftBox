@@ -48,7 +48,10 @@ public final class DiffusionHarness {
     static GridScheduler sched;
     // chain-coefficient overrides for sign/behavior diagnosis (NaN = use v1 default)
     static double fracROverride = Double.NaN, fmtOverride = Double.NaN;
-    static boolean deflect = false;
+    static boolean deflect = false, lpOnly = false, characterize = false;
+    // Lp-chain defaults (match v1: monomerCt=32, ~48 µm contour). alpha matched to v1 -pf for x-val.
+    static final int LP_NSEG = 539, LP_STEPS = 60000, LP_CAD = 50;
+    static final double LP_ALPHA = 0.02;
 
     public static void main(String[] args) {
         // parse flags: "-3js <dir>" (free-rod viz), "-chain <dir>" (free Brownian chain, inc 2a);
@@ -63,7 +66,16 @@ public final class DiffusionHarness {
             else if (args[i].equals("-fracR")) { fracROverride = Double.parseDouble(args[++i]); }
             else if (args[i].equals("-fmt")) { fmtOverride = Double.parseDouble(args[++i]); }
             else if (args[i].equals("-deflect")) { deflect = true; }
+            else if (args[i].equals("-lp")) { lpOnly = true; }
+            else if (args[i].equals("-characterize")) { characterize = true; }
             else pos.add(args[i]);
+        }
+        if (characterize) { runCharacterize(dt); return; }
+        if (lpOnly) {
+            int nSeg = pos.size() >= 1 ? Integer.parseInt(pos.get(0)) : LP_NSEG;
+            int M    = pos.size() >= 2 ? Integer.parseInt(pos.get(1)) : LP_STEPS;
+            measureLp(nSeg, Constants.stdSegLength, M, dt, LP_ALPHA, LP_CAD);
+            return;
         }
         if (deflect) {
             int nSeg = pos.size() >= 1 ? Integer.parseInt(pos.get(0)) : 11;   // v1 benchmarkNSegs
@@ -189,6 +201,11 @@ public final class DiffusionHarness {
      * v2's deflection directly to v1's (a strong identical-physics check).
      */
     private static void runDeflection(int nSeg, int defM, double dt) {
+        measureDeflection(nSeg, dt, defM, 20000);
+    }
+
+    /** Returns {ratio (obs/exp, avg over load 2nd half), tauMeas (s), tauTheo (s)}. */
+    private static double[] measureDeflection(int nSeg, double dt, int loadM, int releaseM) {
         final int monomerCt = Constants.stdSegLength;        // 32, matching v1 benchmark
         final double frac = 0.01;                            // benchmarkForceFrac
         double segLen = (monomerCt + 1) * Constants.actinMonoRadius;   // microns (=0.0891)
@@ -235,26 +252,151 @@ public final class DiffusionHarness {
 
         TornadoExecutionPlan plan = buildDeflectionPlan(s);
         s.setCounts(0, 1);
+        s.counts.set(3, 1);   // load ON
 
+        // tau_theo = N * zeta_perp * span^3 / (EI * pi^4)  (first bending mode, pinned-pinned; v1 BoxOfActin.java:2933)
+        double zetaPerp = s.bTransGam.get(s.planeY(mid));   // per-segment transverse drag (N s/m)
+        double pi4 = Math.PI * Math.PI * Math.PI * Math.PI;
+        double tauTheo = nSeg * zetaPerp * (spanM * spanM * spanM) / (Constants.EI * pi4);
+
+        // --- phase 1: load on, reach steady deflection; average ratio over 2nd half ---
         TornadoExecutionResult res = null;
-        int half = defM / 2, stride = 2;     // average/jitter over the converged 2nd half
-        double sum = 0, sumsq = 0, mn = 1e30, mx = -1e30; int cnt = 0;
-        for (int step = 0; step < defM; step++) {
+        int half = loadM / 2, stride = 2;
+        double sum = 0; int cnt = 0; double obs = 0;
+        for (int step = 0; step < loadM; step++) {
             s.counts.set(1, step);
             res = plan.withGridScheduler(sched).execute();
             if (step + 1 > half && (step + 1) % stride == 0) {
                 res.transferToHost(s.coord);
-                double obs = Math.sqrt(s.coordY(mid) * s.coordY(mid) + s.coordZ(mid) * s.coordZ(mid));
-                sum += obs; sumsq += obs * obs; cnt++;
-                if (obs < mn) mn = obs; if (obs > mx) mx = obs;
+                obs = Math.sqrt(s.coordY(mid) * s.coordY(mid) + s.coordZ(mid) * s.coordZ(mid));
+                sum += obs; cnt++;
             }
         }
-        double mean = sum / cnt, var = sumsq / cnt - mean * mean;
-        double std = var > 0 ? Math.sqrt(var) : 0;
-        System.out.printf("=== v2 deflection (avg over %d samples, 2nd half): obs=%.6f +/- %.6f um  (min=%.6f max=%.6f, jitter=%.2f%% pk-pk)%n",
-                cnt, mean, std, mn, mx, 100 * (mx - mn) / mean);
-        System.out.printf("    mean ratio=%.5f +/- %.5f   (analyticDefl=%.6f um) ===%n",
-                mean / analyticDefl, std / analyticDefl, analyticDefl);
+        double meanObs = sum / cnt, ratio = meanObs / analyticDefl;
+        double releaseDefl = obs;   // deflection at release
+
+        // --- phase 2: release the load, fit 1/e crossing of the decay -> tau_meas (v1 protocol) ---
+        s.counts.set(3, 0);   // load OFF (release)
+        final double INV_E = 1.0 / Math.E;
+        double tauMeas = Double.NaN;
+        double prevObs = releaseDefl, prevT = 0;
+        int relStride = 4;
+        for (int step = 0; step < releaseM; step++) {
+            s.counts.set(1, loadM + step);
+            res = plan.withGridScheduler(sched).execute();
+            if ((step + 1) % relStride == 0) {
+                res.transferToHost(s.coord);
+                double o = Math.sqrt(s.coordY(mid) * s.coordY(mid) + s.coordZ(mid) * s.coordZ(mid));
+                double t = (step + 1) * dt;
+                if (o / releaseDefl <= INV_E) {
+                    // log-linear interpolate the crossing between prevT and t
+                    double r0 = Math.log(prevObs / releaseDefl), r1 = Math.log(o / releaseDefl), rc = Math.log(INV_E);
+                    double frac2 = (r1 != r0) ? (rc - r0) / (r1 - r0) : 1.0;
+                    tauMeas = prevT + frac2 * (t - prevT);
+                    break;
+                }
+                prevObs = o; prevT = t;
+            }
+        }
+
+        System.out.printf("  deflection ratio = %.5f  (obs %.6f / analytic %.6f um)%n", ratio, meanObs, analyticDefl);
+        System.out.printf("  tau_meas = %.5f s   tau_theo = %.5f s   tau_meas/tau_theo = %.4f%n",
+                tauMeas, tauTheo, tauMeas / tauTheo);
+        return new double[]{ratio, tauMeas, tauTheo};
+    }
+
+    // ----------------------------------------------------------------- Lp (persistence length)
+    /**
+     * Persistence-length instrument (port of v1 BoxOfActin.accumulateLpData + computeLpMeas):
+     * free Brownian chain, tangent-correlation C(k)=<u_i·u_{i+k}> EWMA-accumulated (alpha),
+     * Lp_meas = -1/slope of the weighted (w=C^2) log-linear fit of ln C(k) vs s=k·segLen over
+     * C_k>0.01. Diagnostic readout (Brownian-coefficient- and length-dependent), not a target.
+     */
+    private static double measureLp(int nSeg, int monomerCt, int M, double dt, double alpha, int cadStride) {
+        double segLen = (monomerCt + 1) * Constants.actinMonoRadius;
+        System.out.printf("=== Lp instrument: nSeg=%d, monomerCt=%d, segLen=%.4f um, contour=%.2f um, alpha=%.4g ===%n",
+                nSeg, monomerCt, segLen, nSeg * segLen, alpha);
+        FilamentStore s = new FilamentStore(nSeg);
+        double x0 = -0.5 * (nSeg - 1) * segLen;
+        for (int k = 0; k < nSeg; k++) {
+            s.monomerCount.set(k, monomerCt);
+            s.setUVec(k, 1f, 0f, 0f); s.setYVec(k, 0f, 1f, 0f);
+            s.setCoord(k, (float) (x0 + k * segLen), 0f, 0f);
+            s.brownTransScale.set(k, (float) Constants.BTransCoeff);
+            boolean interior = (k > 0 && k < nSeg - 1);
+            s.brownRotScale.set(k, interior ? 0f : (float) Constants.BRotCoeff);   // BRotCoeff on ends
+            if (k < nSeg - 1) { s.end2NbrSlot.set(k, k + 1); s.end2NbrSide.set(k, 0); }
+            if (k > 0)        { s.end1NbrSlot.set(k, k - 1); s.end1NbrSide.set(k, 1); }
+        }
+        DragTensorSystem.run(s);
+        s.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt));
+        s.setChainParams();
+        if (!Double.isNaN(fracROverride)) s.chainParams.set(2, (float) fracROverride);
+        if (!Double.isNaN(fmtOverride))   s.chainParams.set(3, (float) fmtOverride);
+
+        TornadoExecutionPlan plan = buildChainPlan(s);
+        s.setCounts(0, 31337);
+
+        double[] cMean = new double[nSeg];
+        boolean init = false; int samples = 0;
+        TornadoExecutionResult res = null;
+        for (int step = 0; step < M; step++) {
+            s.counts.set(1, step);
+            res = plan.withGridScheduler(sched).execute();
+            if ((step + 1) % cadStride == 0) {
+                res.transferToHost(s.uVec);
+                for (int k = 1; k < nSeg; k++) {
+                    double sum = 0; int pairs = 0;
+                    for (int i = 0; i + k < nSeg; i++) {
+                        sum += s.uVecX(i) * s.uVecX(i + k) + s.uVecY(i) * s.uVecY(i + k) + s.uVecZ(i) * s.uVecZ(i + k);
+                        pairs++;
+                    }
+                    double cNew = pairs > 0 ? sum / pairs : 1.0;
+                    cMean[k] = init ? alpha * cNew + (1.0 - alpha) * cMean[k] : cNew;
+                }
+                init = true; samples++;
+            }
+        }
+
+        // weighted log-linear fit ln C(k) = b·s + a (w = C^2, C>0.01); Lp = -1/b  (v1 computeLpMeas)
+        double sumW = 0, sumWS = 0, sumWLogC = 0, sumWS2 = 0, sumWSlogC = 0; int nFit = 0;
+        for (int k = 1; k < nSeg; k++) {
+            double ck = cMean[k];
+            if (ck > 0.01) {
+                double sk = k * segLen, logC = Math.log(ck), w = ck * ck;
+                sumW += w; sumWS += w * sk; sumWLogC += w * logC; sumWS2 += w * sk * sk; sumWSlogC += w * sk * logC; nFit++;
+            }
+        }
+        double Lp = Double.NaN;
+        if (nFit >= 2 && sumW > 1e-30) {
+            double denom = sumWS2 - sumWS * sumWS / sumW;
+            if (Math.abs(denom) > 1e-30) {
+                double b = (sumWSlogC - sumWS * sumWLogC / sumW) / denom;
+                if (b < 0) Lp = -1.0 / b;
+            }
+        }
+        System.out.printf("  Lp_meas = %.4f um  (samples=%d, nFit=%d, C(1)=%.4f, C(nFit)=%.4f)%n",
+                Lp, samples, nFit, cMean[1], nFit > 0 ? cMean[nFit] : Double.NaN);
+        return Lp;
+    }
+
+    // ----------------------------------------------------------------- manual-tuning entry point
+    /**
+     * One command -> {deflection ratio obs/exp, tau_meas/tau_theo, Lp_meas} for the current
+     * coefficients (override via -fracR/-fmt; BRotCoeff via Constants). Measurement/reporting only;
+     * the v1 auto-tune coefficient-search loop was deliberately NOT ported.
+     */
+    private static void runCharacterize(double dt) {
+        System.out.println("########## Soft Box filament characterization (manual tuning) ##########");
+        System.out.printf("coeffs: fracMove=0.5 fracR=%.4g fracMoveTorq=%.4g  BRotCoeff=%.2f  aeta=%.3g Pa-s%n",
+                Double.isNaN(fracROverride) ? 0.1 : fracROverride,
+                Double.isNaN(fmtOverride) ? 0.265 : fmtOverride, Constants.BRotCoeff, Constants.aeta);
+        double[] defl = measureDeflection(11, dt, 60000, 20000);     // ratio + tau (Brownian off)
+        double lp = measureLp(LP_NSEG, Constants.stdSegLength, LP_STEPS, dt, LP_ALPHA, LP_CAD);  // Lp (Brownian on)
+        System.out.println("---------------------------------------------------------------");
+        System.out.printf("  READOUTS:  deflection ratio = %.4f   tau_meas/tau_theo = %.4f   Lp_meas = %.3f um%n",
+                defl[0], defl[1] / defl[2], lp);
+        System.out.println("########################################################################");
     }
 
     // ----------------------------------------------------------------- chain (inc 2a)
@@ -315,11 +457,11 @@ public final class DiffusionHarness {
             s.setCoord(k, (float) (x0 + k * spacing), 0f, 0f);
             s.brownTransScale.set(k, 1.0f);
             // Rotational Brownian ONLY on chain-end segments (>=1 free end), matching v1:
-            //   rScale = (filAtEnd1 && filAtEnd2) ? 0 : rs  ("only apply brownian torques to end
-            //   filaments.. best matches expected angular correlations"). Kicking interior segments
-            //   rotationally makes adjacent joints zigzag -> a jagged, non-smooth bend.
+            //   rScale = (filAtEnd1 && filAtEnd2) ? 0 : BRotCoeff. Interior segments kicked
+            //   rotationally would make adjacent joints zigzag (2a-FIX). End segments get
+            //   BRotCoeff=0.5 (v1 default, Env.java:583) — the 2b fidelity fix (was 1.0).
             boolean interior = (k > 0 && k < nSeg - 1);
-            s.brownRotScale.set(k, interior ? 0f : 1f);
+            s.brownRotScale.set(k, interior ? 0f : (float) Constants.BRotCoeff);
             // wire topology (no storage reshape): my end2 -> next.end1 (side 0); my end1 -> prev.end2 (side 1)
             if (k < nSeg - 1) { s.end2NbrSlot.set(k, k + 1); s.end2NbrSide.set(k, 0); }
             if (k > 0)        { s.end1NbrSlot.set(k, k - 1); s.end1NbrSide.set(k, 1); }

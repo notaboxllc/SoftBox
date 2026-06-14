@@ -71,7 +71,7 @@ public final class FilamentStore {
     // ---- Kernel scalar params ----
     // params (float): [0]=dt, [1]=brownianForceMag (= sqrt(2kT/dt))
     public final FloatArray params;
-    // counts (int):   [0]=n, [1]=stepCount, [2]=runSeed
+    // counts (int):   [0]=n, [1]=stepCount, [2]=runSeed, [3]=loadOn (deflection tau release)
     public final IntArray   counts;
     // chainParams (float, inc 2a): [0]=dt [1]=fracMove [2]=fracR [3]=fracMoveTorq
     //   [4]=filTorqSpringActive(0/1) [5]=filTorqSpring [6]=actinMonoRadius. Allocated
@@ -113,7 +113,8 @@ public final class FilamentStore {
         end2NbrSide = new IntArray(n);
 
         params = new FloatArray(2);
-        counts = new IntArray(3);
+        counts = new IntArray(4);
+        counts.set(3, 1);   // loadOn (default; deflection harness toggles for tau release)
         chainParams = new FloatArray(7);
 
         // zero the accumulators explicitly (free rod: forceSum/torqueSum stay zero)

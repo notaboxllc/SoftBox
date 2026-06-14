@@ -73,6 +73,17 @@ package. Two helper scripts:
 ./run_gpu.sh [N [M_trans]] # java @tornado-argfile … softbox.DiffusionHarness   (FDT validation)
 ```
 
+**Characterize a filament (inc 2b, manual tuning).** One command → `{deflection ratio, τ_meas/τ_theo,
+Lp_meas}` for the current coefficients (override `-fracR <v>`/`-fmt <v>`; BRotCoeff via Constants):
+```
+./run_gpu.sh -characterize                 # ~40s; ratio + tau (Brownian off) + Lp (Brownian on)
+./run_gpu.sh -deflect 11 60000 -fracR 0.1  # just deflection ratio + tau
+./run_gpu.sh -lp 539 60000 -fmt 0.05       # just Lp (tangent-correlation C(s) + weighted log-fit)
+```
+Measurement/reporting only — the v1 auto-tune coefficient-search loop is deliberately NOT ported.
+Lp/τ are instruments validated against v1's *measurement* (fixtures/filament_characterization_v1.md),
+not biological-target gates.
+
 **Watch the rods (inc 1.5, file-based Three.js playback).** `-3js <dir>` dumps per-frame JSON in the
 v1 viewer's schema; off by default, the FDT path is byte-for-byte unaffected.
 
@@ -118,6 +129,12 @@ Increment 1 (rigid-rod Langevin slice) FDT-validated; 1.5 (Three.js frame output
   Found+fixed a float32 limit at very low fracR (stiff filaments): the bending angle now uses
   `asin(|cross|)` (hand-rolled `accurateAsin` poly) instead of `acos(dot)` to dodge small-angle
   cancellation — important for microtubules (Lp~mm). See JOURNAL 2026-06-13 (deflection benchmark).
-- **2b — NEXT.** The full deflection ratio/τ + LP/persistence-length *fixture* (the `-deflect` harness
-  is its foundation), plus the `BRotCoeff=0.5` end-segment rotational-Brownian calibration (v2 uses
-  1.0 now). `fracMove`/`fracR`/`fracMoveTorq` carry over.
+- **2b — DONE.** Filament-characterization toolkit (manual-tuning instrument): `-characterize` reports
+  deflection ratio, τ_meas/τ_theo, Lp_meas. BRotCoeff=0.5 end-segment fix applied (FDT + static ratio
+  unaffected). Cross-validated vs v1: ratio ≤0.05%, τ_theo exact + τ_meas/τ_theo=0.992, Lp's C(s)
+  <0.05% (scalar Lp_meas ill-conditioned at uncalibrated coeffs — a diagnostic, not a gate). The
+  **auto-tune coefficient-search loop was deliberately NOT ported** (left in v1; planner decision).
+  See JOURNAL 2026-06-13 (inc 2b) + fixtures/.
+
+Increment 2 (chain physics + manual-tuning instrument) is complete. **Next: increment 3 — spatial grid
++ broad-phase** (entity-agnostic, anticipating surfaces/membranes).

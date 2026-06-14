@@ -2,6 +2,50 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 — Increment 2b: filament characterization toolkit (manual tuning)
+Ported v1's filament-characterization MEASUREMENT side (deflection ratio, relaxation time τ,
+persistence length Lp) as a manual-tuning instrument + the BRotCoeff fidelity fix. **The auto-tune /
+coefficient-search loop was deliberately NOT ported** (v1 DeflectionTuner*/the `eitherTunerActive`
+block — cleanly separable; left in v1 for a later decision). Lp and τ are instruments validated
+against v1's *measurement*, not biological-target gates.
+
+**BRotCoeff fidelity fix.** v1 applies rotational Brownian only to chain-end segments (≥1 free end)
+scaled by BRotCoeff=0.5 (interior=0; FilSegment.moveThing:633-642, `if(!filAtEnd1|!filAtEnd2)`,
+Env.java:583). v2 chain/Lp paths now use `interior?0:BRotCoeff` (was 1.0) — completes the 2a interior-
+vs-end correction. Free chain bend RMS 3.54°→1.98° (less end jitter, matches v1's appearance). Static
+deflection ratio unaffected (Brownian off) and **inc-1 FDT still PASS** (it uses bare 1.0, not
+Constants.BRotCoeff) — both re-verified.
+
+**τ (DeflectionSupport / -deflect).** Load → steady → release (counts[3]=0 gates extForce in
+seedAccumulators, no buffer re-upload) → 1/e crossing of the decay (log-interpolated) = τ_meas;
+τ_theo = N·ζ_perp·span³/(EI·π⁴), ζ_perp=midSeg bTransGam.y (port of v1 BoxOfActin.java:2933). Result:
+τ_theo=0.05697 s (v1 prints 0.057 — exact, same formula); τ_meas=0.05652 s, **τ_meas/τ_theo=0.992**.
+
+**Lp (-lp / measureLp).** Port of v1 accumulateLpData + computeLpMeas: free Brownian 539-seg/48-µm
+chain (matches v1 testLpFilLength=48, monomerCt=32 — both `static final`, so v2 must match), tangent
+correlation C(k)=⟨u_i·u_{i+k}⟩ EWMA(α), Lp=−1/slope of weighted (w=C²) log-fit over C_k>0.01.
+
+**Unified entry point (-characterize):** one command → `{deflection ratio, τ_meas/τ_theo, Lp_meas}`
+for the current coeffs (override fracR/fmt via flags, BRotCoeff via Constants). ~40 s. Example output:
+ratio 0.9983, τ_meas/τ_theo 0.9920, Lp_meas 1441 µm.
+
+**Cross-validation vs v1 (fixtures/filament_characterization_v1.md):**
+- ratio: ≤0.05% across fracR (TIGHT, from the deflection-benchmark session).
+- τ: τ_theo exact; τ_meas/τ_theo=0.992. (v1's τ_meas needs an interactive force-release, not headlessly
+  capturable; the deterministic relaxation is pinned by the ≤0.04% static-ratio match.)
+- Lp: the **C(s) measurement reproduces v1 to <0.05%** (C(1) 0.9987 vs 0.9989, C(538) 0.7366 vs 0.7370
+  at fmt=0.265 — proving instrument + physics faithful). BUT the **scalar Lp_meas is ill-conditioned**
+  (v1 785 µm vs v2 1441 µm, ~2×): the uncalibrated chain is far stiffer than its 48-µm contour, so C
+  barely decays and 1/slope is noise-dominated — intrinsic to the metric (present in v1; why v1 has the
+  auto-tune and treats Lp as a diagnostic). NOT a port bug (C(s) match proves it); NOT bailed. Lp is a
+  faithfully-ported diagnostic, not a tightly-reproducing scalar at uncalibrated coeffs.
+
+So: ratio + τ are tight quantitative cross-checks; Lp's C(s) is tight, its scalar is an honest
+ill-conditioned diagnostic. Manual-tuning instrument complete; auto-tune deferred.
+
+Open / next: increment 3 (spatial grid + broad-phase). Still deferred: the auto-tune loop (planner
+decision), and whether to expose aeta/segment-length as -characterize flags (currently fracR/fmt only).
+
 ## 2026-06-13 — Deflection benchmark: v2 ≡ v1 force/torque coding (+ low-fracR float32 fix)
 Validated the 2a chain force law against v1's deflection benchmark, settled a fracR-direction
 puzzle, and found+fixed a float32 precision limit at very low fracR (stiff filaments). This is the
