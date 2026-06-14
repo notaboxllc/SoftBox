@@ -63,7 +63,7 @@ SoA primitive component arrays the canonical state and keeps that state device-r
    system; validate against v1 deflection / relaxation-time / LP-persistence fixtures. Ungated:
    filaments touch neither nodes nor membrane.
 2. Actin chain / bending-force system.
-3. Spatial grid + broad-phase — entity-agnostic (anticipating surfaces/membranes).
+3. **Spatial grid + broad-phase — entity-agnostic. DONE.** (anticipating surfaces/membranes).
 4. Binding detection + myosin motors — validate against the v1 gliding-assay fixture.
 5. Crosslinkers / Arp2/3 branching.
 6. Protein-node contractile path — validate against the v1 node-tension fixture.
@@ -118,6 +118,19 @@ python3 sim_server.py 8000 # serve from ~/Code/SoftBox; then open
                            #   http://localhost:8000/sim_viewer_boa.html  (Recent picker, newest)
 ```
 
+**Broad-phase test (inc 3, entity-agnostic spatial grid).** Device-resident uniform grid (CSR) +
+broad-phase over the `SpatialBodyView` (bounding spheres), gated by exact set-equality vs an O(N²)
+brute force on both GPU and `-cpu`, CSR bit-identical CPU↔GPU, O(N) vs O(N²) scaling.
+**Infrastructure only — writes no forces** (first narrow-phase consumer is motors, inc 4):
+```
+./run_grid.sh [N [M]]        # default 512 2000; GPU run + CPU cross-check (grid==brute, CSR bit-identity)
+./run_grid.sh -cpu [N [M]]   # CPU runner only (triage mode)
+```
+`SpatialBodyView` is the extensible seam (center+boundingRadius+ownerStore/ownerSlot); `FilamentStore.
+publishToBodyView` is the only publisher now. `SpatialGrid` kernels read ONLY the view (no FilSegment).
+The grid uses center-cell binning with cellSize=2·maxRadius+cutoff so the 27-cell stencil is provably
+complete; every kernel runs on both GPU and `-cpu` (no KernelContext/atomics — see JOURNAL inc 3).
+
 `sim_server.py` + `sim_viewer_boa.html` are copied **verbatim** from v1 (do not fork/modify the
 viewer). `softbox/FrameWriter.java` emits `segments` only (no myosins/minifilaments/nodes — deferred
 to the planner pre-motors); it reads the already-pulled host pose, adds no device sync, and is gated
@@ -169,4 +182,13 @@ TaskGraph/WorkerGrid/DataTransferMode references in any kernel body; **no refact
 on FDT / static ratio / connectivity within float32 last-bit tolerance. A CPU reference is now in hand
 for triaging increment-3 broad-phase bugs as physics-logic vs PTX-lowering. See JOURNAL 2026-06-13.
 
-**Next: increment 3 — spatial grid + broad-phase** (entity-agnostic, anticipating surfaces/membranes).
+**Increment 3 — DONE.** Entity-agnostic device-resident spatial grid (CSR) + broad-phase over the
+`SpatialBodyView` (bounding spheres; `FilamentStore.publishToBodyView` the sole publisher).
+Infrastructure, no forces written. Broad-phase candidate set == O(N²) brute force EXACTLY on both GPU
+and `-cpu` (N=512, 2048; all sampled steps); CSR bit-identical CPU↔GPU; O(N) grid vs O(N²) brute
+demonstrated (work + timing). Center-cell binning + cellSize=2·maxR+cutoff makes the 27-cell stencil
+provably complete; histogram/scatter kept single-threaded (no KernelContext atomics) so every kernel
+runs on both runners. FDT/deflection/chain numbers unchanged. See JOURNAL 2026-06-13 (inc 3).
+
+**Next: increment 4 — binding detection + myosin motors** (the first narrow-phase consumer on the
+body view; validate against the v1 gliding-assay fixture).

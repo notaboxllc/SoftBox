@@ -1,5 +1,6 @@
 package softbox;
 
+import uk.ac.manchester.tornado.api.annotations.Parallel;
 import uk.ac.manchester.tornado.api.types.arrays.FloatArray;
 import uk.ac.manchester.tornado.api.types.arrays.IntArray;
 
@@ -156,6 +157,41 @@ public final class FilamentStore {
     }
     public void setYVec(int i, float x, float y, float z) {
         yVec.set(planeX(i), x); yVec.set(planeY(i), y); yVec.set(planeZ(i), z);
+    }
+
+    /**
+     * Device step (increment 3): publish each segment into the entity-agnostic
+     * SpatialBodyView as a bounding sphere. center = segment coord; boundingRadius =
+     * half-length + actin radius (the sphere that bounds the capsule). ownerStore =
+     * STORE_FILAMENT(0), ownerSlot = segment slot, so the future narrow-phase consumer
+     * can resolve a candidate body back to its FilSegment.
+     *
+     * One thread per segment. The filament coord is planar with stride n; the body view
+     * center is planar with stride cap (= center.getSize()/3). FilamentStore is the only
+     * publisher this increment, writing body slots [0,n) (baseSlot 0). viewParams[0] =
+     * actinRadius. Plain method over the SoA arrays — runs on the GPU TaskGraph and the
+     * sequential -cpu runner identically (the device-agnostic invariant).
+     */
+    public static void publishToBodyView(
+            FloatArray coord,
+            FloatArray segLength,
+            FloatArray center,
+            FloatArray boundingRadius,
+            IntArray   ownerStore,
+            IntArray   ownerSlot,
+            FloatArray viewParams,
+            IntArray   counts) {
+        int n   = coord.getSize() / 3;
+        int cap = center.getSize() / 3;
+        float actinRadius = viewParams.get(0);
+        for (@Parallel int i = 0; i < n; i++) {
+            center.set(i,           coord.get(i));         // X plane (src stride n -> dst stride cap)
+            center.set(cap + i,     coord.get(n + i));     // Y plane
+            center.set(2 * cap + i, coord.get(2 * n + i)); // Z plane
+            boundingRadius.set(i, 0.5f * segLength.get(i) + actinRadius);
+            ownerStore.set(i, SpatialBodyView.STORE_FILAMENT);
+            ownerSlot.set(i, i);
+        }
     }
 
     public void setParams(double dt, double brownianForceMag) {

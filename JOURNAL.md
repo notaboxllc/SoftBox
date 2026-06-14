@@ -2,6 +2,81 @@
 
 Last updated: 2026-06-13
 
+## 2026-06-13 — Increment 3: entity-agnostic spatial grid + broad-phase
+Device-resident uniform grid (CSR) + broad-phase that emits candidate interaction pairs.
+**Infrastructure, not physics — no forces written this increment** (the first narrow-phase consumer
+is motors, inc 4). Gate: exact set-equality vs an O(N²) brute-force reference, on **both** GPU and the
+`-cpu` runner, CSR bit-identical CPU↔GPU, O(N) vs O(N²) scaling. New: `softbox/SpatialBodyView.java`,
+`softbox/SpatialGrid.java`, `FilamentStore.publishToBodyView`, `softbox/BroadPhaseHarness.java`,
+`run_grid.sh`.
+
+**Body view (the entity-agnostic seam).** `SpatialBodyView` represents any collidable body as a
+bounding SPHERE: `center` (planar SoA, plane stride = capacity) + `boundingRadius` + back-pointer
+`ownerStore`/`ownerSlot`. The grid + broad-phase read ONLY the view — zero `FilSegment` knowledge.
+`FilamentStore.publishToBodyView` (a device step) is the sole publisher now: center = segment coord,
+boundingRadius = ½·segLength + actin radius (sphere bounds the capsule), ownerStore=STORE_FILAMENT,
+ownerSlot=slot. Nodes/membrane/motors register into this same view later.
+
+**CSR build (ported from v1 GPUMotorBinding).** cellId = ix + iy·nX + iz·nX·nY. Passes: bodyCell
+(center cell, clamped) → gridZero → gridHistogram → **two-level parallel prefix-sum**
+(gridScanLocal per-chunk exclusive scan + gridScanChunks single-thread scan of chunk totals +
+gridScanAdd add-base/reset-cursor) → gridScatter. The parallel scan is the hard primitive, ported
+from v1's gridScanLocal/Chunks/Add (GRID_SCAN_CHUNK=512). Histogram + order-independent scan + serial
+scatter (bodies in index order) ⇒ CSR **bit-identical** (offsets + within-cell order), not merely
+multiset-equal.
+
+**Binning choice → provable completeness + exact match.** Each body bins into the single cell of its
+CENTER; cellSize = 2·maxBoundingRadius + cutoff. Then any pair within reach (centerDist ≤ rᵢ+rⱼ+cutoff
+≤ 2·maxR+cutoff = cellSize) has center cells ≤1 apart in every axis ⇒ in the 27-cell stencil. The
+broad-phase re-applies the EXACT predicate (`distSq ≤ (rᵢ+rⱼ+cutoff)²`, same as brute force) before
+emitting, so over-scanned cells are filtered and none are missed ⇒ candidate set == brute set exactly.
+Center binning ⇒ each body in one cell ⇒ pair (i,j) discovered once by thread i ⇒ the i<j guard dedups
+with no min-corner logic (unlike v1's AABB binning, which needed it). Output = per-body owned slices
+candPartner[i·MAX_CAND+k]/candCount[i] (race-free, no atomics; overflow detected + reported).
+
+**FINDING — KernelContext atomics dropped for dual-runner portability.** v1's production
+`gridHistogramKernel` uses `context.atomicAdd` (a TornadoVM KernelContext device construct) which CANNOT
+run on the plain-Java `-cpu` runner. To honour the one-implementation invariant (every kernel runs on
+BOTH runners), the histogram + scatter are single-threaded (`@Parallel` range 1, serial inner loop) —
+exactly v1's `gridAssembleKernel` oracle structure: race-free, O(N), no atomics, no KernelContext.
+Serial on the GPU but O(N) (the parallel work is the scan + broad-phase). A future parallel
+chunk-ownership histogram/scatter (v1's gridScatterChunkKernel pattern, also atomic-free) can replace
+them without breaking the invariant.
+
+**Validation (`./run_grid.sh [N [M]]`, default 512×2000; also N=2048).** Bodies = free rods diffusing
+(inc-1 brownian→integrate, translational only) in a density-fixed cluster; grid rebuilt every step;
+candidate vs brute compared as order-independent sets at 5 sampled steps.
+
+| check | N=512 | N=2048 |
+|---|---|---|
+| grid set == brute set (GPU), all steps | EXACT | EXACT |
+| grid set == brute set (CPU), all steps | EXACT | EXACT |
+| CSR bit-identical CPU↔GPU, all steps | yes | yes |
+| candidate set identical CPU↔GPU, all steps | yes | yes |
+| max candidates/body (MAX_CAND=256) | 19 | 23 (no overflow) |
+
+candPairs densest at step 0 (2639 @512, 11153 @2048), falling as the cluster spreads — physically
+right. A per-sample interior check guards 27-stencil completeness (flags any body clamped to a grid
+edge cell rather than silently missing a pair); none triggered.
+
+**Scaling (fixed density, CPU runner, work + timing):**
+
+| N | candPairs | bruteTests | gridTests | grid(ms) | brute(ms) |
+|---|---|---|---|---|---|
+| 512  | 2639  | 130,816   | 26,610  | 0.281 | 0.332 |
+| 2048 | 11153 | 2,096,128 | 129,606 | 1.211 | 4.854 |
+
+×N=4: bruteTests ×16.0 (=N²), gridTests ×4.9 (≈N); brute(ms) ×14.6 (≈N²), grid(ms) ×4.3 (≈N). Grid
+already beats brute at N=512 and is 4× faster at N=2048, gap widening. (gridTests ×4.9 vs ideal 4.0 is
+a cluster surface effect — fewer neighbours per body at the smaller cluster's relatively larger
+surface; vanishes as N→∞, clearly linear not quadratic.)
+
+**No forces written → production paths unaffected (verified):** GPU FDT (D_par 1.11676e-1, D_rot
+1.89712e1), deflection (ratio 0.99831, τ 0.9920), chain (max gap 0.04262 µm) all reproduce their
+pre-inc-3 numbers exactly. Device-resident: grid built on-device each step; host reads only at sampled
+validation steps (UNDER_DEMAND). No bail-out triggered. Ready for inc 4 (motors) to add the first
+narrow-phase consumer on the body view.
+
 ## 2026-06-13 — Pre-inc-3 interlude: CPU validation runner + device-agnostic invariant
 A debugging/validation interlude before the broad-phase. Stood up a **sequential CPU runner that
 executes the SAME system methods** (no TaskGraph) as a second runner, and recorded the
