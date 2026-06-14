@@ -19,14 +19,17 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
  * convention. Kernels recover cap as center.getSize()/3 and the active body count
  * S from counts[1]; bodies [0,S) are live, [S,cap) are padding.
  *
- * ownerStore ids (room to grow): 0 = FilamentStore. Reserved for nodes/membrane/
- * motors. The grid/broad-phase never read ownerStore/ownerSlot — those are for the
- * narrow-phase consumer (motors, inc 4) to resolve a candidate body back to its
- * physical object.
+ * ownerStore ids (room to grow): 0 = FilamentStore, 1 = MotorStore (inc 4a).
+ * Reserved for nodes/membrane. The grid/broad-phase never read ownerStore/ownerSlot —
+ * those are for the narrow-phase consumer (BindingDetectionSystem, inc 4a) to resolve
+ * a candidate body back to its physical object and to FILTER candidate pairs by store
+ * (motor↔segment). Two publishers now register into this same view (FilamentStore +
+ * MotorStore); the grid/broad-phase code is entity-agnostic and unchanged.
  */
 public final class SpatialBodyView {
 
     public static final int STORE_FILAMENT = 0;
+    public static final int STORE_MOTOR    = 1;
 
     public final int capacity;
     public int count;                       // active bodies [0,count)

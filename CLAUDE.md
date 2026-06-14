@@ -65,6 +65,9 @@ SoA primitive component arrays the canonical state and keeps that state device-r
 2. Actin chain / bending-force system.
 3. **Spatial grid + broad-phase — entity-agnostic. DONE.** (anticipating surfaces/membranes).
 4. Binding detection + myosin motors — validate against the v1 gliding-assay fixture.
+   **Split into 4a (binding) / 4b (gliding).** 4a — DONE: motors as a second entity/publisher +
+   binding detection + bind/unbind kinetics, NO force (no power stroke/surface/gliding). 4b: power
+   stroke + surface confinement + gliding velocity vs the v1 gliding-assay fixture.
 5. Crosslinkers / Arp2/3 branching.
 6. Protein-node contractile path — validate against the v1 node-tension fixture.
 7. Membrane — StickyNode bodies + NodeLink springs + the iterative relaxation solver (the
@@ -126,8 +129,23 @@ brute force on both GPU and `-cpu`, CSR bit-identical CPU↔GPU, O(N) vs O(N²) 
 ./run_grid.sh [N [M]]        # default 512 2000; GPU run + CPU cross-check (grid==brute, CSR bit-identity)
 ./run_grid.sh -cpu [N [M]]   # CPU runner only (triage mode)
 ```
-`SpatialBodyView` is the extensible seam (center+boundingRadius+ownerStore/ownerSlot); `FilamentStore.
-publishToBodyView` is the only publisher now. `SpatialGrid` kernels read ONLY the view (no FilSegment).
+**Motor-binding test (inc 4a, first narrow-phase consumer).** Myosin motors as a second entity type +
+publisher into the SAME `SpatialBodyView`; `BindingDetectionSystem` consumes the broad-phase candidate
+pairs, FILTERS by `ownerStore` to motor↔segment pairs, applies the exact v1 bind-reach predicate, and
+runs faithful v1 kinetics (deterministic bind, catch-slip release = kOff·dt at zero force). Gated by
+reachable-set exactness vs brute force (both runners), the analytic off-rate, and CPU≡GPU bit-identity.
+**Bound motors apply NO force this increment** (no power stroke/surface/gliding — all 4b):
+```
+./run_motor.sh                  # GPU + CPU cross-check (default M=3000): reachable exact, off-rate, CPU≡GPU
+./run_motor.sh -cpu             # CPU runner only (triage)
+./run_motor.sh -3js threejs_motor   # dump viewer frames (bound motors red + link to segment)
+```
+The broad-phase + grid + FilamentStore are UNCHANGED — only new files (`MotorStore`,
+`BindingDetectionSystem`, `MotorBindingHarness`) + one `SpatialBodyView` constant (`STORE_MOTOR`).
+
+`SpatialBodyView` is the extensible seam (center+boundingRadius+ownerStore/ownerSlot); two publishers
+now register into it (`FilamentStore.publishToBodyView` + `MotorStore.publishToBodyView`). `SpatialGrid`
+kernels read ONLY the view (no FilSegment, no Motor).
 The grid uses center-cell binning with cellSize=2·maxRadius+cutoff so the 27-cell stencil is provably
 complete; every kernel runs on both GPU and `-cpu` (no KernelContext/atomics — see JOURNAL inc 3).
 
@@ -190,5 +208,20 @@ demonstrated (work + timing). Center-cell binning + cellSize=2·maxR+cutoff make
 provably complete; histogram/scatter kept single-threaded (no KernelContext atomics) so every kernel
 runs on both runners. FDT/deflection/chain numbers unchanged. See JOURNAL 2026-06-13 (inc 3).
 
-**Next: increment 4 — binding detection + myosin motors** (the first narrow-phase consumer on the
-body view; validate against the v1 gliding-assay fixture).
+**Increment 4a — DONE.** Myosin motors as a second entity type + the first narrow-phase consumer of the
+broad-phase (binding detection + bind/unbind kinetics). **No motion, no force this increment** (power
+stroke + surface confinement + gliding velocity are 4b). Entity-agnostic design VALIDATED: the grid/
+broad-phase needed ZERO changes; motors register into the existing `SpatialBodyView` via a second
+publisher and the consumer (`BindingDetectionSystem`) filters broad-phase candidates by `ownerStore` —
+all motor/segment type logic lives in the consumer. Reachable motor↔segment set == brute force EXACTLY
+on GPU and `-cpu` (negative-control motors never reachable); faithful v1 kinetics (deterministic bind +
+catch-slip release, which at zero force = kOff·dt) reproduce the analytic off-rate (empirical p_off
+0.00999 vs kOff·dt 0.01000, 0.10%); CPU≡GPU bit-identical (bound-state + stats). v1's k_on/(k_on+k_off)
+does NOT apply (v1 binds deterministically) and v1's avgBound≈7.6 needs the 4b power-stroke force —
+neither is a 4a gate (planner decision: faithful mechanism). FDT/deflection/chain/broad-phase all
+reproduce their pre-inc-4 numbers (bound motors apply no force — verified). New: `MotorStore`,
+`BindingDetectionSystem`, `MotorBindingHarness`, `run_motor.sh`; +`SpatialBodyView.STORE_MOTOR`. See
+JOURNAL 2026-06-14 (inc 4a).
+
+**Next: increment 4b — gliding** (power stroke force + surface/`keepMyosinsOnSurface` confinement +
+gliding velocity; validate against the v1 gliding-assay fixture — avgBound + gliding speed).

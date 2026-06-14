@@ -1,6 +1,94 @@
 # Soft Box Project Journal
 
-Last updated: 2026-06-13
+Last updated: 2026-06-14
+
+## 2026-06-14 — Increment 4a: myosin motors + binding detection (first narrow-phase consumer)
+Motors as a SECOND entity type + the first narrow-phase consumer of the broad-phase: binding
+detection + bind/unbind kinetics. **No motion this increment** — no power stroke, no surface
+confinement, no gliding velocity (all 4b). **Bound motors apply NO force.** New: `softbox/MotorStore.
+java`, `softbox/BindingDetectionSystem.java`, `softbox/MotorBindingHarness.java`, `run_motor.sh`; one
+constant added to `SpatialBodyView` (`STORE_MOTOR=1`). **Everything else — the broad-phase, the grid,
+FilamentStore, the Brownian/integration/derive systems — is UNCHANGED.**
+
+**Entity-agnostic design VALIDATED.** The grid/broad-phase (`SpatialGrid`) needed zero changes: motors
+register into the existing `SpatialBodyView` via a second publisher (`MotorStore.publishToBodyView`,
+center=head, boundingRadius=reach, ownerStore=STORE_MOTOR, ownerSlot=slot), occupying body slots
+[nFil, nFil+nMot). The consumer (`BindingDetectionSystem.invertCandidates`) consumes the broad-phase
+candidate pairs and FILTERS by `ownerStore` to motor↔segment pairs — all `FilSegment`/`Motor` type
+logic lives in the consumer, none in the broad-phase. `invertCandidates` handles BOTH pair orderings
+(motor=i/seg=j and seg=i/motor=j), so it is independent of publisher layout in the view; single-thread
+serial ⇒ race-free, deterministic, bit-identical CPU↔GPU.
+
+**MotorStore layout (SoA, source of truth, device-resident).** Planar SoA (stride nMotors): `head`
+(bindTip = body-view center), `uVec` (head axis), `rodUVec` (rod axis), `anchor` (viewer link only).
+Scalars: `reach` (= myoColTol, also the body bounding radius). Bound-state in ONE int `boundSeg[m]`:
+≥0 → bound to that segment slot; −1 → free & bindable; −2 → free in the one-step rebind refractory
+(v1 myoRebindTime 1e-5 s < dt=1e-4 s). `bindArc[m]` = arc-length bind site. `stats[2m|2m+1]` =
+per-motor (bound-step, release) counters (race-free; host sums). `kinParams` carries the v1 catch-slip
+constants (kOff=100/s, αCatch=0.92, αSlip=0.08, xCatch/xSlip) + reach/alignTol + forceDotFil(=0).
+
+**Kinetics — FAITHFUL v1 mechanism (planner decision).** v1 myosin binds DETERMINISTICALLY on contact
+(modulo refractory) and releases via the force-dependent Guo–Guilford catch-slip rate
+(`MyoFilLink.ckRelease`, p = kOff·dt·[αCatch·e^(−F·xCatch/kT)+αSlip·e^(+F·xSlip/kT)]). At zero force
+(no power stroke this increment) catch+slip = αCatch+αSlip = 1 ⇒ the release probability reduces
+**EXACTLY** to p = kOff·dt = 0.01 — so 4a's off-rate IS v1's, in the no-force limit, with NO tuning;
+the catch/slip terms are carried inert for 4b. Binding is deterministic (nearest reachable segment,
+no RNG). RNG (release only) is the REUSED v1 wang-hash keyed (slot, stepCount, runSeed) with a MOTOR
+salt — integer-identical on both runners. **The prompt's k_on/(k_on+k_off) equilibrium does NOT apply
+(v1 has no stochastic on-rate); validated the off-rate instead** (see below). The exact bind-reach
+predicate (`reachTestDistSq`) is v1 `MyoMotor.checkFilSegCollision`: perpendicular drop of the head
+onto the segment, gated by α∈[0,1], conDist<myoColTol(6 nm), the head-align gate (motDotFil≥−0.4) and
+the rod gate (rodDotFil≥0). ONE predicate, called by both the grid path and the brute reference.
+
+**Assay (`MotorBindingHarness`, default M=3000, brownScale=0.02, dt=1e-4).** Static gliding-assay-like
+config: 200 filaments (10×20, along x at z=0) with one "reachable" motor at each filament's centre
+(conDist≈0) + 100 "control" motors a z-offset (40 nm ≫ 6 nm) above the plane. Filaments diffuse
+(Brownian) at REDUCED amplitude — v1's 6 nm reach is tiny next to a full-amplitude diffusion step
+(~4.5 nm), so a stable geometric reachable set needs gentle motion; the off-rate is reach-INDEPENDENT
+(faithful mechanism unbinds only via stochastic release, never reach-loss), so it is unaffected. Motor
+rods tilted toward +x (normalize(0.3,0,1)) so the v1 rodDotFil≥0 gate clears with margin (a vertical
+rod sits EXACTLY on the gate boundary for a horizontal filament — a coin-flip on the filament's tiny
+z-tilt; tilting it took reachMot 105→200 at step 0).
+
+**Gate 1 — reachable-set EXACTNESS (exact, no tolerance): PASS on BOTH runners.** computeReachable
+(grid path, consuming broad-phase candidates) == bruteReachable (every motor×segment) EXACTLY at every
+sampled step, GPU and `-cpu`. Control motors NEVER reachable (negative control clean). reachMot 200 at
+step 0 decaying 200→98 as filaments diffuse out of the 6 nm z-reach (dynamic reachable set, exercising
+the consumer). No candidate overflow (maxCand=20 ≪ 256).
+
+| step | gridPairs | brutePairs | match | reachMot | control |
+|---|---|---|---|---|---|
+| 0 | 200 | 200 | EXACT | 200 | clean |
+| 750 | 176 | 176 | EXACT | 176 | clean |
+| 1500 | 138 | 138 | EXACT | 138 | clean |
+| 2999 | 98 | 98 | EXACT | 98 | clean |
+
+**Gate 2 — off-rate STATISTICS (tol 5%): PASS.** Empirical per-step release p = totalReleases/
+totalBoundSteps = 4739/474367 = **0.00999** vs analytic kOff·dt = **0.01000** (rel err **0.10%**); mean
+bond lifetime 100.1 vs 100.0 steps. This validates the stochastic release machinery + RNG keying.
+meanBound=158 motors, boundFraction=0.79 of 200 reachable (< the τ_on/(τ_on+τ_off)≈0.98 ideal because
+reachMot decays — motors that lose reachability stay free). **Not k_on/(k_on+k_off)** (v1 binds
+deterministically) and **not v1's avgBound≈7.6** (that needs the 4b power-stroke force) — neither is a
+4a gate; the analytic off-rate is.
+
+**Gate 3 — CPU≡GPU: bit-identical.** reachable set, bound-state (boundSeg), and stats all identical at
+every sampled step; final totals bit-identical (boundSteps 474367/474367, releases 4739/4739). Positions/
+uVec are bit-identical CPU↔GPU (the inc-3 result), so the predicate — even at the gate boundaries — and
+the integer RNG agree exactly ⇒ identical bind/release decisions.
+
+**No force written → production paths unaffected (verified).** `bindKinetics` writes only boundSeg/
+bindArc/stats, never forceSum/torqueSum; integration reads only the filament force accumulators, which
+motors never touch. Re-ran inc-3 broad-phase (CPU, candidate set EXACT == brute) and the deflection
+benchmark (ratio 0.99832, τ 0.9920) — both reproduce their pre-inc-4 numbers exactly. FDT/deflection/
+chain are unaffected (force-coverage: motor binding applies zero force this increment).
+
+**Viewer (`-3js <dir>`).** Bound motors drawn red with a rod from the anchor to the bound site on the
+segment (the link); free motors blue, rod pointing up. Emitted in the v1 viewer's `myosins` schema
+(rod/lever/motor composite) so the unmodified `sim_viewer_boa.html` renders binding/release. No fork of
+the viewer; `FrameWriter` stays segments-only (the motor frame writer is harness-local).
+
+Open: the dynamic reachable set decays over a run (filaments diffuse out of the tiny 6 nm reach); 4b's
+surface confinement + gliding will keep filaments engaged. No bail-out triggered.
 
 ## 2026-06-13 — Increment 3: entity-agnostic spatial grid + broad-phase
 Device-resident uniform grid (CSR) + broad-phase that emits candidate interaction pairs.
