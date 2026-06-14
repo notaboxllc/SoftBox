@@ -55,6 +55,12 @@ SoA primitive component arrays the canonical state and keeps that state device-r
   code on a different runner. Stay single-precision; fix float problems with better algorithms (cf.
   the `asin(|cross|)` bending angle), not a parallel double path. One-off double checks for a
   specific diagnosis are fine if thrown away.
+- **CPU≡GPU validation standard.** Bit-identical (to printed precision) for non-chaotic or
+  short-horizon checks (FDT, broad-phase set, static deflection, joint geometry). For **chaotic
+  many-body dynamics over long horizons** (gliding, contractile networks), float32 op-ordering
+  decorrelates the microstate (Lyapunov divergence) — bit-identity is unattainable and is not the
+  test. The standard there is **aggregate-statistical agreement within SEM**, matching how v1's own
+  CPU-vs-GPU runs agree.
 
 ## Porting discipline (per v1 GPU_MIGRATION_LESSONS.md)
 - **Force-coverage audit** for every ported subsystem: every force applied on exactly one path —
@@ -77,9 +83,10 @@ SoA primitive component arrays the canonical state and keeps that state device-r
    "power stroke" is not a force but emergent from an articulated 3-body motor + a load-coupled
    nucleotide cycle + alignment torques, so it re-architects 4a's point-motor and is staged). 4a —
    DONE (binding, no force). **4b-i — DONE: the articulated motor BODY** (rod→lever→head + 2 joints +
-   bed anchor, shared rigid-rod integration, validated isometrically). 4b-ii: cross-bridge spring +
-   alignment torques + the cross-entity force+torque gather (head ↔ pinned filament). 4b-iii: nucleotide
-   cycle + force-dependent catch-slip + surface + gliding velocity/avgBound vs the v1 fixture.
+   bed anchor, shared rigid-rod integration, validated isometrically). **4b-ii — DONE: cross-bridge
+   spring + alignment torques + the cross-entity force+torque gather** (head ↔ pinned filament, fixed
+   rest angles). 4b-iii: nucleotide cycle + rest-angle switching (the stroke) + force-dependent
+   catch-slip + surface → unpin → gliding velocity/avgBound vs the v1 fixture.
 5. Crosslinkers / Arp2/3 branching.
 6. Protein-node contractile path — validate against the v1 node-tension fixture.
 7. Membrane — StickyNode bodies + NodeLink springs + the iterative relaxation solver (the
@@ -169,6 +176,21 @@ CPU≡GPU on the aggregate joint statistics:
 The SHARED systems (`BrownianForceSystem`/`RigidRodLangevinIntegrationSystem`/`DerivedGeometrySystem`)
 run over `MotorStore.body` UNCHANGED; only `MotorJointSystem` + `TailAnchorSystem` are motor-specific.
 `RigidRodBody` is the factored shared layout (FilamentStore + MotorStore each embed one).
+
+**Cross-bridge + cross-entity gather test (inc 4b-ii, the design centerpiece).** Articulated motors
+bind a PINNED filament (4a binding, re-exercised via the head sub-body); the cross-bridge spring +
+alignment torques (`CrossBridgeSystem`: F8/F9/F10, fixed uncocked rest angle) transmit force+torque to
+the segments through the **segment-side CSR-inverse gather** (the race-free, atomics-free motor→segment
+coupling — the template every future multi-store coupling reuses). FIXED rest angles + pinned filament
+⇒ no stroke/motion/gliding (4b-iii). Gated by the gather exactly equalling a brute-force per-bond sum:
+```
+./run_xbridge.sh               # GPU + CPU cross-check (4 pinned segs, 12 motors, 3/seg)
+./run_xbridge.sh -cpu          # CPU runner only (triage)
+./run_xbridge.sh -3js threejs_xbridge -b 0.3   # viewer (motors bound to the pinned filament)
+```
+The gather (`CrossBridgeSystem.csrHistogram/csrScan/csrScatter` → `segGather`) is general infrastructure
+— it builds the segment→bound-motors CSR-inverse (inc-3 pattern keyed by `boundSeg`) and each segment
+sums its motors' stored bond reactions into its own forceSum/torqueSum (no atomics, no `KernelContext`).
 
 `SpatialBodyView` is the extensible seam (center+boundingRadius+ownerStore/ownerSlot); two publishers
 now register into it (`FilamentStore.publishToBodyView` + `MotorStore.publishToBodyView`). `SpatialGrid`
@@ -268,6 +290,21 @@ formula — verified D_par 1.11676e-1, deflection 0.99832 unchanged). New: `Rigi
 `MotorJointSystem`, `TailAnchorSystem`, `MotorBodyHarness`, `run_motorbody.sh`. See JOURNAL 2026-06-14
 (inc 4b-i).
 
-**Next: increment 4b-ii** — the cross-bridge spring + alignment torques (F8/F9/F10) + the cross-entity
-motor→segment force+torque gather (the design-risk infra: race-free CSR-inverse, no atomics), head ↔ a
-2b-pinned filament; validated on the isometric pinned step (force applied once, race-free, CPU≡GPU).
+**Increment 4b-ii — DONE.** The myosin cross-bridge (`CrossBridgeSystem`: F8 spring + F9/F10 alignment
+torques, faithful `MyoFilLink` port, FIXED uncocked 90° rest angle) connecting the articulated motor
+head to a PINNED filament, + the **cross-entity motor→segment force+torque gather** (the design-risk
+centerpiece). The gather is race-free WITHOUT atomics by a segment-side sum over a segment→bound-motors
+CSR-inverse (inc-3 histogram/scan/scatter keyed by `boundSeg`); each bond is computed once (head-side
+self-write + seg-side reaction stored), and each segment sums its motors' stored reactions into its own
+forceSum/torqueSum. Gated EXACT: the gathered force+torque == a brute-force per-bond sum, **bit-identical**
+(same values, same motor order) on GPU + `-cpu`; CPU≡GPU on the gathered cross-bridge bit-identical
+(ΔF ~7e-19 N — float32 last-bit). 4a binding re-exercised on the new head sub-body (12/12 bound, 3/seg ⇒
+multi-motor gather). Force-coverage: F8 +F head / −F segment, F9/F10 −T head / +T segment, each once.
+Fixed rest angles + pinned filament ⇒ no stroke, no motion, no gliding. Existing paths unaffected (only
+new files added). New: `CrossBridgeSystem`, `MotorXBridgeHarness`, `run_xbridge.sh`; +CLAUDE.md CPU≡GPU
+validation-standard note. See JOURNAL 2026-06-14 (inc 4b-ii).
+
+**Next: increment 4b-iii** — the 4-state nucleotide cycle + rest-angle switching (90°↔120° / 0°↔60°,
+the power stroke) + force-dependent catch-slip → unpin the filament + surface confinement → measure
+gliding velocity + avgBound vs the v1 fixture (8.33 µm/s, meanBound 7.6). This is where the cross-entity
+gather (4b-ii) carries the real stroke force and the filament glides.

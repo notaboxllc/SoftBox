@@ -2,6 +2,69 @@
 
 Last updated: 2026-06-14
 
+## 2026-06-14 — Increment 4b-ii: cross-bridge + the cross-entity gather (pinned)
+Connected the articulated motor head (4b-i) to a **pinned** filament via the cross-bridge spring +
+alignment torques, and built the **cross-entity motor→segment force+torque gather** — the design-risk
+centerpiece, and the template every future multi-store coupling inherits. FIXED uncocked rest angle +
+pinned filament ⇒ **no stroke, no motion, no gliding** (those need the nucleotide cycle, 4b-iii). New:
+`softbox/CrossBridgeSystem.java`, `MotorXBridgeHarness.java`, `run_xbridge.sh`; + the CPU≡GPU
+validation-standard note in CLAUDE.md (Task 0). **No existing file touched** (purely additive).
+
+**Cross-bridge (`CrossBridgeSystem.bondForces`) — faithful `MyoFilLink` port.** Per bound motor, between
+its head tip (head sub-body end2) and the bound site on the segment (attachPt = seg.coord + (bindArc −
+½·segLen)·seg.uVec): F8 spring `F = myoSpring·dist` toward the site (addForces:187, myoSpring=1e-9 N/µm);
+F9 uVec-alignment torque toward the motor–actin rest angle (FIXED 90° uncocked; alignUVecTorque); F10
+yVec-alignment torque toward 0°. The cross-bridge force is applied at the head tip / the bound site, so
+each end gets the POSITIONAL torque R×F (R in metres, the v1 `incForceSum(F,pt)` 2-arg semantics,
+Thing.java:505). Equal-and-opposite: the head gets +F at its tip and −T9/−T10; the segment gets −F at
+attachPt and +T9/+T10. The bond is computed ONCE: the head-side is applied to the head
+sub-body (3m+2, self-write — one bond per head, race-free); the seg-side reaction is STORED in
+`bondSeg6[m*6..]` for the gather.
+
+**THE CROSS-ENTITY GATHER (the centerpiece, reusable infrastructure).** Motors write force to segments in
+a DIFFERENT store — the race v1 hit with spawn()+shared taForce. Race-free WITHOUT atomics/`KernelContext`
+(the dual-runner constraint) by a SEGMENT-SIDE gather over a **segment→bound-motors CSR-inverse** index:
+`csrHistogram` (count bound motors per segment) → `csrScan` (prefix-sum offsets) → `csrScatter` (motor ids
+grouped by segment) — exactly the inc-3 grid-CSR pattern keyed by `boundSeg` instead of cell, single-thread
++ serial (race-free, no atomics, both runners). Then `segGather`: each segment (one thread) sums its bound
+motors' stored `bondSeg6` reactions into its OWN forceSum/torqueSum. The scatter visits motors in index
+order ⇒ the per-segment list is sorted by m ⇒ the gather sums in the SAME order as the brute reference ⇒
+**bit-identical** (not merely modulo float ordering). This is general infra — crosslinkers / nodes /
+membrane↔ring reuse it (CSR-inverse keyed by the partner id + segment-side gather).
+
+**Force-coverage audit** (each force/torque on exactly one path): F8 spring +F on the head (self-write
+×1) / −F on the segment (gathered ×1) — equal-opposite by construction; F9 −T9 head / +T9 seg (×1); F10
+−T10 head / +T10 seg (×1). The gather == brute equality (below) proves each seg-side contribution is
+summed exactly once. No double-apply, no drop.
+
+**Harness (`MotorXBridgeHarness`, 4 pinned segments, 12 motors = 3/seg, dt=1e-5, Brownian off).** Pinned
+filament along x at z just above the standing head tips; 3 articulated motors under each segment. Binding
+ESTABLISHED on the host (deterministic): publishHeadFromBody → bruteReachable → bindKinetics — 4a binding
+re-exercised reading the **new head sub-body** (12/12 bound, [3 3 3 3] per segment ⇒ a multi-motor gather).
+Then bonds frozen. Per cross-bridge step: zero → brownian(off) → joints → anchor → bondForces (head +
+store) → integrate → derive → zero(fil) → CSR-inverse → segGather → bruteGather. The filament is pinned
+(not integrated); its forceSum/torqueSum receive the gathered cross-bridge for validation.
+
+**Gates (both runners): PASS.**
+
+| check | GPU | CPU |
+|---|---|---|
+| gathered F+T == brute per-bond sum (max diff) | **0.0 EXACT** | **0.0 EXACT** |
+| binding re-exercised (bound / per-seg) | 12/12 [3 3 3 3] | same |
+| CPU≡GPU gathered force (max ΔF) | — | **7.3e-19 N** (float32 last-bit) |
+| CPU≡GPU gathered torque (max ΔT) | — | **2.9e-26 N·m** |
+
+Σ|segForce| starts 3.6e-11 N (heads 3 nm below the filament → F8 = myoSpring·3nm ≈ 3pN ×12) and relaxes to
+a 3.7e-12 N steady residual as the heads are pulled to their bound sites + oriented to the filament (F9/F10)
+— a clean static cross-bridge equilibrium (no stroke). CPU≡GPU is held to **bit-identity** here (per the
+new validation standard: this config is near-static, not chaotic) and meets it to float32 last-bit.
+
+**Existing paths unaffected (verified):** 4b-i articulated motor PASS, 4a binding off-rate 0.00999 +
+reachable EXACT, inc-3 broad-phase EXACT, deflection ratio 0.99831 — all reproduce (only new files added,
+no existing system touched). No bail-out triggered. The cross-entity gather is in hand as reusable
+infrastructure. Ready for 4b-iii: the nucleotide cycle + rest-angle switching (the stroke) + F-dependent
+catch-slip → unpin + surface → gliding velocity + avgBound vs the v1 fixture (8.33 µm/s, meanBound 7.6).
+
 ## 2026-06-14 — Increment 4b-i: articulated myosin motor (the body), isometric
 Re-architected `MotorStore` from 4a's single point into v1's **3-body articulated myosin** — rod (tail,
 anchored) → lever (neck) → head — held by two joints, integrated by the SHARED rigid-rod systems, and
