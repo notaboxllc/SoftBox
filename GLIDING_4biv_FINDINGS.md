@@ -63,6 +63,27 @@ to **6.85 (now matching v1's 7.6)** and velocity 0.41× → 0.51×. **This is co
 **(b) The genuine remaining gap is ~1.5×, not 2×.** Apples-to-apples (v2 at ~3.4×1.1 vs v1 at 4×1):
 **4.27 vs 6.66 µm/s ⇒ 0.64×.** So against a same-box v1 the gap is ~1.5×, with everything else matching.
 
+**(d) FULL-SCALE GPU RESOLUTION — the clean comparison (a GlidingHarness GPU TaskGraph was built).**
+The 23-kernel gliding step is now ONE device-resident TaskGraph (`GlidingHarness.buildPlan`, run via
+`-gpu`; same systems as the CPU step, only dispatch differs — the one-implementation invariant). It
+compiles + runs at the **full 14×2 box (~13 370 motors)**, stable over the run, **no per-step host pull**
+(host reads at output cadence only — the residency test). Full-box, multi-seed (3 seeds, 10k steps):
+
+| | velocity (µm/s) | avgBound |
+|---|---|---|
+| **v2 (full box, GPU, 3 seeds)** | **4.25 ± 0.32** | **7.53 ± 0.50** |
+| v1 fixture (10 seeds) | 8.33 ± 0.18 | 7.64 ± 0.16 |
+
+**avgBound MATCHES v1 within SEM (7.53 vs 7.64). Velocity is a clean 0.51× MISS, well outside SEM.**
+This is the clean full-scale finding (faithful config + frozen physics + full box + multi-seed): the
+binding is right, the velocity coupling is ~half. The trigger to burrow into the mechanism (Section 6
+candidates), NOT to tune. **GPU throughput: 386 steps/s @ 13 370 motors (2.59 ms/step), ~19× the CPU
+runner** — the dense-proximity regime where residency wins (the full scaling-vs-v1-ceiling study is
+later). **CPU≡GPU (6×2 box, aggregate-within-SEM, the chaotic standard):** CPU 4.0/7.47 vs GPU 4.58/7.40
+— avgBound matches, velocity within the chaotic run-to-run spread. NOTE: single-seed runs are noisy and
+box/run-length-sensitive (v1 itself: 8.33 full-box-0.1s, 6.66 small-box, 5.81 big-box-0.3s) — only the
+full-box multi-seed numbers above are the rigorous comparison.
+
 **(c) Big-box converged run (box ≈6×2 µm, full y-width, 30k steps / 0.3 s — for better statistics).**
 v2: **velocity −4.0 µm/s, avgBound 7.47** (now matching v1's 7.6 essentially exactly); filament settles
 to z ≈ −0.056 (onto the bed plane); stable, minimal rotation. Notably the wider box raised avgBound to
@@ -127,9 +148,11 @@ collective stroke-transmission / duty-under-motion.
 | avgBound vs v1 | ✓ 6.85 vs 7.6 (same-box) |
 | Stability over the full run (no NaN/blow-up) | ✓ |
 | dwell times / stroke / catch-slip / gather (4b-iii/ii) | ✓ (committed) |
-| **Gliding velocity vs fixture** | ✗ — 0.64× vs same-box v1 (6.66), 0.51× vs full-box fixture (8.33) |
-| CPU≡GPU on gliding | not tested (no GPU plan yet) |
-| GPU throughput | not measured (no GPU plan yet) |
+| GPU TaskGraph (23 kernels, device-resident, full 14×2 box / ~13.4k motors) | ✓ builds, runs, stable, no per-step pull |
+| avgBound vs fixture (full box, 3 seeds) | ✓ 7.53 ± 0.50 vs 7.64 ± 0.16 (within SEM) |
+| CPU≡GPU on gliding (6×2, aggregate-within-SEM) | ✓ avgBound matches; velocity in chaotic spread |
+| GPU throughput | ✓ 386 steps/s @ 13.4k motors (~19× CPU runner) |
+| **Gliding velocity vs fixture** | ✗ — **0.51× clean full-scale finding**: 4.25 ± 0.32 vs 8.33 ± 0.18 (outside SEM) |
 
 ## 8. Reproduce
 

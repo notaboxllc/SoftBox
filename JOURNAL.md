@@ -29,12 +29,22 @@ catch-slip, stroke) are all frozen validated constants ⇒ a faithful-config phy
 build artifacts — worktree left clean):** v1 `glidingAssay500_val` at box 4×1 → 6.66 µm/s; viewer runs
 `threejs_v1_gliding` vs `threejs_gliding` for side-by-side. Open for the planner (see the doc): the ~1.5×
 coupling (chain-stiffness faithfulness at 0.2 vs the inc-2 deflection-calibrated 0.265; resisting-motor
-release timing; filament-z); the GlidingHarness **GPU TaskGraph is not yet built** (CPU-only → needed
-for the full-box fixture comparison + the GPU-throughput gate); a biochem-cadence sanity check.
+release timing; filament-z).
+
+**UPDATE — full-scale GPU resolution (the clean comparison).** Confirmed v1's MyoMotor nucleotide cycle
+fires EVERY step (biochemStart phase ungated, BoxOfActin.java:1523; the biochemFireCt=10 is the FilSegment
+poly/depoly gate, off in gliding) — v2's per-step cadence is faithful. Built the **GlidingHarness GPU
+TaskGraph** (`buildPlan`, 23 kernels, one device-resident graph, `-gpu`; same systems as the CPU step,
+only dispatch differs). Runs at the **full 14×2 box (~13.4k motors)**, stable, no per-step host pull.
+Full-box multi-seed (3 seeds, 10k steps): **velocity 4.25 ± 0.32 µm/s vs the v1 fixture 8.33 ± 0.18 —
+0.51×, a clean MISS outside SEM; avgBound 7.53 ± 0.50 MATCHES v1's 7.64 within SEM.** So binding is
+faithful, the velocity coupling is ~half — the clean full-scale finding (NOT tuned; the mechanism burrow
+is the scoped next move). **GPU throughput 386 steps/s @ 13.4k motors (~19× the CPU runner)** — residency
+wins this dense-proximity workload. CPU≡GPU aggregate-within-SEM (6×2 box: CPU 4.0/7.47 vs GPU 4.58/7.40).
 
 **Existing paths unaffected:** 4b-iii stroke checkpoint PASS, 4a binding PASS, FDT 1.11676e-1 — bindNearest
-is additive. **Increment 4 is NOT complete** (gliding velocity open); 4a binding + 4b-i/ii/iii physics
-stand validated.
+is additive. **Increment 4 is NOT complete** (gliding velocity is a clean full-scale finding); 4a binding
++ 4b-i/ii/iii physics + the binding/residency/throughput of the gliding assembly stand validated.
 
 ## 2026-06-14 — Increment 4b-iii (new physics): nucleotide cycle + the power stroke (pinned checkpoint)
 Added the genuinely-new physics of the stroke — the 4-state nucleotide cycle + the state-dependent

@@ -1,5 +1,12 @@
 package softbox;
 
+import uk.ac.manchester.tornado.api.GridScheduler;
+import uk.ac.manchester.tornado.api.TaskGraph;
+import uk.ac.manchester.tornado.api.TornadoExecutionPlan;
+import uk.ac.manchester.tornado.api.TornadoExecutionResult;
+import uk.ac.manchester.tornado.api.WorkerGrid;
+import uk.ac.manchester.tornado.api.WorkerGrid1D;
+import uk.ac.manchester.tornado.api.enums.DataTransferMode;
 import uk.ac.manchester.tornado.api.types.arrays.FloatArray;
 import uk.ac.manchester.tornado.api.types.arrays.IntArray;
 
@@ -28,15 +35,22 @@ public final class GlidingHarness {
     static final double DENSITY = 500.0;        // motors / µm²
     static final int    FIL_SEGS = 11;          // ~2 µm of 64-monomer segments
     static final int    FIL_MONO = 64;          // filSegLength (gliding override)
+    // bed geometry (default ≈6×2 box; -full → v1's 14×2 box / ~14000 motors for the fixture comparison)
+    static double bX0 = 2.2, bXlo = -3.5, bYhalf = 1.0;
+    static int SEED = 0x6111D;   // varied across an ensemble (placement + RNG)
 
     public static void main(String[] args) {
         int M = 2000;
         String viz = null;
         boolean diag = false;
         java.util.List<String> pos = new java.util.ArrayList<>();
+        boolean gpu = false;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("-3js")) viz = args[++i];
             else if (args[i].equals("-diag")) diag = true;
+            else if (args[i].equals("-gpu")) gpu = true;
+            else if (args[i].equals("-full")) { bX0 = 5.87; bXlo = -7.0; bYhalf = 1.0; }  // v1 14×2 box, ~13.4k motors
+            else if (args[i].equals("-seed")) SEED = 0x6111D + 7919 * Integer.parseInt(args[++i]);
             else pos.add(args[i]);
         }
         if (!pos.isEmpty()) M = Integer.parseInt(pos.get(0));
@@ -48,6 +62,7 @@ public final class GlidingHarness {
 
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz); return; }
         if (diag) { diagnose(sc, Math.max(M, 8000)); return; }
+        if (gpu) { gpuProbe(sc, M); return; }
         probe(sc, M);
     }
 
@@ -66,7 +81,7 @@ public final class GlidingHarness {
         sc.segL = L;
         // ---- filament: chain along +x at z=0, centered so it glides −x within the bed ----
         FilamentStore fil = new FilamentStore(nSeg);
-        double x0 = 2.2;               // filament +x end near x=2.2; glides −x with room for a 3× run
+        double x0 = bX0;               // filament +x end; glides −x with room for a long run
         sc.x0 = x0;
         for (int s = 0; s < nSeg; s++) {
             fil.monomerCount.set(s, FIL_MONO);
@@ -91,12 +106,12 @@ public final class GlidingHarness {
         // ---- motor bed: density-faithful patch around the filament's −x path. Wide enough in y that
         //      the filament's ends stay over motors as it rotates/wanders (v1's bed is the full 2µm-wide
         //      box; a narrow strip lets the ends rotate out → unsupported ends lag → velocity drops). ----
-        double bedXlo = -3.5, bedXhi = x0 + 0.5;     // long enough for a 3× (0.3 s) −x glide
-        double bedYhalf = 1.0;                       // full v1 y-width (boxYDim 2) → cut the finite-size effect
+        double bedXlo = bXlo, bedXhi = x0 + 0.5;     // long enough for the −x glide
+        double bedYhalf = bYhalf;                     // y-width (boxYDim) → governs the finite-size effect
         double bedX = bedXhi - bedXlo, bedY = 2 * bedYhalf;
         int nMot = (int) Math.round(DENSITY * bedX * bedY);
         MotorStore mot = new MotorStore(nMot);
-        java.util.Random rng = new java.util.Random(0x6111D);
+        java.util.Random rng = new java.util.Random(SEED);
         for (int m = 0; m < nMot; m++) {
             float ax = (float) (bedXlo + rng.nextDouble() * bedX);
             float ay = (float) (-bedYhalf + rng.nextDouble() * bedY);
@@ -118,7 +133,7 @@ public final class GlidingHarness {
     /** One gliding step (CPU runner). */
     static void step(Scene sc, int t) {
         FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
-        mot.setCounts(t, 0x6111D, f.n);
+        mot.setCounts(t, SEED, f.n);
         f.counts.set(1, t);
         // --- binding (dynamic) ---
         MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
@@ -148,6 +163,62 @@ public final class GlidingHarness {
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
     }
+
+    // ===================== GPU TaskGraph (GpuStepper — same systems, device dispatch) =================
+    static final int B = 64;
+    static GridScheduler sched;
+    /** The full gliding step as ONE device-resident TaskGraph (23 kernels) — mirrors `step()` exactly.
+     *  No per-step host pull (residency test); host reads fil.coord + boundSeg at output cadence only. */
+    static TornadoExecutionPlan buildPlan(Scene sc) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        TaskGraph tg = new TaskGraph("gliding")
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION,
+                    b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, b.bTransGam, b.bRotGam,
+                    b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.brownTransScale, b.brownRotScale,
+                    mot.head, mot.uVec, mot.rodUVec, mot.anchor, mot.boundSeg, mot.bindArc, mot.nucleotideState,
+                    mot.forceDotFil, mot.forceDotHist, mot.forceDotPlace, mot.stats,
+                    mot.bodyParams, mot.jointParams, mot.nucParams, mot.kinParams,
+                    sc.bondData, sc.xbParams, sc.segMotorCount, sc.segMotorOffsets, sc.segMotorMyo, sc.reachSeg, sc.reachCount,
+                    f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.bTransGam, f.bRotGam,
+                    f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.brownTransScale, f.brownRotScale,
+                    f.params, f.chainParams, f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, f.counts)
+            .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
+            .task("reach", BindingDetectionSystem::bruteReachable, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts)
+            .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.stats, mot.kinParams, mot.counts)
+            .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts)
+            .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts)
+            .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
+            .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
+            .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
+            .task("anchor", TailAnchorSystem::anchor, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts)
+            .task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams)
+            .task("applyHead", CrossBridgeSystem::applyHeadForce, sc.bondData, b.forceSum, b.torqueSum, mot.counts)
+            .task("integMot", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
+            .task("deriveMot", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts)
+            .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceDotHist, mot.forceDotPlace, mot.counts)
+            .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
+            .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
+            .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
+            .task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, sc.segMotorCount)
+            .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, sc.segMotorCount, sc.segMotorOffsets)
+            .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo)
+            .task("gather", CrossBridgeSystem::segGather, sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts)
+            .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
+            .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
+            .transferToHost(DataTransferMode.UNDER_DEMAND, f.coord, f.uVec, f.end1, f.end2, mot.boundSeg);
+
+        int nB = 3 * mot.nMotors, nM = mot.nMotors, nSeg = f.n;
+        sched = new GridScheduler();
+        for (String t : new String[]{ "publishHead","reach","release","bind","cycle","anchor","bond","applyHead","register" }) addW("gliding." + t, pad(nM));
+        for (String t : new String[]{ "zeroMot","brownMot","joints","integMot","deriveMot" }) addW("gliding." + t, pad(nB));
+        for (String t : new String[]{ "zeroFil","brownFil","chain","gather","integFil","deriveFil" }) addW("gliding." + t, pad(nSeg));
+        for (String t : new String[]{ "csrHist","csrScan","csrScatter" }) addS("gliding." + t);
+        return new TornadoExecutionPlan(tg.snapshot());
+    }
+    static int pad(int n) { return ((n + B - 1) / B) * B; }
+    static void addW(String n, int g) { WorkerGrid w = new WorkerGrid1D(g); w.setLocalWork(B, 1, 1); sched.addWorkerGrid(n, w); }
+    static void addS(String n) { WorkerGrid w = new WorkerGrid1D(1); w.setLocalWork(1, 1, 1); sched.addWorkerGrid(n, w); }
 
     static double centroidX(FilamentStore f) { double s = 0; for (int i = 0; i < f.n; i++) s += f.coordX(i); return s / f.n; }
     static double centroidZ(FilamentStore f) { double s = 0; for (int i = 0; i < f.n; i++) s += f.coordZ(i); return s / f.n; }
@@ -246,6 +317,41 @@ public final class GlidingHarness {
         System.out.printf("  power strokes (ADPPi→ADP while bound) = %.4f /bound-motor-step  ⇒  %.0f /s per bound motor%n",
                 strokeRatePerMotor, strokeRatePerMotor / DT);
         System.out.printf("  filament advance per power stroke = %.2f nm  (unloaded stroke ≈ 7 nm)%n", advancePerStroke * 1e3);
+    }
+
+    /** GPU probe: run the device-resident gliding TaskGraph; sample velocity/avgBound at output cadence
+     *  (no per-step host pull — the residency test) and report throughput. */
+    static void gpuProbe(Scene sc, int M) {
+        System.out.println("\n--- GPU probe: device-resident gliding TaskGraph (23 kernels), " + sc.mot.nMotors + " motors ---");
+        TornadoExecutionPlan plan = buildPlan(sc);
+        double cx0 = centroidX(sc.fil);
+        // warm-up execute (PTX compile) — untimed
+        sc.mot.setCounts(0, SEED, sc.fil.n); sc.fil.counts.set(1, 0);
+        plan.withGridScheduler(sched).execute();
+        long sample = 0; double boundSum = 0; double cxHalf = cx0; boolean nan = false;
+        int report = Math.max(1, M / 10);
+        long t0 = System.nanoTime();
+        for (int t = 1; t < M; t++) {
+            sc.mot.setCounts(t, SEED, sc.fil.n); sc.fil.counts.set(1, t);
+            TornadoExecutionResult res = plan.withGridScheduler(sched).execute();
+            if (t % report == 0 || t == M - 1) {
+                res.transferToHost(sc.fil.coord, sc.mot.boundSeg);
+                double cx = centroidX(sc.fil);
+                if (Double.isNaN(cx)) nan = true;
+                if (t >= M / 2 && cxHalf == cx0) cxHalf = cx;
+                boundSum += bound(sc.mot); sample++;
+                System.out.printf("  step %-8d centroidX=%.5f  avgBound(inst)=%d%n", t, cx, bound(sc.mot));
+            }
+        }
+        long t1 = System.nanoTime();
+        double sec = (t1 - t0) / 1e9, stepsPerSec = (M - 1) / sec;
+        double cxN = centroidX(sc.fil);
+        double vel = (cxN - cx0) / (M * DT), velSteady = (cxN - cxHalf) / ((M - M / 2) * DT);
+        double avgB = boundSum / sample;
+        System.out.printf("%n  velocity(net) = %.3f µm/s (%s), STEADY = %.3f, avgBound = %.2f  (v1 fixture 8.33/7.6), NaN=%s%n",
+                vel, vel < 0 ? "−x ✓" : "+x ?", velSteady, avgB, nan);
+        System.out.printf("  GPU THROUGHPUT: %.0f steps/s (%.2f ms/step) at %d motors; device-resident, host pull only at output cadence%n",
+                stepsPerSec, 1e3 / stepsPerSec, sc.mot.nMotors);
     }
 
     static void runViz(Scene sc, int M, String dir) {

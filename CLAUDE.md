@@ -344,10 +344,17 @@ coordinated net-assisting population — levers all frozen validated constants �
 Full report: `GLIDING_4biv_FINDINGS.md`. New: `GlidingHarness`, `BindingDetectionSystem.bindNearest`,
 `run_gliding.sh`:
 ```
-./run_gliding.sh [M]            # CPU gliding probe (default 2000); velocity + avgBound + y-spread
-./run_gliding.sh -diag 10000    # mechanism instrument (state dist, force balance, advance/stroke)
+./run_gliding.sh [M]                 # CPU gliding probe; velocity + avgBound + y-spread
+./run_gliding.sh -gpu [M]            # GPU TaskGraph (23 kernels, device-resident) + throughput
+./run_gliding.sh -gpu -full 10000    # full v1 14×2 box (~13.4k motors) — the fixture comparison
+./run_gliding.sh -gpu -full -seed <n> 10000   # ensemble member (varies placement + RNG)
+./run_gliding.sh -diag 10000         # mechanism instrument (state dist, force balance, advance/stroke)
 ./run_gliding.sh -3js threejs_gliding   # viewer
 ```
-**Increment 4 is NOT complete** (gliding velocity open). Next: a GlidingHarness **GPU TaskGraph**
-(CPU-only today) for the full-box fixture comparison + the GPU-throughput gate; the ~1.5× coupling burrow;
-a biochem-cadence sanity check. See JOURNAL 2026-06-14 (inc 4b-iv).
+**Full-scale result (GPU TaskGraph built — 23 kernels, device-resident, no per-step host pull):** full
+14×2 box (~13.4k motors), 3 seeds — **velocity 4.25 ± 0.32 µm/s vs the v1 fixture 8.33 ± 0.18 (0.51×, a
+clean MISS); avgBound 7.53 ± 0.50 MATCHES v1's 7.64.** GPU throughput **386 steps/s @ 13.4k motors (~19×
+the CPU runner)**. So the binding + assembly + residency are validated at scale; the **gliding VELOCITY
+is a clean full-scale finding** (the velocity coupling, ~half — not tuned; mechanism burrow is the next
+move). **Increment 4 is NOT complete** (gliding velocity open). See JOURNAL 2026-06-14 (inc 4b-iv) +
+`GLIDING_4biv_FINDINGS.md`.
