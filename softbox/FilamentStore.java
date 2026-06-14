@@ -30,6 +30,12 @@ public final class FilamentStore {
 
     public final int n;  // number of segments (entities are integer IDs 0..n-1)
 
+    // ---- Shared rigid-rod body (inc 4b-i): the entity-agnostic pose/drag/accumulator/
+    //      Brownian layout. The public arrays below ALIAS this body's arrays (same objects),
+    //      so the shared systems run over either store and the validated FDT/deflection/chain
+    //      paths see identical arrays. FilamentStore adds only actin-specific state. ----
+    public final RigidRodBody body;
+
     // ---- Pose (canonical source of truth), planar 3N ----
     public final FloatArray coord;   // segment centers (microns)
     public final FloatArray uVec;    // long axis (unit)
@@ -84,29 +90,20 @@ public final class FilamentStore {
 
     public FilamentStore(int n) {
         this.n = n;
-        coord = new FloatArray(3 * n);
-        uVec  = new FloatArray(3 * n);
-        yVec  = new FloatArray(3 * n);
-        zVec  = new FloatArray(3 * n);
-        end1  = new FloatArray(3 * n);
-        end2  = new FloatArray(3 * n);
+        body = new RigidRodBody(n);
+        // alias the shared rigid-rod arrays (same objects — existing code/harnesses unchanged)
+        coord = body.coord;  uVec = body.uVec;  yVec = body.yVec;
+        zVec  = body.zVec;   end1 = body.end1;  end2 = body.end2;
+        segLength  = body.segLength;
+        bTransGam  = body.bTransGam;  bRotGam = body.bRotGam;
+        bTransDiff = body.bTransDiff; bRotDiff = body.bRotDiff;
+        forceSum   = body.forceSum;   torqueSum = body.torqueSum;
+        randForce  = body.randForce;  randTorque = body.randTorque;
+        brownTransScale = body.brownTransScale;
+        brownRotScale   = body.brownRotScale;
 
         monomerCount = new IntArray(n);
-        segLength    = new FloatArray(n);
-
-        bTransGam  = new FloatArray(3 * n);
-        bRotGam    = new FloatArray(3 * n);
-        bTransDiff = new FloatArray(3 * n);
-        bRotDiff   = new FloatArray(3 * n);
-
         extForce   = new FloatArray(3 * n);
-        forceSum   = new FloatArray(3 * n);
-        torqueSum  = new FloatArray(3 * n);
-        randForce  = new FloatArray(3 * n);
-        randTorque = new FloatArray(3 * n);
-
-        brownTransScale = new FloatArray(n);
-        brownRotScale   = new FloatArray(n);
 
         end1NbrSlot = new IntArray(n);
         end1NbrSide = new IntArray(n);

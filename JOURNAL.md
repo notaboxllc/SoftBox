@@ -2,6 +2,89 @@
 
 Last updated: 2026-06-14
 
+## 2026-06-14 — Increment 4b-i: articulated myosin motor (the body), isometric
+Re-architected `MotorStore` from 4a's single point into v1's **3-body articulated myosin** — rod (tail,
+anchored) → lever (neck) → head — held by two joints, integrated by the SHARED rigid-rod systems, and
+validated **isometrically** (a bed of anchored motors holds its articulated shape under Brownian, no
+filament). **No cross-bridge, no nucleotide cycle, no gliding, no surface** (those are 4b-ii/4b-iii).
+This followed the 4b bail-out finding (v1's power stroke is emergent from this articulated body + a
+nucleotide cycle + alignment torques, not a portable force). New: `softbox/RigidRodBody.java`,
+`MotorJointSystem.java`, `TailAnchorSystem.java`, `MotorBodyHarness.java`, `run_motorbody.sh`; +CLAUDE.md
+abstraction invariant (Task 0). Also folded the sharpened "abstract from the second instance" invariant
+into CLAUDE.md.
+
+**Rigid-rod-body factoring (the second-instance abstraction — VALIDATED).** `RigidRodBody` factors the
+entity-agnostic rigid-rod layout (planar-SoA pose / drag / accumulators / Brownian) that was previously
+inline in `FilamentStore`. FilamentStore now EMBEDS one and ALIASES its existing public arrays to the
+body's (same objects ⇒ the validated FDT/deflection/chain paths see identical arrays — zero behavioural
+change). MotorStore embeds one of 3·nMotors sub-bodies (3m=rod, 3m+1=lever, 3m+2=head). The SHARED
+device systems — `BrownianForceSystem`, `RigidRodLangevinIntegrationSystem`, `DerivedGeometrySystem` —
+run over `MotorStore.body` **UNCHANGED** (they already took raw arrays; no motor-specific
+reimplementation needed). **Abstraction-leak rule held:** the one genuinely entity-specific piece is the
+DRAG FORMULA — the diff the second instance revealed is rod-drag (actin seg / myo rod / myo lever, the
+shared `DragTensorSystem.rodDragSI` helper) vs **sphere-drag** (the myo head, `sphereDragSI`). That's
+localized in the host-side drag init (a stored parameter), NOT a forked device system — exactly the
+invariant ("entity-specific physics localized; never hardcode it in the shared systems"). The rod-drag
+formula is now ONE helper used by both stores (FDT re-verified bit-identical after the extraction).
+
+**MotorStore layout.** Articulated `body` (RigidRodBody, 3·nMotors) + the bed anchor point (`anchor`,
+reused from 4a, = the rod's fixed `end1`) + `bodyParams`[dt,brownMag] + `jointParams` (J1/J2 PAIRS
+coeffs, rest angles, stall cap). The 4a binding interface (head/uVec/rodUVec/bound-state/…) is PRESERVED
+as a published projection of the body (`publishHeadFromBody` — the "repoint"; inert this increment, no
+filament, wired for 4b-ii). Geometry from v1 (Env.java:776-778): rod 0.080, lever 0.008, head 0.020 µm;
+radii 0.003/0.002/0.010.
+
+**Joint law (`MotorJointSystem`) — faithful port of Myosin.applyRodLeverJointForce (J2) +
+applyLeverMotorJointForce/Torque (J1).** Structurally the inc-2 chain joint: a `moveCoeff`-normalized
+PAIRS connection spring (forceMag = fracMove·strain/(dt·(mcA+mcB)), applied at body centre + an explicit
+½·len·fracR lever-arm torque toward the joint end) + a bend torque toward a rest angle. Specialized to
+the myosin topology: J2 connects rod.end2↔lever.end1 (rest 96°, **angular spring OFF** — v1
+`myoJ2FracMoveTorq=0`, so a free hinge, connection-spring only); J1 connects lever.end2↔motor.end1 (rest
+**0° uncocked** — FIXED state this increment; angular spring on, capped at the stall-force torque
+`stallForce·0.5·motorDim·1e-18`, Myosin.java:241). **Ownership (race-free, no atomics — the chain
+pattern):** one thread per sub-body; each computes the joint contributions ON ITSELF and writes only its
+own forceSum/torqueSum; a joint is evaluated from both endpoints (forceMag symmetric ⇒ equal/opposite).
+`TailAnchorSystem` ports `applyRodFixedPtForce`: a connection spring pulling rod.end1 to the bed point
+with moveC1=0 (fixed point immovable), FORCE-only (v1's torque is commented out), reaction discarded.
+Lever gets NO Brownian (v1 MyoLever.moveThing Brownian commented out); rod+head get it (attn 1.0) — set
+via the per-sub-body `brownTransScale`/`brownRotScale`. Sign convention nailed from v1
+`Pt3D.unitVec(a,b)=unit(a−b)` (the springs are attractive). dt=1e-5 (v1 gliding regime); the PAIRS
+relaxation is dt-independent (forceMag∝1/dt, displacement∝force·dt), so the joints are stable for
+fracMove<1.
+
+**Force-coverage audit** (every force on exactly one path): J2 connection (rod-side + lever-side,
+equal/opposite) ×1; J1 connection (lever-side + head-side) ×1; J1 bend torque (lever + −head) ×1; J2
+bend torque ×1 (=0); anchor force on rod ×1; Brownian ×1 (rod+head only). No double-apply, no silent
+drop. TaskGraph: zero → brownian → joints → anchor → integrate → derive.
+
+**Isometric validation (`./run_motorbody.sh`, 64 motors, M=5000, dt=1e-5, GPU + `-cpu`): PASS.**
+
+| step | gapJ1(nm) | gapJ2(nm) | anchor(nm) | angJ1(°) | angJ2(°) |
+|---|---|---|---|---|---|
+| 0    | 6.7  | 8.4  | 9.4  | 13.0 | 3.9  |
+| 1250 | 13.8 | 16.9 | 14.8 | 16.5 | 106.1 |
+| 4999 | 13.6 | 18.3 | 17.9 | 15.4 | 97.8 |
+
+Joint gaps bounded (<30 nm, ≪ the 8–80 nm body sizes) and non-growing over 5000 steps — the 2a
+"holds-together" check for an articulated body. J1 angle ~15° about its 0° rest (thermal; the head is
+the tiny high-D body the J1 spring restrains). J2 free hinge settles at the ~96° thermal mean of an
+unconstrained lever+head dangling from the rod tip (faithful — there's nothing holding the head "up"
+without a filament; the cocked state / a bound filament does that in 4b-ii/iii).
+
+**CPU≡GPU — aggregate-statistics test (chaotic system).** The per-runner joint tables are byte-identical
+to printed precision; the GPU vs CPU aggregate gaps/angles agree to <1e-4 nm / <1e-5°. The per-body
+MICROSTATE trajectory diverges at the float-noise level (max|Δcoord| 1.5e-5 → 0.011 nm over 5000 steps)
+— the fma/transcendental op-ordering divergence (inc-2's 0.99831/0.99832 finding), amplified by the
+dynamics and bounded far below body size. Bit-identity is unattainable (and unnecessary) for a chaotic
+thermal many-body run; this is exactly how v1's own gliding agrees CPU-vs-GPU (8.326 vs 8.231 µm/s,
+within SEM). Gate = aggregate agreement + bounded microstate (no logic blowup).
+
+**Existing paths unaffected (verified bit-identical):** FDT D_par 1.11676e-1 / D_rot 1.89712e1 (baseline
+config N=2048 M=8000), deflection ratio 0.99832 / τ 0.9920, inc-3 broad-phase EXACT, 4a binding off-rate
+0.00999 + reachable EXACT. The FilamentStore embed/alias + the DragTensorSystem rod-drag extraction are
+byte-clean. No bail-out triggered. Ready for 4b-ii (cross-bridge + alignment torques + the cross-entity
+gather, head ↔ pinned filament).
+
 ## 2026-06-14 — Increment 4a: myosin motors + binding detection (first narrow-phase consumer)
 Motors as a SECOND entity type + the first narrow-phase consumer of the broad-phase: binding
 detection + bind/unbind kinetics. **No motion this increment** — no power stroke, no surface

@@ -37,8 +37,16 @@ SoA primitive component arrays the canonical state and keeps that state device-r
   CPU<->GPU transfer is the bottleneck to *eliminate*, not optimize (v1 GPU_STRATEGY lesson).
 - A thin CPU-side OOP "view" layer may exist for topology operations only — convenience, never the
   source of truth.
-- **Do NOT build extensibility yet** (no plugin loader, no component registry). First reproduce the
-  physics; generalization is a later phase.
+- **Abstract from the second instance, not from anticipation.** General *names* and *shared
+  infrastructure* (body view, grid, broad-phase, integration, RNG) are entity-agnostic. But
+  entity-specific *physics* stays concrete and localized in per-entity systems + stored
+  *parameters*, named honestly (the actin PAIRS law, the myosin catch-slip — not "generic"
+  anything). Do not generalize a subsystem's physics from a single instance: the correct
+  abstraction is the *diff* between two instances and can't be seen until the second exists. SoA +
+  the v1 fixtures make "generalize when the second instance arrives" a cheap, behavior-safe
+  refactor, so deferring is free, not a debt. Never hardcode entity-specific constants inside the
+  shared systems — that's the leak that makes the "general" layer secretly actin-shaped. (No
+  plugin loader / component registry yet — that's a later phase.)
 - **One physics implementation; device-agnostic systems.** Each system is written once as a kernel
   method over the SoA arrays. The GPU TaskGraph is the production path; the *same* system methods
   run sequentially on the CPU (plain Java, no TaskGraph) as a debugging/validation runner —
@@ -65,9 +73,13 @@ SoA primitive component arrays the canonical state and keeps that state device-r
 2. Actin chain / bending-force system.
 3. **Spatial grid + broad-phase — entity-agnostic. DONE.** (anticipating surfaces/membranes).
 4. Binding detection + myosin motors — validate against the v1 gliding-assay fixture.
-   **Split into 4a (binding) / 4b (gliding).** 4a — DONE: motors as a second entity/publisher +
-   binding detection + bind/unbind kinetics, NO force (no power stroke/surface/gliding). 4b: power
-   stroke + surface confinement + gliding velocity vs the v1 gliding-assay fixture.
+   **Split into 4a (binding) / 4b (gliding); 4b split into 4b-i/ii/iii** (a bail-out finding: v1's
+   "power stroke" is not a force but emergent from an articulated 3-body motor + a load-coupled
+   nucleotide cycle + alignment torques, so it re-architects 4a's point-motor and is staged). 4a —
+   DONE (binding, no force). **4b-i — DONE: the articulated motor BODY** (rod→lever→head + 2 joints +
+   bed anchor, shared rigid-rod integration, validated isometrically). 4b-ii: cross-bridge spring +
+   alignment torques + the cross-entity force+torque gather (head ↔ pinned filament). 4b-iii: nucleotide
+   cycle + force-dependent catch-slip + surface + gliding velocity/avgBound vs the v1 fixture.
 5. Crosslinkers / Arp2/3 branching.
 6. Protein-node contractile path — validate against the v1 node-tension fixture.
 7. Membrane — StickyNode bodies + NodeLink springs + the iterative relaxation solver (the
@@ -142,6 +154,21 @@ reachable-set exactness vs brute force (both runners), the analytic off-rate, an
 ```
 The broad-phase + grid + FilamentStore are UNCHANGED — only new files (`MotorStore`,
 `BindingDetectionSystem`, `MotorBindingHarness`) + one `SpatialBodyView` constant (`STORE_MOTOR`).
+
+**Articulated-motor isometric test (inc 4b-i, the motor BODY).** Re-architects `MotorStore` into v1's
+3-body articulated myosin (rod→lever→head) held by two joints + a bed anchor, integrated by the SHARED
+rigid-rod systems (the second instance of the `RigidRodBody` abstraction). Validated isometrically: a
+bed of anchored motors holds its articulated shape under Brownian — NO filament/cross-bridge/nucleotide/
+gliding (those are 4b-ii/4b-iii). Gated by bounded+non-growing joint gaps, J1 angle about its rest, and
+CPU≡GPU on the aggregate joint statistics:
+```
+./run_motorbody.sh              # GPU + CPU cross-check (64 motors, M=5000, dt=1e-5)
+./run_motorbody.sh -cpu         # CPU runner only (triage)
+./run_motorbody.sh -3js threejs_motorbody -n 25   # dump viewer frames (articulated motors)
+```
+The SHARED systems (`BrownianForceSystem`/`RigidRodLangevinIntegrationSystem`/`DerivedGeometrySystem`)
+run over `MotorStore.body` UNCHANGED; only `MotorJointSystem` + `TailAnchorSystem` are motor-specific.
+`RigidRodBody` is the factored shared layout (FilamentStore + MotorStore each embed one).
 
 `SpatialBodyView` is the extensible seam (center+boundingRadius+ownerStore/ownerSlot); two publishers
 now register into it (`FilamentStore.publishToBodyView` + `MotorStore.publishToBodyView`). `SpatialGrid`
@@ -223,5 +250,24 @@ reproduce their pre-inc-4 numbers (bound motors apply no force — verified). Ne
 `BindingDetectionSystem`, `MotorBindingHarness`, `run_motor.sh`; +`SpatialBodyView.STORE_MOTOR`. See
 JOURNAL 2026-06-14 (inc 4a).
 
-**Next: increment 4b — gliding** (power stroke force + surface/`keepMyosinsOnSurface` confinement +
-gliding velocity; validate against the v1 gliding-assay fixture — avgBound + gliding speed).
+**Increment 4b-i — DONE.** Re-architected `MotorStore` from 4a's single point into v1's 3-body
+articulated myosin (rod→lever→head), held by two joints (`MotorJointSystem`: J1 lever-motor + J2
+rod-lever, the chain F3/F4 PAIRS pattern with myosin rest angles) + a bed anchor (`TailAnchorSystem`,
+v1 `applyRodFixedPtForce`), integrated by the SHARED `RigidRodLangevinIntegrationSystem` /
+`BrownianForceSystem` / `DerivedGeometrySystem` over the factored `RigidRodBody` — the second instance
+of the rigid-rod-body abstraction (the shared systems run over `MotorStore.body` UNCHANGED; the
+abstraction-leak rule held — the only entity-specific drag formula, the sphere head, is a localized
+init, not a forked system). FIXED uncocked rest angles (state switching is 4b-iii); NO cross-bridge,
+nucleotide, surface, or gliding. Validated ISOMETRICALLY: a bed of 64 anchored motors holds its
+articulated shape under Brownian (joint gaps ~13–18 nm, bounded + non-growing over 5000 steps; J1 angle
+~15° about its 0° rest; J2 a free hinge at ~96° since v1 `myoJ2FracMoveTorq=0`) on GPU + `-cpu`; CPU≡GPU
+on the aggregate joint statistics (microstate diverges only at float-noise level — chaotic op-ordering,
+like v1's own CPU-vs-GPU gliding). FDT/deflection/chain/broad-phase/4a-binding all bit-identical
+(FilamentStore now embeds `RigidRodBody` via array aliasing; `DragTensorSystem` shares the rod-drag
+formula — verified D_par 1.11676e-1, deflection 0.99832 unchanged). New: `RigidRodBody`,
+`MotorJointSystem`, `TailAnchorSystem`, `MotorBodyHarness`, `run_motorbody.sh`. See JOURNAL 2026-06-14
+(inc 4b-i).
+
+**Next: increment 4b-ii** — the cross-bridge spring + alignment torques (F8/F9/F10) + the cross-entity
+motor→segment force+torque gather (the design-risk infra: race-free CSR-inverse, no atomics), head ↔ a
+2b-pinned filament; validated on the isometric pinned step (force applied once, race-free, CPU≡GPU).

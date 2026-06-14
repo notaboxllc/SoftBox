@@ -1,5 +1,7 @@
 package softbox;
 
+import uk.ac.manchester.tornado.api.types.arrays.FloatArray;
+
 /**
  * System 1: dragTensorSystem.
  *
@@ -21,11 +23,53 @@ package softbox;
 public final class DragTensorSystem {
     private DragTensorSystem() {}
 
+    /**
+     * Rod (slender-body) drag — the SHARED formula used by actin segments, the myosin rod,
+     * and the myosin lever. VERBATIM FilSegment.calculateProperties():420-435 (== MyoRod /
+     * MyoLever.calculateProperties, same expressions, different length/radius). Returns SI
+     * {bTGx, bTGy, bTGz, bRGx, bRGy, bRGz}. The caller applies any entity-specific length
+     * derivation/clamp BEFORE calling (actin min-length clamp stays in run(FilamentStore)).
+     */
+    public static double[] rodDragSI(double lengthUm, double radiusUm) {
+        double aeta = Constants.aeta;
+        double LM = 1.0e-6 * lengthUm;          // meters
+        double RM = radiusUm * 1.0e-6;
+        double logT = Math.log(LM / (2 * RM));  // dimensionless
+        double bTGx = (2 * Math.PI * aeta * LM) / (logT + Constants.aParallel);
+        double bTGy = (4 * Math.PI * aeta * LM) / (logT + Constants.aOrthog);
+        double bTGz = bTGy;
+        double bRGx = 4 * Math.PI * aeta * RM * RM * LM;
+        double bRGy = (Math.PI * aeta * (LM * LM * LM)) / (3 * (logT + Constants.aTurning));
+        double bRGz = bRGy;
+        return new double[] { bTGx, bTGy, bTGz, bRGx, bRGy, bRGz };
+    }
+
+    /**
+     * Sphere (Stokes) drag — the SECOND drag formula, revealed by the myosin HEAD (the
+     * diff between the two body instances). VERBATIM MyoMotor.calculateProperties():144-149:
+     * translational 6πηr (isotropic), rotational 8πηr³. Returns SI {bTGx,bTGy,bTGz,bRGx,bRGy,bRGz}.
+     */
+    public static double[] sphereDragSI(double radiusUm) {
+        double aeta = Constants.aeta;
+        double RM = radiusUm * 1.0e-6;
+        double bTG = 6 * Math.PI * aeta * RM;
+        double bRG = 8 * Math.PI * aeta * (RM * RM * RM);
+        return new double[] { bTG, bTG, bTG, bRG, bRG, bRG };
+    }
+
+    /** Store a SI drag tensor (and its Einstein diffusion) into a body's planar arrays at slot i. */
+    private static void storeDrag(FloatArray bTransGam, FloatArray bRotGam,
+                                  FloatArray bTransDiff, FloatArray bRotDiff,
+                                  int planeX, int planeY, int planeZ, double[] g) {
+        double kT = Constants.kT;
+        bTransGam.set(planeX, (float) g[0]); bTransGam.set(planeY, (float) g[1]); bTransGam.set(planeZ, (float) g[2]);
+        bRotGam.set(planeX,   (float) g[3]); bRotGam.set(planeY,   (float) g[4]); bRotGam.set(planeZ,   (float) g[5]);
+        bTransDiff.set(planeX, (float) (kT / g[0])); bTransDiff.set(planeY, (float) (kT / g[1])); bTransDiff.set(planeZ, (float) (kT / g[2]));
+        bRotDiff.set(planeX,   (float) (kT / g[3])); bRotDiff.set(planeY,   (float) (kT / g[4])); bRotDiff.set(planeZ,   (float) (kT / g[5]));
+    }
+
     public static void run(FilamentStore s) {
-        final double aeta   = Constants.aeta;
-        final double radius = Constants.radius;        // microns
         final double halfmono = Constants.actinMonoRadius;
-        final double kT = Constants.kT;
         final int minMonomerCt = 30;                   // FilSegment.java:411
 
         for (int i = 0; i < s.n; i++) {
@@ -35,7 +79,8 @@ public final class DragTensorSystem {
             s.segLength.set(i, (float) length);
 
             // min-length clamp (FilSegment.java:409-419). A free rod is "at end" on both
-            // ends (no neighbors), so the filAtEnd branch applies.
+            // ends (no neighbors), so the filAtEnd branch applies. This length derivation +
+            // clamp is ACTIN-specific and stays here; the drag formula is the shared helper.
             double minLength;
             if (s.filAtEnd1(i) || s.filAtEnd2(i)) {
                 minLength = Constants.stdSegLength * halfmono;
@@ -45,42 +90,34 @@ public final class DragTensorSystem {
             double asIfLength = length;
             if (asIfLength < minLength) { asIfLength = minLength; }
 
-            // --- VERBATIM from FilSegment.calculateProperties():420-441 ---
-            double asIfLengthM = 1.0e-6 * asIfLength;          // meters
-            double radiusM = radius * 1.0e-6;
-            double denomLogTerm = Math.log(asIfLengthM / (2 * radiusM));  // dimensionless
+            double[] g = rodDragSI(asIfLength, Constants.radius);
+            storeDrag(s.bTransGam, s.bRotGam, s.bTransDiff, s.bRotDiff,
+                      s.planeX(i), s.planeY(i), s.planeZ(i), g);
+        }
+    }
 
-            double bTransGamX = (2 * Math.PI * aeta * asIfLengthM) / (denomLogTerm + Constants.aParallel);
-            double bTransGamY = (4 * Math.PI * aeta * asIfLengthM) / (denomLogTerm + Constants.aOrthog);
-            double bTransGamZ = bTransGamY;
-
-            double bRotGamX = 4 * Math.PI * aeta * radiusM * radiusM * asIfLengthM;
-            double bRotGamY = (Math.PI * aeta * (asIfLengthM * asIfLengthM * asIfLengthM))
-                              / (3 * (denomLogTerm + Constants.aTurning));
-            double bRotGamZ = bRotGamY;
-
-            // Einstein's relation D = kT/gamma (FilSegment.java:440-441)
-            double bTransDiffX = kT / bTransGamX;
-            double bTransDiffY = kT / bTransGamY;
-            double bTransDiffZ = kT / bTransGamZ;
-            double bRotDiffX = kT / bRotGamX;
-            double bRotDiffY = kT / bRotGamY;
-            double bRotDiffZ = kT / bRotGamZ;
-
-            // store planar (float32 to match v1's GPU marshalling)
-            s.bTransGam.set(s.planeX(i), (float) bTransGamX);
-            s.bTransGam.set(s.planeY(i), (float) bTransGamY);
-            s.bTransGam.set(s.planeZ(i), (float) bTransGamZ);
-            s.bRotGam.set(s.planeX(i), (float) bRotGamX);
-            s.bRotGam.set(s.planeY(i), (float) bRotGamY);
-            s.bRotGam.set(s.planeZ(i), (float) bRotGamZ);
-
-            s.bTransDiff.set(s.planeX(i), (float) bTransDiffX);
-            s.bTransDiff.set(s.planeY(i), (float) bTransDiffY);
-            s.bTransDiff.set(s.planeZ(i), (float) bTransDiffZ);
-            s.bRotDiff.set(s.planeX(i), (float) bRotDiffX);
-            s.bRotDiff.set(s.planeY(i), (float) bRotDiffY);
-            s.bRotDiff.set(s.planeZ(i), (float) bRotDiffZ);
+    /**
+     * Motor sub-body drag init (increment 4b-i). Per motor m, the three sub-bodies
+     * 3m=rod, 3m+1=lever (rod drag), 3m+2=head (sphere drag), with v1's lengths/radii.
+     * Host init over the SHARED RigidRodBody arrays — the shared device systems then read
+     * the resulting gamma unchanged.
+     */
+    public static void run(MotorStore mot) {
+        RigidRodBody b = mot.body;
+        for (int m = 0; m < mot.nMotors; m++) {
+            int rod = 3 * m, lever = 3 * m + 1, head = 3 * m + 2;
+            b.segLength.set(rod,   (float) MotorStore.ROD_LEN);
+            b.segLength.set(lever, (float) MotorStore.LEVER_LEN);
+            b.segLength.set(head,  (float) MotorStore.HEAD_LEN);
+            storeDrag(b.bTransGam, b.bRotGam, b.bTransDiff, b.bRotDiff,
+                      b.planeX(rod), b.planeY(rod), b.planeZ(rod),
+                      rodDragSI(MotorStore.ROD_LEN, MotorStore.ROD_R));
+            storeDrag(b.bTransGam, b.bRotGam, b.bTransDiff, b.bRotDiff,
+                      b.planeX(lever), b.planeY(lever), b.planeZ(lever),
+                      rodDragSI(MotorStore.LEVER_LEN, MotorStore.LEVER_R));
+            storeDrag(b.bTransGam, b.bRotGam, b.bTransDiff, b.bRotDiff,
+                      b.planeX(head), b.planeY(head), b.planeZ(head),
+                      sphereDragSI(MotorStore.HEAD_R));
         }
     }
 
