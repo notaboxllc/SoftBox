@@ -35,21 +35,25 @@ public final class GlidingHarness {
     static final double DENSITY = 500.0;        // motors / µm²
     static final int    FIL_SEGS = 11;          // ~2 µm of 64-monomer segments
     static final int    FIL_MONO = 64;          // filSegLength (gliding override)
-    // bed geometry (default ≈6×2 box; -full → v1's 14×2 box / ~14000 motors for the fixture comparison)
-    static double bX0 = 2.2, bXlo = -3.5, bYhalf = 1.0;
+    // bed geometry: bX0 = filament +x end; the bed spans x∈[bXlo,bXhi], y∈[-bYhalf,bYhalf].
+    // default ≈6×2; -full → v1's 14×2 (~14k motors); -v1box → v1's 4×1 (exactly 2000 heads).
+    static double bX0 = 2.2, bXlo = -3.5, bXhi = 2.7, bYhalf = 1.0;
     static int SEED = 0x6111D;   // varied across an ensemble (placement + RNG)
 
     public static void main(String[] args) {
         int M = 2000;
         String viz = null;
         boolean diag = false;
+        boolean grid = false;
         java.util.List<String> pos = new java.util.ArrayList<>();
         boolean gpu = false;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("-3js")) viz = args[++i];
             else if (args[i].equals("-diag")) diag = true;
+            else if (args[i].equals("-grid")) grid = true;
             else if (args[i].equals("-gpu")) gpu = true;
-            else if (args[i].equals("-full")) { bX0 = 5.87; bXlo = -7.0; bYhalf = 1.0; }  // v1 14×2 box, ~13.4k motors
+            else if (args[i].equals("-full")) { bX0 = 5.87; bXlo = -7.0; bXhi = 6.37; bYhalf = 1.0; }  // v1 14×2, ~13.4k motors
+            else if (args[i].equals("-v1box")) { bX0 = 1.7; bXlo = -2.0; bXhi = 2.0; bYhalf = 0.5; }   // v1 4×1, exactly 2000 heads
             else if (args[i].equals("-seed")) SEED = 0x6111D + 7919 * Integer.parseInt(args[++i]);
             else pos.add(args[i]);
         }
@@ -60,8 +64,9 @@ public final class GlidingHarness {
         System.out.printf("config: %d-seg filament (%.2f µm) at z=%.3f, %d motors @ %.0f/µm² strip, dt=%.0e%n",
                 sc.fil.n, sc.fil.n * sc.segL, FIL_Z, sc.mot.nMotors, DENSITY, DT);
 
-        if (viz != null) { runViz(sc, Math.max(M, 20000), viz); return; }
+        if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
         if (diag) { diagnose(sc, Math.max(M, 8000)); return; }
+        if (grid) { measureGrid(sc, M, gpu); return; }
         if (gpu) { gpuProbe(sc, M); return; }
         probe(sc, M);
     }
@@ -106,7 +111,7 @@ public final class GlidingHarness {
         // ---- motor bed: density-faithful patch around the filament's −x path. Wide enough in y that
         //      the filament's ends stay over motors as it rotates/wanders (v1's bed is the full 2µm-wide
         //      box; a narrow strip lets the ends rotate out → unsupported ends lag → velocity drops). ----
-        double bedXlo = bXlo, bedXhi = x0 + 0.5;     // long enough for the −x glide
+        double bedXlo = bXlo, bedXhi = bXhi;          // explicit bed x-extent (matches v1's box)
         double bedYhalf = bYhalf;                     // y-width (boxYDim) → governs the finite-size effect
         double bedX = bedXhi - bedXlo, bedY = 2 * bedYhalf;
         int nMot = (int) Math.round(DENSITY * bedX * bedY);
@@ -206,7 +211,8 @@ public final class GlidingHarness {
             .task("gather", CrossBridgeSystem::segGather, sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts)
             .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
             .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
-            .transferToHost(DataTransferMode.UNDER_DEMAND, f.coord, f.uVec, f.end1, f.end2, mot.boundSeg);
+            .transferToHost(DataTransferMode.UNDER_DEMAND, f.coord, f.uVec, f.end1, f.end2, mot.boundSeg,
+                    b.end1, b.end2, mot.nucleotideState);
 
         int nB = 3 * mot.nMotors, nM = mot.nMotors, nSeg = f.n;
         sched = new GridScheduler();
@@ -354,14 +360,110 @@ public final class GlidingHarness {
                 stepsPerSec, 1e3 / stepsPerSec, sc.mot.nMotors);
     }
 
-    static void runViz(Scene sc, int M, String dir) {
+    static double centroidY(FilamentStore f) { double s = 0; for (int i = 0; i < f.n; i++) s += f.coordY(i); return s / f.n; }
+
+    /**
+     * Fixture-reconciliation measurement (4b-iv): emit BOTH of v1's velocity statistics, computed by the
+     * EXACT GlidingAssayEvaluator algorithm, so v2 is comparable to v1 cell-for-cell. Samples the filament
+     * centroid every OUT_INT=100 steps (v1's toFileInterval) and reports:
+     *   - instantaneousSpeed: per-interval 3D displacement magnitude / dt   (GlidingAssayEvaluator L226–234)
+     *   - longWindowSpeedXY:  XY chord over a 1 s ring-buffer window / dt     (L237–263; the v1 "primary" stat)
+     *   - net:                XY (and x-only) net centroid displacement / total time  (the honest net glide)
+     * Mean over all intervals AND over the steady 2nd half; avgBound averaged the same way. Measurement
+     * only — no physics touched. GPU pulls fil.coord+boundSeg at the 100-step output cadence (residency
+     * preserved); CPU runner steps in-process.
+     */
+    static void measureGrid(Scene sc, int M, boolean gpu) {
+        final int OUT_INT = 100;
+        final double dtInt = OUT_INT * DT;
+        final int bufCap = Math.max(2, (int) Math.round(1.0 / dtInt));   // v1 LONG_WINDOW_SECONDS=1.0
+        int nInt = M / OUT_INT;
+        double[] cx = new double[nInt + 1], cy = new double[nInt + 1], cz = new double[nInt + 1];
+        long[] bnd = new long[nInt + 1];
+        System.out.printf("%n--- grid measurement (%s, %d motors, box x∈[%.1f,%.1f] y±%.1f, seed=0x%X) ---%n",
+                gpu ? "GPU" : "CPU", sc.mot.nMotors, bXlo, bXhi, bYhalf, SEED);
+
+        int k = 0;
+        if (gpu) {
+            TornadoExecutionPlan plan = buildPlan(sc);
+            sc.mot.setCounts(0, SEED, sc.fil.n); sc.fil.counts.set(1, 0);
+            plan.withGridScheduler(sched).execute();                    // warm-up (PTX compile), untimed
+            cx[0] = centroidX(sc.fil); cy[0] = centroidY(sc.fil); cz[0] = centroidZ(sc.fil); bnd[0] = bound(sc.mot); k = 1;
+            for (int t = 1; t < M; t++) {
+                sc.mot.setCounts(t, SEED, sc.fil.n); sc.fil.counts.set(1, t);
+                TornadoExecutionResult res = plan.withGridScheduler(sched).execute();
+                if ((t + 1) % OUT_INT == 0 && k <= nInt) {
+                    res.transferToHost(sc.fil.coord, sc.mot.boundSeg);
+                    cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot); k++;
+                }
+            }
+        } else {
+            cx[0] = centroidX(sc.fil); cy[0] = centroidY(sc.fil); cz[0] = centroidZ(sc.fil); bnd[0] = bound(sc.mot); k = 1;
+            for (int t = 0; t < M; t++) {
+                step(sc, t);
+                if ((t + 1) % OUT_INT == 0 && k <= nInt) {
+                    cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot); k++;
+                }
+            }
+        }
+        int n = k;   // number of samples (intervals + 1)
+
+        // ---- v1's instantaneousSpeed: per-interval 3D displacement / dt ----
+        double instAll = 0, instSteady = 0; int instN = 0, instNs = 0;
+        for (int i = 1; i < n; i++) {
+            double dx = cx[i] - cx[i-1], dy = cy[i] - cy[i-1], dz = cz[i] - cz[i-1];
+            double sp = Math.sqrt(dx*dx + dy*dy + dz*dz) / dtInt;
+            instAll += sp; instN++;
+            if (i >= n / 2) { instSteady += sp; instNs++; }
+        }
+        // ---- v1's longWindowSpeedXY at end of run (ring buffer; XY chord over the window) ----
+        int newest = n - 1, oldest = Math.max(0, n - bufCap);
+        double lwDx = cx[newest] - cx[oldest], lwDy = cy[newest] - cy[oldest];
+        double lwDt = (newest - oldest) * dtInt;
+        double longWindowSpeedXY = lwDt > 1e-12 ? Math.sqrt(lwDx*lwDx + lwDy*lwDy) / lwDt : 0.0;
+        // ---- net displacement / time (honest net glide), full run and steady 2nd half ----
+        double netXY = Math.sqrt(Math.pow(cx[n-1]-cx[0],2) + Math.pow(cy[n-1]-cy[0],2)) / ((n-1)*dtInt);
+        double netX  = (cx[n-1] - cx[0]) / ((n-1)*dtInt);
+        int h = n / 2;
+        double netXYsteady = Math.sqrt(Math.pow(cx[n-1]-cx[h],2) + Math.pow(cy[n-1]-cy[h],2)) / ((n-1-h)*dtInt);
+        // ---- avgBound ----
+        double avgBall = 0; for (int i = 0; i < n; i++) avgBall += bnd[i]; avgBall /= n;
+        double avgBsteady = 0; for (int i = h; i < n; i++) avgBsteady += bnd[i]; avgBsteady /= (n - h);
+
+        System.out.printf("  samples=%d  bufCap=%d  netΔx=%.4f µm over %.4f s%n", n, bufCap, cx[n-1]-cx[0], (n-1)*dtInt);
+        System.out.println("  STATISTIC                       full-run    steady(2nd-half)");
+        System.out.printf("  instantaneousSpeed (3D/intvl) :  %7.3f     %7.3f   µm/s%n", instAll/instN, instSteady/Math.max(1,instNs));
+        System.out.printf("  net-displacement XY/time      :  %7.3f     %7.3f   µm/s%n", netXY, netXYsteady);
+        System.out.printf("  net-displacement x-only/time  :  %7.3f                µm/s%n", netX);
+        System.out.printf("  longWindowSpeedXY @ end       :  %7.3f                µm/s%n", longWindowSpeedXY);
+        System.out.printf("  avgBound                      :  %7.3f     %7.3f%n", avgBall, avgBsteady);
+        System.out.printf("  GRID_ROW seed=0x%X nMot=%d inst=%.3f instSteady=%.3f netXY=%.3f netX=%.3f lwXY=%.3f avgB=%.3f%n",
+                SEED, sc.mot.nMotors, instAll/instN, instSteady/Math.max(1,instNs), netXY, netX, longWindowSpeedXY, avgBall);
+    }
+
+    static void runViz(Scene sc, int M, String dir, boolean gpu) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
         new java.io.File(dir).mkdirs();
         int every = Math.max(1, M / 400), frames = 0;
+        if (gpu) {
+            TornadoExecutionPlan plan = buildPlan(sc);
+            writeFrame(dir, frames++, 0, sc);                 // frame 0: initial host pose
+            for (int t = 0; t < M; t++) {
+                mot.setCounts(t, SEED, f.n); f.counts.set(1, t);
+                TornadoExecutionResult res = plan.withGridScheduler(sched).execute();
+                if ((t + 1) % every == 0) {                   // pull pose + state at frame cadence only
+                    res.transferToHost(b.end1, b.end2, f.end1, f.end2, mot.nucleotideState);
+                    writeFrame(dir, frames++, (t + 1) * DT, sc);
+                }
+            }
+            System.out.println("viewer (GPU): wrote " + frames + " frames to " + dir);
+            return;
+        }
         for (int t = 0; t <= M; t++) {
             if (t % every == 0) writeFrame(dir, frames++, t * DT, sc);
             step(sc, t);
         }
-        System.out.println("viewer: wrote " + frames + " frames to " + dir);
+        System.out.println("viewer (CPU): wrote " + frames + " frames to " + dir);
     }
     static final String[] SN = { "NONE", "ATP", "ADPPi", "ADP" };
     static void writeFrame(String dir, int frame, double t, Scene sc) {
@@ -377,8 +479,7 @@ public final class GlidingHarness {
         sb.append("],\"myosins\":[");
         boolean first = true;
         for (int m = 0; m < mot.nMotors; m++) {
-            // only emit motors near the filament (keep frames small)
-            if (Math.abs(b.coordY(3 * m)) > 0.05) continue;
+            // emit the full motor carpet (match v1)
             if (!first) sb.append(','); first = false;
             int rod = 3 * m, lever = 3 * m + 1, head = 3 * m + 2;
             sb.append(String.format(java.util.Locale.US,

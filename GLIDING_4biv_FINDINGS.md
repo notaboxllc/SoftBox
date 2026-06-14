@@ -1,99 +1,94 @@
-# Increment 4b-iv (gliding assay) — findings for the planner
+# Increment 4b-iv (gliding assay) — RECONCILED: the "0.51× miss" was dominantly measurement-method
 
-**Status: BAIL-OUT / FINDING. Nothing committed.** The gliding assembly works end-to-end (glides −x,
-stable, avgBound matches v1), but the gliding **velocity** lands below v1's fixture. Per the bail-out
-discipline ("a physics miss with a faithful config is a finding — report, do not tune"), this document
-reports the localized cause and the diagnosis trail rather than tuning to hit the number. The working
-tree holds the uncommitted gliding harness; the planner should decide whether to commit it as a
-checkpoint, continue the diagnosis, or re-scope.
+**Status: RECONCILED (measurement/protocol only — no physics changed).** The prior "0.51× velocity miss"
+compared two *different measurements*: v2's **net-displacement** glide speed against v1's
+**`longWindowSpeedXY`-at-end-of-a-0.1 s-run** (the "8.33 fixture"). Measured the SAME way, multi-seed, at
+matched boxes, **v2 = 0.76× v1** — a small, box-UNIFORM residual, not a 2× miss and not a box-scaling
+mismatch. v2 reproduces v1's avgBound, its `instantaneousSpeed`, and its (weak) box-size scaling; the
+residual is specifically in **net directedness** (v2 converts a smaller fraction of its matched total
+motion into forward glide — the co-bound tug-of-war of §5, now correctly sized at ~0.76× not ~0.5×).
 
-Everything in 4a–4b-iii remains committed and validated; this is purely about the 4b-iv integration.
+Everything in 4a–4b-iii remains committed and validated; this document supersedes the earlier "0.51× clean
+full-scale finding" framing with the matched-measurement reconciliation. Measurement harness +
+methodology are committed; **no physics edits.**
 
 ---
 
-## 1. What was built (uncommitted, in the working tree)
+## 1. Provenance of "8.33" (resolved)
 
-- `softbox/GlidingHarness.java` — the gliding harness (CPU runner): unpinned ~11-segment **chain**
-  filament over a motor bed, dynamic per-step binding + the full cross-bridge/gather/stroke/cycle/
-  catch-slip, measurement (centroid velocity + avgBound), a cheap probe, a `-diag` instrument, a
-  `-3js` viewer. **No GPU TaskGraph yet** (CPU-only).
-- `softbox/BindingDetectionSystem.bindNearest` — a bind-only kernel (geometric bind; the F-dependent
-  catch-slip release is `NucleotideCycleSystem.catchSlipRelease`). Additive; existing paths verified
-  unaffected (4b-iii stroke checkpoint + 4a binding still PASS).
-- `run_gliding.sh`.
+- "8.33" is **not** in v1's validated table. It traces to the iter2a / soa-coord CPU≡GPU validation
+  (`BoA-v1ref/JOURNAL_ARCHIVE.md:8452, 12271`): *"glidingVelocity = mean `longWindowSpeedXY` across
+  filaments at end of run"*, `glidingAssay500_val` (14×2), runTime 0.1 s, 10 seeds → CPU 8.326 ± 0.179 /
+  GPU 8.231. It is `longWindowSpeedXY` sampled **at the end of a short run**, not a net-glide speed.
+- The **validated** d=500 oracle (`BoA-v1ref/MYOSIN_VALIDATION.md` line 41/54) names `longWindowSpeedXY`
+  the "primary gliding-velocity statistic" and reports it **averaged over a ~0.5 s run**: median **3.70**,
+  mean **4.23**, avgBound 6.91.
+- The two v1 numbers differ ~2× purely by **window / run-length + a startup artifact**. In the v1 .dat the
+  very first output interval reports `instantaneousSpeed = 309 µm/s`, `longWindowSpeedXY = 309` — a 0.31 µm
+  centroid **settling jump** as the filament drops onto the bed and first binds. Over a *short* 0.1 s run
+  the long-window chord stays inflated for the whole run; averaged over a *long* run it relaxes toward the
+  true net glide. `MYOSIN_VALIDATION.md` lines 187–200 say this outright: `instantaneousSpeed` "counts
+  wandering as motion"; **use `longWindowSpeedXY` or net-displacement/time for honest comparison.**
+- The net-vs-inflated gap is a property of the *measurement*, present in BOTH codes: at 14×2, v1's
+  `instantaneousSpeed` ≈ 7.5 and its `longWindowSpeedXY`-at-end ≈ 8.1 vs its **net ≈ 5.0**; v2's
+  `instantaneousSpeed` ≈ 6.7 vs its **net ≈ 3.8**.
 
-## 2. Config captured from v1 (faithful — the legitimate "matching")
+## 2. The grid — multi-seed, v2 measured v1's way (both statistics, both boxes)
 
-From `ParameterFiles/glidingAssay500_val` + `FilSegment.makeGlidingAssayFilament` + `MyosinFixed`:
-- dt = 1e-5; density 500 motors/µm²; `fixedMyosinZValue = −0.05`; **filament built at z = 0** (confirmed
-  in v1 source), along +x (plus-end +x); 2 µm, 64-monomer segments ⇒ ~11 chain segments connected by
-  the inc-2 chain forces; chain params `fracMove=0.5 / fracR=0.1 / fracMoveTorq=0.2`.
-- Surface = **small** (the `MyosinFixed` rod-tail anchor + the filament held by its bound motors; no
-  separate z-clamp; confirmed no filament-surface subsystem in v1).
-- Binding is **purely geometric** (4a predicate), not nucleotide-state-gated.
-- Glide direction **−x** (filament plus-end at +x; minus-end leads).
-- v2 uses a density-faithful **patch** of bed around the filament's path (not the full 14×2 box) to keep
-  the motor count tractable — avgBound/velocity are local to the filament, so this is faithful.
+All cells: `glidingAssay500_val` regime (dt 1e-5, d=500/µm², fracMove/fracR/fracMoveTorq = 0.5/0.1/0.2),
+10 000 steps = 0.1 s, toFileInterval = 100. **NET** = net centroid displacement / elapsed time (the honest
+glide); **inst** = mean per-interval 3D `instantaneousSpeed`; both computed by v1's exact
+`GlidingAssayEvaluator` algorithm (ported into `GlidingHarness.measureGrid` for v2, `-grid`). v1 = real
+`BoxOfActin -r -gpu` runs, `BOA_RNG_SEED` 1–3; v2 = `GlidingHarness -grid -gpu` seeds 1–3. ± = SEM (n=3).
+Raw: `RUN_LOGS/2026-06-14_4biv_grid_reconciliation.txt`.
 
-## 3. The cheap probe caught two things early (as intended)
+| box  | code  | **NET (µm/s)**   | instantaneous | avgBound |
+|------|-------|------------------|---------------|----------|
+| 4×1  | v1ref | **4.71 ± 0.14**  | 6.85          | 7.32     |
+| 4×1  | v2    | **3.66 ± 0.11**  | 6.81          | 6.79     |
+| 14×2 | v1ref | **5.02 ± 0.16**  | 7.54          | 7.22     |
+| 14×2 | v2    | **3.76 ± 0.17**  | 6.69          | 7.50     |
 
-1. **avgBound = 0** initially → a HARNESS BUG: I had omitted the **motor Brownian** in the gliding step
-   (present for the filament, missing for the motors), so the articulated heads stood rigidly upright
-   (head tip z ≈ 0.058) and never thermally reached the filament at z=0. **Fixed** (added
-   `BrownianForceSystem.brownianForce` for the motor sub-bodies). Not a physics issue.
-2. After the fix, it **glides −x, stably (no NaN)** over the full 10k-step (0.1 s) run.
+Reference (not re-run): v1 14×2 `longWindowSpeedXY`-at-end-of-0.1 s = **8.33 ± 0.18** (10 seeds, the old
+"fixture"); v1 d=500 validated `longWindowSpeedXY` mean over 0.5 s = **4.23** / median 3.70, avgBound 6.91.
+The decisive cell (v1 **NET** @ 14×2 = **5.02 ± 0.16**) is the apples-to-apples partner of v2's net 3.76 —
+it is ~5, NOT ~8.3.
 
-## 4. The velocity finding (the core result)
+## 3. Decomposition — the three contributors, separated
 
-| run | box (µm) | motors | avgBound | velocity (µm/s) |
-|---|---|---|---|---|
-| **v1 full assay (the fixture)** | 14×2 | 14000 | 7.64 / 7.21 | **8.33 / 8.23** (CPU/GPU) |
-| **v1, matched box (ran this session, GPU)** | **4×1** | ~2000 | — | **6.66** |
-| v2 (mine), narrow strip | ~3.4×0.2 | 343 | 8.3 | −3.4 (0.41×) |
-| v2 (mine), wide bed | ~3.4×1.1 | 2107 | **6.85** | **−4.27** (0.51× vs fixture) |
+- **(a) Measurement method — the dominant factor.** The "8.33 → ~4" collapse is the net-vs-
+  `longWindowSpeedXY`-at-short-run-end difference (+ the startup jump). v1's own NET at 14×2 is **5.0**,
+  not 8.33. The original "0.51×" (v2 net 4.25 vs v1 lwEnd 8.33) was 60 % this measurement mismatch.
+  Matching the statistic is most of the reconciliation.
+- **(b) Box-size scaling — NO mismatch.** Under one matched statistic (NET): v1 4.71 → 5.02 (**+6.5 %**);
+  v2 3.66 → 3.76 (**+2.8 %**). **Both codes show only weak positive box scaling in net terms — v2
+  reproduces it.** The earlier "v1 climbs 4.4 → 8.33 across boxes while v2 stays flat" was comparing v1's
+  *lwEnd* (8.33) against v2's *net* — an artifact of mixing statistics, not a real edge/finite-size
+  divergence. (v1's `instantaneousSpeed` does climb mildly with box, 6.85 → 7.54; v2's stays ~6.7 — a
+  minor secondary difference, not the headline.)
+- **(c) The residual — small, box-uniform, real.** At matched box + matched (NET) statistic:
+  - 4×1:  v2/v1 = **0.78** (3.66 ± 0.11 vs 4.71 ± 0.14; gap 1.05 ± 0.18, ≈ 5.8 σ)
+  - 14×2: v2/v1 = **0.75** (3.76 ± 0.17 vs 5.02 ± 0.16; gap 1.25 ± 0.23, ≈ 5.4 σ)
+  A genuine ~**0.76×** shortfall, **uniform across boxes** and outside SEM — but a far cry from 0.51×, and
+  NOT a box-size effect.
 
-**Two distinct contributors, now separated:**
+## 4. Verdict
 
-**(a) Finite-size / bed-width — a CONFIG effect that v1 ALSO exhibits.** Running v1 at the *same* small
-box (4×1) gives **6.66 µm/s, not 8.33** — v1 itself drops ~20% just from shrinking the box. The cause
-(planner-noted from the viewer): the filament's ends rotate/wander toward the bed edges and lose motor
-support; a narrow bed amplifies it. Widening v2's bed (±0.1 → ±0.55 µm in y) brought avgBound from 8.3
-to **6.85 (now matching v1's 7.6)** and velocity 0.41× → 0.51×. **This is config-matching, not tuning.**
+**The gate substantially closes; the original 2× framing is wrong.** Matched box + matched velocity
+statistic, multi-seed: v2's net glide is **0.76× v1's**, box-uniform, with **avgBound and
+`instantaneousSpeed` matching v1**. The "0.51×" was dominantly a measurement-method conflation (net vs
+`longWindowSpeedXY`-at-end-of-short-run) plus the startup settling jump; the box-size and box-scaling
+framings are resolved (v2 reproduces v1's weak net box-scaling).
 
-**(b) The genuine remaining gap is ~1.5×, not 2×.** Apples-to-apples (v2 at ~3.4×1.1 vs v1 at 4×1):
-**4.27 vs 6.66 µm/s ⇒ 0.64×.** So against a same-box v1 the gap is ~1.5×, with everything else matching.
+A **small, sharp, box-uniform ~0.76× residual remains** and it is **not** in binding, density, geometry,
+box size, or total motion (all match) — it is specifically in **net directedness**: v2 and v1 make nearly
+the same total per-interval motion (`instantaneousSpeed` matches), but v2 converts a smaller fraction of
+it into forward glide. That is exactly the co-bound tug-of-war / advance-per-stroke signature of §5,
+**now correctly sized at ~0.76× (≈ −24 %), not ~0.5×.** This is the proper, much-smaller target for any
+future burrow — and it is the *coordination/directedness of the co-bound population under motion*, NOT the
+box-size/edge mechanism and NOT an advance-per-stroke deficit twice as large as it really is.
 
-**(d) FULL-SCALE GPU RESOLUTION — the clean comparison (a GlidingHarness GPU TaskGraph was built).**
-The 23-kernel gliding step is now ONE device-resident TaskGraph (`GlidingHarness.buildPlan`, run via
-`-gpu`; same systems as the CPU step, only dispatch differs — the one-implementation invariant). It
-compiles + runs at the **full 14×2 box (~13 370 motors)**, stable over the run, **no per-step host pull**
-(host reads at output cadence only — the residency test). Full-box, multi-seed (3 seeds, 10k steps):
-
-| | velocity (µm/s) | avgBound |
-|---|---|---|
-| **v2 (full box, GPU, 3 seeds)** | **4.25 ± 0.32** | **7.53 ± 0.50** |
-| v1 fixture (10 seeds) | 8.33 ± 0.18 | 7.64 ± 0.16 |
-
-**avgBound MATCHES v1 within SEM (7.53 vs 7.64). Velocity is a clean 0.51× MISS, well outside SEM.**
-This is the clean full-scale finding (faithful config + frozen physics + full box + multi-seed): the
-binding is right, the velocity coupling is ~half. The trigger to burrow into the mechanism (Section 6
-candidates), NOT to tune. **GPU throughput: 386 steps/s @ 13 370 motors (2.59 ms/step), ~19× the CPU
-runner** — the dense-proximity regime where residency wins (the full scaling-vs-v1-ceiling study is
-later). **CPU≡GPU (6×2 box, aggregate-within-SEM, the chaotic standard):** CPU 4.0/7.47 vs GPU 4.58/7.40
-— avgBound matches, velocity within the chaotic run-to-run spread. NOTE: single-seed runs are noisy and
-box/run-length-sensitive (v1 itself: 8.33 full-box-0.1s, 6.66 small-box, 5.81 big-box-0.3s) — only the
-full-box multi-seed numbers above are the rigorous comparison.
-
-**(c) Big-box converged run (box ≈6×2 µm, full y-width, 30k steps / 0.3 s — for better statistics).**
-v2: **velocity −4.0 µm/s, avgBound 7.47** (now matching v1's 7.6 essentially exactly); filament settles
-to z ≈ −0.056 (onto the bed plane); stable, minimal rotation. Notably the wider box raised avgBound to
-v1's value but left velocity ~unchanged (slightly LOWER) — **higher avgBound came with slightly lower
-velocity**, the tug-of-war signature: v2's extra bound motors add drag (~50/50 assist/resist), whereas
-v1 sustains high avgBound AND high velocity (its bound population is net-assisting / coordinated). That
-coordination-under-motion is the crux of the remaining gap. (v1 big-box result pending at write time;
-the harness default is now this big box.)
-
-## 5. Mechanism diagnosis (the `-diag` instrument, wide bed, post-warmup)
+## 5. Mechanism diagnosis (the `-diag` instrument — the now-correctly-sized target)
 
 ```
 velocity = −4.27 µm/s, avgBound = 6.85
@@ -104,40 +99,27 @@ power strokes (ADPPi→ADP while bound) = 268/s per bound motor
 filament advance per power stroke = 2.33 nm   (unloaded stroke ≈ 7 nm, validated 4b-iii)
 ```
 
-Decomposition `velocity = avgBound × strokeRate × advancePerStroke` holds (6.85 × 268/s × 2.33 nm ≈
-4.27 µm/s). So the gap is **not** binding/density/geometry (avgBound, direction, stability, dwell-times
-all match v1). It is the **velocity coupling under motion**:
-- **advance per power stroke = 2.33 nm vs the 7 nm unloaded stroke (0.33×)** — the bottleneck.
-- The bound population is a near-balanced **tug-of-war (~53% assisting / 47% resisting)** ⇒ weak NET
-  force ⇒ small advance. For v1 to advance ~2× more per stroke at the same avgBound, its bound
-  population must be more asymmetrically assisting (resisting motors must clear faster / fewer bind
-  mid-resist).
-- Motors release fast (126 steps) via slip as the filament glides ~3 nm past them; ~⅔ of binds release
-  during ATP **before ever reaching the ADPPi→ADP power stroke**.
+Decomposition `velocity = avgBound × strokeRate × advancePerStroke` holds. The bound population is a
+near-balanced **tug-of-war (~53 % assisting / 47 % resisting)** ⇒ weak NET force ⇒ small forward advance
+per stroke, even though total motion (instantaneous) matches v1. For v1 to net ~24 % more glide at the
+same avgBound and the same instantaneous activity, its bound population must be marginally more
+asymmetrically assisting (resisting motors clear slightly faster / fewer bind mid-resist). The levers that
+would raise net directedness (chain `fracMoveTorq`, `myoSpring`, the catch-slip params, the 7 nm stroke)
+are all **FROZEN validated constants** — chasing the last ~24 % by changing any is the forbidden tuning.
+So the residual is a faithful-config finding about collective stroke-transmission directedness under
+motion, sized at ~0.76×.
 
-**The levers that would raise advance-per-stroke are all FROZEN, validated constants** (chain
-`fracMoveTorq`, `myoSpring=1e-9`, the catch-slip params, the 7 nm stroke). Changing any to chase the
-number is the forbidden tuning. So the remaining ~1.5× is a faithful-config physics finding about
-collective stroke-transmission / duty-under-motion.
+## 6. Open questions for the planner (re-scoped)
 
-## 6. Open questions for the planner
-
-1. **The ~1.5× coupling gap** (v2 4.27 vs same-box v1 6.66): why does v1 advance ~2× more per stroke
-   at the same avgBound? Candidate faithfulness checks (NOT tuning): (a) is the inc-2 chain force —
-   calibrated for *deflection* at `fracMoveTorq=0.265` — faithful to v1 at the *gliding* `0.2` (a
-   stiffer chain would transmit strokes better and resist local bending)? (b) does v1's catch-slip
-   release the *resisting* (negative-forceDotFil) population as promptly as ours? (c) the filament z
-   settles to ≈ −0.017 in v2 — does v1's stay at 0?
-2. **Scale to the fixture.** To compare against the 8.33 fixture (not the 6.66 small-box value) needs
-   the FULL 14×2 box (~14000 motors). v2 is CPU-only today; this needs the **GlidingHarness GPU
-   TaskGraph** (not yet built) — which is also required for the prompt's GPU-throughput gate.
-3. **Biochem cadence sanity.** v1's run stats show `biochemFireCt=10` over 10101 steps — that is the
-   *FilSegment* poly/depoly gate (biochemCheckInt=1000). The *MyoMotor* nucleotide cycle must fire
-   every step (else v1 couldn't glide, and our 4b-iii dwell-time gate matched at per-step cadence), but
-   a direct confirm in v1 source is worth doing before trusting the cycle timing under motion.
-4. **Commit policy.** The harness works (mechanism correct, avgBound/direction/stability match); the
-   open item is the velocity magnitude. Bail-out says "commit nothing"; the planner may prefer to bank
-   the working harness + this finding as an explicit partial checkpoint.
+1. **The ~0.76× net-directedness residual** (box-uniform, instantaneous + avgBound matched). Candidate
+   faithfulness checks (NOT tuning): (a) is the inc-2 chain force — calibrated for *deflection* at
+   `fracMoveTorq=0.265` — faithful at the *gliding* `0.2`? A stiffer chain transmits strokes more
+   directedly and resists local bending that scatters motion sideways. (b) Does v1's catch-slip release
+   the *resisting* (negative-forceDotFil) population marginally faster than ours? (c) the filament z
+   settles to ≈ −0.017–0.056 in v2 — does v1's stay nearer 0?
+2. **Box scaling is now closed** as a target — both codes scale weakly and equally in net terms.
+3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
+   The residual is correctly sized and re-targeted; whether to burrow is the planner's call.
 
 ## 7. What is and isn't validated
 
@@ -145,24 +127,27 @@ collective stroke-transmission / duty-under-motion.
 |---|---|
 | Assembly integrates (binding+cycle+cross-bridge+gather+stroke+chain+catch-slip) | ✓ works, stable |
 | Glide direction −x | ✓ |
-| avgBound vs v1 | ✓ 6.85 vs 7.6 (same-box) |
-| Stability over the full run (no NaN/blow-up) | ✓ |
-| dwell times / stroke / catch-slip / gather (4b-iii/ii) | ✓ (committed) |
-| GPU TaskGraph (23 kernels, device-resident, full 14×2 box / ~13.4k motors) | ✓ builds, runs, stable, no per-step pull |
-| avgBound vs fixture (full box, 3 seeds) | ✓ 7.53 ± 0.50 vs 7.64 ± 0.16 (within SEM) |
-| CPU≡GPU on gliding (6×2, aggregate-within-SEM) | ✓ avgBound matches; velocity in chaotic spread |
+| avgBound vs v1 (matched box, multi-seed) | ✓ 7.50 vs 7.22 @14×2; 6.79 vs 7.32 @4×1 |
+| `instantaneousSpeed` vs v1 (matched box, multi-seed) | ✓ 6.69 vs 7.54 @14×2; 6.81 vs 6.85 @4×1 |
+| Box-size NET scaling vs v1 | ✓ both weak (+3–6%); v2 reproduces it |
+| GPU TaskGraph (23 kernels, device-resident, full 14×2 box) | ✓ builds, runs, stable, no per-step pull |
 | GPU throughput | ✓ 386 steps/s @ 13.4k motors (~19× CPU runner) |
-| **Gliding velocity vs fixture** | ✗ — **0.51× clean full-scale finding**: 4.25 ± 0.32 vs 8.33 ± 0.18 (outside SEM) |
+| CPU≡GPU on gliding (aggregate-within-SEM) | ✓ avgBound matches; velocity in chaotic spread |
+| **Gliding NET velocity vs v1 (matched box+statistic)** | ◑ **0.76× box-uniform residual** (was mis-framed as 0.51×) — small, sharp, in net directedness |
 
 ## 8. Reproduce
 
 ```
-./run_gliding.sh 10000          # CPU probe: velocity + avgBound + y-spread
-./run_gliding.sh -diag 10000    # the mechanism instrument (state dist, force balance, advance/stroke)
-./run_gliding.sh -3js threejs_gliding   # viewer (v2)
-# v1 reference (read-only worktree; libs + .class are gitignored build artifacts):
-#   cd ~/Code/BoA-v1ref; build with `-encoding ISO-8859-1`; run BoxOfActin -r -gpu
-#   -pf <box-4x1 param> -3js ~/Code/SoftBox/threejs_v1_gliding   → glidingVelocity=6.66
+# v2 — the matched grid (both v1 statistics, multi-seed):
+./run_gliding.sh -gpu -v1box -grid -seed 1 10000     # 4×1 box (2000 motors)
+./run_gliding.sh -gpu -full  -grid -seed 1 10000     # 14×2 box (~13.4k motors)
+#   prints GRID_ROW: inst / instSteady / netXY / netX / lwXY / avgB
+./run_gliding.sh -diag 10000        # mechanism instrument (state dist, force balance, advance/stroke)
+./run_gliding.sh -gpu -3js threejs_gliding 20000     # viewer (full motor carpet)
+
+# v1ref (read-only worktree; outputs to a scratch dir — never written into v1ref):
+#   cd /tmp/scratch; BOA_RNG_SEED=<n> java @argfile … BoxOfActin -r -gpu -3js <dir> \
+#       -pf BoA-v1ref/ParameterFiles/glidingAssay500_val     # 14×2;  …/glidingAssay500_4x1 for 4×1
+#   gliding_assay.dat has instantaneousSpeed (col 13) + longWindowSpeedXY (col 14); NET from posX/posY.
 ```
-Viewer: `threejs_gliding` (v2, 4.27 µm/s) vs `threejs_v1_gliding` (v1 same box, 6.66 µm/s), same
-nucleotide-state coloring.
+Viewer: `threejs_gliding` (v2) vs `threejs_v1_gliding` (v1), same nucleotide-state coloring.

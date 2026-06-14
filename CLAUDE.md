@@ -334,27 +334,27 @@ into the pinned filament (the glide direction); (5) catch-slip unbind rate respo
 + `run_stroke.sh`. Existing paths bit-identical (FDT/deflection/broad-phase/4a/4b-i/ii). See JOURNAL
 2026-06-14 (inc 4b-iii).
 
-**Increment 4b-iv (gliding assay) — PARTIAL.** Assembled 4a–4b-iii + the inc-2 chain filament into v1's
-gliding assay. **Works end-to-end — filament glides −x, stable, avgBound matching v1 (7.47 vs 7.6) — but
-the gliding VELOCITY is below the v1 fixture, an OPEN FINDING (not tuned).** v2 ~−4.0 µm/s vs the full-box
-fixture 8.33; v1 itself is 6.66 at a matched small box (finite-size: filament ends rotate toward the bed
-edges), so the same-box gap is ~0.64×, genuine remainder ~1.5×. Localized (`-diag`) to the velocity
-coupling: advance/power-stroke 2.33 nm vs the 7 nm stroke, a ~50/50 assist/resist tug-of-war vs v1's
-coordinated net-assisting population — levers all frozen validated constants ⇒ faithful-config finding.
-Full report: `GLIDING_4biv_FINDINGS.md`. New: `GlidingHarness`, `BindingDetectionSystem.bindNearest`,
-`run_gliding.sh`:
+**Increment 4b-iv (gliding assay) — RECONCILED (measurement), small residual.** Assembled 4a–4b-iii + the
+inc-2 chain filament into v1's gliding assay. **Works end-to-end — glides −x, stable, avgBound +
+instantaneousSpeed matching v1.** The earlier "0.51× velocity miss" was a **measurement-method conflation**:
+v2's net-displacement glide was compared against v1's `longWindowSpeedXY`-at-end-of-a-0.1 s-run ("8.33"),
+which is inflated by window-length + an initial settling jump and is NOT v1's net glide. Measured the SAME
+way (v2's harness ports v1's `GlidingAssayEvaluator`), multi-seed, at matched boxes, **v2 = 0.76× v1**
+(NET 4×1: 3.66 vs 4.71; 14×2: 3.76 vs 5.02) — a small, **box-uniform** residual (NOT 2×, NOT box-scaling:
+v2 reproduces v1's weak +3–6 % net box-scaling; v1's own NET @14×2 is **5.0, not 8.33**). The residual is
+specifically in **net directedness** (total motion/instantaneous + avgBound match; v2 converts less of it
+to forward glide — the §5 co-bound tug-of-war, now correctly sized ~0.76× not ~0.5×). **No physics edits.**
+Full report + grid: `GLIDING_4biv_FINDINGS.md`; raw `RUN_LOGS/2026-06-14_4biv_grid_reconciliation.txt`.
+New: `GlidingHarness` (+ `-grid` v1-style measurement), `BindingDetectionSystem.bindNearest`, `run_gliding.sh`:
 ```
-./run_gliding.sh [M]                 # CPU gliding probe; velocity + avgBound + y-spread
-./run_gliding.sh -gpu [M]            # GPU TaskGraph (23 kernels, device-resident) + throughput
-./run_gliding.sh -gpu -full 10000    # full v1 14×2 box (~13.4k motors) — the fixture comparison
-./run_gliding.sh -gpu -full -seed <n> 10000   # ensemble member (varies placement + RNG)
+./run_gliding.sh -gpu -v1box -grid -seed <n> 10000   # 4×1 box: v1-style grid (inst+net+longWindow)
+./run_gliding.sh -gpu -full  -grid -seed <n> 10000   # 14×2 box (~13.4k motors)
+./run_gliding.sh -gpu -full 10000    # full v1 14×2 box — probe + GPU throughput
 ./run_gliding.sh -diag 10000         # mechanism instrument (state dist, force balance, advance/stroke)
-./run_gliding.sh -3js threejs_gliding   # viewer
+./run_gliding.sh -gpu -3js threejs_gliding 20000   # viewer (full motor carpet)
 ```
-**Full-scale result (GPU TaskGraph built — 23 kernels, device-resident, no per-step host pull):** full
-14×2 box (~13.4k motors), 3 seeds — **velocity 4.25 ± 0.32 µm/s vs the v1 fixture 8.33 ± 0.18 (0.51×, a
-clean MISS); avgBound 7.53 ± 0.50 MATCHES v1's 7.64.** GPU throughput **386 steps/s @ 13.4k motors (~19×
-the CPU runner)**. So the binding + assembly + residency are validated at scale; the **gliding VELOCITY
-is a clean full-scale finding** (the velocity coupling, ~half — not tuned; mechanism burrow is the next
-move). **Increment 4 is NOT complete** (gliding velocity open). See JOURNAL 2026-06-14 (inc 4b-iv) +
-`GLIDING_4biv_FINDINGS.md`.
+**Full-scale GPU TaskGraph (23 kernels, device-resident, no per-step host pull):** full 14×2 box (~13.4k
+motors), stable; GPU throughput **386 steps/s @ 13.4k motors (~19× the CPU runner)**. Binding + assembly +
+residency validated at scale; the gliding velocity is now a **small, sharp, correctly-sized ~0.76×
+box-uniform residual** in net directedness (re-scoped from the mis-framed 0.51×). See JOURNAL 2026-06-14
+(inc 4b-iv RECONCILED) + `GLIDING_4biv_FINDINGS.md`.
