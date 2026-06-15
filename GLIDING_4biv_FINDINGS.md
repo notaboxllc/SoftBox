@@ -233,6 +233,26 @@ motion, sized at ~0.87×.
      on the chaotic many-body gliding dynamics.** A clean dt→0 confirmation that it vanishes in the
      continuum is blocked by the deterministic-binding confound, but per-step force identity establishes
      the residual is the scheme, not the physics. Documented finding; not tunable. **No physics edits.**
+
+   **6.4 — which part of the scheme? the release-read reorder A/B (tested).** The one *reorderable* timing
+   difference: v2's catch-slip release + ADP-gate read a ONE-STEP-STALE `forceDotFil` (release/cycle run
+   before bond/register in v2's pipeline), whereas v1 explicitly reconciled this (`MyoFilLink.java:114`,
+   2026-06-04) so `ckRelease` consumes the FRESH same-step force. Mechanism: a stale read mis-times the
+   release of a motor whose load just flipped to resisting ⇒ v2 retains resisters v1 would shed ⇒ lower
+   assist-fraction. Tested with a clean A/B (`GlidingHarness -freshread`: compute force + register BEFORE
+   release/cycle; wang-hash RNG is keyed so the draws are identical — only the read-timing changes):
+   - **Assist-fraction: +0.43 pp toward v1** (52.27 % → 52.70 %, all 3 seeds positive). The release-read
+     lag IS a real, systematic contributor to the directedness — confirming the timing hypothesis.
+   - **Net glide: unchanged** (4×1, n=6: 4.13 ± 0.23 → 4.03 ± 0.16, Δ −0.10 ± 0.28 — within noise), because
+     the assist gain is offset by an avgBound increase (7.22 → 7.47; better-timed catch retains more motors
+     ⇒ more drag — the §5 tug-of-war again).
+   - **⇒ The reorder changes the MECHANISM (assist balance, +0.43 pp) but NOT the net residual** (robust
+     within noise). So the release-read timing is a small piece, not the net driver: the ~0.87× residual is
+     dominated by the broader emergent/chaotic decorrelation of the parallel scheme (and its avgBound–drag
+     coupling), which reordering kernels cannot remove. The position integration is forward-Euler in BOTH
+     (no Gauss-Seidel difference to reorder away), and float32 op-ordering chaos is irreducible. `-freshread`
+     is a faithful-to-v1 toggle (CPU; default off) the planner may adopt for fidelity, but it does not close
+     the gliding-velocity gap. **No physics edits.**
 2. **Box scaling is now closed** as a target — both codes scale weakly and equally in net terms.
 3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
    The residual is correctly sized and re-targeted; whether to burrow is the planner's call.

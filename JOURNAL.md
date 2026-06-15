@@ -2,6 +2,25 @@
 
 Last updated: 2026-06-15
 
+## 2026-06-15 — Increment 4b-iv residual: release-read reorder A/B — shifts the mechanism, NOT the net residual
+Tested whether reordering v2's integration scheme changes the residual. The one reorderable timing
+difference: v2's catch-slip release + ADP-gate read a ONE-STEP-STALE forceDotFil (release/cycle before
+bond/register), vs v1's reconciled order where ckRelease consumes the FRESH same-step force
+(`MyoFilLink.java:114`). Added `GlidingHarness -freshread` (compute force+register BEFORE release/cycle;
+keyed wang-hash RNG ⇒ identical draws — a clean A/B; CPU step only, GPU plan unchanged). Measurement only.
+
+- **Assist-fraction: +0.43 pp toward v1** (52.27→52.70 %, all 3 seeds positive) — the release-read lag IS a
+  real systematic contributor to the directedness (confirms the timing hypothesis).
+- **Net glide: unchanged** (4×1 n=6: 4.13±0.23 → 4.03±0.16, Δ −0.10±0.28, within noise) — the assist gain
+  is offset by an avgBound rise (7.22→7.47; better-timed catch retains more motors ⇒ more drag, the §5
+  tug-of-war).
+- **⇒ Reordering moves the MECHANISM but not the net residual.** The release-read timing is a small piece;
+  the ~0.87× net residual is robust — dominated by the broader emergent/chaotic decorrelation of the
+  parallel scheme + the avgBound–drag coupling, which kernel reordering can't remove (position integration
+  is forward-Euler in both — no Gauss-Seidel to reorder away; float32 op-order chaos is irreducible).
+  `-freshread` is a faithful-to-v1 toggle (default off) the planner may adopt for fidelity; it does not
+  close the velocity gap. `GLIDING_4biv_FINDINGS.md` §6.4. No physics edits.
+
 ## 2026-06-15 — Increment 4b-iv residual: dt-test CONFOUNDED, per-step force FAITHFUL ⇒ residual is the SCHEME
 The decisive test for whether the ~0.87× residual is a discretization/integration-scheme difference
 (vanishes as dt→0) or a real unfound difference. **Measurement only — no physics edits.** Raw

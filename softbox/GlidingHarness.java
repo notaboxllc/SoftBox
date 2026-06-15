@@ -30,6 +30,9 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
 public final class GlidingHarness {
 
     static double DT = 1.0e-5;                   // gliding dt; -dt overrides (dt-convergence test)
+    static boolean FRESH_READ = false;           // -freshread: catch-slip + cycle read THIS step's forceDotFil
+                                                 // (compute force+register BEFORE release/cycle, matching v1's
+                                                 // reconciled order) vs the default one-step-stale read.
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static final double DENSITY = 500.0;        // motors / µm²
@@ -60,6 +63,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-v1box")) { bX0 = 1.7; bXlo = -2.0; bXhi = 2.0; bYhalf = 0.5; }   // v1 4×1, exactly 2000 heads
             else if (args[i].equals("-seed")) SEED = 0x6111D + 7919 * Integer.parseInt(args[++i]);
             else if (args[i].equals("-dt")) DT = Double.parseDouble(args[++i]);   // dt-convergence test
+            else if (args[i].equals("-freshread")) FRESH_READ = true;             // release-read reorder A/B
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
         }
@@ -149,8 +153,11 @@ public final class GlidingHarness {
         return sc;
     }
 
-    /** One gliding step (CPU runner). */
-    static void step(Scene sc, int t) {
+    /** One gliding step (CPU runner). Dispatches to the default or the fresh-read reorder. */
+    static void step(Scene sc, int t) { if (FRESH_READ) stepFresh(sc, t); else stepOrig(sc, t); }
+
+    /** One gliding step (CPU runner) — default order (catch-slip/cycle read last step's forceDotFil). */
+    static void stepOrig(Scene sc, int t) {
         FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
         mot.setCounts(t, SEED, f.n);
         f.counts.set(1, t);
@@ -179,6 +186,46 @@ public final class GlidingHarness {
         CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
         CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
         CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
+        RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+    }
+
+    /** Fresh-read reorder (-freshread): compute the cross-bridge force + register forceDotFil BEFORE the
+     *  catch-slip release + cycle, so they read THIS step's load (v1's reconciled order). All forces use
+     *  the start-of-step state (forward-Euler unchanged); only the release/cycle/bind run after the force,
+     *  and integration moves to the end. Force gather (head + seg) uses the pre-release bound set (3rd law).
+     *  RNG is wang-hash-keyed ⇒ identical draws regardless of order: a clean A/B vs stepOrig. */
+    static void stepFresh(Scene sc, int t) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        mot.setCounts(t, SEED, f.n);
+        f.counts.set(1, t);
+        // --- reach (for binding, post-force) ---
+        MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
+        BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
+        // --- motor forces (use the prior nucleotide state, like v1's addForces before biochemStep) ---
+        ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
+        BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
+        MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
+        TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts);
+        CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
+        CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+        // --- filament forces + gather (pre-release bound set ⇒ Newton's 3rd law preserved) ---
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+        BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sc.segMotorCount);
+        CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
+        CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
+        CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
+        // --- register THIS step's forceDotFil, THEN release/bind/cycle read it FRESH ---
+        CrossBridgeSystem.registerForceDot(sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceDotHist, mot.forceDotPlace, mot.counts);
+        NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.stats, mot.kinParams, mot.counts);
+        BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
+        // --- integrate all bodies (forces from the start-of-step state) ---
+        RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+        DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
     }
