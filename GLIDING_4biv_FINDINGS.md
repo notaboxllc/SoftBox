@@ -139,9 +139,18 @@ motion, sized at ~0.87×.
 ## 6. Open questions for the planner (re-scoped)
 
 1. **The ~0.87× net-directedness residual** (box-uniform, instantaneous + avgBound matched). Candidate
-   faithfulness checks (NOT tuning): (a) is the inc-2 chain force — calibrated for *deflection* at
-   `fracMoveTorq=0.265` — faithful at the *gliding* `0.2`? A stiffer chain transmits strokes more
-   directedly and resists local bending that scatters motion sideways. (b) Does v1's catch-slip release
+   faithfulness checks (NOT tuning): (a) ~~is the inc-2 chain force — calibrated for *deflection* at
+   `fracMoveTorq=0.265` — faithful at the *gliding* `0.2`?~~ **TESTED — FAITHFUL, ELIMINATED.** Ran v2's
+   deflection characterization (`-characterize`) AND v1's (`BoxOfActin -bmDiag`) at the gliding
+   `fracMoveTorq=0.2` (11-seg×32-mon pinned chain, fracR=0.1, the inc-2b setup): **v1 ratio 1.20240 vs v2
+   1.20235, Δ 0.004 %** — and the 0.265 regression still matches (v1 0.99843 / v2 0.99831). v2's chain is
+   as stiff as v1's at 0.2 to the inc-2b tolerance (≤0.05 %); both are ~20 % softer than the 0.265 beam
+   target, identically. v1 and v2 share the identical damped-torsion law (`fracMoveTorq·(π/180)·angTween/
+   ((1/bRotGam_i+1/bRotGam_j)·dt)`), linear in `fracMoveTorq` with no 0.265-baked constant — so it
+   transfers cleanly to 0.2. **Caveat (measurement, not a gap):** that damped-torsion stiffness ∝ 1/dt, so
+   the characterization MUST be at matched dt — the benchmark runs at dt=1e-4 (a wrong dt=1e-5 override
+   made the chain look 10× stiffer); v1 and v2 share this dt-dependence faithfully. ⇒ Chain stiffness is
+   NOT the residual cause; next is (b)/the cycle-under-load check. (b) Does v1's catch-slip release
    the *resisting* (negative-forceDotFil) population marginally faster than ours? (c) ~~the filament z
    settles in v2 — does v1's stay nearer 0?~~ **TESTED — ELIMINATED (see below).**
 

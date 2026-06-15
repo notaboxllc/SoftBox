@@ -2,6 +2,30 @@
 
 Last updated: 2026-06-14
 
+## 2026-06-14 — Increment 4b-iv residual step 1/2: chain stiffness at fracMoveTorq=0.2 — FAITHFUL, ELIMINATED
+First of two foundational faithfulness checks on the static ~0.87× residual. **Is v2's chain as stiff as
+v1's at the gliding `fracMoveTorq=0.2`?** (inc-2b validated only at 0.265.) **Yes — faithful, chain
+eliminated.** Measurement only — no physics edits; v1ref instrumented (its real `-bmDiag`), never edited.
+
+Ran the deflection characterization (11-seg×32-mon pinned chain, fracR=0.1) for both codes at 0.2 and 0.265:
+
+| fracMoveTorq | v1 (`BoxOfActin -bmDiag`) | v2 (`-characterize`) | Δ |
+|---|---|---|---|
+| 0.265 (regression) | 0.99843 | 0.99831 | 0.01 % |
+| **0.2 (gliding)** | **1.20240** | **1.20235** | **0.004 %** |
+
+v2's chain matches v1 at 0.2 to ≤0.005 % — well within the inc-2b ≤0.05 % tolerance. Both are ~20 % softer
+than the 0.265 beam target (ratio 1.20 vs 1.00), *identically* — that softness is a faithful property of
+v1's gliding config, not a v2 gap. The two share the identical damped-torsion law (linear in `fracMoveTorq`,
+no 0.265-baked constant), so it transfers cleanly.
+
+**Gotcha worth recording:** the damped-torsion stiffness ∝ 1/dt — the deflection benchmark runs at dt=1e-4,
+and an initial wrong dt=1e-5 override made v1 look 10× stiffer (ratio 0.10) and produced a spurious 10×
+"divergence." With matched dt the codes agree to 5 sig-figs. (Both share this dt-dependence faithfully.)
+
+⇒ **Chain stiffness is NOT the residual cause.** Per the prompt's bound, stop here for **step 2** (the
+nucleotide-cycle-under-load check) — not improvised. `GLIDING_4biv_FINDINGS.md` §6(a) updated.
+
 ## 2026-06-14 — Increment 4b-iv z-settling probe: z-mechanism ELIMINATED (residual is static, not z-driven)
 Bounded measurement-only probe of the ~0.87× net-directedness residual. The startup check had pointed at
 §6(c): the filament *progressively losing motor support as its z settles*. Tested directly with
