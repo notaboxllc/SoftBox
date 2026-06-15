@@ -218,7 +218,10 @@ motion, sized at ~0.87×.
      refining dt is non-physical for binding: at 1e-6, avgBound triples (v2 4×1: 6.4→19.9) into a
      different over-bound regime (NET barely moves, 3.60→3.90). The test can't hold the gliding regime
      fixed, so it cannot cleanly isolate the scheme difference. (Notably v1's fixture avgBound ~7.6 is
-     itself a dt=1e-5 artifact of the deterministic binding.)
+     itself a dt=1e-5 artifact of the deterministic binding.) **Update (§6.6, 2026-06-15): a SECOND
+     dt-dependent binding artifact was found + fixed — v2's rebind cooldown was a fixed step count (=dt)
+     vs v1's fixed `myoRebindTime` time; now `ceil(myoRebindTime/dt)`, commit `f2402b2`, bit-identical at
+     production dt. Any future dt-refinement must use this build.**
    - **Per-step cross-bridge force cross-check — FAITHFUL (the planner's chosen alternative).** Dumped v1's
      EXACT compute-time bound config from an instrumented `MyoFilLink.addForces` (scratch v1, CPU, byte-
      clean ref) and fed it into v2's `bondForces` (`-forcetest`). v2 reproduces v1's head-side **F8 vector
@@ -257,6 +260,194 @@ motion, sized at ~0.87×.
      op-ordering chaos is irreducible. `-freshread` is a faithful-to-v1 toggle (CPU step + GPU TaskGraph;
      default off) the planner may adopt for fidelity, but it does not close the gliding-velocity gap.
      **No physics edits.**
+
+   **6.5 — Per-step operation-ORDER audit: the kinetic order is faithful; the prime suspect (binding
+   geometry) is ELIMINATED; no un-toggled divergence of any consequence remains.** §6.4 reordered ONE
+   timing (the release-read) and found it shifts the mechanism (+0.43 pp assist) but not the net. The
+   open gap that conclusion left: was the release-read the *only* per-step order divergence, or are there
+   others (the prime suspect being binding-detection timing / the newly-bound motor's initial strain,
+   which `-freshread` never touched)? This audit enumerates **every** kinetic operation's within-step
+   position and read-staleness in both codes, code-verified. **Survey only — no test was run** (the
+   contingent test's bar was not met; see the ranking). v1ref byte-clean.
+
+   **The reference is v1's GPU path** — the net-glide oracle of §2 is `BoxOfActin -r -gpu`, and the
+   production v2 path is the GPU TaskGraph. v1 itself runs *two* slightly different per-step orders (CPU
+   vs GPU); both are given below because §6.4's CPU A/B used the CPU runner and the net oracle is GPU.
+
+   **Within-step order (code-verified):**
+   - **v1 CPU** (`BoxOfActin.doLoop`): BIND (`motCollStart` 1357 → `checkFilSegCollision`) → cross-bridge
+     FORCE + RELEASE (`stepStart` 1420 → `MyoFilLink.addForces`+`ckRelease`, release reads the FRESH
+     same-step force, reconciled 2026-06-04 `MyoFilLink.java:114`) → MOVE (`moveStart` 1509) → CYCLE
+     (`biochemStart` 1523 → `dissociateADP`, gate reads the `forceDotFilTrack` 10-window avg whose newest
+     entry is this step's fresh force).
+   - **v1 GPU** (the oracle): FORCE → RELEASE (deferred to `bridgeMotorForceWriteback`, fresh step-N
+     force) → MOVE (`moveThings` 1467) → **BIND drained AFTER the move** (`drainBoundResults` 1477) →
+     CYCLE (1523). So on GPU a new bind takes effect for step N+1, and its first force is computed in N+1
+     (the documented 1-step bind lag); the bound set that the step-N force/release act on is last step's.
+   - **v2 default** (`stepOrig`/`buildPlan` else): RELEASE (stale `forceDotFil`) → BIND → CYCLE (stale
+     10-avg) → motor forces incl. bond (this-step nuc state) → MOVE motor → `registerForceDot` → filament
+     forces+gather → MOVE filament. A new bind takes effect step N and its force is applied step N.
+   - **v2 `-freshread`** (`stepFresh`/`buildPlan` if): motor+filament forces incl. bond (LAST-step nuc
+     state) → gather → `registerForceDot` → RELEASE (fresh) → BIND → CYCLE (fresh 10-avg) → MOVE motor →
+     MOVE filament. Bond runs *before* bind, so a new bind's first force is step N+1 — matching v1 GPU.
+
+   **Operation-by-operation staleness, v2 vs the v1 GPU oracle:**
+
+   | operation | reads | v1 GPU (oracle) | v2 default | v2 `-freshread` | divergence |
+   |---|---|---|---|---|---|
+   | binding detection (geometry) | filament end1/end2 | start-of-step (pre-move) pose | start-of-step pose | start-of-step pose | **none — FAITHFUL** |
+   | bind-point arc | `numer/√denom` along seg | `alpha·√denom` (`MyoMotor:421`) | `numer/√denom` (`BindingDetectionSystem:284`) | same | **none — bit-identical formula** |
+   | newly-bound first force | step it first contributes | N+1 (bind drained post-move) | N (bind before bond) | N+1 (bond before bind) | default early by 1; `-freshread` matches |
+   | bond force law | F8/F9/F10 + rest angles | start-of-step pose, last-step nuc state | start-of-step pose, **this-step** nuc state | start-of-step pose, last-step nuc state | default uses this-step state; `-freshread` matches (§6.3 `-forcetest` already validated the law to float32) |
+   | catch-slip RATE `k_off(F)` | `forceDotFil` | FRESH same-step | **one-step-STALE** | FRESH | default stale; `-freshread` matches |
+   | release decision | same `forceDotFil` read | FRESH | one-step-STALE | FRESH | (same single read as the rate — not a separate gap) |
+   | cycle ADP-gate | 10-window `forceDotHist` avg | FRESH (newest entry = this step) | one-step-STALE | FRESH | default stale; `-freshread` matches |
+   | bind vs release order | within-step phase | release-before-effective-bind (bind drains post-move/release) | release-before-bind | release-before-bind | **none vs GPU** (a gap only vs v1 *CPU*, which binds before release) |
+   | position integration | forces from start-of-step | forward-Euler / Jacobi | forward-Euler / Jacobi | forward-Euler / Jacobi | **none — identical (established §6.3)** |
+
+   **Flagged divergences, ranked by plausible contribution to the ~2.5–3 pp assist deficit:**
+
+   1. **The four read-staleness/timing items (release rate+decision, cycle gate, bond nuc-state,
+      newly-bound first-force) — ALL bundled in the single `-freshread` toggle, already A/B-tested
+      (§6.4).** v2's *default* differs from the v1 GPU oracle on exactly these four, and `-freshread`
+      corrects all four together (it is precisely "compute force + register before release/cycle, integrate
+      last," which simultaneously freshens the release read, freshens the cycle gate, reverts the bond to
+      last-step nuc state, and pushes the new-bind first-force to N+1). Mechanism points the right way
+      (stale read mis-times the cull of a just-flipped resister ⇒ v2 retains resisters ⇒ lower assist).
+      **Empirical result (§6.4): +0.43 pp assist toward v1, net unchanged on BOTH runners** (GPU 14×2 n=6:
+      3.96→3.93). So this divergence is real, is the dominant *order* effect, and is **already
+      characterized and toggleable** — there is nothing new to test here.
+   2. **Bind-before-release vs release-before-bind — a gap only against v1 CPU, NOT the GPU oracle, and
+      mechanically negligible.** v1 CPU orders bind→force→release, so a just-bound resister can be culled
+      in its *first* step on fresh force; v2 (both toggles) orders release-before-bind, so a new bind is
+      never first-step-culled. Direction is correct (v1 CPU sheds resisting new-binds marginally faster ⇒
+      higher assist). **But (a)** the production oracle is v1 *GPU*, which *also* defers binding past
+      release/move (the 1-step bind lag) — so against the actual oracle this is **not a divergence at
+      all**; and **(b)** the magnitude is a first-step-only effect: ≈(new-binds/step ~0.056)×P(resist
+      ~0.47)×(differential per-step release prob ~5e-4) ⇒ a standing-assist shift on the order of **~0.02
+      pp**, ~100× too small to matter. Fails the contingent-test bar (clean *and* mechanically material):
+      it is clean vs CPU but immaterial, and absent vs GPU.
+   3. **Bind-target tie-break (v1 first-reachable via the `if(onFil)return` collision guard vs v2
+      nearest-reachable).** Real implementation difference, but only manifests when ≥2 segments are
+      simultaneously within the motor's ~tens-of-nm reach (rare given ~0.27 µm segments), and the choice
+      is **not correlated with the glide direction** — no systematic assist/resist bias. Non-directional ⇒
+      cannot produce a systematic mean shift. Noted for completeness; not a faithfulness gap of consequence.
+
+   **The prime suspect is ELIMINATED.** Binding detection in BOTH codes reads start-of-step (last-completed,
+   pre-move) filament geometry, and the bind-point arc is the *identical* formula (`numer/√denom`). The
+   newly-bound motor's initial cross-bridge strain is therefore set by the same-staleness filament position
+   and the same arc in both — so binding feeds assist-fraction *identically*. `-freshread` "did not touch
+   it" because it did not need to: it was already faithful. (The bond force *given* a bound config was
+   already float32-validated in §6.3 via `-forcetest`; this audit closes the remaining piece — that the
+   *bind site itself* is chosen identically.)
+
+   **⇒ Conclusion (Outcome 2 — the order is faithful; the residual is not an order artifact).** Beyond the
+   four items the now-toggleable `-freshread` already corrects, there is **no per-step kinetic-operation
+   order divergence of any consequence** between v2 and the v1 GPU oracle: binding geometry and bind-point
+   are bit-faithful, position integration is identical (forward-Euler/Jacobi in both, §6.3), and the bond
+   force law is float32-faithful (§6.3). The one un-toggled order difference (bind-vs-release) is absent
+   against the GPU oracle and ~0.02 pp even against v1 CPU. This code-level audit **confirms the §6.4
+   empirical result from first principles**: making v2's order fully faithful (via `-freshread`) recovers
+   part of the assist balance but does not move the net — because the order was already faithful in every
+   *consequential* respect, and the staleness items it corrects are second-order.
+
+   Combined with the two facts the planner established — **position integration is identical** and **float32
+   op-order chaos decorrelates the microstate without shifting the mean** — a systematic mean residual
+   **cannot originate in anything modeled as faithful**: not the integration, not the chaos, not the
+   binding, not the force law, and not the (now-faithful, toggleable) kinetic read-order. There is no
+   remaining systematic-order mechanism to which the ~0.87× net / ~2.5–3 pp assist gap can be attributed.
+
+   **⇒ This points to the residual lying within v1's own true ensemble uncertainty rather than being a real
+   systematic gap.** The ~3–4 σ pooled significance (§3c) is computed against the SEM of short-run
+   ensembles (n=8/16); v1's assist-fraction alone spans 51.6–58.2 % seed-to-seed (§6.2), and v2's 51.5 %
+   sits at the low edge of that band. The honest closing step — **the planner's call, NOT run here** — is a
+   **variance characterization**: does v2's net sit inside v1's *true long-window* spread (one long run, or
+   a large matched-seed ensemble at fixed box), as opposed to the short-window SEM the σ-counting used? If
+   yes, "robust within v1's ensemble" is the earned conclusion and "emergent" can be retired as the framing.
+   If v2 falls cleanly outside v1's true spread, then — since this audit has exhausted the order channel —
+   the cause would have to lie in something currently *believed* faithful (a hidden physics/constant gap),
+   reopening §6.1a/§6.2 rather than the scheme. **No test run, no physics edits, no reorder committed** (the
+   only faithful reorder candidate, the release-read, is already the committed `-freshread` toggle).
+
+   **6.6 — Rebind refractory: dt-fix committed; cleared as the DIRECTEDNESS cause; a partial, favorable
+   NET contributor flagged for a rate-faithful follow-up.** The §6.5 audit left one mechanism explicitly
+   out of scope: the post-release rebind refractory (the minimum time a head waits before it may rebind).
+   Verified this session: **v1** holds a fixed *time* `Env.myoRebindTime=1e-5 s` via a **static class-global**
+   `bindTimer` (reset on release `MyoFilLink.java:315`, gated in `ontoFilament` `MyoMotor.java:455`);
+   **v2** held a fixed *step count* (one `FREE_COOLDOWN` step). Two differences fell out: **(A) dt-scaling**
+   (v2's duration = dt vs v1's fixed time — coincide at every production dt, diverge at dt≤1e-6) and
+   **(B) refractory strength/character at fixed dt** (v2's clean 100%/1-step block vs v1's racy-global).
+
+   **Phase A — dt-correct cooldown (committed, faithfulness fix).** Replaced the hardcoded one-step block
+   with a per-motor counter set to `ceil(myoRebindTime/dt)` steps (`MotorStore.cooldown`; driven in
+   `catchSlipRelease`), using v1's existing constant (no new rate/law/constant). Covers the CPU step + the
+   GPU TaskGraph. **Gate PASSED:** at dt=1e-5 `ceil=1`, so it reproduces the baseline **bit-identically**
+   (git-stash A/B, `-v1box -grid -seed 1 2000`, both runners: `GRID_ROW` identical — inst=6.042 netXY=2.928
+   avgB=6.286). Closes the latent dt artifact (the 2nd dt-dependent binding artifact alongside §6.3's
+   geometric-binding `k_on∝1/dt`). Commit `f2402b2`. Also added `-norefractory` (default off) for the bracket.
+
+   **Phase B1 — v1's effective block rate** (scratch logging-only v1, `BoA-v1ref` byte-clean; `ontoFilament`
+   instrumented to count would-be rebinds refused; fires on the GPU drain too via `GPUMotorBinding.java:1834`):
+
+   | v1 path / box | effective block rate |
+   |---|---|
+   | GPU 14×2 (the net-glide **oracle**) | 0.317, 0.321, 0.303 → **0.31** |
+   | GPU 4×1 | 0.309…0.328 → **0.31** (box-independent) |
+   | **CPU 4×1** | **0.000** (0 of 748–1002 candidates) |
+
+   So v1 is **mid-bracket on GPU (~31 %)** and **0 % on CPU** — the racy static-global makes v1's *own*
+   refractory **path-dependent**. (The earlier "near-absent" guess was wrong for the GPU oracle.)
+
+   **Phase B2 — v2 ON↔OFF bracket** (n=6, full 14×2; ON = current Phase-A block, OFF = `-norefractory`):
+
+   | runner | net ON | net OFF | net swing | assist ON | assist OFF | **assist swing** | avgB ON→OFF |
+   |---|---|---|---|---|---|---|---|
+   | CPU (`-diag`) | 3.899 | 4.041 | +0.142 | 52.42 % | 52.45 % | **−0.03 pp** | 7.68→7.64 |
+   | GPU (`-grid`) | 3.960 | 4.202 | +0.243 | — | — | — | 7.46→7.80 |
+
+   Per-seed assist is **invariant** ON↔OFF (52.6/52.3/52.2/52.7/52.5/52.2 vs 52.7/52.1/52.8/52.4/52.4/52.3).
+   The 1-seed v1box probe (ON>OFF) was noise; at the production box **OFF>ON** consistently — relaxing the
+   refractory **raises net via avgBound** (binding *quantity*), and leaves **assist (directedness) untouched**.
+
+   **Phase C — v1's own CPU-vs-GPU calibration** (4×1 matched box, the natural order-sensitivity scale):
+
+   | v1 path | net | avgB | block |
+   |---|---|---|---|
+   | CPU 4×1 | **4.76** (n=5) | 7.19 | 0 % |
+   | GPU 4×1 | **4.57** (n=6) | 6.97 | 31 % |
+
+   v1's two paths differ by **~0.19 µm/s (~4 %)** in net, same direction as v2 (less block → higher net).
+   So ~4 % is v1's intrinsic CPU-vs-GPU implementation/order-sensitivity for this mechanism.
+
+   **Verdict.**
+   1. **Directedness (the clean signal) — refractory CLEARED.** The assist-fraction ON↔OFF swing is
+      **−0.03 pp**, ≪ the 2.5–3 pp gap, per-seed and on both runners. The ~50/50 tug-of-war / directedness
+      deficit of §5/§6.5 is **not** the refractory. (The refractory acts on binding *quantity*, not the
+      per-bound-motor *directedness*.)
+   2. **Net — a partial, favorable, NOT-fully-closing contributor.** The refractory moves net via avgBound
+      (swing +0.14 CPU / +0.24 GPU, OFF>ON). v1's oracle rate (31 %) is **more relaxed** than v2's Phase-A
+      block (100 %/1-step), so a rate-faithful v2 would gain ~+0.1–0.17 µm/s net **toward** v1 — i.e. the
+      current v2 refractory is slightly *too strong* and mildly *depresses* v2's net, making the §2 0.87×
+      a touch conservative. But that closure is via **over-binding** (avgB rises past v1's), not by fixing
+      directedness, so it shifts the net *number* without resolving the underlying deficit.
+   3. **Scale check (Phase C).** v1's own CPU↔GPU net spread is ~4 %; the v2 net residual (~9–16 %) is
+      several × larger, but its **refractory-attributable part (~4–6 %) is the same order** as v1's intrinsic
+      path-sensitivity — i.e. that part of the gap is within v1's own implementation noise.
+   4. **Flagged follow-up (NOT implemented — physics-of-rate change deferred per the prompt):** a
+      **probabilistic block matching the v1-GPU oracle's ~31 % effective rate** (or a fractional
+      `myoRebindTime`) is the rate-faithful refractory fix; it would raise v2 net partway toward v1 without
+      touching assist. Caveat: v1's rate is itself **path-dependent** (0 % CPU / 31 % GPU), so "the faithful
+      rate" = the **oracle (GPU) 31 %**. Phase A is dt-correct but deliberately still 100 %/1-step (the
+      rate-match is the separate, flagged step).
+
+   **⇒ The last un-cleared same-dt mechanism is now characterized: cleared as the cause of the directedness
+   residual, and only a partial/favorable contributor to the net number (within v1's own ~4 % CPU-GPU
+   spread for the closeable part).** Combined with §6.5 (kinetic order faithful) this leaves **no same-dt
+   mechanism that explains the directedness deficit** — so the closer remains the **variance
+   characterization** (does v2's net/assist sit within v1's *true* long-window ensemble spread; note v1's
+   own CPU-vs-GPU paths already differ ~4 % in net), with the rate-faithful refractory as an independent,
+   net-favorable fidelity improvement to fold in. Raw: `RUN_LOGS/2026-06-15_4biv_refractory.txt`.
+
 2. **Box scaling is now closed** as a target — both codes scale weakly and equally in net terms.
 3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
    The residual is correctly sized and re-targeted; whether to burrow is the planner's call.

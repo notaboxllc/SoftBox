@@ -2,6 +2,65 @@
 
 Last updated: 2026-06-15
 
+## 2026-06-15 — Increment 4b-iv residual: rebind refractory — dt-fix committed; cleared for directedness; partial NET contributor flagged
+Phase A (faithfulness fix, committed `f2402b2`) + Phase B/C (measurement) on the one mechanism §6.5 left
+out of scope: the post-release rebind refractory. v1 holds a fixed TIME (`myoRebindTime=1e-5 s`, racy
+static-global `bindTimer`); v2 held a fixed STEP COUNT (1 `FREE_COOLDOWN` step = dt). `GLIDING_4biv_FINDINGS.md`
+§6.6; raw `RUN_LOGS/2026-06-15_4biv_refractory.txt`.
+
+- **Phase A — dt-correct cooldown, COMMITTED.** Per-motor `MotorStore.cooldown` set to `ceil(myoRebindTime/dt)`
+  steps (v1's existing constant — no new rate/law), driven in `catchSlipRelease`, both CPU step + GPU
+  TaskGraph. **Bit-identical no-op at dt=1e-5** (git-stash A/B, both runners: GRID_ROW inst=6.042 netXY=2.928
+  avgB=6.286 identical) — `ceil(1e-5/1e-5)=1` reproduces the old one-step transition. Closes the 2nd
+  dt-dependent binding artifact (alongside §6.3's geometric `k_on∝1/dt`). Added `-norefractory` (default off).
+- **Phase B1 — v1 effective block rate** (scratch instrumented v1, byte-clean ref; fires on the GPU drain
+  too): **GPU oracle ~0.31** (0.317/0.321/0.303, box-independent: 4×1 also ~0.31), **CPU 0.0**. The racy
+  static-global makes v1's own refractory PATH-DEPENDENT (mid-bracket on GPU, absent on CPU).
+- **Phase B2 — v2 ON/OFF bracket (n=6, 14×2):** **assist swing −0.03 pp** (per-seed invariant, ≪ 2.5–3 pp
+  gap) ⇒ refractory does NOT touch directedness. NET swing +0.14 (CPU) / +0.24 (GPU), OFF>ON — relaxing
+  raises net via **avgBound** (binding quantity), avgB 7.46→7.80 GPU.
+- **Phase C — v1 internal CPU-vs-GPU (4×1):** CPU net 4.76 (0% block) vs GPU 4.57 (31% block) — **~4 %**
+  intrinsic path/order-sensitivity, same direction (less block → higher net).
+
+- **⇒ VERDICT: refractory CLEARED as the directedness cause** (assist swing ~0). It's a partial, FAVORABLE
+  NET contributor: v1 (31%) is more relaxed than v2's Phase-A block (100%/1-step), so a rate-faithful v2
+  would gain ~+0.1–0.17 net toward v1 — but via over-binding, not directedness, and only ~4–6% (the order
+  of v1's own CPU-GPU spread). **Flagged follow-up (NOT implemented):** probabilistic block matching the
+  v1-GPU oracle's ~31% rate (v1's rate is path-dependent ⇒ match the oracle). With §6.5 this exhausts the
+  same-dt mechanisms for the directedness deficit ⇒ closer = variance characterization. No physics edits
+  beyond the committed dt-fix. (Note: runs done on a shared machine w/ a concurrent membrane sim + a stale
+  16h waiter; a cd-bug collision corrupted 2 of the v1 runs — excluded; block-rate counters + 101-row
+  monotonic .dats unaffected.)
+
+## 2026-06-15 — Increment 4b-iv residual: per-step operation-ORDER audit — order is FAITHFUL, prime suspect ELIMINATED
+Code-level audit (survey only, no test run; v1ref byte-clean) of every kinetic operation's within-step
+position + read-staleness in v2 vs v1, to find any order divergence beyond the release-read (§6.4). Built
+the side-by-side timeline for v1 CPU, **v1 GPU (the net-glide oracle)**, v2 default, and v2 `-freshread`.
+`GLIDING_4biv_FINDINGS.md` §6.5.
+
+- **v1 order (CPU):** BIND (`checkFilSegCollision`) → FORCE+RELEASE (`addForces`+`ckRelease`, fresh
+  same-step force) → MOVE → CYCLE (`dissociateADP`, 10-window avg w/ fresh newest entry). **v1 GPU:**
+  FORCE → RELEASE (writeback, fresh) → MOVE → **BIND drained AFTER move** (1-step bind lag) → CYCLE.
+- **Prime suspect ELIMINATED.** Binding detection in BOTH reads start-of-step (pre-move) filament geometry,
+  and the bind-point arc is the *identical* formula: v1 `alpha·√denom` (`MyoMotor:421`) == v2 `numer/√denom`
+  (`BindingDetectionSystem:284`). So a new bind's initial cross-bridge strain is set by same-staleness pose
+  + same arc ⇒ feeds assist-fraction identically. `-freshread` never touched it because it was already
+  faithful (§6.3's `-forcetest` validated force *given* a config; this closes the bind-*site*-selection piece).
+- **The only v2-default-vs-v1-GPU divergences are the FOUR items `-freshread` already bundles+corrects**
+  (release rate+decision read, cycle gate read, bond nuc-state, newly-bound first-force timing) — already
+  A/B-tested (§6.4: +0.43 pp assist, net unchanged both runners). Nothing new to test there.
+- **One un-toggled order diff — bind-before-release (v1 CPU) vs release-before-bind (v2) — fails the
+  contingent-test bar.** It is *not* a divergence against the GPU oracle (v1 GPU also defers binding past
+  release/move), and even vs v1 CPU it is a first-step-only cull worth ~0.02 pp assist — ~100× too small.
+  Bind-target tie-break (v1 first-reachable vs v2 nearest) is rare + non-directional ⇒ no systematic bias.
+- **⇒ Outcome 2: the kinetic order is faithful in every consequential respect; the residual is NOT an order
+  artifact.** Confirms §6.4 from first principles. With position-integration identical + chaos not shifting
+  the mean, a systematic mean residual cannot originate in anything modeled as faithful — pointing to the
+  residual lying within v1's TRUE ensemble uncertainty (v1 assist 51.6–58.2 % seed-to-seed; v2 51.5 % at the
+  low edge). Recommended closing step (planner's call, NOT run): a **variance characterization** — does v2's
+  net sit inside v1's true long-window spread vs the short-run SEM the ~3–4 σ used? **No physics edits, no
+  reorder committed** (the release-read is already the `-freshread` toggle, CPU step + GPU TaskGraph).
+
 ## 2026-06-15 — Increment 4b-iv residual: release-read reorder A/B — shifts the mechanism, NOT the net residual
 Tested whether reordering v2's integration scheme changes the residual. The one reorderable timing
 difference: v2's catch-slip release + ADP-gate read a ONE-STEP-STALE forceDotFil (release/cycle before
