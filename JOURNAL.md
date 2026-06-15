@@ -11,9 +11,9 @@ keyed wang-hash RNG ⇒ identical draws — a clean A/B; CPU step only, GPU plan
 
 - **Assist-fraction: +0.43 pp toward v1** (52.27→52.70 %, all 3 seeds positive) — the release-read lag IS a
   real systematic contributor to the directedness (confirms the timing hypothesis).
-- **Net glide: unchanged** (4×1 n=6: 4.13±0.23 → 4.03±0.16, Δ −0.10±0.28, within noise) — the assist gain
-  is offset by an avgBound rise (7.22→7.47; better-timed catch retains more motors ⇒ more drag, the §5
-  tug-of-war).
+- **Net glide: unchanged on both runners** — CPU 4×1 (n=6) Δ −0.10±0.28; **production GPU TaskGraph full
+  14×2 (n=6): 3.96±0.18 → 3.93±0.18, Δ −0.03±0.25** — within noise. Offset by an avgBound rise (GPU
+  7.46→7.73; better-timed catch retains more motors ⇒ drag, the §5 tug-of-war). GPU buildPlan reordered too.
 - **⇒ Reordering moves the MECHANISM but not the net residual.** The release-read timing is a small piece;
   the ~0.87× net residual is robust — dominated by the broader emergent/chaotic decorrelation of the
   parallel scheme + the avgBound–drag coupling, which kernel reordering can't remove (position integration

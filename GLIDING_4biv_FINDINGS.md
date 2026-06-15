@@ -243,16 +243,20 @@ motion, sized at ~0.87×.
    release/cycle; wang-hash RNG is keyed so the draws are identical — only the read-timing changes):
    - **Assist-fraction: +0.43 pp toward v1** (52.27 % → 52.70 %, all 3 seeds positive). The release-read
      lag IS a real, systematic contributor to the directedness — confirming the timing hypothesis.
-   - **Net glide: unchanged** (4×1, n=6: 4.13 ± 0.23 → 4.03 ± 0.16, Δ −0.10 ± 0.28 — within noise), because
-     the assist gain is offset by an avgBound increase (7.22 → 7.47; better-timed catch retains more motors
-     ⇒ more drag — the §5 tug-of-war again).
+   - **Net glide: unchanged on BOTH runners** — CPU 4×1 (n=6): 4.13 ± 0.23 → 4.03 ± 0.16, Δ −0.10 ± 0.28;
+     **production GPU TaskGraph, full 14×2 box (n=6): 3.96 ± 0.18 → 3.93 ± 0.18, Δ −0.03 ± 0.25** — within
+     noise both ways. The assist gain is offset by an avgBound increase (GPU 7.46 → 7.73; better-timed catch
+     retains more motors ⇒ more drag — the §5 tug-of-war again). The GPU `buildPlan` was reordered too (the
+     `-freshread` toggle now covers the device path; default still reproduces the baseline exactly,
+     4.062/7.178).
    - **⇒ The reorder changes the MECHANISM (assist balance, +0.43 pp) but NOT the net residual** (robust
-     within noise). So the release-read timing is a small piece, not the net driver: the ~0.87× residual is
-     dominated by the broader emergent/chaotic decorrelation of the parallel scheme (and its avgBound–drag
-     coupling), which reordering kernels cannot remove. The position integration is forward-Euler in BOTH
-     (no Gauss-Seidel difference to reorder away), and float32 op-ordering chaos is irreducible. `-freshread`
-     is a faithful-to-v1 toggle (CPU; default off) the planner may adopt for fidelity, but it does not close
-     the gliding-velocity gap. **No physics edits.**
+     within noise on both CPU and the production GPU path). So the release-read timing is a small piece, not
+     the net driver: the ~0.87× residual is dominated by the broader emergent/chaotic decorrelation of the
+     parallel scheme (and its avgBound–drag coupling), which reordering kernels cannot remove. The position
+     integration is forward-Euler in BOTH (no Gauss-Seidel difference to reorder away), and float32
+     op-ordering chaos is irreducible. `-freshread` is a faithful-to-v1 toggle (CPU step + GPU TaskGraph;
+     default off) the planner may adopt for fidelity, but it does not close the gliding-velocity gap.
+     **No physics edits.**
 2. **Box scaling is now closed** as a target — both codes scale weakly and equally in net terms.
 3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
    The residual is correctly sized and re-targeted; whether to burrow is the planner's call.
