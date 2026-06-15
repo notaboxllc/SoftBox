@@ -437,8 +437,8 @@ public final class GlidingHarness {
         System.out.printf("  net-displacement x-only/time  :  %7.3f                µm/s%n", netX);
         System.out.printf("  longWindowSpeedXY @ end       :  %7.3f                µm/s%n", longWindowSpeedXY);
         System.out.printf("  avgBound                      :  %7.3f     %7.3f%n", avgBall, avgBsteady);
-        System.out.printf("  GRID_ROW seed=0x%X nMot=%d inst=%.3f instSteady=%.3f netXY=%.3f netX=%.3f lwXY=%.3f avgB=%.3f%n",
-                SEED, sc.mot.nMotors, instAll/instN, instSteady/Math.max(1,instNs), netXY, netX, longWindowSpeedXY, avgBall);
+        System.out.printf("  GRID_ROW seed=0x%X nMot=%d inst=%.3f instSteady=%.3f netXY=%.3f netSteady=%.3f netX=%.3f lwXY=%.3f avgB=%.3f%n",
+                SEED, sc.mot.nMotors, instAll/instN, instSteady/Math.max(1,instNs), netXY, netXYsteady, netX, longWindowSpeedXY, avgBall);
     }
 
     static void runViz(Scene sc, int M, String dir, boolean gpu) {

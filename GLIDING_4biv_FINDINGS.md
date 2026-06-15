@@ -58,6 +58,26 @@ it is ~4.7, NOT ~8.3.
 codes toward the middle — the n=3 v1 set held a high-outlier seed and the n=3 v2 set ran low — landing the
 ratio at **0.87**. This is the expected small-n correction; the n=8 values supersede the n=3 ones.)
 
+**Simulation time + startup window (sensitivity check).** Each cell is 0.1 s simulated (10k steps × dt
+1e-5), centroid sampled every 100 steps (1 ms). The NET above is over the **full 0.1 s** — both codes
+include their own binding-establishment transient, so it is apples-to-apples (v1 incidentally starts one
+interval in, t=0.001 s, dropping its 0.31 µm settling jump). Re-measuring on the **steady 2nd half
+(t > 0.05 s, startup-excluded, n=8)** *widens* the residual rather than closing it — the opposite of a
+startup artifact:
+
+| net window | v1 4×1 | v2 4×1 | ratio | v1 14×2 | v2 14×2 | ratio |
+|---|---|---|---|---|---|---|
+| full 0.1 s | 4.61 ± 0.13 | 4.02 ± 0.15 | 0.87 | 4.69 ± 0.13 | 4.10 ± 0.18 | 0.87 |
+| steady t>0.05 s | 4.80 ± 0.21 | 3.72 ± 0.20 | **0.78** (3.8 σ) | 4.71 ± 0.15 | 3.84 ± 0.28 | **0.82** (2.8 σ) |
+
+v1 **holds/rises** over the run (4×1 4.61→4.80, 14×2 4.69→4.71) while v2 **decelerates ~7 %** (4×1
+4.02→3.72, 14×2 4.10→3.84), consistently at both boxes — v2 has a *faster startup but a slower sustained
+glide*. So the full-run **0.87× is the conservative (friendlier-to-v2) estimate**; the sustained-glide
+residual is ~0.80×. This is **not** a finite-strip edge effect (over 0.1 s the filament travels only
+~0.4 µm and stays ≥1.3 µm from the bed edges) — it is a genuine v2 dynamical decay (see §6 (c):
+z-settling / filament-end wander losing motor support). `measureGrid` emits `netSteady` in the GRID_ROW
+for this check.
+
 ## 3. Decomposition — the three contributors, separated
 
 - **(a) Measurement method — the dominant factor.** The "8.33 → ~4.5" collapse is the net-vs-
@@ -107,11 +127,11 @@ filament advance per power stroke = 2.33 nm   (unloaded stroke ≈ 7 nm, validat
 
 Decomposition `velocity = avgBound × strokeRate × advancePerStroke` holds. The bound population is a
 near-balanced **tug-of-war (~53 % assisting / 47 % resisting)** ⇒ weak NET force ⇒ small forward advance
-per stroke, even though total motion (instantaneous) matches v1. For v1 to net ~24 % more glide at the
+per stroke, even though total motion (instantaneous) matches v1. For v1 to net ~13 % more glide at the
 same avgBound and the same instantaneous activity, its bound population must be marginally more
 asymmetrically assisting (resisting motors clear slightly faster / fewer bind mid-resist). The levers that
 would raise net directedness (chain `fracMoveTorq`, `myoSpring`, the catch-slip params, the 7 nm stroke)
-are all **FROZEN validated constants** — chasing the last ~24 % by changing any is the forbidden tuning.
+are all **FROZEN validated constants** — chasing the last ~13 % by changing any is the forbidden tuning.
 So the residual is a faithful-config finding about collective stroke-transmission directedness under
 motion, sized at ~0.87×.
 
@@ -122,7 +142,11 @@ motion, sized at ~0.87×.
    `fracMoveTorq=0.265` — faithful at the *gliding* `0.2`? A stiffer chain transmits strokes more
    directedly and resists local bending that scatters motion sideways. (b) Does v1's catch-slip release
    the *resisting* (negative-forceDotFil) population marginally faster than ours? (c) the filament z
-   settles to ≈ −0.017–0.056 in v2 — does v1's stay nearer 0?
+   settles to ≈ −0.017–0.056 in v2 — does v1's stay nearer 0? **Sharpened by the startup check (§2):** v2's
+   net *decays ~7 % over the 0.1 s run* (full 0.87× → sustained ~0.80×) while v1's holds/rises — exactly the
+   signature of the filament progressively losing motor support as its z settles / ends wander. Tracking
+   per-interval z + avgBound vs glide over the run would confirm whether the residual is this slow loss of
+   engagement rather than an instantaneous coupling deficit.
 2. **Box scaling is now closed** as a target — both codes scale weakly and equally in net terms.
 3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
    The residual is correctly sized and re-targeted; whether to burrow is the planner's call.
@@ -147,7 +171,7 @@ motion, sized at ~0.87×.
 # v2 — the matched grid (both v1 statistics, multi-seed):
 ./run_gliding.sh -gpu -v1box -grid -seed 1 10000     # 4×1 box (2000 motors)
 ./run_gliding.sh -gpu -full  -grid -seed 1 10000     # 14×2 box (~13.4k motors)
-#   prints GRID_ROW: inst / instSteady / netXY / netX / lwXY / avgB
+#   prints GRID_ROW: inst / instSteady / netXY (full 0.1s) / netSteady (2nd-half, startup-excluded) / netX / lwXY / avgB
 ./run_gliding.sh -diag 10000        # mechanism instrument (state dist, force balance, advance/stroke)
 ./run_gliding.sh -gpu -3js threejs_gliding 20000     # viewer (full motor carpet)
 
