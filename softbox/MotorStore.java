@@ -79,7 +79,13 @@ public final class MotorStore {
     // ---- Kernel scalar params ----
     // kinParams (float): [0]=kOff [1]=alphaCatch [2]=alphaSlip [3]=xCatch [4]=xSlip
     //   [5]=kT [6]=dt [7]=myoColTol(reach) [8]=alignTol [9]=forceDotFil(=0 this increment)
+    //   [10]=refractorySteps = ceil(myoRebindTime/dt) (dt-correct rebind cooldown; 0 = none)
     public final FloatArray kinParams;
+    // Per-motor rebind-cooldown counter: steps remaining in the post-release refractory. Set to
+    // refractorySteps on release (boundSeg→FREE_COOLDOWN), decremented each step; at 0 → FREE_BINDABLE.
+    public final IntArray   cooldown;   // nMotors
+    /** v1 Env.myoRebindTime (Env.java:832) — the minimum post-release time before a head may rebind. */
+    public static final double MYO_REBIND_TIME = 1.0e-5;  // s
     // counts (int): [0]=nMotors [1]=stepCount [2]=runSeed [3]=nSeg
     public final IntArray   counts;
     // publishParams (int): [0]=baseSlot (the motor block's first body-view slot)
@@ -120,7 +126,8 @@ public final class MotorStore {
         boundSeg = new IntArray(nMotors);
         bindArc  = new FloatArray(nMotors);
         stats    = new IntArray(2 * nMotors);
-        kinParams = new FloatArray(10);
+        kinParams = new FloatArray(11);
+        cooldown  = new IntArray(nMotors);
         counts    = new IntArray(4);
         publishParams = new IntArray(1);
 
@@ -128,6 +135,7 @@ public final class MotorStore {
         boundSeg.init(FREE_BINDABLE);
         bindArc.init(0f);
         stats.init(0);
+        cooldown.init(0);
     }
 
     // ---- planar SoA index helpers (X-plane | Y-plane | Z-plane, stride nMotors) ----
@@ -168,6 +176,10 @@ public final class MotorStore {
         kinParams.set(7, (float) myoColTol);  // bind reach = v1 myoColTol (Env.java:755)
         kinParams.set(8, (float) alignTol);   // myoMotorAlignWithFilTolerance (Env.java:149)
         kinParams.set(9, 0.0f);       // forceDotFil — zero this increment (no power stroke)
+        // dt-correct rebind refractory: hold a fixed PHYSICAL time (v1 Env.myoRebindTime), not a fixed
+        // step count. ceil(myoRebindTime/dt) → 1 at dt=1e-5 and 1e-4 (every production dt), so this is a
+        // bit-identical no-op there; only at dt≤1e-6 does it grow (the dt-study fix — see FINDINGS §6.3).
+        kinParams.set(10, (float) Math.ceil(MYO_REBIND_TIME / dt));
     }
     public void setCounts(int stepCount, int runSeed, int nSeg) {
         counts.set(0, nMotors);

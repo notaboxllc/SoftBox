@@ -74,12 +74,13 @@ public final class NucleotideCycleSystem {
      * cooldown via FREE_COOLDOWN. RNG keyed (slot, step, seed) with a distinct salt. stats[2m]=bound
      * steps, stats[2m+1]=releases. (Binding remains geometric, handled by BindingDetectionSystem.)
      */
-    public static void catchSlipRelease(IntArray boundSeg, FloatArray forceDotFil,
+    public static void catchSlipRelease(IntArray boundSeg, FloatArray forceDotFil, IntArray cooldown,
                                         IntArray stats, FloatArray kinParams, IntArray counts) {
         int nM = boundSeg.getSize();
         int step = counts.get(1), seed = counts.get(2);
         float kOff = kinParams.get(0), aCatch = kinParams.get(1), aSlip = kinParams.get(2);
         float xCatch = kinParams.get(3), xSlip = kinParams.get(4), kT = kinParams.get(5), dt = kinParams.get(6);
+        int refractorySteps = (int) kinParams.get(10);   // ceil(myoRebindTime/dt); 0 = no refractory (-norefractory)
 
         for (@Parallel int m = 0; m < nM; m++) {
             int bs = boundSeg.get(m);
@@ -89,9 +90,18 @@ public final class NucleotideCycleSystem {
                 float rate = kOff * (aCatch * (float) Math.exp(-F * xCatch / kT) + aSlip * (float) Math.exp(F * xSlip / kT));
                 int h = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4D54);  // release salt
                 float u = (h >>> 1) / 2147483647.0f;
-                if (u < rate * dt) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); stats.set(2 * m + 1, stats.get(2 * m + 1) + 1); }
+                if (u < rate * dt) {
+                    stats.set(2 * m + 1, stats.get(2 * m + 1) + 1);
+                    // dt-correct refractory: hold for refractorySteps steps (fixed PHYSICAL time). At the
+                    // production dt this is 1 ⇒ FREE_COOLDOWN for one step, bit-identical to the old
+                    // unconditional one-step transition. 0 ⇒ immediately bindable (-norefractory bracket).
+                    if (refractorySteps > 0) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                }
             } else if (bs == MotorStore.FREE_COOLDOWN) {
-                boundSeg.set(m, MotorStore.FREE_BINDABLE);
+                int c = cooldown.get(m) - 1;
+                if (c <= 0) { boundSeg.set(m, MotorStore.FREE_BINDABLE); }   // refractory elapsed
+                else { cooldown.set(m, c); }
             }
         }
     }

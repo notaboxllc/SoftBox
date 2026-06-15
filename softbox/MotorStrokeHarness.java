@@ -111,7 +111,7 @@ public final class MotorStrokeHarness {
                 for (int m = 0; m < nM; m++) mot.boundSeg.set(m, 0);          // re-bind each step (steady population)
                 for (int m = 0; m < nM; m++) mot.forceDotFil.set(m, (float) F);
                 long b0 = countBound(mot);
-                NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.stats, mot.kinParams, mot.counts);
+                NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.cooldown, mot.stats, mot.kinParams, mot.counts);
                 long b1 = countReleased(mot);
                 boundSteps += b0; releases += b1;
             }

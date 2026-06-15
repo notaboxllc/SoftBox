@@ -33,6 +33,8 @@ public final class GlidingHarness {
     static boolean FRESH_READ = false;           // -freshread: catch-slip + cycle read THIS step's forceDotFil
                                                  // (compute force+register BEFORE release/cycle, matching v1's
                                                  // reconciled order) vs the default one-step-stale read.
+    static boolean NO_REFRACTORY = false;        // -norefractory: released motors are immediately bindable
+                                                 // (kinParams[10]=0) — the OFF bracket for §6.6 (measurement).
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static final double DENSITY = 500.0;        // motors / µm²
@@ -64,6 +66,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-seed")) SEED = 0x6111D + 7919 * Integer.parseInt(args[++i]);
             else if (args[i].equals("-dt")) DT = Double.parseDouble(args[++i]);   // dt-convergence test
             else if (args[i].equals("-freshread")) FRESH_READ = true;             // release-read reorder A/B
+            else if (args[i].equals("-norefractory")) NO_REFRACTORY = true;        // rebind-refractory OFF bracket
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
         }
@@ -142,6 +145,7 @@ public final class GlidingHarness {
         }
         DragTensorSystem.run(mot);
         mot.setBodyParams(DT); mot.setJointParams(DT); mot.setKinParams(0.006, -0.4, DT); mot.setNucParams(DT);
+        if (NO_REFRACTORY) mot.kinParams.set(10, 0f);   // §6.6 OFF bracket: no rebind refractory
         mot.nucleotideState.init(MotorStore.NUC_NONE);
 
         int MAXC = SpatialGrid.MAX_CAND;
@@ -164,7 +168,7 @@ public final class GlidingHarness {
         // --- binding (dynamic) ---
         MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
         BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
-        NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.stats, mot.kinParams, mot.counts);
+        NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.cooldown, mot.stats, mot.kinParams, mot.counts);
         BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
         // --- motor nucleotide cycle + dynamics ---
         NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
@@ -220,7 +224,7 @@ public final class GlidingHarness {
         CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
         // --- register THIS step's forceDotFil, THEN release/bind/cycle read it FRESH ---
         CrossBridgeSystem.registerForceDot(sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceDotHist, mot.forceDotPlace, mot.counts);
-        NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.stats, mot.kinParams, mot.counts);
+        NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.cooldown, mot.stats, mot.kinParams, mot.counts);
         BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
         NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
         // --- integrate all bodies (forces from the start-of-step state) ---
@@ -242,7 +246,7 @@ public final class GlidingHarness {
                     b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, b.bTransGam, b.bRotGam,
                     b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.brownTransScale, b.brownRotScale,
                     mot.head, mot.uVec, mot.rodUVec, mot.anchor, mot.boundSeg, mot.bindArc, mot.nucleotideState,
-                    mot.forceDotFil, mot.forceDotHist, mot.forceDotPlace, mot.stats,
+                    mot.forceDotFil, mot.forceDotHist, mot.forceDotPlace, mot.stats, mot.cooldown,
                     mot.bodyParams, mot.jointParams, mot.nucParams, mot.kinParams,
                     sc.bondData, sc.xbParams, sc.segMotorCount, sc.segMotorOffsets, sc.segMotorMyo, sc.reachSeg, sc.reachCount,
                     f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.bTransGam, f.bRotGam,
@@ -270,7 +274,7 @@ public final class GlidingHarness {
                 .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo)
                 .task("gather", CrossBridgeSystem::segGather, sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts)
                 .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceDotHist, mot.forceDotPlace, mot.counts)
-                .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.stats, mot.kinParams, mot.counts)
+                .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.cooldown, mot.stats, mot.kinParams, mot.counts)
                 .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts)
                 .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts)
                 .task("integMot", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
@@ -280,7 +284,7 @@ public final class GlidingHarness {
         } else {
             // default: release/cycle read last step's forceDotFil (force computed after them).
             tg = tg
-                .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.stats, mot.kinParams, mot.counts)
+                .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.cooldown, mot.stats, mot.kinParams, mot.counts)
                 .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts)
                 .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts)
                 .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
