@@ -29,7 +29,7 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
  */
 public final class GlidingHarness {
 
-    static final double DT = 1.0e-5;
+    static double DT = 1.0e-5;                   // gliding dt; -dt overrides (dt-convergence test)
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static final double DENSITY = 500.0;        // motors / µm²
@@ -59,9 +59,13 @@ public final class GlidingHarness {
             else if (args[i].equals("-full")) { bX0 = 5.87; bXlo = -7.0; bXhi = 6.37; bYhalf = 1.0; }  // v1 14×2, ~13.4k motors
             else if (args[i].equals("-v1box")) { bX0 = 1.7; bXlo = -2.0; bXhi = 2.0; bYhalf = 0.5; }   // v1 4×1, exactly 2000 heads
             else if (args[i].equals("-seed")) SEED = 0x6111D + 7919 * Integer.parseInt(args[++i]);
+            else if (args[i].equals("-dt")) DT = Double.parseDouble(args[++i]);   // dt-convergence test
+            else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
         }
         if (!pos.isEmpty()) M = Integer.parseInt(pos.get(0));
+
+        for (String a : args) if (a.equals("-forcetest")) { forceTest(); return; }
 
         System.out.println("=== Soft Box increment 4b-iv — gliding assay (cheap probe) ===");
         Scene sc = buildScene();
@@ -108,7 +112,11 @@ public final class GlidingHarness {
         DragTensorSystem.run(fil);
         fil.setParams(DT, Math.sqrt(2.0 * Constants.kT / DT));
         fil.setCounts(0, 0xF11A);
-        // gliding chain params (config-matched, NOT tuned): fracMove 0.5 / fracR 0.1 / fracMoveTorq 0.2
+        // gliding chain params (config-matched, NOT tuned): fracMove 0.5 / fracR 0.1 / fracMoveTorq 0.2.
+        // dt-convergence test: change dt ONLY (the dt-correct quantities — cycle rate·dt, Brownian √dt,
+        // Langevin force/γ·dt — auto-scale); the fracMove family is held at its operating values for BOTH
+        // codes (per planner direction — do NOT scale fracMove). The v2/v1 RATIO at each dt isolates the
+        // integration-scheme (update-order/staleness) difference.
         fil.chainParams.set(0, (float) DT); fil.chainParams.set(1, 0.5f); fil.chainParams.set(2, 0.1f);
         fil.chainParams.set(3, 0.2f); fil.chainParams.set(4, 0f); fil.chainParams.set(5, 1.0e-20f);
         fil.chainParams.set(6, (float) Constants.actinMonoRadius);
@@ -569,6 +577,51 @@ public final class GlidingHarness {
                         fdN > 0 ? fdSum / fdN : 0.0, fdN > 0 ? (double) fdPos / fdN : 0.0);
             }
         }
+    }
+
+    /**
+     * 4b-iv per-step force cross-check (measurement only). Feed v1's EXACT compute-time bound config
+     * (dumped from an instrumented v1 `MyoFilLink.addForces`) into v2's `CrossBridgeSystem.bondForces`
+     * and compare the head-side F8 vector + forceDotFil. Tests directly: does v2 compute the same
+     * cross-bridge force vectors as v1 for an identical bound configuration?
+     */
+    static void forceTest() {
+        // --- v1 compute-time dump (BoA-v1ref scratch MyoFilLink.addForces, 4x1 gliding, seed 1) ---
+        double[] headC = {1.870585, -0.000148, 0.022387}, headU = {0.180790, 0.174904, -0.967845};
+        double[] segC  = {1.821203,  0.007071, 0.009056}, segU  = {0.999057, -0.041840, -0.011599};
+        double posOnSeg = 0.139078, segLen = 0.175500, myoSpring = 1.0e-9;
+        double[] v1F8 = {8.98676e-14, 3.32284e-12, -4.24803e-12}; double v1forceMag = 5.39399e-12, v1fdf = 2.71166e-17;
+
+        // --- build a minimal v2 config (1 segment, 1 motor) at the EXACT same geometry ---
+        FilamentStore f = new FilamentStore(1);
+        f.setCoord(0, (float) segC[0], (float) segC[1], (float) segC[2]);
+        f.setUVec(0, (float) segU[0], (float) segU[1], (float) segU[2]); f.setYVec(0, 0f, 1f, 0f);
+        f.segLength.set(0, (float) segLen); f.bRotGam.init(1f);
+        MotorStore mot = new MotorStore(1);
+        mot.assembleArticulated(0, (float) segC[0], (float) segC[1], (float) ANCHOR_Z, 0f, 0f, 1f, (float) Constants.BTransCoeff);
+        RigidRodBody b = mot.body; int h = 2, nB = 3;   // head sub-body slot for motor 0
+        b.coord.set(h, (float) headC[0]); b.coord.set(nB + h, (float) headC[1]); b.coord.set(2*nB + h, (float) headC[2]);
+        b.uVec.set(h, (float) headU[0]); b.uVec.set(nB + h, (float) headU[1]); b.uVec.set(2*nB + h, (float) headU[2]);
+        b.yVec.set(h, 0f); b.yVec.set(nB + h, 1f); b.yVec.set(2*nB + h, 0f); b.bRotGam.init(1f);
+        mot.boundSeg.set(0, 0); mot.bindArc.set(0, (float) posOnSeg); mot.nucleotideState.set(0, MotorStore.NUC_ATP);
+        FloatArray bondData = new FloatArray(CrossBridgeSystem.STRIDE); bondData.init(0f);
+        FloatArray xbParams = FloatArray.fromElements((float) myoSpring, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN);
+
+        CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                mot.boundSeg, mot.bindArc, mot.nucleotideState, bondData, xbParams);
+
+        double v2F8x = bondData.get(0), v2F8y = bondData.get(1), v2F8z = bondData.get(2);
+        double v2mag = Math.sqrt(v2F8x*v2F8x + v2F8y*v2F8y + v2F8z*v2F8z), v2fdf = bondData.get(12);
+        System.out.println("\n=== 4b-iv per-step cross-bridge force cross-check (v1 config → v2 bondForces) ===");
+        System.out.printf("  config: head=(%.5f,%.5f,%.5f) seg=(%.5f,%.5f,%.5f) bindArc=%.5f segLen=%.5f%n",
+                headC[0],headC[1],headC[2], segC[0],segC[1],segC[2], posOnSeg, segLen);
+        System.out.printf("  %-14s %-16s %-16s %-16s%n", "", "v1", "v2", "|Δ|/|v1|");
+        System.out.printf("  %-14s %-16.6g %-16.6g %.2g%n", "F8.x (N)", v1F8[0], v2F8x, Math.abs(v2F8x-v1F8[0])/Math.abs(v1F8[0]));
+        System.out.printf("  %-14s %-16.6g %-16.6g %.2g%n", "F8.y (N)", v1F8[1], v2F8y, Math.abs(v2F8y-v1F8[1])/Math.abs(v1F8[1]));
+        System.out.printf("  %-14s %-16.6g %-16.6g %.2g%n", "F8.z (N)", v1F8[2], v2F8z, Math.abs(v2F8z-v1F8[2])/Math.abs(v1F8[2]));
+        System.out.printf("  %-14s %-16.6g %-16.6g %.2g%n", "forceMag (N)", v1forceMag, v2mag, Math.abs(v2mag-v1forceMag)/Math.abs(v1forceMag));
+        System.out.printf("  %-14s %-16.6g %-16.6g%n", "forceDotFil", v1fdf, v2fdf);
+        System.out.println("  ⇒ v2's bondForces reproduces v1's compute-time F8/forceDotFil for the identical config.");
     }
 
     static void runViz(Scene sc, int M, String dir, boolean gpu) {

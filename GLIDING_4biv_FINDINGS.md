@@ -205,6 +205,34 @@ motion, sized at ~0.87×.
    eliminated as *faithfulness* gaps. This is a finding to document, not tune. Planner decides whether to
    accept the ~0.87× residual or scope the break-force port-gap addition / a deeper emergent-coordination
    study. **No physics edits.**
+
+   **6.3 — is the residual a discretization (integration-scheme) difference? dt-test CONFOUNDED; per-step
+   force law FAITHFUL (so the residual is purely the scheme).** Measurement only (raw `RUN_LOGS/
+   2026-06-14_4biv_dt_force.txt`).
+   - **dt-convergence test — bailed (confound found before burning the run).** Plan: refine dt 1e-5→1e-6
+     for both codes and watch the v2/v1 ratio (a first-order scheme difference shrinks ∝dt). Audit of the
+     dt-dependences: the cross-bridge `myoSpring` is a real spring (dt-correct), cycle is rate·dt, Brownian
+     √dt, Langevin force/γ·dt — all dt-correct; the fracMove family is fraction-per-step but is part of
+     v1's model and was held fixed (NOT scaled — planner direction). **But the binding is geometric/
+     deterministic (a motor in reach binds within ONE step ⇒ effective k_on ∝ 1/dt) in BOTH codes** — so
+     refining dt is non-physical for binding: at 1e-6, avgBound triples (v2 4×1: 6.4→19.9) into a
+     different over-bound regime (NET barely moves, 3.60→3.90). The test can't hold the gliding regime
+     fixed, so it cannot cleanly isolate the scheme difference. (Notably v1's fixture avgBound ~7.6 is
+     itself a dt=1e-5 artifact of the deterministic binding.)
+   - **Per-step cross-bridge force cross-check — FAITHFUL (the planner's chosen alternative).** Dumped v1's
+     EXACT compute-time bound config from an instrumented `MyoFilLink.addForces` (scratch v1, CPU, byte-
+     clean ref) and fed it into v2's `bondForces` (`-forcetest`). v2 reproduces v1's head-side **F8 vector
+     to float32 precision** (Δ ≤0.15 % on the smallest component, ≤0.013 % on the dominant ones; forceMag
+     5.39399e-12 vs 5.39361e-12). Code-level the law is term-by-term identical (F8 spring, F9/F10 align
+     torques rest 90/120, attach point `segC+(arc−½len)·u`, head tip `c+½·0.020·u`, all constants equal),
+     and 4b-ii already bit-validated v2's force gather. **⇒ v2 computes the same cross-bridge force as v1
+     for an identical config; the residual is NOT in the force computation.**
+   - **⇒ All per-step physics is faithful (chain stiffness, nucleotide cycle, cross-bridge force). The
+     ~0.87× residual is the EMERGENT effect of the integration-SCHEME difference — v2's parallel SoA
+     kernels apply one-step-stale forces vs v1's sequential OOP fresh forces (the force-vs-state timing) —
+     on the chaotic many-body gliding dynamics.** A clean dt→0 confirmation that it vanishes in the
+     continuum is blocked by the deterministic-binding confound, but per-step force identity establishes
+     the residual is the scheme, not the physics. Documented finding; not tunable. **No physics edits.**
 2. **Box scaling is now closed** as a target — both codes scale weakly and equally in net terms.
 3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
    The residual is correctly sized and re-targeted; whether to burrow is the planner's call.

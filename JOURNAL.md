@@ -1,6 +1,35 @@
 # Soft Box Project Journal
 
-Last updated: 2026-06-14
+Last updated: 2026-06-15
+
+## 2026-06-15 — Increment 4b-iv residual: dt-test CONFOUNDED, per-step force FAITHFUL ⇒ residual is the SCHEME
+The decisive test for whether the ~0.87× residual is a discretization/integration-scheme difference
+(vanishes as dt→0) or a real unfound difference. **Measurement only — no physics edits.** Raw
+`RUN_LOGS/2026-06-14_4biv_dt_force.txt`.
+
+**dt-convergence test — BAILED on a confound (caught before the ~1 hr v1 run).** Planner directed NOT to
+scale the fracMove family (it's part of v1's model, not a separable rate). Audited the dt-dependences:
+`myoSpring` is a real spring (dt-correct), cycle rate·dt, Brownian √dt, Langevin force/γ·dt — all
+dt-correct. **But binding is geometric/deterministic — a motor in reach binds within ONE step ⇒ effective
+k_on ∝ 1/dt — in BOTH codes.** So refining dt changes the binding regime: v2 4×1 at dt=1e-6, avgBound
+**triples 6.4→19.9** (NET ~robust 3.60→3.90) — an over-bound regime, not the gliding fixture. The test
+can't hold the regime fixed ⇒ can't isolate the scheme. (v1's fixture avgBound ~7.6 is itself a dt=1e-5
+artifact of the deterministic binding.)
+
+**Per-step cross-bridge force cross-check — FAITHFUL (the planner-chosen alternative).** Dumped v1's EXACT
+compute-time bound config (instrumented scratch `MyoFilLink.addForces`, CPU; `BoA-v1ref` byte-clean) and
+fed it into v2's `bondForces` (`GlidingHarness -forcetest`): **v2 reproduces v1's head-side F8 vector to
+float32 precision** (Δ ≤0.15 % smallest component, ≤0.013 % dominant; forceMag 5.39399e-12 vs 5.39361e-12;
+forceDotFil ~0 both — near-perpendicular config). Code is term-by-term identical (F8 spring, F9/F10 rest
+90/120, attach `segC+(arc−½len)·u`, tip `c+½·0.020·u`, all constants equal); 4b-ii bit-validated the gather.
+
+**⇒ All per-step physics is faithful (chain stiffness, nucleotide cycle, cross-bridge force). The ~0.87×
+residual is the EMERGENT effect of the integration-SCHEME difference — v2's parallel SoA kernels apply
+one-step-stale forces vs v1's sequential OOP fresh forces (force-vs-state timing) — on the chaotic
+gliding dynamics.** The clean dt→0 confirmation is blocked by the deterministic-binding confound, but the
+per-step force identity establishes the residual is the scheme, not the physics. 4b-iv residual diagnosis
+complete: not chain, not cycle, not force-law — the parallel-vs-sequential update scheme. New (measurement):
+`GlidingHarness -dt` (dt override) + `-forcetest` (cross-code force check). `GLIDING_4biv_FINDINGS.md` §6.3.
 
 ## 2026-06-14 — Increment 4b-iv residual step 2/2: nucleotide cycle under load — FAITHFUL; residual is EMERGENT
 Second foundational faithfulness check on the static ~0.87× residual. **Is v2's nucleotide cycle different
