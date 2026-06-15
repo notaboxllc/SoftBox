@@ -45,12 +45,14 @@ public final class GlidingHarness {
         String viz = null;
         boolean diag = false;
         boolean grid = false;
+        boolean ztrace = false;
         java.util.List<String> pos = new java.util.ArrayList<>();
         boolean gpu = false;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("-3js")) viz = args[++i];
             else if (args[i].equals("-diag")) diag = true;
             else if (args[i].equals("-grid")) grid = true;
+            else if (args[i].equals("-ztrace")) ztrace = true;
             else if (args[i].equals("-gpu")) gpu = true;
             else if (args[i].equals("-full")) { bX0 = 5.87; bXlo = -7.0; bXhi = 6.37; bYhalf = 1.0; }  // v1 14×2, ~13.4k motors
             else if (args[i].equals("-v1box")) { bX0 = 1.7; bXlo = -2.0; bXhi = 2.0; bYhalf = 0.5; }   // v1 4×1, exactly 2000 heads
@@ -67,6 +69,7 @@ public final class GlidingHarness {
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
         if (diag) { diagnose(sc, Math.max(M, 8000)); return; }
         if (grid) { measureGrid(sc, M, gpu); return; }
+        if (ztrace) { ztrace(sc, M, gpu); return; }
         if (gpu) { gpuProbe(sc, M); return; }
         probe(sc, M);
     }
@@ -212,7 +215,7 @@ public final class GlidingHarness {
             .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
             .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
             .transferToHost(DataTransferMode.UNDER_DEMAND, f.coord, f.uVec, f.end1, f.end2, mot.boundSeg,
-                    b.end1, b.end2, mot.nucleotideState);
+                    b.end1, b.end2, mot.nucleotideState, mot.forceDotFil);
 
         int nB = 3 * mot.nMotors, nM = mot.nMotors, nSeg = f.n;
         sched = new GridScheduler();
@@ -439,6 +442,52 @@ public final class GlidingHarness {
         System.out.printf("  avgBound                      :  %7.3f     %7.3f%n", avgBall, avgBsteady);
         System.out.printf("  GRID_ROW seed=0x%X nMot=%d inst=%.3f instSteady=%.3f netXY=%.3f netSteady=%.3f netX=%.3f lwXY=%.3f avgB=%.3f%n",
                 SEED, sc.mot.nMotors, instAll/instN, instSteady/Math.max(1,instNs), netXY, netXYsteady, netX, longWindowSpeedXY, avgBall);
+    }
+
+    /** filament centroid-z and a tilt/bow proxy (max−min segment z). */
+    static double zSpread(FilamentStore f) { double lo=1e9,hi=-1e9; for(int i=0;i<f.n;i++){double z=f.coordZ(i);lo=Math.min(lo,z);hi=Math.max(hi,z);} return hi-lo; }
+
+    /**
+     * 4b-iv z-settling probe (measurement only). Per output interval (100 steps = 1 ms, matching v1's
+     * toFileInterval) emit a TRACE_ROW for the filament: centroid-z, tilt (max−min seg z), avgBound,
+     * per-interval net-x glide (forward displacement / dt), and the bound-motor along-filament load
+     * (mean `forceDotFil` and the assist fraction, forceDotFil>0 = force along the −x glide). Lets us
+     * test §6(c): does v2's z settle (vs v1's `.dat` posZ), and does its glide-decay track z / a drop in
+     * productive engagement? GPU pulls fil.coord + boundSeg + forceDotFil at the 100-step cadence.
+     */
+    static void ztrace(Scene sc, int M, boolean gpu) {
+        final int OUT_INT = 100; final double dtInt = OUT_INT * DT;
+        MotorStore mot = sc.mot; FilamentStore f = sc.fil;
+        System.out.printf("%n--- z-trace (%s, %d motors, box x∈[%.1f,%.1f] y±%.1f, seed=0x%X) ---%n",
+                gpu ? "GPU" : "CPU", mot.nMotors, bXlo, bXhi, bYhalf, SEED);
+        System.out.println("ZTRACE_HDR seed iv t cz tilt avgB glide fdMean fdPosFrac");
+        TornadoExecutionPlan plan = null;
+        double prevX = centroidX(f);
+        if (gpu) { plan = buildPlan(sc); mot.setCounts(0, SEED, f.n); f.counts.set(1, 0); plan.withGridScheduler(sched).execute(); }
+        int iv = 0;
+        for (int t = 0; t < M; t++) {
+            if (gpu) {
+                mot.setCounts(t, SEED, f.n); f.counts.set(1, t);
+                TornadoExecutionResult res = plan.withGridScheduler(sched).execute();
+                if ((t + 1) % OUT_INT == 0) res.transferToHost(f.coord, mot.boundSeg, mot.forceDotFil);
+            } else {
+                step(sc, t);
+            }
+            if ((t + 1) % OUT_INT == 0) {
+                iv++;
+                double cx = centroidX(f), cz = centroidZ(f), tilt = zSpread(f);
+                double glide = -(cx - prevX) / dtInt;   // forward (−x) per-interval rate, µm/s
+                prevX = cx;
+                long bnd = 0; double fdSum = 0; long fdN = 0, fdPos = 0;
+                for (int m = 0; m < mot.nMotors; m++) {
+                    if (mot.boundSeg.get(m) < 0) continue;
+                    bnd++; float fd = mot.forceDotFil.get(m); fdSum += fd; fdN++; if (fd > 0) fdPos++;
+                }
+                System.out.printf("ZTRACE 0x%X %d %.4f %.5f %.5f %d %.4f %.4g %.4f%n",
+                        SEED, iv, (t + 1) * DT, cz, tilt, bnd, glide,
+                        fdN > 0 ? fdSum / fdN : 0.0, fdN > 0 ? (double) fdPos / fdN : 0.0);
+            }
+        }
     }
 
     static void runViz(Scene sc, int M, String dir, boolean gpu) {

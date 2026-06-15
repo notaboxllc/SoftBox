@@ -74,9 +74,10 @@ v1 **holds/rises** over the run (4×1 4.61→4.80, 14×2 4.69→4.71) while v2 *
 4.02→3.72, 14×2 4.10→3.84), consistently at both boxes — v2 has a *faster startup but a slower sustained
 glide*. So the full-run **0.87× is the conservative (friendlier-to-v2) estimate**; the sustained-glide
 residual is ~0.80×. This is **not** a finite-strip edge effect (over 0.1 s the filament travels only
-~0.4 µm and stays ≥1.3 µm from the bed edges) — it is a genuine v2 dynamical decay (see §6 (c):
-z-settling / filament-end wander losing motor support). `measureGrid` emits `netSteady` in the GRID_ROW
-for this check.
+~0.4 µm and stays ≥1.3 µm from the bed edges). The z-probe (§6.1) then showed this small decay is **not**
+z-driven either (v1 settles in z just as much yet holds glide) — the residual is ≈constant across the run
+(v2/v1 ≈ 0.88 early → 0.84 late), so the ~7 % is a minor second-order widening, not the dominant effect.
+`measureGrid` emits `netSteady` in the GRID_ROW for this check.
 
 ## 3. Decomposition — the three contributors, separated
 
@@ -141,12 +142,27 @@ motion, sized at ~0.87×.
    faithfulness checks (NOT tuning): (a) is the inc-2 chain force — calibrated for *deflection* at
    `fracMoveTorq=0.265` — faithful at the *gliding* `0.2`? A stiffer chain transmits strokes more
    directedly and resists local bending that scatters motion sideways. (b) Does v1's catch-slip release
-   the *resisting* (negative-forceDotFil) population marginally faster than ours? (c) the filament z
-   settles to ≈ −0.017–0.056 in v2 — does v1's stay nearer 0? **Sharpened by the startup check (§2):** v2's
-   net *decays ~7 % over the 0.1 s run* (full 0.87× → sustained ~0.80×) while v1's holds/rises — exactly the
-   signature of the filament progressively losing motor support as its z settles / ends wander. Tracking
-   per-interval z + avgBound vs glide over the run would confirm whether the residual is this slow loss of
-   engagement rather than an instantaneous coupling deficit.
+   the *resisting* (negative-forceDotFil) population marginally faster than ours? (c) ~~the filament z
+   settles in v2 — does v1's stay nearer 0?~~ **TESTED — ELIMINATED (see below).**
+
+   **z-settling probe (n=8, measurement only — `GlidingHarness -ztrace` + v1 `.dat` posZ; raw
+   `RUN_LOGS/2026-06-14_4biv_ztrace.txt`): the residual is NOT progressive z-settling/disengagement.**
+   Time-resolved 1 ms traces over the 0.1 s run show:
+   - **Both codes settle to z ≈ −0.03…−0.04, nearly identically** — v1 14×2 −0.007→−0.036 vs v2
+     −0.002→−0.030; v1 4×1 −0.010→−0.031 vs v2 −0.006→−0.040 (no consistent asymmetry — v2 settles
+     *less* at 14×2, slightly more at 4×1). v2 does **not** sink more than v1.
+   - **v1 settles in z just as much as v2 yet its glide holds** (v1 glide early→late: 14×2 −2 %, 4×1
+     +14 %) — the direct counterexample: z-settling does not cause the glide difference.
+   - **v2's assist fraction is flat ~0.50–0.55 throughout** (14×2 0.535→0.504); avgBound tracks v1's
+     (both ~8.4→7.0). No progressive disengagement — the ~50/50 tug-of-war is present from the *start*.
+   - The residual is **≈constant across the run** (v2/v1 ≈ 0.88 early → 0.84 late), present from the
+     first bins, not a progressive collapse. (The earlier "v2 decays ~7 %" is a small second-order
+     widening, not z-coupled and not the dominant residual.)
+
+   **⇒ The residual is a *static* coupling deficit, not z-driven.** It is the ~50/50 assist/resist
+   tug-of-war of §5, present throughout — so the live candidates revert to (a) chain stiffness at the
+   gliding `fracMoveTorq=0.2` and (b) resisting-motor release timing, the static determinants of the
+   bound population's assist/resist asymmetry. **Planner decides; not pursued here.**
 2. **Box scaling is now closed** as a target — both codes scale weakly and equally in net terms.
 3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
    The residual is correctly sized and re-targeted; whether to burrow is the planner's call.

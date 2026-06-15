@@ -2,6 +2,29 @@
 
 Last updated: 2026-06-14
 
+## 2026-06-14 — Increment 4b-iv z-settling probe: z-mechanism ELIMINATED (residual is static, not z-driven)
+Bounded measurement-only probe of the ~0.87× net-directedness residual. The startup check had pointed at
+§6(c): the filament *progressively losing motor support as its z settles*. Tested directly with
+time-resolved 1 ms traces (v1 from `.dat` posZ/avgBound/vecMovedX; v2 via new `GlidingHarness -ztrace`:
+centroid-z, tilt, avgBound, per-interval glide, bound-motor `forceDotFil` mean + assist-fraction), n=8,
+both boxes. Raw `RUN_LOGS/2026-06-14_4biv_ztrace.txt`.
+
+**Verdict: ELIMINATED.** (1) **Both codes settle to z ≈ −0.03…−0.04, nearly identically** (v1 14×2
+−0.007→−0.036 vs v2 −0.002→−0.030; v1 4×1 −0.010→−0.031 vs v2 −0.006→−0.040; no consistent asymmetry — v2
+settles *less* at 14×2). v2 does NOT sink more than v1. (2) **v1 settles in z just as much yet its glide
+holds** (14×2 −2 %, 4×1 +14 %) — the direct counterexample: z-settling isn't the cause. (3) v2's
+**assist-fraction is flat ~0.50–0.55 throughout** (no progressive disengagement; the ~50/50 tug-of-war is
+present from the *start*); avgBound tracks v1 (~8.4→7.0). (4) The residual is **≈constant across the run**
+(v2/v1 ≈ 0.88 early → 0.84 late) — present from the first bins, not a progressive collapse (the earlier
+"~7 % decay" is a small second-order widening, not z-coupled).
+
+**⇒ The residual is a STATIC coupling deficit (the §5 ~50/50 assist/resist tug-of-war), not progressive
+z-settling.** Live candidates revert to chain-stiffness at the gliding `fracMoveTorq=0.2` (deflection-
+calibrated at 0.265) and resisting-motor release timing — static determinants of the bound population's
+assist/resist asymmetry. Probe stops here per its bound; planner decides whether to scope a fix or accept
+the residual. **No physics edits**; committed `GlidingHarness -ztrace` (measurement) + `mot.forceDotFil`
+added to the plan's host-transfer list. v1ref untouched (instrumented its real `.dat`).
+
 ## 2026-06-14 — Increment 4b-iv RECONCILED: the "0.51× velocity miss" was dominantly measurement-method
 **The gliding-velocity "0.51× miss" was comparing two different MEASUREMENTS, not two physics.** Measured
 the same way, multi-seed (n=8), at matched boxes, **v2 = 0.87× v1** — small, box-uniform, NOT a 2× miss
