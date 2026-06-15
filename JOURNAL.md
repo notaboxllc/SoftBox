@@ -2,6 +2,36 @@
 
 Last updated: 2026-06-14
 
+## 2026-06-14 — Increment 4b-iv residual step 2/2: nucleotide cycle under load — FAITHFUL; residual is EMERGENT
+Second foundational faithfulness check on the static ~0.87× residual. **Is v2's nucleotide cycle different
+or changing under gliding load? No — the cycle is faithful; the residual is a small emergent assist/resist
+force-balance difference.** Measurement only — no physics edits; v1 instrumented by a scratch logging-only
+build (`GlidingAssayEvaluator` shadowed in /tmp, `BoA-v1ref` byte-clean). Raw `RUN_LOGS/2026-06-14_4biv_
+cycle.txt`. New (measurement): `GlidingHarness -cycldiag` + forceMag stats.
+
+1. **Self-consistency (`-cycldiag`):** v2's empirical per-state conditional transition rates under load
+   match the validated nominal within ~10 % (NONE→ATP 98 %, ATP→ADPPi 97 %, ADPPi→ADP 89 %, ADP→NONE|
+   gate-open 111 %). The high ADP occupancy is the **load-gate** (open only 37 % of the time — assisting
+   load holds ADP motors), NOT a malfunction.
+2. **Drift (0.3 s run):** assist-fraction (~0.52) and glide (~4) FLATTEN — no continuing drift ⇒ static
+   (the earlier 0.88→0.84 was second-order noise; only z keeps settling).
+3. **v1 vs v2 (scratch v1 logging build, 4 seeds, 1424 bound-obs):** cycle rates, the load-gated
+   `dissociateADP`, and the Guo–Guilford catch-slip law+params are **identical** (code-verified).
+   **Occupancy MATCHES** (v1 ATP 58.9 / ADP 37.4 vs v2 59.8 / 36.6); **assist-fraction v1 54.4 % vs v2
+   51.5 %** — a small ~3 pp difference (~2 SE; seed-1's 58 % regressed with more seeds). Near the 50/50
+   balance, 3 pp maps to a meaningful net-force difference, consistent with the ~13 % residual.
+
+**One port gap (reported, NOT fixed — physics change, and self-consistency passed):** v1's `ckRelease` has
+a break-force release (cross-bridge tension > `myosinBreakForce` 12 pN) that v2 lacks — but v2's tension
+exceeds 12 pN only 0.56 % of bound-steps and that tail is ~60 % assist, so shedding it would *lower*
+assist-fraction (wrong direction). Not the cause.
+
+**⇒ Both static candidates eliminated as faithfulness gaps (step 1 chain, step 2 cycle). The ~0.87×
+residual is a genuine EMERGENT collective-coordination difference: v2's bound population is marginally less
+assist-enriched (51.5 % vs v1's 54.4 %) at matched cycle/occupancy/release-law.** Diagnosis of the residual
+is complete — a documented finding, not a tunable gap. Planner decides: accept the ~0.87×, or scope the
+break-force port-gap / a deeper emergent-coordination study. `GLIDING_4biv_FINDINGS.md` §6 updated.
+
 ## 2026-06-14 — Increment 4b-iv residual step 1/2: chain stiffness at fracMoveTorq=0.2 — FAITHFUL, ELIMINATED
 First of two foundational faithfulness checks on the static ~0.87× residual. **Is v2's chain as stiff as
 v1's at the gliding `fracMoveTorq=0.2`?** (inc-2b validated only at 0.265.) **Yes — faithful, chain

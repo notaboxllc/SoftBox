@@ -150,8 +150,9 @@ motion, sized at ~0.87×.
    transfers cleanly to 0.2. **Caveat (measurement, not a gap):** that damped-torsion stiffness ∝ 1/dt, so
    the characterization MUST be at matched dt — the benchmark runs at dt=1e-4 (a wrong dt=1e-5 override
    made the chain look 10× stiffer); v1 and v2 share this dt-dependence faithfully. ⇒ Chain stiffness is
-   NOT the residual cause; next is (b)/the cycle-under-load check. (b) Does v1's catch-slip release
-   the *resisting* (negative-forceDotFil) population marginally faster than ours? (c) ~~the filament z
+   NOT the residual cause; next is (b)/the cycle-under-load check. (b) ~~Does v1's catch-slip release
+   the *resisting* (negative-forceDotFil) population marginally faster than ours?~~ **TESTED — the cycle
+   is FAITHFUL; the residual is emergent (see §6.2 below).** (c) ~~the filament z
    settles in v2 — does v1's stay nearer 0?~~ **TESTED — ELIMINATED (see below).**
 
    **z-settling probe (n=8, measurement only — `GlidingHarness -ztrace` + v1 `.dat` posZ; raw
@@ -169,9 +170,41 @@ motion, sized at ~0.87×.
      widening, not z-coupled and not the dominant residual.)
 
    **⇒ The residual is a *static* coupling deficit, not z-driven.** It is the ~50/50 assist/resist
-   tug-of-war of §5, present throughout — so the live candidates revert to (a) chain stiffness at the
-   gliding `fracMoveTorq=0.2` and (b) resisting-motor release timing, the static determinants of the
-   bound population's assist/resist asymmetry. **Planner decides; not pursued here.**
+   tug-of-war of §5, present throughout. Two static candidates were then tested in turn (steps 1 & 2):
+
+   **6.1a — chain stiffness at the gliding `fracMoveTorq=0.2` (step 1): FAITHFUL, ELIMINATED.** See §6(a)
+   above: v1 (`-bmDiag`) and v2 (`-characterize`) deflection ratios match at 0.2 to Δ 0.004 % (1.20240 vs
+   1.20235), and at 0.265 to 0.01 %. Identical damped-torsion law, no 0.265-baked constant. Not the cause.
+
+   **6.2 — the nucleotide cycle under gliding load (step 2): cycle FAITHFUL; residual is EMERGENT.**
+   Measurement only (raw `RUN_LOGS/2026-06-14_4biv_cycle.txt`). Three checks:
+   - **Self-consistency (v2-internal, `-cycldiag`):** empirical per-state conditional transition rates
+     under load match the validated nominal rates within ~10 % (NONE→ATP 98 %, ATP→ADPPi 97 %, ADPPi→ADP
+     89 %, ADP→NONE|gate-open 111 %). The high ADP occupancy is the **load-gate** (open only 37 % of the
+     time — assisting load holds ADP motors), NOT a malfunction. Cycle is self-consistent. ✓
+   - **Drift (longer 0.3 s run):** v2's assist-fraction (~0.52) and glide (~4) **flatten** — no continuing
+     drift; only z keeps settling. Confirms the residual is static (the 0.88→0.84 was second-order noise).
+   - **v1-vs-v2 (scratch logging-only v1 build — `BoA-v1ref` byte-clean; `GlidingAssayEvaluator` shadowed
+     in /tmp):** v1 and v2 share the **identical** cycle rates, the load-gated `dissociateADP`, and the
+     Guo–Guilford catch-slip law+params (code-verified). Measured during gliding (4 v1 seeds, 1424 bound-
+     obs): **occupancy MATCHES** (v1 ATP 58.9 / ADP 37.4 vs v2 59.8 / 36.6); **assist-fraction v1 54.4 %
+     vs v2 51.5 %** — a small ~3 pp difference (~2 SE; v1 seed-to-seed 51.6–58.2). Near the 50/50 balance a
+     3 pp shift in assist-fraction maps to a meaningful net-force difference, consistent with the ~13 %
+     net residual.
+   - **The one port gap (reported, NOT fixed — adding it is a physics change, and self-consistency passed
+     so the prompt's bound forbids it):** v1's `ckRelease` has a **break-force release** (detach when
+     cross-bridge tension > `myosinBreakForce` 12 pN) that v2 lacks. But v2's tension exceeds 12 pN only
+     **0.56 %** of bound-steps (mean 5.1, max 17.7 pN), and that tail is ~60 % *assist* — so shedding it
+     would *lower* assist-fraction, the WRONG direction to explain v1's higher enrichment. Not the cause;
+     a small faithfulness gap worth the planner's note.
+
+   **⇒ The cycle + release law are FAITHFUL (self-consistent, occupancy matches, identical law); the
+   residual is a genuine EMERGENT collective-coordination difference — v2's bound population is marginally
+   less assist-enriched (≈51.5 % vs v1's ≈54.4 %) at matched cycle/occupancy/release-law, amplified near
+   the 50/50 tug-of-war into the ~13 % net-glide gap.** Both static candidates (chain, cycle) are
+   eliminated as *faithfulness* gaps. This is a finding to document, not tune. Planner decides whether to
+   accept the ~0.87× residual or scope the break-force port-gap addition / a deeper emergent-coordination
+   study. **No physics edits.**
 2. **Box scaling is now closed** as a target — both codes scale weakly and equally in net terms.
 3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
    The residual is correctly sized and re-targeted; whether to burrow is the planner's call.
