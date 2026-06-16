@@ -897,6 +897,69 @@ motion, sized at ~0.87×.
    confirmed divergences **documented + toggle-available + decomposed**, or promote-and-re-baseline for
    faithfulness. **4b-iv is NOT declared closed here** (planner's call).
 
+   **6.12 — Refractory-confound test (is the −13% residual inflated by v1's refractory race?) —
+   Phase-1 gate FAILS: v1's effective block rate is WINDOW-INDEPENDENT (~0.31 across a 1000× sweep), so the
+   race cannot be "diluted" by lengthening. Phase 2 NOT run; the confound stays bounded-small by §6.6/§6.7.**
+   Every residual measurement so far compared v1 (racy, ~0.31 *effective* refractory on the GPU oracle, §6.6)
+   against v2 (a clean 100 %/1-step block) — so each net gap conflates the parallel-scheme difference with a
+   refractory-*implementation* difference. The hypothesis under test: if v1's race **under-blocks** (0.31 vs
+   an intended 1.0 at N=1 step) it inflates v1's binding → inflates v1's net → part of the −13 % is *v1 too
+   fast*, not v2 too slow. jba's probe: lengthen `myoRebindTime` in **both** codes to N steps so the race is a
+   small fraction of the window, then see if the v1−v2 net gap survives. **The cheap Phase-1 gate** asks the
+   prerequisite: does lengthening `myoRebindTime` actually raise v1's *effective* block rate? Raw:
+   `RUN_LOGS/2026-06-16_4biv_refractory_confound/` (`phase1_gate.txt`, `NOTES.md`, scratch param files).
+
+   - **Scratch build (probe, NOT the oracle).** `/tmp/v1scratch` = a copy of `BoA-v1ref` (frozen ref stays
+     **byte-clean**; `diff` confirms it differs only by the logging-only `[REBIND_DIAG]` candidate/blocked
+     atomic counters in `MyoMotor.ontoFilament`, carried from §6.6 — no physics change). The probe parameter
+     `myoRebindTime` was set **purely via the param file** (matched by Parameter label in `loadParamConfig`)
+     — literally one parameter changed, **no source edit, no rebuild**; each run's stdout confirms the assign.
+
+   - **Gate result (v1 GPU 14×2, ~3k steps; effective block rate vs `myoRebindTime` = N·dt, dt=1e-5):**
+
+     | N (steps) | myoRebindTime | effective block rate |
+     |---|---|---|
+     | 1    | 1.0e-5 | 0.267, 0.297 (+ smoke 0.323) |
+     | 4    | 4.0e-5 | 0.271, 0.338 |
+     | 40   | 4.0e-4 | 0.272 |
+     | 1000 | 1.0e-2 | 0.315 |
+
+     The effective block rate is **WINDOW-INDEPENDENT across the full 1×→1000× sweep** (all ~0.27–0.34). N=4
+     is **not** materially higher than N=1 (needed ≥~0.7). **⇒ The Phase-1 gate FAILS: the race scales with
+     the window and cannot be suppressed by lengthening.** Per the gate rule, **pause & report; Phase 2 NOT
+     run; commit nothing.**
+
+   - **Mechanism (why window-independent).** v1's `bindTimer` is a **static class-global** (`MyoMotor:73`),
+     advanced `+= deltaT` by **every** motor's `step()` (`:179`) ⇒ ~N·deltaT ≈ **0.13 s** of nominal advance
+     per simulation step (N≈13.4k motors), and reset to 0 by **any** release (`MyoFilLink:315`); the gate
+     `bindTimer < myoRebindTime` (`:455`) is read in the serial GPU drain. Because the per-step accumulation
+     (~0.13 s) **dwarfs every tested window** (1e-5…1e-2 s), at a drain check the timer is effectively
+     bimodal — either ≈0 (just reset by a near-simultaneous release ⇒ blocked for ANY window) or already ≫
+     any window (⇒ never blocked). The blocked fraction (~0.31) is set by the **racy reset-vs-check
+     concurrency**, not by where the threshold sits between those two regimes ⇒ invariant to N. So the race
+     **is** the window-setting mechanism; you cannot make it "a small fraction of the window."
+
+   - **Δ₁ / Δ₄ — N/A (not measured).** The two-point net-gap (Phase 2) was the contingent step; the gate
+     foreclosed it, so there is no Δ₁ vs Δ₄ to report. The v2 side **was** ready: a clean **deterministic
+     N-step block** (`-refractorysteps N`, race-free, `blockProb`=1.0 — NOT the §6.11 probabilistic path) was
+     implemented + verified (default/`-refractorysteps 1` **bit-identical to HEAD**: netXY 3.418/avgB 6.000;
+     `-refractorysteps 4` blocks more → avgB 6.000→5.813, correct direction; raw
+     `v2_refractorysteps_verification.txt`), then **reverted** since Phase 2 did not run — v2 production
+     untouched, `BoA-v1ref` byte-clean.
+
+   - **Read — confound NOT testable this way, but already bounded small.** The lengthen-both route cannot
+     isolate the confound because v1's effective block rate is a **structural ~0.31 set by the parallel
+     implementation, invariant to `myoRebindTime`** — there is no window at which v1's race becomes negligible
+     relative to a clean block. This does not *resolve* the confound but neither does it reopen it: the
+     residual's refractory sensitivity is already bounded by the existing v2-side and v1-self evidence —
+     **(i)** §6.11 matched v2 to v1's 0.31 rate (probabilistically) and net was **unmoved** (refractory-fixable
+     net chunk ≈0, directedness untouched); **(ii)** §6.6 Phase C measured v1's own **CPU(0 % block)-vs-GPU
+     (31 % block)** net spread at only ~4 % (4×1), and §6.7 found v1 CPU≡GPU net to **0.0 σ at the production
+     14×2** — i.e. v1's net is only weakly sensitive to its block rate, far below the 13 % residual. So any
+     v1-race-inflation of net is bounded at ≲v1's own ~0–4 % path spread, consistent with §6.11's conclusion
+     that the −13 % is **~entirely the irreducible parallel-scheme remainder** (§6.7/§6.8/§6.9 class), not
+     refractory-race-inflation. **No physics edits; nothing promoted; nothing committed to either tree.**
+
 ## 7. What is and isn't validated
 
 | aspect | status |
@@ -914,6 +977,7 @@ motion, sized at ~0.87×.
 | **Assist-fraction + joint decomposition vs v1 (§6.9, n=6 each)** | ✓ **MATCHES** — assist gap +0.65 pp (+0.7 σ); per-state/load/bindArc/poseAngle rates + all 3 distributions track v1; §6.2 deficit dissolves into v1's **chaotic same-seed SD 3.3 pp**. ⇒ NOT a localized constant — (B) emergent, accept |
 | **Release logic vs v1 — break-force cap (§6.10)** | ✓ **MATCHED** (behind default-off `-faithfulrelease`): v1's 12 pN deterministic force-cap release ported faithfully (same quantity `forceMag`, threshold, target, ordering); OFF≡HEAD bit-identical, ON CPU≡GPU bit-identical. **Not the residual**: A/B (n=16) net −0.13/−0.73 σ (does not close toward 4.58); fires ~0.5 %/bound-step; re-patterns avgBound (−5 σ) but assist-fraction flat. Promotion (re-baselines all prior numbers) = planner's call |
 | **Rebind refractory vs v1 — rate-faithful `myoRebindTime` (§6.11)** | ✓ **MATCHED** (behind default-off `-faithfulrefractory`): v1's static-global `bindTimer` racy rate (GPU-oracle 0.31) matched **race-free** by a probabilistic 31 % entry into the dt-correct cooldown (per-motor wang-hash, FSM untouched); OFF≡HEAD bit-identical, ON CPU≡GPU bit-identical. **Not the net residual**: A/B (n=16, 2×2 with §6.10) refractory net effect ±0.16 (≤1 σ, sign-unstable) ⇒ **refractory-fixable chunk ≈0, contradicts §6.6's ~4–6 %** (reopen §6.6's net-contributor claim; directedness re-confirmed flat). **avgBound**: offsets the cap's over-suppression (6.53→6.82, toward v1 7.29). Bundle (cell3) net unmoved (+0.19 σ), avgB 6.82 closer to v1 than HEAD 7.89. Residual ⇒ ~entirely irreducible-scheme. Promotion = planner's call |
+| **Refractory-confound test (§6.12)** | ◑ **Phase-1 gate FAILS — not testable this way.** v1's *effective* block rate is **window-INDEPENDENT** (0.27–0.34 across N=1/4/40/1000, a 1000× `myoRebindTime` sweep) ⇒ the racy static-global `bindTimer` is the window-setting mechanism, can't be diluted by lengthening. Phase 2 (2-pt net gap) NOT run; no Δ₁/Δ₄. v2 clean `-refractorysteps N` block built+verified (default≡HEAD bit-identical) then reverted. **Confound stays bounded small** by §6.11 (v2-matched-to-0.31 net unmoved) + §6.6/§6.7 (v1 own block-rate net sensitivity ≲4 %, 0 σ at 14×2). `BoA-v1ref` byte-clean; nothing committed |
 
 ## 8. Reproduce
 

@@ -9,6 +9,13 @@ break the ~16x host-RAM ceiling that bounds v1: the v1 scaling study showed the 
 SoA primitive component arrays the canonical state and keeps that state device-resident across steps.
 
 ## Relationship to v1 (BoA) — READ THIS BEFORE TOUCHING THE REFERENCE
+- **Three repos, three names (use them precisely — the §6.10 Phase-A slip motivated naming this):**
+  - **BoA-active** = `~/Code/BoA`, the live v1 research instrument (evolves). **Never in a v2 validation loop.**
+  - **BoA-v1ref** = `~/Code/BoA-v1ref`, the frozen, **byte-clean** read-only oracle worktree. **Every v2
+    validation compares SoftBox vs BoA-v1ref — and ONLY this one.**
+  - **SoftBox** = this repo, v2.
+  All "v1 oracle" numbers come from BoA-v1ref; a scratch instrumented copy (e.g. `/tmp/v1scratch`) may be
+  built for probes, but BoA-v1ref itself stays byte-clean and BoA-active never enters validation.
 - v1 lives at `~/Code/BoA` and remains the active research instrument. **Soft Box work never edits v1.**
 - Frozen reference: a read-only worktree at `~/Code/BoA-v1ref`, detached at tag
   `softbox-filref-2026-06-13`. This is the physics + residency-pattern reference AND the source for
@@ -127,7 +134,12 @@ oracle, but its role changes across the migration:
    F-catch-slip, validated on a pinned filament (stroke checkpoint).** 4b-iv (the gliding payoff,
    deferred): unpin + surface + the chain filament + dynamic binding → gliding velocity/avgBound vs the
    v1 fixture (8.33/8.23 µm/s, avgBound 7.64/7.21).
-5. Crosslinkers / Arp2/3 branching.
+   4b-iv — **DONE + CLOSED** (2026-06-16): glides −x, stable, avgBound + instantaneousSpeed match v1; the
+   net-glide velocity is a small **0.874× (−13%/−4σ) box-uniform residual** accepted as the **irreducible
+   parallel-scheme remainder** (one-step-stale SoA forces vs v1's sequential fresh-force update), real but
+   within v1's chaotic envelope. Exclusion chain §6.8–6.12 (`GLIDING_4biv_FINDINGS.md`); consolidated in
+   `GLIDING_4biv_RESIDUAL_DOSSIER.md`.
+5. **Crosslinkers / Arp2/3 branching — ACTIVE/NEXT.** Recon: `INC5_CROSSLINKER_RECON.md`.
 6. Protein-node contractile path — validate against the v1 node-tension fixture.
 7. Membrane — StickyNode bodies + NodeLink springs + the iterative relaxation solver (the
    iterative-constraint-solver-as-a-system design case; v1 RULE_NODE covers only the single-eval
@@ -372,7 +384,7 @@ into the pinned filament (the glide direction); (5) catch-slip unbind rate respo
 + `run_stroke.sh`. Existing paths bit-identical (FDT/deflection/broad-phase/4a/4b-i/ii). See JOURNAL
 2026-06-14 (inc 4b-iii).
 
-**Increment 4b-iv (gliding assay) — RECONCILED (measurement), small residual.** Assembled 4a–4b-iii + the
+**Increment 4b-iv (gliding assay) — CLOSED (2026-06-16). Residual accepted.** Assembled 4a–4b-iii + the
 inc-2 chain filament into v1's gliding assay. **Works end-to-end — glides −x, stable, avgBound +
 instantaneousSpeed matching v1.** The earlier "0.51× velocity miss" was a **measurement-method conflation**:
 v2's net-displacement glide was compared against v1's `longWindowSpeedXY`-at-end-of-a-0.1 s-run ("8.33"),
@@ -398,3 +410,35 @@ CPU 52.6 steps/s, difference-method)**. Binding + assembly +
 residency validated at scale; the gliding velocity is now a **small, sharp, correctly-sized ~0.87×
 box-uniform residual** in net directedness (re-scoped from the mis-framed 0.51×). See JOURNAL 2026-06-14
 (inc 4b-iv RECONCILED) + `GLIDING_4biv_FINDINGS.md`.
+
+**4b-iv CLOSE (2026-06-16, §6.7–6.12).** The −13% / −4σ net-glide residual (v2 4.000 vs v1 4.578, 0.874×,
+box-uniform; n=24/16) is **accepted as the irreducible parallel-scheme remainder** — v2's one-step-stale
+SoA forces (Jacobi-like) vs v1's sequential fresh-force update (Gauss–Seidel-like) on a chaotic many-body
+trajectory; real but **within v1's chaotic envelope** (22/24 v2 runs inside v1's seed range; v1 same-seed
+assist SD 3.3 pp; v2 bit-reproducible). The full exclusion chain (§6.8 precision RULED OUT, floor ≲0.1%;
+§6.9 no localized assist-balance constant; §6.10 force-cap net-flat; §6.11 refractory-rate ±0.16/≤1σ; §6.12
+refractory-race confound — gate failed + bounded 0.0σ by the v1-CPU 4.581 vs v1-GPU 4.578 control) all
+excluded or bounded small; net is decoupled from assist-balance, avgBound, and refractory rate.
+**Consolidated reference: `GLIDING_4biv_RESIDUAL_DOSSIER.md`** (Part 1 residual; Part 2 the BoA `bindTimer`
+bug for a future BoA-active fix). **Architectural, not a bug/precision/tunable-constant — not reopened
+without a >0.1% systematic signal.**
+
+- **Pending faithfulness step (decided, NOT executed):** promote v1's 12 pN break-force release
+  (`-faithfulrelease`, §6.10 — a real v1 feature, faithfully ported, CPU≡GPU) to default-on. Deferred to
+  its **own task** because flipping it re-baselines §7 (avgBound 7.6→6.5, the §6.7/§6.9 distributions). Do
+  not flip it as a side-effect of other work.
+- **Deliberate de-racing divergence (keep):** v2 keeps its **clean per-motor 1-step rebind block**; v1's
+  `bindTimer` is a non-physical **static-global race** (~0.31 GPU / 0% CPU, parameter-vestigial — §6.12,
+  dossier Part 2). v2 not reproducing it is v2 correctly **not** inheriting a v1 bug, not a faithfulness gap.
+- **Superseded leads (do NOT re-trust older entries):** §6.2's "v1 assist 54.4%" was an **n=4 draw** (≈52%
+  at n=6, §6.9 — there is no assist deficit); §6.6's "~4–6% net from the refractory" **did not survive n=16**
+  (§6.11; its primary verdict — refractory acts on binding quantity not directedness — does stand); §6.8's
+  neat "1.37% coherent ≈ 2–3 pp assist deficit" cross-check is **coincidental** (the deficit was the small-n
+  artifact). §6.8's **core stands** (precision ruled out; float32 floor ≲0.1%).
+- **Carry-forward rule (crosslinker/contractile work):** a **>0.1% systematic** discrepancy vs BoA-v1ref is
+  a **logic** signal, not float32 (the §6.8 precision floor). Below ~0.1% on near-cancelling force balances
+  is expected float32 / chaotic-mean noise.
+
+**Increment 5 (crosslinkers / Arp2/3) is now ACTIVE/NEXT.** Code-state recon for the planner:
+`INC5_CROSSLINKER_RECON.md` (SoA plug-in points; the CSR-inverse gather is single-ended and does **not**
+cover filament↔filament coupling as-is — flagged; v1 `FilLink`/`Arp23` model; schema stays entity-agnostic).
