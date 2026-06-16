@@ -439,6 +439,30 @@ without a >0.1% systematic signal.**
   a **logic** signal, not float32 (the §6.8 precision floor). Below ~0.1% on near-cancelling force balances
   is expected float32 / chaotic-mean noise.
 
-**Increment 5 (crosslinkers / Arp2/3) is now ACTIVE/NEXT.** Code-state recon for the planner:
-`INC5_CROSSLINKER_RECON.md` (SoA plug-in points; the CSR-inverse gather is single-ended and does **not**
-cover filament↔filament coupling as-is — flagged; v1 `FilLink`/`Arp23` model; schema stays entity-agnostic).
+**Increment 5 (crosslinkers / Arp2/3) — ACTIVE.** Recon: `INC5_CROSSLINKER_RECON.md`.
+
+**Increment 5a — DONE (2026-06-16).** Passive crosslinker static translational spring + the **double-ended
+filament↔filament gather** (the recon §2 design risk: the motor→segment CSR-inverse is single-ended).
+Solved by a **two-pass single-ended gather** — the validated `CrossBridgeSystem` CSR template reused
+**verbatim, run twice** (pass A keyed by `linkFilA`, pass B keyed by `linkFilB`); each crosslinker
+self-writes both side reactions into its own `xlinkData` row, each pass sums the matching side into the
+filament's `forceSum`/`torqueSum` — race-free, no atomics, **bit-identical CPU↔GPU** by construction.
+Force law = faithful v1 `FilLink.applyTransForce` port (damping-limited; the `/dt` cancels the integrator
+`·dt` ⇒ dt-independent relaxation — drag in both the force-law denominator and the integrator is v1's
+design, not a double-count). Links **pre-placed + STATIC** this sub-increment (no formation/Bell-unbinding/
+torsion/Arp2/3 — 5b/5c/later). Validated vs `BoA-v1ref` on two co-developed static checks: **rest hold**
+(no spurious rest force; equal-and-opposite ⇒ COM fixed) and **stretch relaxation** (decay constant
+τ=273.84 steps matches the analytic-from-v1-arithmetic to **0.0012 %**, **dt-invariant to 0.0000 %**);
+gather==brute bit-identical; **CPU≡GPU** (force+gather bit-identical, pose float32 last-bit); **all-OFF≡HEAD**
+(crosslinker pipeline over nLinks=0 ≡ bare filament path, bit-identical). `GlidingHarness`/production
+**byte-unchanged**. New: `CrosslinkerStore`, `CrosslinkerSystem`, `CrosslinkerHarness`, `run_xlink.sh`,
+`SpatialBodyView.STORE_CROSSLINKER=2`. Report: `INC5A_CROSSLINKER_FINDINGS.md`; JOURNAL 2026-06-16 (5a).
+```
+./run_xlink.sh              # GPU TaskGraph + CPU cross-check (rest hold, decay constant, gather, all-OFF≡HEAD)
+./run_xlink.sh -cpu         # CPU runner only (triage)
+./run_xlink.sh -3js threejs_xlink   # viewer (off-rest crosslinked pair relaxing)
+```
+**5a flag for the planner:** v1 `getLinkCt` accumulates per-step (order/thread-dependent for
+multi-link-per-segment); 5a uses the total static count (=1 ⇒ `fracMove`=0.4 exact). Multi-link-per-segment
+`fracMove` faithfulness is a 5c (formation) concern. Next: 5b (Bell strain unbinding `ckLinkBreak`), 5c
+(formation + broad-phase segment↔segment + the `STORE_CROSSLINKER` publisher), torsion, 5d (Arp2/3).

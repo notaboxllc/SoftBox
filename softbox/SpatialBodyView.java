@@ -28,8 +28,9 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
  */
 public final class SpatialBodyView {
 
-    public static final int STORE_FILAMENT = 0;
-    public static final int STORE_MOTOR    = 1;
+    public static final int STORE_FILAMENT    = 0;
+    public static final int STORE_MOTOR       = 1;
+    public static final int STORE_CROSSLINKER = 2;   // inc 5 (recon §2); broad-phase publisher arrives with formation (5c)
 
     public final int capacity;
     public int count;                       // active bodies [0,count)
