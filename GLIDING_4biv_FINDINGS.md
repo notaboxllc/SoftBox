@@ -12,6 +12,13 @@ Everything in 4a–4b-iii remains committed and validated; this document superse
 full-scale finding" framing with the matched-measurement reconciliation. Measurement harness +
 methodology are committed; **no physics edits.**
 
+> **Closer (§6.7, 2026-06-15):** the variance characterization is done. The ~0.87× residual is **OUTSIDE
+> v1's honest (autocorrelation-corrected) envelope** — a real −4.7 σ (pooled, n=24/16/16/15) systematic
+> mean difference, but small: **≈1.2× v1's own seed-to-seed SD**, with heavily overlapping per-run
+> distributions. Crucially it is **localized to precision/logic, NOT the GPU parallel reduction** (the gap
+> is full-size on the *sequential* v2-CPU-vs-v1-CPU comparison; v1 and v2 each have CPU≡GPU at 14×2). ⇒
+> Next step is the **numerical-match discriminator** (a double-precision build), not a reduction-order test.
+
 ---
 
 ## 1. Provenance of "8.33" (resolved)
@@ -448,6 +455,96 @@ motion, sized at ~0.87×.
    own CPU-vs-GPU paths already differ ~4 % in net), with the rate-faithful refractory as an independent,
    net-favorable fidelity improvement to fold in. Raw: `RUN_LOGS/2026-06-15_4biv_refractory.txt`.
 
+   **6.7 — Variance characterization (the closer): the residual is OUTSIDE v1's honest envelope, small
+   (~1.2× v1's seed-spread), and localized to PRECISION/LOGIC — NOT the parallel reduction.** The honest
+   close to the §6.5/§6.6 chain (all same-dt mechanisms cleared as the directedness cause): does v2's net
+   sit inside v1's *true* run-to-run spread, measured with autocorrelation-corrected, stationarity-checked
+   ensembles rather than the short-run SEM the earlier ~3–4 σ used? Four configs — **v1-CPU, v1-GPU, v2-CPU
+   runner, v2-GPU TaskGraph** — at the full 14×2 box (dt=1e-5, d=500/µm²), 10k steps (0.1 s), measurement
+   only (existing instruments: v2 `-ztrace`/`-grid`, v1 `gliding_assay.dat`). Clean machine, serial (no
+   concurrent sims). Primary statistic: **post-transient net-x glide** (t>0.02 s, the −x displacement
+   rate), computed identically for all four. Raw: `RUN_LOGS/2026-06-15_variance/` (`variance_results.txt`,
+   per-seed `.dat`/ztrace, `report.py`).
+
+   **The four distributions** (post-transient net-x µm/s; SD = the true run-to-run envelope):
+
+   | config | n | net-x mean | SD (envelope) | seed-SEM | assist-frac | avgB |
+   |---|---|---|---|---|---|---|
+   | v2-GPU TaskGraph | 24 | **4.000** | 0.408 | 0.083 | 52.84 % ± 1.96 | 7.37 |
+   | v2-CPU runner    | 16 | **4.037** | 0.600 | 0.150 | 52.23 % ± 2.01 | 7.61 |
+   | v1-GPU (oracle)  | 16 | **4.578** | 0.472 | 0.118 | — (§6.2 n=4: 54.4) | 6.58 |
+   | v1-CPU           | 15 | **4.581** | 0.567 | 0.146 | — (§6.2 n=4: 54.4) | 7.35 |
+
+   (v1-CPU seed 9 excluded: its gliding filament's assay output terminated at ~0.05 s on the CPU path,
+   reproducibly — no full-window net; the GPU path of the same seed completed at net 5.3. n=15.)
+
+   **Honest uncertainty — autocorrelation / effective N.** Within each run the per-interval glide velocity
+   decorrelates in **τ ≈ 0.8–0.9 ms** (Sokal-windowed integrated ACF + batch-means), **≪ the 80 ms
+   post-transient window** ⇒ ~57–64 effective samples per run. Because τ ≪ window, the runs ARE as
+   independent as n suggests at the run level: the **effective-N-corrected pooled SEM (σ_v/√(n·N_eff))
+   equals the naïve seed-SEM (SD/√n) to ≈0.12** for every config — so the seed-SEM is honest, not inflated
+   by within-run correlation. (Conversely, a *single* 0.1 s run pins net only to ±0.6 — eff-N ≈ 57, σ_v ≈
+   4 — so the seed-to-seed SD is dominated by finite-window chaotic sampling noise, and the **ensemble of
+   short runs is the real averaging**; one long run cannot answer this. The pilot 30k run confirmed even
+   0.3 s does not self-average.) Stationarity: assist/avgB flat across the run (no progressive
+   disengagement, per §6.1); startup transient (first 2000 steps) excluded.
+
+   **Mean stability.** Running mean vs seed count plateaus by n≈10 for all four (v2-GPU 3.95→3.92, v1-GPU
+   4.83→4.55, v1-CPU →4.58, v2-CPU →4.03). Mean vs window length (long 30k runs): both codes' net rises
+   slightly then plateaus ~4.2–4.3 by 0.2–0.3 s (v2-GPU-long n=3; v1-GPU-long n=1) with the ratio
+   ≈constant — the 0.1 s ensemble means are representative, not a window artifact.
+
+   **The three comparisons** (difference of means ± combined seed-SEM):
+
+   | comparison | means | Δnet (µm/s) | σ | ratio |
+   |---|---|---|---|---|
+   | **v2-GPU vs v1-GPU** (production) | 4.000 vs 4.578 | **−0.578 ± 0.145** | **−4.0** | **0.874** |
+   | **v2-CPU vs v1-CPU** (both sequential) | 4.037 vs 4.581 | −0.544 ± 0.210 | −2.6 | 0.881 |
+   | v1-GPU vs v1-CPU (v1 self-spread) | 4.578 vs 4.581 | −0.003 ± 0.188 | −0.0 | 0.999 |
+   | v2-GPU vs v2-CPU (v2 self-spread) | 4.000 vs 4.037 | −0.037 ± 0.172 | −0.2 | 0.991 |
+   | **pooled** (v2 n=40 vs v1 n=31) | 4.015 vs 4.579 | −0.565 ± 0.120 | **−4.7** | **0.877** |
+
+   **Verdict — OUTSIDE, but small.** The production gap is **−4.0 σ** (pooled −4.7 σ), a *real,
+   statistically-resolved systematic mean difference* — it does **not** dissolve into v1's run-to-run
+   variability when that variability is measured honestly (autocorrelation-corrected). Ratio **0.874–0.877**,
+   exactly reproducing §2's n=8 full-run 0.873 — but now at n=24/16 with eff-N-honest SEM. **Magnitude:
+   ≈1.2× v1's seed-to-seed SD** (0.578/0.472), ~13 %. The per-run distributions overlap heavily (22/24
+   v2-GPU runs fall inside v1-GPU's seed range 3.54–5.44; a single v2 run is indistinguishable from a single
+   v1 run) — the residual is a *mean shift*, not run-to-run noise. Note the §6.5/§6.6 premise that "v1
+   disagrees with itself ~4 %" was a **4×1** finding: at the production **14×2** box v1's CPU and GPU paths
+   agree to **0.003 (0.0 σ)** — the path-spread is box-dependent and ≈0 here, so by that yardstick the gap
+   is many-σ outside.
+
+   **Localization read — precision/logic, NOT the parallel reduction.** The decisive new result:
+   - production gap (v1-GPU − v2-GPU) = **+0.578**; sequential gap (v1-CPU − v2-CPU) = **+0.544**.
+   - **parallel-reduction excess = gap_GPU − gap_CPU = +0.033 (≈0).** The full residual is present on the
+     *sequential* CPU-vs-CPU comparison at the same size; v2's own CPU≡GPU (Δ0.037) and v1's own CPU≡GPU
+     (Δ0.003) at 14×2.
+   - ⇒ Per the prompt's localization rule — *"if the gap in v2-CPU-vs-v1-CPU is essentially the full
+     residual, the parallel reduction is NOT the cause (precision or logic is)"* — the **GPU parallel
+     reduction is exonerated.** The ~13 % residual is carried by **float32 precision (v2) vs float64 (v1)**,
+     and/or a residual **logic** difference (the §6.3 one-step-stale-force scheme is float32-faithful
+     per-step and §6.4 showed reordering it doesn't move the net, leaving precision as the prime suspect).
+
+   **Assist (directedness, mechanism).** v2 assist-fraction is tight and reproducible across runners: **52.8 %
+   (GPU, n=24) / 52.2 % (CPU, n=16)**, SD ≈2 pp. v1 assist is only the §6.2 n=4 measurement (54.4 %, range
+   **51.6–58.2 %**) — not re-measured here (it needs new v1 instrumentation + a sign-convention match; out of
+   "existing instruments" scope, and the NET comparison already carries the verdict). Read together: the
+   ~2–3 pp assist gap that drives the ~13 % net (§5's near-50/50 amplification) is **within** v1's own n=4
+   assist seed-spread (6.6 pp), even though the *net* gap is resolved — consistent with assist being the
+   noisier per-seed quantity and net the integrated one. (A clean follow-up — v1 assist at n≥16 — would
+   tighten this, but does not change the net verdict.)
+
+   **⇒ Bottom line (6.7).** The directedness/net residual is **OUTSIDE v1's honest envelope** — a real
+   ~0.87× (−13 %) systematic mean difference at −4.0 σ (pooled −4.7 σ), **≈1.2× v1's seed-to-seed SD** —
+   and it is **localized to precision/logic, NOT the GPU parallel reduction** (identical on the sequential
+   CPU-vs-CPU path; v1 & v2 each CPU≡GPU at 14×2). This **closes the variance question** (the gap is not a
+   short-run-SEM artifact) and **selects the contingent next step: the numerical-match discriminator** —
+   push v2's numerics toward v1's (a double-precision `-cpu` variant, or a targeted double-accumulate),
+   *not* a sequential-reduction-order test (the reduction is already exonerated). If the gap closes under
+   double precision it is the deliberate float32 GPU tradeoff (document); if it persists, a hidden
+   logic/constant difference remains and §6.1a/§6.2 reopen. **No physics edits.**
+
 2. **Box scaling is now closed** as a target — both codes scale weakly and equally in net terms.
 3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
    The residual is correctly sized and re-targeted; whether to burrow is the planner's call.
@@ -465,6 +562,7 @@ motion, sized at ~0.87×.
 | GPU throughput | ✓ 386 steps/s @ 13.4k motors (~7.3× CPU runner: GPU 386 vs CPU 52.6 steps/s) |
 | CPU≡GPU on gliding (aggregate-within-SEM) | ✓ avgBound matches; velocity in chaotic spread |
 | **Gliding NET velocity vs v1 (matched box+statistic)** | ◑ **0.87× box-uniform residual** (was mis-framed as 0.51×) — small, sharp, in net directedness |
+| **Gliding NET vs v1 — variance characterization (§6.7, n=24/16/16/15)** | ◑ **OUTSIDE v1's envelope**: 0.877× at −4.7 σ (pooled), ≈1.2× v1's seed-SD; **localized to precision/logic, NOT the parallel reduction** (CPU≡GPU within each code; gap full-size on v2-CPU-vs-v1-CPU) |
 
 ## 8. Reproduce
 
