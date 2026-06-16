@@ -157,19 +157,28 @@ public final class CrossBridgeSystem {
     }
 
     /** Track forceDotFil: instantaneous (catch-slip) + a 10-window ring (the ADP→NONE gate average,
-     *  v1 ValueTracker(10)). Free motors reset the tracker (v1 release().zero()). */
+     *  v1 ValueTracker(10)). Free motors reset the tracker (v1 release().zero()).
+     *  §6.10: also publish forceMag = |F8| (the cross-bridge spring MAGNITUDE, v1 MyoFilLink.forceMag)
+     *  — the head-side force bondData[d..d+2] already has magnitude myoSpring·dist, so this is a sqrt
+     *  of stored values, NOT a re-derivation of the force law. Kept in lockstep with forceDotFil (same
+     *  vintage in stepOrig last-step / stepFresh this-step) so the cap reads the same force the
+     *  catch-slip draw does, exactly as v1's single addForces writes both. */
     public static void registerForceDot(FloatArray bondData, IntArray boundSeg,
-                                        FloatArray forceDotFil, FloatArray forceDotHist, IntArray forceDotPlace, IntArray counts) {
+                                        FloatArray forceDotFil, FloatArray forceMag, FloatArray forceDotHist, IntArray forceDotPlace, IntArray counts) {
         int nM = boundSeg.getSize();
         for (@Parallel int m = 0; m < nM; m++) {
             if (boundSeg.get(m) >= 0) {
-                float fd = bondData.get(m * STRIDE + 12);
+                int d = m * STRIDE;
+                float fd = bondData.get(d + 12);
                 forceDotFil.set(m, fd);
+                float fx = bondData.get(d), fy = bondData.get(d + 1), fz = bondData.get(d + 2);
+                forceMag.set(m, (float) Math.sqrt(fx * fx + fy * fy + fz * fz));
                 int p = forceDotPlace.get(m);
                 forceDotHist.set(m * 10 + p, fd);
                 forceDotPlace.set(m, (p + 1) % 10);
             } else {
                 forceDotFil.set(m, 0f);
+                forceMag.set(m, 0f);
                 forceDotPlace.set(m, 0);
                 int b = m * 10;
                 for (int k = 0; k < 10; k++) forceDotHist.set(b + k, 0f);

@@ -111,7 +111,7 @@ public final class MotorStrokeHarness {
                 for (int m = 0; m < nM; m++) mot.boundSeg.set(m, 0);          // re-bind each step (steady population)
                 for (int m = 0; m < nM; m++) mot.forceDotFil.set(m, (float) F);
                 long b0 = countBound(mot);
-                NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.cooldown, mot.stats, mot.kinParams, mot.counts);
+                NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
                 long b1 = countReleased(mot);
                 boundSteps += b0; releases += b1;
             }
@@ -272,7 +272,7 @@ public final class MotorStrokeHarness {
             CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
             RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
             DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
-            CrossBridgeSystem.registerForceDot(sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceDotHist, mot.forceDotPlace, mot.counts);
+            CrossBridgeSystem.registerForceDot(sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts);
             ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
             CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sc.segMotorCount);
             CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
@@ -288,7 +288,7 @@ public final class MotorStrokeHarness {
                     b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, b.bTransGam, b.bRotGam,
                     b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.brownTransScale, b.brownRotScale,
                     mot.bodyParams, mot.jointParams, mot.anchor, mot.nucleotideState, mot.boundSeg, mot.bindArc,
-                    mot.forceDotFil, mot.forceDotHist, mot.forceDotPlace, mot.nucParams,
+                    mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.nucParams,
                     sc.bondData, sc.xbParams, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, f.forceSum, f.torqueSum,
                     sc.segMotorCount, sc.segMotorOffsets, sc.segMotorMyo)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts)
@@ -301,7 +301,7 @@ public final class MotorStrokeHarness {
             .task("applyHead", CrossBridgeSystem::applyHeadForce, sc.bondData, b.forceSum, b.torqueSum, mot.counts)
             .task("integrate", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
             .task("derive", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts)
-            .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceDotHist, mot.forceDotPlace, mot.counts)
+            .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
             .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
             .task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, sc.segMotorCount)
             .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, sc.segMotorCount, sc.segMotorOffsets)

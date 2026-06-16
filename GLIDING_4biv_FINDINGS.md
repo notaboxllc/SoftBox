@@ -721,6 +721,82 @@ motion, sized at ~0.87×.
 3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
    The residual is correctly sized and re-targeted; whether to burrow is the planner's call.
 
+   **6.10 — Force-cap (break-force 12 pN) release: a real v1 port-gap, now closed behind a toggle;
+   faithfulness restored, NOT the residual fix.** §6.2 flagged the one confirmed logic divergence: v1's
+   `MyoFilLink.ckRelease` has a deterministic **break-force release** (detach when the cross-bridge spring
+   magnitude exceeds `myosinBreakForce` = 12 pN) that v2's `NucleotideCycleSystem.catchSlipRelease` lacked.
+   This increment ports it faithfully behind a default-off `-faithfulrelease` flag and A/Bs it at §6.7
+   power (GPU, 14×2, 10k steps).
+
+   - **The v1/v2 side-by-side (file:line).**
+
+     | | v1 (BoA-v1ref) | v2 HEAD (SoftBox) | v2 `-faithfulrelease` |
+     |---|---|---|---|
+     | location | `MyoFilLink.ckRelease` (MyoFilLink.java:334) | `NucleotideCycleSystem.catchSlipRelease:85` | same kernel + 1 branch |
+     | compared quantity | `forceMag` = `\|F8\|` = myoSpring·dist (cross-bridge spring MAGNITUDE) | — (absent) | `forceMag` (= `\|`bondData[d..d+2]`\|`, surfaced in `registerForceDot`) |
+     | threshold | `Env.myosinBreakForce·1e-12` = **12 pN** (Env.java:799) | — | `kinParams[11]`=12e-12 N (identical) |
+     | kind | deterministic hard release (`force>thr ⇒ release(); return;`) | — | deterministic; `continue` (skip catch-slip draw) |
+     | release target | `release()` → fully unbound, same as catch-slip; nucleotide state untouched | — | same FREE_COOLDOWN/BINDABLE + refractory as catch-slip |
+     | ordering | **first** in ckRelease, before the `inRigor` gate, before the catch-slip RNG draw | — | first in catchSlipRelease, before the draw (v2 has **no `inRigor`** state, so v1's order collapses to break-force → catch-slip) |
+
+     The compared quantity is `forceMag` (the full spring magnitude), **not** `forceDotFil` (the
+     along-filament load the catch-slip uses). v2 already computed `fmag = myoSpring·dist` in
+     `CrossBridgeSystem.bondForces:96` but discarded it; the port surfaces it (a `sqrt` of the already-stored
+     head-side force vector — **no force-law arithmetic changed**) and keeps it in lockstep with
+     `forceDotFil` so the cap reads the same vintage the catch-slip draw does, exactly as v1's single
+     `addForces` writes both. v2's per-motor wang-hash RNG (keyed on motor,step) means pre-empting the draw
+     for a capped motor perturbs **no other motor** — cleaner than v1's sequential RNG and immune to the
+     §6.4 stale-read/reorder class.
+
+   - **Verification.** Toggle-OFF is **bit-identical to HEAD** — GPU `GRID_ROW` every field matches the
+     pre-change build (v1box seed 1: `inst=6.042 netXY=2.928 avgB=6.286`, identical). Toggle-ON **CPU≡GPU
+     bit-identical** at short horizon (v1box seed 1, 3000 steps: `GRID_ROW` and `CAP_ROW` match exactly,
+     `capFires=90 capRate=0.00505`).
+
+   - **A/B at power (GPU, 14×2 `-full`, dt=1e-5, 10k steps, n=16/toggle; raw
+     `RUN_LOGS/2026-06-16_4biv_forcecap/`).**
+
+     | statistic | OFF mean±SEM | ON mean±SEM | Δ(ON−OFF) | Δ/SEM |
+     |---|---|---|---|---|
+     | **netXY** (full 0.1 s) | **4.224 ± 0.130** | **4.098 ± 0.114** | −0.126 | **−0.73 σ** |
+     | netSteady (2nd-half) | 4.001 ± 0.165 | 3.843 ± 0.167 | −0.158 | −0.67 σ |
+     | netX | 4.194 ± 0.129 | 4.085 ± 0.116 | −0.109 | −0.63 σ |
+     | instSteady | 6.906 ± 0.108 | 6.749 ± 0.121 | −0.157 | −0.97 σ |
+     | avgBound (full-run) | 7.891 ± 0.176 | 6.528 ± 0.203 | −1.363 | **−5.07 σ** |
+
+     - **Net glide — the decisive number: does NOT close the residual.** ON moves net *slightly down*
+       (−0.13 netXY, −0.73 σ; −0.16 netSteady, −0.67 σ), the **wrong direction** and within noise of zero.
+       v1's oracle net is 4.578; v2 stays at ~4.1–4.2 ON or OFF. **The force-cap is not the residual fix.**
+     - **Cap firing rate.** OFF: 0 (toggle dead). ON: **capRate = 0.00494 / bound-motor-step** (5197 fires
+       over 16 seeds × 13.4k motors), i.e. ~**0.5 %** of bound-steps reach 12 pN — matching §6.2's
+       independent 0.56 % estimate and the Phase-B 0.00505. So 12 pN *is* reached; the branch is live, just
+       rare.
+     - **Feedback signature — re-patterning IS present but does not help.** avgBound (full-run) drops
+       **−1.36 (−5.07 σ)** — far larger than directly shedding 0.5 % of bound-steps (~0.04) could produce, so
+       the cap genuinely **re-patterns** the bound population (shedding the most-strained head cascades into
+       a smaller bound set, dominated by the startup transient; the steady-state assist-log avgBound drop
+       n=3 is a smaller ~6.87→6.71). **But the assist/resist balance does NOT shift**: assist-fraction OFF
+       0.520 vs ON 0.525 (n=3, flat within seed noise), occupancy essentially unchanged. So the
+       re-patterning the §6.2 "re-pattern which neighbors load next" hypothesis predicted does occur, yet it
+       neither shifts the assist balance nor improves net directedness — fully consistent with §6.9 (net is
+       decoupled from assist-balance) and §6.4 (a release-side perturbation moved the balance but not net).
+     - **Which population is at the cap tail.** §6.2 measured the >12 pN tail as ~60 % assist; this A/B is
+       consistent — shedding it leaves assist-fraction flat (the re-bind re-equilibrates the balance), so the
+       tail is not assist-enriched enough relative to the bound set to tilt the balance.
+
+   **⇒ Decision read (per the task's rule): "net unchanged but cap fires nonzero ⇒ faithfulness restored;
+   residual stays emergent-scheme-class."** v2's release logic now provably **matches v1's** (the one
+   confirmed logic divergence is closed, behind a default-off toggle), and the clean A/B shows the cap is
+   **not** the −13 % net-glide residual — it fires ~0.5 %, re-patterns avgBound, but leaves net directedness
+   and the assist balance unmoved. The residual remains emergent-coordination-class (§6.7/§6.8/§6.9).
+
+   **⇒ Promotion is the planner's call — NOT flipped here.** Turning `-faithfulrelease` on by default
+   **re-baselines every prior validation number** (the §6.7 distributions, avgBound 7.6→6.5, the §6.9
+   decomposition were all measured *without* this branch). Recommendation: promote-and-re-baseline **for
+   faithfulness** (it closes the last confirmed v1 divergence and the cost is a known ~0.5 % release-rate +
+   a lower, arguably more v1-like avgBound), or keep default-off and close 4b-iv with the divergence
+   *documented + toggle-available*. Either way the residual hunt does not gain a lead here.
+
 ## 7. What is and isn't validated
 
 | aspect | status |
@@ -736,6 +812,7 @@ motion, sized at ~0.87×.
 | **Gliding NET velocity vs v1 (matched box+statistic)** | ◑ **0.87× box-uniform residual** (was mis-framed as 0.51×) — small, sharp, in net directedness |
 | **Gliding NET vs v1 — variance characterization (§6.7, n=24/16/16/15)** | ◑ **OUTSIDE v1's envelope**: 0.877× at −4.7 σ (pooled), ≈1.2× v1's seed-SD; **localized to precision/logic, NOT the parallel reduction** (CPU≡GPU within each code; gap full-size on v2-CPU-vs-v1-CPU) |
 | **Assist-fraction + joint decomposition vs v1 (§6.9, n=6 each)** | ✓ **MATCHES** — assist gap +0.65 pp (+0.7 σ); per-state/load/bindArc/poseAngle rates + all 3 distributions track v1; §6.2 deficit dissolves into v1's **chaotic same-seed SD 3.3 pp**. ⇒ NOT a localized constant — (B) emergent, accept |
+| **Release logic vs v1 — break-force cap (§6.10)** | ✓ **MATCHED** (behind default-off `-faithfulrelease`): v1's 12 pN deterministic force-cap release ported faithfully (same quantity `forceMag`, threshold, target, ordering); OFF≡HEAD bit-identical, ON CPU≡GPU bit-identical. **Not the residual**: A/B (n=16) net −0.13/−0.73 σ (does not close toward 4.58); fires ~0.5 %/bound-step; re-patterns avgBound (−5 σ) but assist-fraction flat. Promotion (re-baselines all prior numbers) = planner's call |
 
 ## 8. Reproduce
 
@@ -746,6 +823,11 @@ motion, sized at ~0.87×.
 #   prints GRID_ROW: inst / instSteady / netXY (full 0.1s) / netSteady (2nd-half, startup-excluded) / netX / lwXY / avgB
 ./run_gliding.sh -diag 10000        # mechanism instrument (state dist, force balance, advance/stroke)
 ./run_gliding.sh -gpu -3js threejs_gliding 20000     # viewer (full motor carpet)
+
+# §6.10 — v1 break-force (12 pN) release, default OFF; -faithfulrelease turns it on (prints CAP_ROW firing rate):
+./run_gliding.sh -gpu -full -grid -faithfulrelease -seed 1 10000   # ON;  drop the flag for the OFF arm
+./run_phaseC_forcecap.sh 16         # the full OFF/ON A/B (n=16) → RUN_LOGS/2026-06-16_4biv_forcecap/
+python3 RUN_LOGS/2026-06-16_4biv_forcecap/report.py RUN_LOGS/2026-06-16_4biv_forcecap/phaseC.txt
 
 # v1ref (read-only worktree; outputs to a scratch dir — never written into v1ref):
 #   cd /tmp/scratch; BOA_RNG_SEED=<n> java @argfile … BoxOfActin -r -gpu -3js <dir> \

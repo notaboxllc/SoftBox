@@ -75,11 +75,17 @@ public final class MotorStore {
     //   stats[2m]   = # steps this motor began the step bound
     //   stats[2m+1] = # release events fired
     public final IntArray   stats;    // 2*nMotors
+    // §6.10 break-force release: capStats[m] = # times motor m released via the v1 force-cap branch
+    // (forceMag > myosinBreakForce). Measurement only; distinct from stats[2m+1] (catch-slip releases),
+    // mirroring v1's separate myoBreakForceRelease vs normalRelease counters.
+    public final IntArray   capStats; // nMotors
 
     // ---- Kernel scalar params ----
     // kinParams (float): [0]=kOff [1]=alphaCatch [2]=alphaSlip [3]=xCatch [4]=xSlip
     //   [5]=kT [6]=dt [7]=myoColTol(reach) [8]=alignTol [9]=forceDotFil(=0 this increment)
     //   [10]=refractorySteps = ceil(myoRebindTime/dt) (dt-correct rebind cooldown; 0 = none)
+    //   [11]=breakForceN (v1 myosinBreakForce·1e-12; the force-cap threshold in N — §6.10)
+    //   [12]=faithfulRelease enable (0 = off/production no-op, 1 = on; default off)
     public final FloatArray kinParams;
     // Per-motor rebind-cooldown counter: steps remaining in the post-release refractory. Set to
     // refractorySteps on release (boundSeg→FREE_COOLDOWN), decremented each step; at 0 → FREE_BINDABLE.
@@ -100,6 +106,8 @@ public final class MotorStore {
     public static final int NUC_NONE = 0, NUC_ATP = 1, NUC_ADPPI = 2, NUC_ADP = 3;
     public final IntArray   nucleotideState;   // nMotors
     public final FloatArray forceDotFil;       // nMotors (instantaneous cross-bridge load; catch-slip)
+    public final FloatArray forceMag;          // nMotors (cross-bridge spring MAGNITUDE |F8|, v1 MyoFilLink.forceMag;
+                                               //          the quantity v1's break-force release compares — §6.10)
     public final FloatArray forceDotHist;      // 10*nMotors (v1 ValueTracker(10); the ADP→NONE gate average)
     public final IntArray   forceDotPlace;     // nMotors (ring index)
     // nucParams (float): [0]=dt [1]=atpOnMyo [2]=onFilATP_ADPPi [3]=offFilATP_ADPPi
@@ -115,6 +123,7 @@ public final class MotorStore {
         jointParams = new FloatArray(11);
         nucleotideState = new IntArray(nMotors);   nucleotideState.init(NUC_NONE);
         forceDotFil   = new FloatArray(nMotors);   forceDotFil.init(0f);
+        forceMag      = new FloatArray(nMotors);   forceMag.init(0f);
         forceDotHist  = new FloatArray(10 * nMotors); forceDotHist.init(0f);
         forceDotPlace = new IntArray(nMotors);     forceDotPlace.init(0);
         nucParams = new FloatArray(8);
@@ -126,7 +135,8 @@ public final class MotorStore {
         boundSeg = new IntArray(nMotors);
         bindArc  = new FloatArray(nMotors);
         stats    = new IntArray(2 * nMotors);
-        kinParams = new FloatArray(11);
+        capStats = new IntArray(nMotors);          // §6.10 break-force release fires per motor (measurement only)
+        kinParams = new FloatArray(13);
         cooldown  = new IntArray(nMotors);
         counts    = new IntArray(4);
         publishParams = new IntArray(1);
@@ -135,6 +145,7 @@ public final class MotorStore {
         boundSeg.init(FREE_BINDABLE);
         bindArc.init(0f);
         stats.init(0);
+        capStats.init(0);
         cooldown.init(0);
     }
 
@@ -180,6 +191,17 @@ public final class MotorStore {
         // step count. ceil(myoRebindTime/dt) → 1 at dt=1e-5 and 1e-4 (every production dt), so this is a
         // bit-identical no-op there; only at dt≤1e-6 does it grow (the dt-study fix — see FINDINGS §6.3).
         kinParams.set(10, (float) Math.ceil(MYO_REBIND_TIME / dt));
+        // §6.10 break-force release: threshold = v1 Env.myosinBreakForce (12 pN) · 1e-12 → N.
+        // Disabled by default (kinParams[12]=0) ⇒ catchSlipRelease is bit-identical to HEAD until
+        // -faithfulrelease flips it on via setFaithfulRelease().
+        kinParams.set(11, 12.0e-12f);   // v1 Env.java:799 myosinBreakForce_init = 12.0 pN
+        kinParams.set(12, 0.0f);        // default OFF — production no-op
+    }
+    /** §6.10: enable v1's deterministic force-cap release (detach when forceMag > myosinBreakForce).
+     *  Default off; -faithfulrelease flips it on. pN ≤ 0 keeps the v1 default (12 pN). */
+    public void setFaithfulRelease(boolean on, double breakForcePN) {
+        if (breakForcePN > 0.0) kinParams.set(11, (float) (breakForcePN * 1.0e-12));
+        kinParams.set(12, on ? 1.0f : 0.0f);
     }
     public void setCounts(int stepCount, int runSeed, int nSeg) {
         counts.set(0, nMotors);

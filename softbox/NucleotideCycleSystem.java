@@ -74,18 +74,32 @@ public final class NucleotideCycleSystem {
      * cooldown via FREE_COOLDOWN. RNG keyed (slot, step, seed) with a distinct salt. stats[2m]=bound
      * steps, stats[2m+1]=releases. (Binding remains geometric, handled by BindingDetectionSystem.)
      */
-    public static void catchSlipRelease(IntArray boundSeg, FloatArray forceDotFil, IntArray cooldown,
-                                        IntArray stats, FloatArray kinParams, IntArray counts) {
+    public static void catchSlipRelease(IntArray boundSeg, FloatArray forceDotFil, FloatArray forceMag, IntArray cooldown,
+                                        IntArray stats, IntArray capStats, FloatArray kinParams, IntArray counts) {
         int nM = boundSeg.getSize();
         int step = counts.get(1), seed = counts.get(2);
         float kOff = kinParams.get(0), aCatch = kinParams.get(1), aSlip = kinParams.get(2);
         float xCatch = kinParams.get(3), xSlip = kinParams.get(4), kT = kinParams.get(5), dt = kinParams.get(6);
         int refractorySteps = (int) kinParams.get(10);   // ceil(myoRebindTime/dt); 0 = no refractory (-norefractory)
+        float breakForceN = kinParams.get(11);           // §6.10 v1 myosinBreakForce·1e-12 (N)
+        boolean capOn = kinParams.get(12) > 0.5f;         // §6.10 -faithfulrelease toggle (default off)
 
         for (@Parallel int m = 0; m < nM; m++) {
             int bs = boundSeg.get(m);
             if (bs >= 0) {
                 stats.set(2 * m, stats.get(2 * m) + 1);
+                // §6.10 — v1 MyoFilLink.ckRelease FIRST branch: deterministic force-cap release. If the
+                // cross-bridge spring magnitude exceeds myosinBreakForce, detach this step and SKIP the
+                // catch-slip draw (v1's `release(); return;`). v1's inRigor gate has no v2 analog (v2 has
+                // no rigor state) so the order collapses to break-force → catch-slip. The release target +
+                // refractory match the catch-slip path exactly (v1 routes both through the same release()).
+                // RNG is wang-hash-keyed per (motor,step), so pre-empting the draw perturbs no other motor.
+                if (capOn && forceMag.get(m) > breakForceN) {
+                    capStats.set(m, capStats.get(m) + 1);
+                    if (refractorySteps > 0) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                    continue;
+                }
                 float F = forceDotFil.get(m);
                 float rate = kOff * (aCatch * (float) Math.exp(-F * xCatch / kT) + aSlip * (float) Math.exp(F * xSlip / kT));
                 int h = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4D54);  // release salt
