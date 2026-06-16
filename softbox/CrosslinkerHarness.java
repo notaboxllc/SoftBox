@@ -50,6 +50,11 @@ public final class CrosslinkerHarness {
     static final double REST_LEN   = 0.0125;   // v1 FilLink.restLength (FilLink.java:28), µm
     static final double FRAC_MOVE  = 0.4;      // v1 FilLink.applyTransForce fracMove base (FilLink.java:208)
     static final int    FIL_MONO   = Constants.stdSegLength;   // 32 monomers/segment
+    // 5b Bell off-rate (v1 Env defaults): k_off = OFF_CONST + OFF_COEFF·exp(aveStrain·OFF_EXP)
+    static final double OFF_CONST  = 1.0;      // linkOffConst /s  (Env.java:679)
+    static final double OFF_COEFF  = 1.0;      // linkOffCoeff /s  (Env.java:680)
+    static final double OFF_EXP    = 2.0;      // linkOffExp       (Env.java:681)
+    static final int    SEED_5B    = 0x5B11;
 
     public static void main(String[] args) {
         double dt = 1.0e-5;
@@ -94,8 +99,16 @@ public final class CrosslinkerHarness {
             ok &= allOffEqualsHead(dt, 1500, true);
         }
 
+        // ===================== increment 5b: Bell-model unbinding (death half) =====================
+        System.out.println("\n========== increment 5b — Bell-model crosslinker unbinding ==========");
+        ok &= check1Arithmetic(dt);                       // GATE: P_break + EWMA arithmetic vs v1 formula
+        ok &= check3EmpiricalOffRate();                   // empirical break rate vs k_off·dt (frozen pose, population)
+        ok &= checkDeathInert(dt);                        // death self-write + one gather guard ⇒ inert (full pipeline)
+        ok &= allOffUnbind(dt, 1500, cpu);                // unbinding OFF ⇒ 5a path bit-identical
+        if (!cpu) ok &= checkCpuGpuBreak();               // RNG/break path bit-identical CPU↔GPU
+
         System.out.println();
-        System.out.println("=== CROSSLINKER 5a VALIDATION " + (ok ? "PASS" : "FAIL") + " ===");
+        System.out.println("=== CROSSLINKER 5a+5b VALIDATION " + (ok ? "PASS" : "FAIL") + " ===");
         if (!ok) {
             System.out.println("BAIL-OUT: a gate failed. Use -cpu to localize (force law vs CSR gather vs integration). Commit nothing.");
             System.exit(1);
@@ -109,14 +122,20 @@ public final class CrosslinkerHarness {
         IntArray segCountB, segOffsetsB, segIdxB;
         FloatArray bruteForceSum, bruteTorqueSum;
         boolean tasksOn;                  // crosslinker pipeline present in step/plan
+        boolean unbindOn;                 // 5b: Bell-unbinding system present (default off ⇒ 5a path)
         TornadoExecutionPlan plan;        // lazily built per scene (GPU)
         GridScheduler sched;              // captured at plan build (static sched is overwritten per buildPlan)
     }
 
+    static Scene buildScene(double dt, double brownScale, double sep, double shearX, int nLinks, boolean tasksOn) {
+        return buildScene(dt, brownScale, sep, shearX, nLinks, tasksOn, false);
+    }
+
     /** 2 single-segment filaments parallel along x; fil1 offset by (shearX, 0, sep) above fil0.
      *  nLinks crosslinkers (0 or 1) link fil0@mid ↔ fil1@mid; tasksOn includes the crosslinker
-     *  pipeline in the step/plan (so tasksOn with nLinks=0 = the empty-set no-op for all-OFF≡HEAD). */
-    static Scene buildScene(double dt, double brownScale, double sep, double shearX, int nLinks, boolean tasksOn) {
+     *  pipeline in the step/plan (so tasksOn with nLinks=0 = the empty-set no-op for all-OFF≡HEAD);
+     *  unbindOn adds the 5b Bell-unbinding system (default off ⇒ bit-identical 5a path). */
+    static Scene buildScene(double dt, double brownScale, double sep, double shearX, int nLinks, boolean tasksOn, boolean unbindOn) {
         Scene sc = new Scene();
         int nSeg = 2;
         double L = (FIL_MONO + 1) * Constants.actinMonoRadius;     // µm
@@ -137,6 +156,7 @@ public final class CrosslinkerHarness {
 
         CrosslinkerStore xl = new CrosslinkerStore(nLinks, nSeg);
         xl.setParams(REST_LEN, FRAC_MOVE, dt);
+        xl.setOffParams(OFF_CONST, OFF_COEFF, OFF_EXP, dt, REST_LEN);
         if (nLinks > 0) xl.setLink(0, 0, 0.5 * L, 1, 0.5 * L);   // midpoint ↔ midpoint
         xl.computeFilLinkCt();
 
@@ -144,7 +164,7 @@ public final class CrosslinkerHarness {
         sc.segCountB = new IntArray(nSeg); sc.segOffsetsB = new IntArray(nSeg + 1); sc.segIdxB = new IntArray(Math.max(1, nLinks));
         sc.bruteForceSum  = new FloatArray(3 * nSeg); sc.bruteForceSum.init(0f);
         sc.bruteTorqueSum = new FloatArray(3 * nSeg); sc.bruteTorqueSum.init(0f);
-        sc.fil = fil; sc.xl = xl; sc.tasksOn = tasksOn;
+        sc.fil = fil; sc.xl = xl; sc.tasksOn = tasksOn; sc.unbindOn = unbindOn;
         return sc;
     }
 
@@ -159,20 +179,26 @@ public final class CrosslinkerHarness {
         ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
         if (sc.tasksOn) {
+            // 5b: Bell unbinding runs BEFORE the force pass (v1 ckLinkBreak precedes applyTransForce's
+            // force) ⇒ a link breaking this step is FREE before the gather, contributing no force.
+            if (sc.unbindOn) {
+                CrosslinkerSystem.unbind(f.coord, f.uVec, f.end1, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2,
+                        xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams, xl.counts);
+            }
             CrosslinkerSystem.linkForces(f.coord, f.uVec, f.end1, f.bTransGam,
                     xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.filLinkCt, xl.xlinkData, xl.xlParams);
             // pass A: keyed by linkFilA (reuse the validated CrossBridge CSR template verbatim)
             CrossBridgeSystem.csrHistogram(xl.linkFilA, xl.counts, sc.segCountA);
             CrossBridgeSystem.csrScan(xl.counts, sc.segCountA, sc.segOffsetsA);
             CrossBridgeSystem.csrScatter(xl.linkFilA, xl.counts, sc.segOffsetsA, sc.segCountA, sc.segIdxA);
-            CrosslinkerSystem.segGatherA(sc.segOffsetsA, sc.segIdxA, xl.xlinkData, f.forceSum, f.torqueSum, xl.counts);
+            CrosslinkerSystem.segGatherA(sc.segOffsetsA, sc.segIdxA, xl.xlinkData, xl.linkState, f.forceSum, f.torqueSum, xl.counts);
             // pass B: keyed by linkFilB
             CrossBridgeSystem.csrHistogram(xl.linkFilB, xl.counts, sc.segCountB);
             CrossBridgeSystem.csrScan(xl.counts, sc.segCountB, sc.segOffsetsB);
             CrossBridgeSystem.csrScatter(xl.linkFilB, xl.counts, sc.segOffsetsB, sc.segCountB, sc.segIdxB);
-            CrosslinkerSystem.segGatherB(sc.segOffsetsB, sc.segIdxB, xl.xlinkData, f.forceSum, f.torqueSum, xl.counts);
+            CrosslinkerSystem.segGatherB(sc.segOffsetsB, sc.segIdxB, xl.xlinkData, xl.linkState, f.forceSum, f.torqueSum, xl.counts);
             // brute reference (gather-exactness gate)
-            CrosslinkerSystem.bruteGather(xl.linkFilA, xl.linkFilB, xl.xlinkData, sc.bruteForceSum, sc.bruteTorqueSum, xl.counts);
+            CrosslinkerSystem.bruteGather(xl.linkFilA, xl.linkFilB, xl.xlinkData, xl.linkState, sc.bruteForceSum, sc.bruteTorqueSum, xl.counts);
         }
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
@@ -186,35 +212,43 @@ public final class CrosslinkerHarness {
                     f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.bTransGam, f.bRotGam,
                     f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.brownTransScale, f.brownRotScale,
                     f.params,
-                    xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.filLinkCt, xl.xlinkData, xl.xlParams, xl.counts,
+                    xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.filLinkCt, xl.xlinkData, xl.xlParams,
+                    xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams,
                     sc.segCountA, sc.segOffsetsA, sc.segIdxA, sc.segCountB, sc.segOffsetsB, sc.segIdxB,
                     sc.bruteForceSum, sc.bruteTorqueSum)
-            .transferToDevice(DataTransferMode.EVERY_EXECUTION, f.counts)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, f.counts, xl.counts)
             .task("zero", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
             .task("brownian", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
         if (sc.tasksOn) {
+            if (sc.unbindOn) {
+                tg = tg.task("unbind", CrosslinkerSystem::unbind, f.coord, f.uVec, f.end1,
+                        xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams, xl.counts);
+            }
             tg = tg
                 .task("linkForces", CrosslinkerSystem::linkForces, f.coord, f.uVec, f.end1, f.bTransGam,
                         xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.filLinkCt, xl.xlinkData, xl.xlParams)
                 .task("histA", CrossBridgeSystem::csrHistogram, xl.linkFilA, xl.counts, sc.segCountA)
                 .task("scanA", CrossBridgeSystem::csrScan, xl.counts, sc.segCountA, sc.segOffsetsA)
                 .task("scatterA", CrossBridgeSystem::csrScatter, xl.linkFilA, xl.counts, sc.segOffsetsA, sc.segCountA, sc.segIdxA)
-                .task("gatherA", CrosslinkerSystem::segGatherA, sc.segOffsetsA, sc.segIdxA, xl.xlinkData, f.forceSum, f.torqueSum, xl.counts)
+                .task("gatherA", CrosslinkerSystem::segGatherA, sc.segOffsetsA, sc.segIdxA, xl.xlinkData, xl.linkState, f.forceSum, f.torqueSum, xl.counts)
                 .task("histB", CrossBridgeSystem::csrHistogram, xl.linkFilB, xl.counts, sc.segCountB)
                 .task("scanB", CrossBridgeSystem::csrScan, xl.counts, sc.segCountB, sc.segOffsetsB)
                 .task("scatterB", CrossBridgeSystem::csrScatter, xl.linkFilB, xl.counts, sc.segOffsetsB, sc.segCountB, sc.segIdxB)
-                .task("gatherB", CrosslinkerSystem::segGatherB, sc.segOffsetsB, sc.segIdxB, xl.xlinkData, f.forceSum, f.torqueSum, xl.counts)
-                .task("brute", CrosslinkerSystem::bruteGather, xl.linkFilA, xl.linkFilB, xl.xlinkData, sc.bruteForceSum, sc.bruteTorqueSum, xl.counts);
+                .task("gatherB", CrosslinkerSystem::segGatherB, sc.segOffsetsB, sc.segIdxB, xl.xlinkData, xl.linkState, f.forceSum, f.torqueSum, xl.counts)
+                .task("brute", CrosslinkerSystem::bruteGather, xl.linkFilA, xl.linkFilB, xl.xlinkData, xl.linkState, sc.bruteForceSum, sc.bruteTorqueSum, xl.counts);
         }
         tg = tg
             .task("integrate", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
             .task("derive", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
-            .transferToHost(DataTransferMode.UNDER_DEMAND, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, sc.bruteForceSum, sc.bruteTorqueSum);
+            .transferToHost(DataTransferMode.UNDER_DEMAND, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum,
+                    sc.bruteForceSum, sc.bruteTorqueSum, xl.linkState);
 
         int nSeg = f.n, nLinks = Math.max(1, sc.xl.nLinks);
         sched = new GridScheduler();
         addW("xlink.zero", pad(nSeg)); addW("xlink.brownian", pad(nSeg));
         if (sc.tasksOn) {
+            // RNG kernel (one wang-hash draw per link/step) ⇒ localWork=64 (addW) per CLAUDE.md gotcha.
+            if (sc.unbindOn) addW("xlink.unbind", pad(nLinks));
             addW("xlink.linkForces", pad(nLinks));
             addS("xlink.histA"); addS("xlink.scanA"); addS("xlink.scatterA"); addW("xlink.gatherA", pad(nSeg));
             addS("xlink.histB"); addS("xlink.scanB"); addS("xlink.scatterB"); addW("xlink.gatherB", pad(nSeg));
@@ -390,6 +424,223 @@ public final class CrosslinkerHarness {
         boolean ok = maxC < 1e-12 && maxU < 1e-12;
         System.out.printf("%n--- all-OFF≡HEAD (%s): crosslinker pipeline over nLinks=0 ≡ bare filament path, Brownian on (%d steps) ---%n", run, M);
         System.out.printf("  max|Δcoord|=%.3g µm   max|ΔuVec|=%.3g   %s%n", maxC, maxU, ok ? "(crosslinker code is a true no-op when off) ✓" : "*PERTURBS PRODUCTION*");
+        return ok;
+    }
+
+    // ================================================== 5b CHECK #1 (GATE): P_break + EWMA arithmetic
+    /** Deterministic, cheap. Validates v2's k_off/P_break expression + the 10-slot boxcar EWMA against
+     *  v1's ckLinkBreak + ValueTracker ARITHMETIC (analytic-oracle posture — same as 5a; the running-v1
+     *  oracle stays deferred to 5c). v2 stores strain as float32 (the kernel cast); v1 keeps double, so
+     *  the only gap is the float32 storage floor (≪0.1%). The kernel (CrosslinkerSystem.unbind) computes
+     *  this exact expression; CPU≡GPU (below) confirms it evaluates bit-identically on both runners. */
+    static boolean check1Arithmetic(double dt) {
+        System.out.println("\n--- CHECK #1 (GATE): P_break + EWMA(boxcar) arithmetic bit-exact vs v1 ckLinkBreak/ValueTracker ---");
+        boolean ok = true;
+
+        // (a) k_off / P_break vs v1's literal formula (Env defaults const=1, coeff=1, exp=2)
+        double[] strains = { 0.0, 0.25, 0.5, 1.0, 2.0 };
+        double worstA = 0;
+        System.out.printf("  (a) k_off(aveStrain) = const + coeff·exp(aveStrain·exp);  P_break = k_off·dt  (dt=%.1e)%n", dt);
+        System.out.printf("      %-10s %-16s %-16s %-16s %-10s%n", "aveStrain", "v2 k_off(/s)", "v1 k_off(/s)", "v2 P_break", "Δ%");
+        for (double s : strains) {
+            double v2k = OFF_CONST + OFF_COEFF * Math.exp(s * OFF_EXP);   // identical expression to the kernel
+            double v1k = 1.0 + 1.0 * Math.exp(s * 2.0);                   // v1 ckLinkBreak literal (Env defaults)
+            double v2p = v2k * dt, v1p = v1k * dt;
+            double pct = v1p > 0 ? 100.0 * Math.abs(v2p - v1p) / v1p : 0;
+            worstA = Math.max(worstA, pct);
+            System.out.printf("      %-10.3f %-16.8g %-16.8g %-16.8g %-10.4g%n", s, v2k, v1k, v2p, pct);
+        }
+        System.out.printf("      max Δ%% = %.4g  %s  (formula/constants faithful)%n", worstA, worstA < 0.1 ? "✓" : "*CHECK*");
+        ok &= worstA < 0.1;
+
+        // (b) EWMA step-for-step: feed a strain sequence; v2 boxcar (float storage, kernel logic) vs v1
+        //     ValueTracker(10) (double). Compare aveStrain + k_off each step → the float32 storage floor.
+        int W = CrosslinkerStore.STRAIN_WIN;
+        float[] v2hist = new float[W]; int v2place = 0;          // v2 kernel boxcar
+        double[] v1vals = new double[W]; int v1place = 0;        // v1 ValueTracker(10)
+        double worstB = 0; int steps = 40;
+        for (int t = 0; t < steps; t++) {
+            double strain = (t < 12) ? (0.8 * t / 12.0) : 0.8;  // ramp then hold (exercises fill + steady)
+            // v2 register (kernel): write at place, advance circularly
+            v2hist[v2place] = (float) strain; v2place = (v2place + 1) % W;
+            double v2ave = 0; for (int j = 0; j < W; j++) v2ave += v2hist[j]; v2ave /= W;
+            // v1 ValueTracker.registerValue (pre-check wrap) + averageVal (sum all / W)
+            if (v1place == W) v1place = 0;
+            v1vals[v1place] = strain; v1place++;
+            double v1ave = 0; for (int j = 0; j < W; j++) v1ave += v1vals[j]; v1ave /= W;
+            double v2k = OFF_CONST + OFF_COEFF * Math.exp(v2ave * OFF_EXP);
+            double v1k = 1.0 + 1.0 * Math.exp(v1ave * 2.0);
+            double pct = v1k > 0 ? 100.0 * Math.abs(v2k - v1k) / v1k : 0;
+            worstB = Math.max(worstB, pct);
+        }
+        System.out.printf("  (b) EWMA step-for-step (%d-step ramp+hold, %d-slot boxcar): max k_off Δ%% = %.4g  %s%n",
+                steps, W, worstB, worstB < 0.1 ? "(float32 storage floor) ✓" : "*CHECK*");
+        ok &= worstB < 0.1;
+        return ok;
+    }
+
+    // ================================================== 5b CHECK #3: empirical off-rate law
+    /** Frozen pose (no integration), a population of pre-placed links at a controlled strain; let the
+     *  boxcar fill, then measure the empirical break fraction/step vs k_off·dt. At strain 0 (k_off =
+     *  const+coeff = 2 /s) and ≥2 nonzero strains spanning the Bell exp. One run, population of links
+     *  (no seed ensemble needed — gated behind #1). CPU runner (the same kernel; CPU≡GPU proven below). */
+    static boolean check3EmpiricalOffRate() {
+        double dt = 1.0e-4;                 // v1 deltaT; P_break stays ≪1, more deaths/step ⇒ tighter CI
+        int N = 20000, warmup = 30, M = 3000;
+        double[] strains = { 0.0, 0.5, 1.0 };
+        System.out.println("\n--- CHECK #3: empirical off-rate vs k_off·dt (frozen pose, " + N + " links/strain, CPU) ---");
+        System.out.printf("  dt=%.1e, warmup=%d, measure=%d steps  (k_off = 1 + exp(2·aveStrain) /s)%n", dt, warmup, M);
+        System.out.printf("  %-8s %-12s %-14s %-14s %-10s %-8s%n", "strain", "k_off(/s)", "P_emp/step", "k_off·dt", "Δ%", "deaths");
+        boolean ok = true;
+        for (double s : strains) {
+            Scene sc = buildOffRateScene(s, N, dt);
+            double koff = OFF_CONST + OFF_COEFF * Math.exp(s * OFF_EXP);
+            double pExp = koff * dt;
+            int seed = SEED_5B + (int) Math.round(s * 1000);
+            long deaths = 0, activeSteps = 0;
+            int active = countActive(sc.xl);
+            for (int t = 0; t < warmup + M; t++) {
+                sc.xl.setCounts(t, seed);
+                CrosslinkerSystem.unbind(sc.fil.coord, sc.fil.uVec, sc.fil.end1, sc.xl.linkFilA, sc.xl.linkFilB,
+                        sc.xl.loc1, sc.xl.loc2, sc.xl.linkState, sc.xl.strainHist, sc.xl.strainPlace, sc.xl.offParams, sc.xl.counts);
+                int after = countActive(sc.xl);
+                if (t >= warmup) { deaths += (active - after); activeSteps += active; }
+                active = after;
+            }
+            double pEmp = activeSteps > 0 ? deaths / (double) activeSteps : 0;
+            double pct = pExp > 0 ? 100.0 * Math.abs(pEmp - pExp) / pExp : 0;
+            boolean okS = pct < 5.0;       // sampling error (~1/sqrt(deaths))
+            ok &= okS;
+            System.out.printf("  %-8.2f %-12.5g %-14.6g %-14.6g %-10.3g %-8d %s%n",
+                    s, koff, pEmp, pExp, pct, deaths, okS ? "✓" : "*OFF*");
+        }
+        return ok;
+    }
+
+    static int countActive(CrosslinkerStore xl) {
+        int c = 0; for (int k = 0; k < xl.nLinks; k++) if (xl.linkState.get(k) >= 0) c++; return c;
+    }
+
+    // ================================================== 5b DEATH→INERT (contract items 3–4, full pipeline)
+    /** A loaded link (nonzero force) breaks via the Bell draw, self-writes the sentinel, and thereafter
+     *  contributes ZERO force/torque through the ONE gather guard — verified in the full force pipeline
+     *  (linkForces → CSR → gather), with gather==brute preserved. CPU runner (deterministic). */
+    static boolean checkDeathInert(double dt) {
+        System.out.println("\n--- DEATH→INERT: broken link self-writes sentinel ⇒ ZERO gathered force (one guard); full pipeline ---");
+        Scene sc = buildScene(dt, 0.0, 2.0 * REST_LEN, 0.0, 1, true, true);   // 1 link, strain 1, Brownian off, unbind ON
+        sc.xl.setOffParams(8000.0, 0.0, 0.0, dt, REST_LEN);                   // boosted const off-rate ⇒ breaks in a few steps
+        double forceWhileActive = 0; int deadAt = -1;
+        for (int t = 0; t < 2000; t++) {
+            sc.xl.setCounts(t, SEED_5B);
+            cpuStep(sc);
+            if (sc.xl.linkState.get(0) >= 0) forceWhileActive = Math.max(forceWhileActive, maxAbs(sc.fil.forceSum));
+            else { deadAt = t; break; }
+        }
+        boolean died = deadAt >= 0 && sc.xl.linkState.get(0) == CrosslinkerStore.LINK_FREE;
+        // one more step after death: gathered force must be exactly 0, and gather==brute (both 0)
+        sc.xl.setCounts(deadAt + 1, SEED_5B);
+        cpuStep(sc);
+        double fAfter = maxAbs(sc.fil.forceSum), bAfter = maxAbs(sc.bruteForceSum);
+        double gVsBrute = maxAbsDiff(sc.fil.forceSum, sc.bruteForceSum);
+        boolean ok = died && forceWhileActive > 0 && fAfter == 0.0 && bAfter == 0.0 && gVsBrute == 0.0;
+        System.out.printf("  link broke at step %d; |force| while active = %.3g N → after death: |gathered|=%.3g, |brute|=%.3g, gather−brute=%.3g  %s%n",
+                deadAt, forceWhileActive, fAfter, bAfter, gVsBrute, ok ? "(inert, equal-opposite gone) ✓" : "*STILL CONTRIBUTES*");
+        return ok;
+    }
+
+    static double maxAbs(FloatArray a) { double m = 0; for (int i = 0; i < a.getSize(); i++) m = Math.max(m, Math.abs(a.get(i))); return m; }
+
+    /** A frozen-pose population: 2 filaments at z-separation restLength·(1+strain) so every midpoint↔
+     *  midpoint link has exactly `strain`; N pre-placed ACTIVE links between them. unbindOn. */
+    static Scene buildOffRateScene(double strain, int N, double dt) {
+        Scene sc = new Scene();
+        int nSeg = 2;
+        double L = (FIL_MONO + 1) * Constants.actinMonoRadius;
+        FilamentStore fil = new FilamentStore(nSeg);
+        for (int s = 0; s < nSeg; s++) {
+            fil.monomerCount.set(s, FIL_MONO);
+            fil.setUVec(s, 1f, 0f, 0f); fil.setYVec(s, 0f, 1f, 0f);
+            fil.brownTransScale.set(s, 0f); fil.brownRotScale.set(s, 0f);
+        }
+        fil.setCoord(0, 0f, 0f, 0f);
+        fil.setCoord(1, 0f, 0f, (float) (REST_LEN * (1.0 + strain)));   // mid↔mid separation ⇒ strain
+        DragTensorSystem.run(fil);
+        fil.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt));
+        fil.setCounts(0, 0);
+        DerivedGeometrySystem.derive(fil.coord, fil.uVec, fil.yVec, fil.zVec, fil.end1, fil.end2, fil.segLength, fil.counts);
+        CrosslinkerStore xl = new CrosslinkerStore(N, nSeg);
+        xl.setParams(REST_LEN, FRAC_MOVE, dt);
+        xl.setOffParams(OFF_CONST, OFF_COEFF, OFF_EXP, dt, REST_LEN);
+        for (int k = 0; k < N; k++) xl.setLink(k, 0, 0.5 * L, 1, 0.5 * L);
+        xl.computeFilLinkCt();
+        sc.fil = fil; sc.xl = xl; sc.tasksOn = true; sc.unbindOn = true;
+        return sc;
+    }
+
+    // ================================================== 5b CPU≡GPU break path (bit-identical)
+    /** The wang-hash break draw must be bit-identical on both runners ⇒ the SAME links die. Frozen pose,
+     *  population; compare linkState after M steps. */
+    static boolean checkCpuGpuBreak() {
+        System.out.println("\n--- CPU≡GPU: break path (which links die) bit-identical (wang-hash, no KernelContext) ---");
+        double dt = 1.0e-4; int N = 4000, M = 400; double s = 0.8;
+        Scene g = buildOffRateScene(s, N, dt), c = buildOffRateScene(s, N, dt);
+        TornadoExecutionPlan plan = buildUnbindPlan(g); GridScheduler sg = sched;
+        TornadoExecutionResult r = null;
+        for (int t = 0; t < M; t++) { g.xl.setCounts(t, SEED_5B); r = plan.withGridScheduler(sg).execute(); }
+        r.transferToHost(g.xl.linkState);
+        for (int t = 0; t < M; t++) { c.xl.setCounts(t, SEED_5B); CrosslinkerSystem.unbind(c.fil.coord, c.fil.uVec, c.fil.end1,
+                c.xl.linkFilA, c.xl.linkFilB, c.xl.loc1, c.xl.loc2, c.xl.linkState, c.xl.strainHist, c.xl.strainPlace, c.xl.offParams, c.xl.counts); }
+        int diff = 0, gDead = 0, cDead = 0;
+        for (int k = 0; k < N; k++) {
+            boolean gd = g.xl.linkState.get(k) < 0, cd = c.xl.linkState.get(k) < 0;
+            if (gd) gDead++; if (cd) cDead++; if (gd != cd) diff++;
+        }
+        boolean ok = diff == 0;
+        System.out.printf("  after %d steps: GPU dead=%d, CPU dead=%d, mismatched links=%d  %s%n",
+                M, gDead, cDead, diff, ok ? "(bit-identical) ✓" : "*DIFFERS*");
+        return ok;
+    }
+
+    /** Minimal GPU plan: unbind-only over a frozen pose (no force/gather/integration). RNG kernel ⇒
+     *  localWork=64 (addW) per the CLAUDE.md gotcha. */
+    static TornadoExecutionPlan buildUnbindPlan(Scene sc) {
+        FilamentStore f = sc.fil; CrosslinkerStore xl = sc.xl;
+        TaskGraph tg = new TaskGraph("xlinkUnbind")
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION, f.coord, f.uVec, f.end1,
+                    xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, xl.counts)
+            .task("unbind", CrosslinkerSystem::unbind, f.coord, f.uVec, f.end1, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2,
+                    xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams, xl.counts)
+            .transferToHost(DataTransferMode.UNDER_DEMAND, xl.linkState, xl.strainHist, xl.strainPlace);
+        sched = new GridScheduler();
+        addW("xlinkUnbind.unbind", pad(xl.nLinks));
+        return new TornadoExecutionPlan(tg.snapshot());
+    }
+
+    // ================================================== 5b all-OFF ≡ HEAD (unbinding off)
+    /** With unbinding OFF (default), the 5b-capable scene evolves bit-identically to the 5a path
+     *  (the unbind task is omitted; the gather guard is a no-op with all links ACTIVE). Confirms the
+     *  lifecycle field + guard do not disturb the proven 5a force/gather path. */
+    static boolean allOffUnbind(double dt, int M, boolean useCpu) {
+        double sep = REST_LEN + 0.25 * REST_LEN, shear = 0.08 * REST_LEN;
+        Scene off  = buildScene(dt, Constants.BTransCoeff, sep, shear, 1, true, false);  // 5b build, unbinding OFF
+        Scene head = buildScene(dt, Constants.BTransCoeff, sep, shear, 1, true);         // 5a path (6-arg)
+        if (useCpu) {
+            for (int t = 0; t < M; t++) { off.fil.setCounts(t, 0x5A11);  cpuStep(off);  }
+            for (int t = 0; t < M; t++) { head.fil.setCounts(t, 0x5A11); cpuStep(head); }
+        } else {
+            TornadoExecutionPlan po = buildPlan(off);  GridScheduler so = sched; TornadoExecutionResult ro = null;
+            for (int t = 0; t < M; t++) { off.fil.setCounts(t, 0x5A11);  ro = po.withGridScheduler(so).execute(); }
+            ro.transferToHost(off.fil.coord, off.fil.uVec);
+            TornadoExecutionPlan ph = buildPlan(head); GridScheduler sh = sched; TornadoExecutionResult rh = null;
+            for (int t = 0; t < M; t++) { head.fil.setCounts(t, 0x5A11); rh = ph.withGridScheduler(sh).execute(); }
+            rh.transferToHost(head.fil.coord, head.fil.uVec);
+        }
+        double maxC = maxAbsDiff(off.fil.coord, head.fil.coord);
+        double maxU = maxAbsDiff(off.fil.uVec, head.fil.uVec);
+        boolean ok = maxC < 1e-12 && maxU < 1e-12;
+        System.out.printf("%n--- all-OFF≡HEAD (5b, %s): unbinding OFF ≡ 5a path, Brownian on (%d steps) ---%n", useCpu ? "CPU" : "GPU", M);
+        System.out.printf("  max|Δcoord|=%.3g µm   max|ΔuVec|=%.3g   %s%n", maxC, maxU, ok ? "(lifecycle field + guard are no-ops when unbinding off) ✓" : "*PERTURBS 5a*");
         return ok;
     }
 

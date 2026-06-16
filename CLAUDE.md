@@ -464,5 +464,27 @@ gather==brute bit-identical; **CPU≡GPU** (force+gather bit-identical, pose flo
 ```
 **5a flag for the planner:** v1 `getLinkCt` accumulates per-step (order/thread-dependent for
 multi-link-per-segment); 5a uses the total static count (=1 ⇒ `fracMove`=0.4 exact). Multi-link-per-segment
-`fracMove` faithfulness is a 5c (formation) concern. Next: 5b (Bell strain unbinding `ckLinkBreak`), 5c
-(formation + broad-phase segment↔segment + the `STORE_CROSSLINKER` publisher), torsion, 5d (Arp2/3).
+`fracMove` faithfulness is a 5c (formation) concern.
+
+**Increment 5b — DONE (2026-06-16).** Bell-model crosslinker unbinding + the link-lifecycle **death half**,
+on 5a's pre-placed scene. `CrosslinkerSystem.unbind` (faithful v1 `FilLink` strain-register + `ckLinkBreak`
+port): a 10-slot **boxcar** strain track (v1 `ValueTracker(10)` — NOT an exponential EWMA;
+`strainHist`/`strainPlace` ring), `k_off = linkOffConst + linkOffCoeff·exp(aveStrain·linkOffExp)`,
+`P_break = k_off·dt`, drawn via the reused wang-hash keyed `(link,step,seed)` salt `0x584C4B42` ("XLKB",
+distinct from the motor salts) — bit-identical CPU↔GPU, no atomics/KernelContext, `localWork=64`. Lifecycle =
+ONE authoritative sentinel field `CrosslinkerStore.linkState` (`>=0` ACTIVE / `<0` FREE-DEAD, mirroring
+motor `boundSeg`); **death = self-write** the sentinel; the 5a gather gained **exactly one** `if(active)`
+guard (`segGatherA`/`B` + the `bruteGather` reference) — the CSR template stays reused VERBATIM. Default-off
+(`unbindOn`) ⇒ all-OFF≡HEAD. Validated vs `BoA-v1ref` (analytic-oracle): #1 P_break+EWMA arithmetic
+**Δ=0.000% / 2.6e-6%** (gate); #3 empirical off-rate matches `k_off·dt` at strain 0/0.5/1
+(**Δ 1.37%/0.030%/0.0054%**, sampling-limited); death→inert (gathered force exactly 0 after a break, full
+pipeline); **CPU≡GPU break path bit-identical** (854=854 dead, 0 mismatched); all-OFF≡HEAD (unbind off ≡
+5a, bit-identical). `BoA-v1ref` byte-clean; production byte-unchanged. New: `CrosslinkerSystem.unbind` +
+lifecycle/strain fields in `CrosslinkerStore` + 5b checks in `CrosslinkerHarness`. Report:
+`INC5A_CROSSLINKER_FINDINGS.md` (§5b appended); JOURNAL 2026-06-16 (5b).
+**5b flag for the planner:** the **running-v1 oracle stays DEFERRED to 5c** (formation steady-state — link-count
+plateau / formation≈dissolution — is where a running v1 bundle is genuinely needed; 5a/5b were analytic-oracle).
+`k_off(strain 0) = const+coeff = 2 /s` (not `linkOffConst` alone). fracMove-on-death deferred to 5c.
+
+Next: 5c (formation/birth + broad-phase segment↔segment FIL×FIL candidates + free-slot allocation + the
+`STORE_CROSSLINKER` publisher + the running-v1 steady-state oracle), torsion (`applyTorsionForce`), 5d (Arp2/3).

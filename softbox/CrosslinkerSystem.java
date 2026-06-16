@@ -123,13 +123,15 @@ public final class CrosslinkerSystem {
      *  crosslinkers keyed to it (linkFilA == s) into its own forceSum/torqueSum (+=).
      *  CSR built by the reused CrossBridgeSystem.csr* keyed by linkFilA. */
     public static void segGatherA(IntArray segOffsets, IntArray segLinkIdx, FloatArray xlinkData,
-                                  FloatArray filForceSum, FloatArray filTorqueSum, IntArray counts) {
+                                  IntArray linkState, FloatArray filForceSum, FloatArray filTorqueSum, IntArray counts) {
         int nSeg = counts.get(3);
         for (@Parallel int s = 0; s < nSeg; s++) {
             double fx = 0, fy = 0, fz = 0, tx = 0, ty = 0, tz = 0;
             int start = segOffsets.get(s), end = segOffsets.get(s + 1);
             for (int k = start; k < end; k++) {
-                int d = segLinkIdx.get(k) * CrosslinkerStore.STRIDE;
+                int li = segLinkIdx.get(k);
+                if (linkState.get(li) < 0) continue;     // 5b lifecycle guard: dead/free links contribute 0
+                int d = li * CrosslinkerStore.STRIDE;
                 fx += xlinkData.get(d);     fy += xlinkData.get(d + 1); fz += xlinkData.get(d + 2);
                 tx += xlinkData.get(d + 3); ty += xlinkData.get(d + 4); tz += xlinkData.get(d + 5);
             }
@@ -145,13 +147,15 @@ public final class CrosslinkerSystem {
     /** Pass-B gather: each filament sums the B-side reactions (xlinkData[6..11]) of the
      *  crosslinkers keyed to it (linkFilB == s) into the SAME forceSum/torqueSum (+=). */
     public static void segGatherB(IntArray segOffsets, IntArray segLinkIdx, FloatArray xlinkData,
-                                  FloatArray filForceSum, FloatArray filTorqueSum, IntArray counts) {
+                                  IntArray linkState, FloatArray filForceSum, FloatArray filTorqueSum, IntArray counts) {
         int nSeg = counts.get(3);
         for (@Parallel int s = 0; s < nSeg; s++) {
             double fx = 0, fy = 0, fz = 0, tx = 0, ty = 0, tz = 0;
             int start = segOffsets.get(s), end = segOffsets.get(s + 1);
             for (int k = start; k < end; k++) {
-                int d = segLinkIdx.get(k) * CrosslinkerStore.STRIDE;
+                int li = segLinkIdx.get(k);
+                if (linkState.get(li) < 0) continue;     // 5b lifecycle guard: dead/free links contribute 0
+                int d = li * CrosslinkerStore.STRIDE;
                 fx += xlinkData.get(d + 6); fy += xlinkData.get(d + 7);  fz += xlinkData.get(d + 8);
                 tx += xlinkData.get(d + 9); ty += xlinkData.get(d + 10); tz += xlinkData.get(d + 11);
             }
@@ -168,11 +172,12 @@ public final class CrosslinkerSystem {
      *  (A-side where linkFilA==s, B-side where linkFilB==s). Writes (set) the reference for
      *  the gather-exactness gate. */
     public static void bruteGather(IntArray linkFilA, IntArray linkFilB, FloatArray xlinkData,
-                                   FloatArray bForceSum, FloatArray bTorqueSum, IntArray counts) {
+                                   IntArray linkState, FloatArray bForceSum, FloatArray bTorqueSum, IntArray counts) {
         int nSeg = counts.get(3), nLinks = counts.get(0);
         for (@Parallel int s = 0; s < nSeg; s++) {
             double fx = 0, fy = 0, fz = 0, tx = 0, ty = 0, tz = 0;
             for (int k = 0; k < nLinks; k++) {
+                if (linkState.get(k) < 0) continue;      // 5b lifecycle guard (matches the gather)
                 int d = k * CrosslinkerStore.STRIDE;
                 if (linkFilA.get(k) == s) {
                     fx += xlinkData.get(d);     fy += xlinkData.get(d + 1); fz += xlinkData.get(d + 2);
@@ -185,6 +190,89 @@ public final class CrosslinkerSystem {
             }
             bForceSum.set(s, (float) fx); bForceSum.set(nSeg + s, (float) fy); bForceSum.set(2 * nSeg + s, (float) fz);
             bTorqueSum.set(s, (float) tx); bTorqueSum.set(nSeg + s, (float) ty); bTorqueSum.set(2 * nSeg + s, (float) tz);
+        }
+    }
+
+    // ===================== 5b: Bell-model unbinding + EWMA(boxcar) strain track =====================
+
+    /** Wang hash — the reused v1 device-RNG primitive (VERBATIM BrownianForceSystem/NucleotideCycleSystem).
+     *  Integer arithmetic ⇒ bit-identical CPU↔GPU, race-free (no shared state, no atomics, no KernelContext). */
+    private static int wangHash(int seed) {
+        seed = (seed ^ 61) ^ (seed >>> 16);
+        seed *= 9; seed = seed ^ (seed >>> 4);
+        seed *= 0x27d4eb2d; seed = seed ^ (seed >>> 15);
+        return seed;
+    }
+
+    /**
+     * Bell-model unbinding (faithful port of v1 FilLink: applyTransForce strain register +
+     * ckLinkBreak — FilLink.java:200-203/182-191), the DEATH half of the link lifecycle.
+     *
+     * Per ACTIVE link, exactly mirroring v1's per-step order (registerValue → averageVal → P_break):
+     *   1. strain = max(linkLength − restLength, 0) / restLength            (v1 applyTransForce:200-202)
+     *   2. push strain into the 10-slot BOXCAR ring (v1 ValueTracker.registerValue, circular write)
+     *   3. aveStrain = sum(all 10)/10                                       (v1 ValueTracker.averageVal)
+     *   4. k_off = linkOffConst + linkOffCoeff·exp(aveStrain·linkOffExp);  P_break = k_off·dt  (ckLinkBreak)
+     *   5. draw u via wang-hash per (link, step, seed); if u < P_break ⇒ DEATH self-write (sentinel).
+     *
+     * v1 calls ckLinkBreak BEFORE applying force (returns on break ⇒ no force that step). Mirrored by
+     * running `unbind` BEFORE `linkForces` in the step: a link breaking this step is FREE before the
+     * force pass, so the gather guard drops it ⇒ no force this step. A dead link is skipped entirely
+     * (no strain update, no break draw, no force) — it is inert. RNG salt 0x584C4B42 ("XLKB"), distinct
+     * from the motor salts (NUC 0x4E55 / refractory 0x52465241 / release 0x4D54).
+     *
+     * One RNG draw per link per step ⇒ a WorkerGrid1D localWork=64 is required for this kernel
+     * (CLAUDE.md RNG gotcha; the harness sets it).
+     */
+    public static void unbind(
+            FloatArray filCoord, FloatArray filUVec, FloatArray filEnd1,
+            IntArray linkFilA, IntArray linkFilB, FloatArray loc1, FloatArray loc2,
+            IntArray linkState, FloatArray strainHist, IntArray strainPlace,
+            FloatArray offParams, IntArray counts) {
+
+        int nSeg = filCoord.getSize() / 3;
+        int nLinks = counts.get(0);
+        int step = counts.get(1), seed = counts.get(2);
+        double offConst = offParams.get(0), offCoeff = offParams.get(1), offExp = offParams.get(2);
+        double dt = offParams.get(3), restLength = offParams.get(4);
+        int W = CrosslinkerStore.STRAIN_WIN;
+
+        for (@Parallel int k = 0; k < nLinks; k++) {
+            if (linkState.get(k) < 0) continue;     // FREE/DEAD: inert (no strain update, no break)
+
+            int a = linkFilA.get(k), b = linkFilB.get(k);
+            double l1 = loc1.get(k);
+            double uax = filUVec.get(a), uay = filUVec.get(nSeg + a), uaz = filUVec.get(2 * nSeg + a);
+            double p1x = filEnd1.get(a) + l1 * uax;
+            double p1y = filEnd1.get(nSeg + a) + l1 * uay;
+            double p1z = filEnd1.get(2 * nSeg + a) + l1 * uaz;
+            double l2 = loc2.get(k);
+            double ubx = filUVec.get(b), uby = filUVec.get(nSeg + b), ubz = filUVec.get(2 * nSeg + b);
+            double p2x = filEnd1.get(b) + l2 * ubx;
+            double p2y = filEnd1.get(nSeg + b) + l2 * uby;
+            double p2z = filEnd1.get(2 * nSeg + b) + l2 * ubz;
+            double lvx = p2x - p1x, lvy = p2y - p1y, lvz = p2z - p1z;
+            double linkLength = Math.sqrt(lvx * lvx + lvy * lvy + lvz * lvz);
+            double stretch = linkLength - restLength;
+            if (stretch < 0.0) stretch = 0.0;
+            double strain = stretch / restLength;
+
+            // boxcar register (v1 ValueTracker.registerValue: write at place, advance circularly)
+            int base = k * W;
+            int p = strainPlace.get(k);
+            strainHist.set(base + p, (float) strain);
+            strainPlace.set(k, (p + 1) % W);
+
+            // averageVal: sum all W slots / W (v1 divides by stepsToTrack always; initial zeros included)
+            double ave = 0.0;
+            for (int j = 0; j < W; j++) ave += strainHist.get(base + j);
+            ave /= W;
+
+            double kOff = offConst + offCoeff * Math.exp(ave * offExp);
+            double pBreak = kOff * dt;
+            int h = wangHash((k * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x584C4B42);  // XLKB break salt
+            float u = (h >>> 1) / 2147483647.0f;
+            if (u < pBreak) linkState.set(k, CrosslinkerStore.LINK_FREE);   // death = self-write sentinel
         }
     }
 }

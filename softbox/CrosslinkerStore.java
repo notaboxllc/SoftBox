@@ -46,27 +46,61 @@ public final class CrosslinkerStore {
     public final IntArray   filLinkCt;
 
     // ---- per-link reaction scratch (self-written by CrosslinkerSystem.linkForces) ----
-    public final FloatArray xlinkData;  // nLinks * STRIDE
+    public final FloatArray xlinkData;  // capacity * STRIDE
+
+    // ---- LIFECYCLE: one authoritative sentinel-encoded per-slot field (5b death half; 5c birth).
+    //      Mirrors motor boundSeg: >=0 = ACTIVE, <0 = sentinel (FREE/DEAD). This single field is the
+    //      source of lifecycle truth (not scattered booleans). 5b sets ACTIVE→FREE on a Bell break
+    //      (self-write, no compaction). 5c (formation) will allocate FREE→ACTIVE on the SAME field;
+    //      it may subdivide the negative space (e.g. a distinct -2) like boundSeg's FREE_COOLDOWN
+    //      without disturbing the >=0=ACTIVE contract. ----
+    public static final int LINK_ACTIVE = 0;    // >=0 ⇒ active (5b uses the constant 0 marker)
+    public static final int LINK_FREE   = -1;   // <0  ⇒ free/dead (inert; allocatable in 5c)
+    public final IntArray   linkState;          // capacity
+
+    // ---- Bell strain track: v1 ValueTracker(filLinkStrainToAve=10) — a 10-slot BOXCAR (sliding-
+    //      window) circular buffer, NOT an exponential EWMA. averageVal = sum(all 10)/10 always
+    //      (initial zeros included until filled). Mirrors the proven forceDotHist/forceDotPlace ring. ----
+    public static final int STRAIN_WIN = 10;    // v1 Env.filLinkStrainToAve
+    public final FloatArray strainHist;         // capacity * STRAIN_WIN, init 0 (v1 vals[] init 0)
+    public final IntArray   strainPlace;        // capacity circular pointer, init 0
 
     // ---- kernel scalar params: [0]=restLength(µm) [1]=fracMoveBase(0.4) [2]=dt ----
     public final FloatArray xlParams;
 
-    // ---- counts for the reused CrossBridge CSR template: [0]=nLinks, [3]=nSeg ----
+    // ---- Bell off-rate params (5b): [0]=linkOffConst [1]=linkOffCoeff [2]=linkOffExp [3]=dt
+    //      [4]=restLength(µm).  k_off = const + coeff·exp(aveStrain·exp);  P_break = k_off·dt. ----
+    public final FloatArray offParams;
+
+    // ---- counts for the reused CrossBridge CSR template + the break RNG:
+    //      [0]=capacity (nM for csr*), [1]=step, [2]=seed, [3]=nSeg.  csr* read only [0]/[3];
+    //      [1]/[2] feed the wang-hash — so the CSR template is reused VERBATIM. ----
     public final IntArray   counts;
 
     public CrosslinkerStore(int nLinks, int nSeg) {
-        this.nLinks = nLinks;
-        linkFilA  = new IntArray(Math.max(1, nLinks));
-        linkFilB  = new IntArray(Math.max(1, nLinks));
-        loc1      = new FloatArray(Math.max(1, nLinks));
-        loc2      = new FloatArray(Math.max(1, nLinks));
+        this.nLinks = nLinks;                       // = pool CAPACITY C (the SoA size + CSR loop bound)
+        int cap = Math.max(1, nLinks);
+        linkFilA  = new IntArray(cap);
+        linkFilB  = new IntArray(cap);
+        loc1      = new FloatArray(cap);
+        loc2      = new FloatArray(cap);
         filLinkCt = new IntArray(nSeg);
-        xlinkData = new FloatArray(Math.max(1, nLinks) * STRIDE);
+        xlinkData = new FloatArray(cap * STRIDE);
         xlinkData.init(0f);
+        linkState   = new IntArray(cap);
+        strainHist  = new FloatArray(cap * STRAIN_WIN);
+        strainPlace = new IntArray(cap);
+        offParams = new FloatArray(5);
         xlParams  = new FloatArray(3);
         counts    = new IntArray(4);
         counts.set(0, nLinks);
         counts.set(3, nSeg);
+        // unused slots start FREE with a negative key ⇒ skipped by the CSR (key<0) and the gather guard.
+        linkState.init(LINK_FREE);
+        linkFilA.init(-1);
+        linkFilB.init(-1);
+        strainHist.init(0f);
+        strainPlace.init(0);
     }
 
     /** restLength = 0.0125 µm (v1 FilLink.java:28), fracMoveBase = 0.4 (v1 FilLink.java:208). */
@@ -76,13 +110,30 @@ public final class CrosslinkerStore {
         xlParams.set(2, (float) dt);
     }
 
-    /** Pre-place a static crosslinker (5a). filA/filB are integer filament slots (distinct,
-     *  per v1's filID!=filID exclusion); loc1/loc2 are microns along each segment from end1. */
+    /** Bell off-rate (5b): v1 Env defaults linkOffConst=1 /s, linkOffCoeff=1 /s, linkOffExp=2
+     *  (Env.java:679/680/681). k_off(aveStrain) = const + coeff·exp(aveStrain·exp). */
+    public void setOffParams(double linkOffConst, double linkOffCoeff, double linkOffExp, double dt, double restLength) {
+        offParams.set(0, (float) linkOffConst);
+        offParams.set(1, (float) linkOffCoeff);
+        offParams.set(2, (float) linkOffExp);
+        offParams.set(3, (float) dt);
+        offParams.set(4, (float) restLength);
+    }
+
+    /** Per-step RNG keys for the wang-hash break draw (mirrors MotorStore.setCounts step/seed). */
+    public void setCounts(int step, int seed) {
+        counts.set(1, step);
+        counts.set(2, seed);
+    }
+
+    /** Pre-place a static crosslinker (5a) and mark it ACTIVE (5b lifecycle). filA/filB are integer
+     *  filament slots (distinct, per v1's filID!=filID exclusion); loc1/loc2 are microns from end1. */
     public void setLink(int k, int filA, double loc1Um, int filB, double loc2Um) {
         linkFilA.set(k, filA);
         linkFilB.set(k, filB);
         loc1.set(k, (float) loc1Um);
         loc2.set(k, (float) loc2Um);
+        linkState.set(k, LINK_ACTIVE);
     }
 
     /** Compute the static per-filament link count (v1 getLinkCt) once: total links touching
@@ -94,6 +145,7 @@ public final class CrosslinkerStore {
     public void computeFilLinkCt() {
         filLinkCt.init(0);
         for (int k = 0; k < nLinks; k++) {
+            if (linkState.get(k) < 0) continue;     // skip FREE/DEAD slots (key would be -1)
             int a = linkFilA.get(k), b = linkFilB.get(k);
             filLinkCt.set(a, filLinkCt.get(a) + 1);
             filLinkCt.set(b, filLinkCt.get(b) + 1);

@@ -1,5 +1,8 @@
 # Increment 5a — passive crosslinker static spring + double-ended fil↔fil gather (findings)
 
+> **Increment 5b (Bell-model unbinding + link-lifecycle death half) is appended at the bottom of this
+> file** — chose to §-extend the inc-5 findings rather than spawn `INC5B_*`.
+
 **Status: DONE / green.** The crosslinker store + static translational spring force law + the new
 double-ended filament↔filament gather are built, wired into both runners (CPU sequential + GPU
 TaskGraph), and validated by the two static port-equivalence checks. `BoA-v1ref` byte-clean; production
@@ -171,3 +174,106 @@ planner wants an independent run-time number.
   consistent with `linkLength` in µm. Ported as 0.0125 µm.
 - Next: 5b (Bell strain unbinding `ckLinkBreak`), 5c (formation + broad-phase segment↔segment +
   `STORE_CROSSLINKER` publisher), torsion (`applyTorsionForce`), 5d (Arp2/3).
+
+---
+
+# Increment 5b — Bell-model crosslinker unbinding + link-lifecycle (death half)
+
+**Status: DONE / green.** On 5a's pre-placed-link scene: the EWMA(boxcar) strain track + the Bell
+off-rate + per-step stochastic break (wang-hash) + the lifecycle DEATH half (sentinel self-write) + the
+one `if(active)` gather guard. Wired into both runners. `BoA-v1ref` byte-clean; production
+(`GlidingHarness`) byte-unchanged. (Same harness/script as 5a — `run_xlink.sh` now runs 5a **and** 5b.)
+
+Scope is **death only**. OUT (→ 5c): formation / `checkToLink` / broad-phase FIL×FIL candidates /
+free-slot allocation / stream-compaction. Links remain pre-placed; 5b only lets them *die*.
+
+## 1. The lifecycle contract (items 1–4 implemented; item 5 = 5c)
+- **Pool = fixed-capacity SoA** — `CrosslinkerStore(capacity C, nSeg)`. The SoA arrays + the CSR loop
+  bound are `counts[0]=C`. (For the 5b scenes C = #pre-placed; the field is shaped so 5c's
+  formation/allocation extends it with no rework.)
+- **One authoritative sentinel-encoded lifecycle field** — `IntArray linkState`, mirroring motor
+  `boundSeg`: `>=0` = `LINK_ACTIVE`, `<0` = `LINK_FREE` (free/dead, inert, allocatable in 5c). Single
+  source of lifecycle truth (no scattered booleans). Unused capacity slots start `LINK_FREE` with a
+  negative key (`linkFilA=-1`) so the CSR skips them (key<0) AND the gather guard skips them.
+- **Exactly one `if(active)` gather guard** — `segGatherA`/`segGatherB` each gained one branch
+  (`if (linkState[li] < 0) continue;`); `bruteGather` gained the matching guard (it is the reference).
+  The CSR template (`CrossBridgeSystem.csrHistogram/Scan/Scatter`) stays **reused verbatim** — dead
+  links keep their key ≥0 so they remain in the CSR index; the gather guard is what drops their payload.
+  This was the **only** change to the proven 5a gather (no pause/report needed).
+- **Death = self-write** — a link breaking this step self-writes `LINK_FREE` into its own `linkState[k]`
+  (race-free, no allocation, no compaction; the data stays in place, just inert).
+
+## 2. The strain track is a BOXCAR, not an exponential EWMA (a discovery)
+v1's `strainTrack` is `ValueTracker(Env.filLinkStrainToAve=10)` — a **10-slot sliding-window (boxcar)
+circular buffer**, `averageVal() = sum(all 10)/10` **always** (initial zeros included until filled), NOT
+an exponential EWMA (the recon's "EWMA" label is loose). Ported faithfully as `strainHist[k*10+p]` +
+`strainPlace[k]` (the proven `forceDotHist`/`forceDotPlace` ring; the circular write sequence is
+bit-identical to v1's `registerValue` pre-check-wrap). `STRAIN_WIN=10`.
+
+## 3. Force law (faithful FilLink port) — `CrosslinkerSystem.unbind`
+Per ACTIVE link, mirroring v1's per-step order (`applyTransForce` register → `ckLinkBreak`):
+strain = max(linkLength−restLength,0)/restLength → push into the boxcar → aveStrain = sum/10 →
+`k_off = linkOffConst + linkOffCoeff·exp(aveStrain·linkOffExp)` → `P_break = k_off·dt` →
+wang-hash draw `u<P_break` ⇒ death self-write. v1 calls `ckLinkBreak` **before** applying force (returns
+on break), so `unbind` runs **before** `linkForces` in the step: a link breaking this step is FREE before
+the gather ⇒ contributes no force this step (matches v1). A dead link is skipped entirely — no strain
+update, no break draw, no force (inert).
+
+**RNG:** the reused v1 wang-hash, keyed per `(link, step, seed)` with salt **`0x584C4B42` ("XLKB")**,
+distinct from the motor salts (NUC `0x4E55` / refractory `0x52465241` / release `0x4D54`). `u =
+(h>>>1)/2147483647f`. Integer mixer ⇒ bit-identical CPU↔GPU, race-free (no atomics, no KernelContext).
+One draw/link/step ⇒ the break kernel uses a `WorkerGrid1D localWork=64` (CLAUDE.md RNG gotcha; absent in
+5a which had no RNG).
+
+**Note — k_off at strain 0 is 2 /s, not 1.** With Env defaults (const=1, coeff=1, exp=2),
+`k_off(0) = 1 + 1·exp(0) = 2 /s`. The prompt's "rate ≈ linkOffConst" at strain 0 is approximate; the
+faithful v1 formula gives const+coeff at zero strain. Validated against the actual formula (2 /s).
+
+## 4. Validation (numbers for the planner) — `./run_xlink.sh`, all gates PASS (GPU + CPU)
+**CHECK #1 (GATE) — P_break + EWMA arithmetic vs v1.** (a) `k_off`/`P_break` at aveStrain
+{0, 0.25, 0.5, 1, 2} vs v1's literal `ckLinkBreak` formula: **max Δ = 0.000 %** (constants/formula
+faithful). (b) EWMA step-for-step (40-step ramp+hold, 10-slot boxcar) v2 (float32 storage) vs v1
+`ValueTracker` (double): **max k_off Δ = 2.6e-6 %** (float32 storage floor, ≪ 0.1 %).
+
+**CHECK #3 — empirical off-rate vs k_off·dt** (frozen pose, 20 000 links/strain, dt=1e-4, warmup 30,
+3000 steps):
+| strain | k_off (/s) | P_emp/step | k_off·dt | Δ% | deaths |
+|---|---|---|---|---|---|
+| 0.0 | 2.0000 | 2.0274e-4 | 2.0000e-4 | 1.37 % | 9 039 |
+| 0.5 | 3.7183 | 3.7172e-4 | 3.7183e-4 | 0.030 % | 13 317 |
+| 1.0 | 8.3891 | 8.3886e-4 | 8.3891e-4 | 0.0054 % | 17 989 |
+
+The empirical break fraction/step matches `k_off·dt` across the Bell exp. The strain-0 1.37 % is sampling
+noise (~1.3σ; fewest deaths ⇒ largest relative CI ≈ 1/√9039 = 1.05 %) — exactly the expected statistical
+behavior (Δ shrinks monotonically as deaths grow). Spans strain 0 (k_off=2) + two nonzero strains.
+
+**DEATH→INERT (contract items 3–4, full force pipeline).** A loaded link (|force| 1.49e-13 N while
+active) breaks (step 35), self-writes `LINK_FREE`, and thereafter the gathered force is **exactly 0**
+(`|gathered|=0`, `|brute|=0`, `gather−brute=0`) — the one guard makes it inert end-to-end.
+
+**CPU≡GPU (break path).** The wang-hash break draw is **bit-identical** on both runners: after 400 steps,
+GPU dead = CPU dead = 854, **0 mismatched links**. (No KernelContext; integer RNG.)
+
+**all-OFF≡HEAD.** (a) 5b with unbinding OFF ≡ the 5a path, **bit-identical** (Δcoord/ΔuVec = 0, Brownian
+on, GPU + CPU) — the lifecycle field + gather guard are no-ops when no link dies. (b) 5a's own
+all-OFF≡HEAD (crosslinker pipeline over nLinks=0 ≡ bare filament) **still holds**, and all 5a gates
+(rest hold, decay constant 0.0012 %, gather bit-exact, CPU≡GPU) reproduce unchanged.
+
+## 5. v1 oracle posture (running-v1 oracle DEFERRED to 5c — carried forward)
+No formation yet ⇒ no running-v1 bundle needed. 5b is validated against v1's **formula/arithmetic**
+(`ckLinkBreak` + `ValueTracker`), the analytic-oracle posture (same as 5a). The k_off/P_break/EWMA are
+bit-exact to v1's expression (0.000 % / float32 floor), and the empirical rate matches `k_off·dt` through
+the actual kernel. **The running-v1-oracle remains deferred to 5c**, where formation steady-state
+(formation ≈ dissolution, link-count plateau vs `xLinkConc`) genuinely needs a running v1 bundle — carry
+this flag forward.
+
+## 6. Carry-forward / open
+- **fracMove on death (deferred to 5c).** v1's `getLinkCt` is recomputed each step, so a death changes
+  surviving links' `fracMove = 0.4/max(ct)`. 5b keeps `filLinkCt` static (deaths don't recompute it) —
+  the decisive 5b gates don't depend on it (off-rate is force-free; death-inert has no survivors). The
+  dynamic link-count → fracMove recompute pairs naturally with formation (counts change a lot) in 5c.
+- **Lifecycle field shaped for 5c.** `linkState >= 0 = ACTIVE`, `<0 = FREE/DEAD`. 5c formation allocates
+  FREE→ACTIVE on the same field and may subdivide the negative space (like `boundSeg`'s `FREE_COOLDOWN`)
+  with no change to the `>=0`=ACTIVE contract or the gather guard.
+- Next: 5c (formation + broad-phase FIL×FIL + free-slot allocation + the `STORE_CROSSLINKER` publisher +
+  the running-v1 steady-state oracle), torsion (`applyTorsionForce`), 5d (Arp2/3).
