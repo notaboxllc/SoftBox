@@ -797,6 +797,106 @@ motion, sized at ~0.87×.
    a lower, arguably more v1-like avgBound), or keep default-off and close 4b-iv with the divergence
    *documented + toggle-available*. Either way the residual hunt does not gain a lead here.
 
+   **6.11 — Rate-faithful rebind refractory (`myoRebindTime`): ported behind a toggle, race-free; closes
+   the avgBound port-gap PARTWAY but the net residual is UNMOVED — the refractory-fixable net chunk is
+   ≈0 (contradicts §6.6's ~4–6 % prediction at n=16), so the residual is ~entirely irreducible-scheme.**
+   §6.6 flagged v2's refractory as too strong (a clean 100 %/1-step block vs v1's racy static-global,
+   measured GPU-oracle effective rate ≈0.31) and predicted a rate-faithful match would raise net partway
+   toward v1 via avgBound, directedness-neutral. This increment implements that match and A/Bs it bundled
+   with §6.10's force-cap.
+
+   - **The v1/v2 side-by-side (file:line).**
+
+     | | v1 (BoA-v1ref) | v2 HEAD (SoftBox) | v2 `-faithfulrefractory` |
+     |---|---|---|---|
+     | state | `MyoMotor.bindTimer` — **`static`** double, init 1e6 (`MyoMotor.java:73`): ONE class-global shared by all motors | per-motor `MotorStore.cooldown[m]` (`:92`) | same per-motor cooldown |
+     | advance | `bindTimer += deltaT` in each motor's `step()` (`MyoMotor.java:179`) — static ⇒ ~N·deltaT/step, racy across worker threads | decrement in FREE_COOLDOWN branch (`NucleotideCycleSystem.java:116`) | same |
+     | reset on release | `bindTimer = 0` (`MyoFilLink.java:315`) — any release resets the global | `boundSeg→FREE_COOLDOWN, cooldown=ceil(myoRebindTime/dt)` | **probabilistic entry**: enter cooldown only w.p. `blockProb` |
+     | gate | `if (bindTimer < myoRebindTime) return;` in `ontoFilament` (`MyoMotor.java:455`) | `bindNearest` binds only FREE_BINDABLE | same (FSM untouched) |
+     | constant | `myoRebindTime = 1e-5 s` (`Env.java:832`) | `refractorySteps = ceil(1e-5/dt) = 1` @dt=1e-5 | `blockProb = 0.31` (kinParams[13]) |
+     | **effective character** | **racy static-global** ⇒ path-dependent **effective block rate: GPU-oracle ≈0.31, CPU 0 %** (§6.6 B1) | **deterministic 100 %/1-step block** (every release blocked 1 step) | **probabilistic 31 %/1-step block** — matches v1's GPU-oracle *rate* |
+
+   - **The rate-faithful implementation (race-free).** v1's *rate* — not its shared-timer mechanism — is
+     the faithful target. §6.6 measured the GPU-oracle effective block rate at **0.31** (the CPU path is
+     0 %, but the net-glide oracle is GPU) and framed it as v2's position in the ON(100 %)↔OFF(0 %) bracket.
+     So the faithful match is a **probabilistic entry** into the *existing* dt-correct cooldown: on release,
+     a per-(motor,step,seed) wang-hash draw (distinct salt `0x52465241`) enters the 1-step refractory with
+     probability `FAITHFUL_BLOCK_PROB = 0.31`, else the head is immediately bindable. This matches v1's
+     **rate** while staying **race-free** (no shared `bindTimer`, no atomics/`KernelContext`) — the
+     binding model/FSM is untouched (same FREE_COOLDOWN/FREE_BINDABLE states, same `bindNearest`). One
+     impl, GPU + `-cpu`. `blockProb≥1.0` (default) is HEAD's deterministic block: the RNG branch is guarded
+     `if (blockProb < 1.0f)` so the draw is unused and the path is **bit-identical**. `MotorStore` slot
+     `kinParams[13]`; `setFaithfulRefractory()`; `GlidingHarness -faithfulrefractory` (default off), coexists
+     with §6.10's `-faithfulrelease` on this branch.
+
+   - **Verification.** All-toggles-OFF **bit-identical to HEAD** — GPU `GRID_ROW` *every field* matches the
+     stashed pre-change build (`-v1box -grid -seed 1 2000`: `inst=6.042 instSteady=6.248 netXY=2.928
+     netSteady=2.370 netX=-2.883 lwXY=2.928 avgB=6.286`, identical). `-faithfulrefractory` **CPU≡GPU
+     bit-identical** (same run, every field). The bundle `-faithfulrelease -faithfulrefractory` **CPU≡GPU
+     bit-identical** (GRID_ROW every field + `CAP_ROW capFires=68 capRate=0.00549`).
+
+   - **A/B at power (GPU, 14×2 `-full`, dt=1e-5, 10k steps, n=16 grid / n=3 assist; raw
+     `RUN_LOGS/2026-06-16_4biv_refractory_bundle/`).** cell1 (cap OFF + HEAD refractory) reproduces §6.10's
+     OFF arm *exactly* (net 4.224, avgB 7.891), so §6.10's cap-ON-HEAD-refractory cell completes a clean
+     **2×2 factorial** (cap × refractory):
+
+     | net (netXY) / avgBound | refractory **100 %** (HEAD) | refractory **31 %** (faithful) | refractory effect (100→31 %) |
+     |---|---|---|---|
+     | **cap OFF** | cell1: **4.224**±0.130 / **7.891**±0.176 | cell2: **4.084**±0.083 / **7.725**±0.193 | Δnet −0.140 (−0.91 σ) / ΔavgB −0.166 |
+     | **cap ON** | §6.10-ON: 4.098±0.114 / 6.528±0.203 | cell3: **4.256**±0.106 / **6.822**±0.216 | Δnet +0.158 / ΔavgB +0.294 |
+     | cap effect (OFF→ON) | Δnet −0.126 / ΔavgB −1.363 | Δnet +0.172 / ΔavgB −0.903 | |
+
+     Other per-cell stats (n=16 grid; assist n=3): netSteady 4.001 / 3.943 / 4.069; instSteady 6.906 /
+     6.759 / 6.897; **assist-fraction 0.520 / 0.520 / 0.528** (cell1/2/3); cap rate 0 / 0 / **0.00513**.
+
+     - **Net — the refractory does NOT raise net toward v1; the refractory-fixable chunk is ≈0 (FLAG:
+       contradicts §6.6).** cell2 vs cell1 (refractory fix alone, cap off): Δnet **−0.140 ± 0.154 (−0.91 σ)**
+       — within noise of zero and, if anything, the *wrong direction* vs §6.6's predicted +0.1–0.17 rise.
+       The refractory's net effect is **sign-unstable across the cap context** (−0.14 cap-off, +0.16 cap-on),
+       both ≤1 σ — i.e. **not a reliable net contributor**. §6.6's "partial, favorable, ~4–6 %
+       net-attributable" claim (extrapolated from an n=6 bracket + a 1-seed v1box probe §6.6 itself called
+       noise) **does not survive at n=16**. **This reopens §6.6's secondary net-contributor claim** — but
+       NOT its primary verdict: directedness is re-confirmed untouched (assist-fraction flat: cell2 −0.04 σ,
+       cell3 +1.28 σ).
+     - **avgBound — the gentler refractory DOES offset the cap's over-suppression (§6.6/§6.11 hypothesis
+       holds in direction).** §6.10's cap-alone overshot *below* v1 (6.528 vs 7.29). Adding the rate-faithful
+       refractory lifts avgBound back up **6.528 → 6.822** (the cap-ON column, +0.294 via more binding) —
+       toward v1's 7.29, though still −0.47 short. The full faithful bundle (cell3, both divergences ported)
+       sits at avgB 6.822, **closer to v1's 7.29 than HEAD's 7.891** (|−0.47| < |+0.60|) — a modest avgBound
+       fidelity gain. (cell2, refractory-only, 7.725, is the closest single corner to 7.29.)
+     - **The bundle (cell3, the v1-faithful config) leaves net where HEAD is.** netXY 4.256 (Δ vs cell1
+       **+0.033, +0.19 σ**); vs v1 oracle 4.578: **−0.322 (−2.02 σ on netXY)**. Porting *both* confirmed v1
+       release/rebind logic divergences (force-cap + rate-faithful refractory) moves net **negligibly**.
+
+   - **Residual decomposition (vs v1-GPU oracle 4.578 / 7.29).** All four 2×2 corners sit at net 4.08–4.26
+     (−0.32 to −0.49 from v1; ~2–3.4 σ on netXY) with assist flat at ~0.52. The two confirmed v1 logic
+     divergences are now both ported and **both leave net unmoved**:
+       - **refractory-fixable net chunk ≈ 0** (|Δ| ≤ 0.16, ≤1 σ, sign-unstable) — *not* the ~4–6 % §6.6 hoped
+       - **force-cap net chunk ≈ 0** (§6.10: −0.73 σ, wrong direction)
+       - **⇒ irreducible parallel-scheme remainder ≈ the ENTIRE net residual** (§6.7/§6.8/§6.9 class:
+         emergent-coordination on the chaotic trajectory mean — float32 op-ordering + the one-step-stale
+         force scheme — architectural, not a localized constant).
+     The faithfulness payoff is on **avgBound**, not net: the bundle reconciles avgBound from HEAD's +0.60
+     overshoot to −0.47 (closer to v1), at a known cost (0.5 % cap-release rate, a 31 %-vs-100 % refractory).
+
+   **⇒ Decision read (per the task's rule). The −13 % net residual is now decomposed: the
+   faithfulness-motivated logic ports (force-cap §6.10 + rate-faithful refractory §6.11) close NONE of it
+   — the refractory-fixable chunk is ≈0, contradicting §6.6's optimistic ~4–6 % — so the residual is
+   bounded as ~entirely the irreducible parallel-scheme remainder.** v2's release+rebind logic is now
+   provably matched to v1's *rate* (both behind default-off toggles, race-free, CPU≡GPU). Directedness
+   stays untouched (the §6.6 primary verdict, re-confirmed at n=16). **§6.6's secondary "favorable net
+   contributor" claim is flagged as not surviving n=16** (reopen if the planner wants the
+   refractory-net link re-examined — but it is directedness-neutral either way).
+
+   **⇒ Promotion is the planner's call — NOT flipped here.** Turning `-faithfulrefractory` (and/or
+   `-faithfulrelease`) on by default **re-baselines every prior validation number** — the §6.7
+   distributions, avgBound (7.89→6.82 for the bundle), the §6.9 decomposition were all measured *without*
+   these branches. The faithful bundle's avgBound (6.82) is *closer to v1* (7.29) than HEAD's (7.89), so
+   promotion is arguably more v1-like, but it does not improve net and it re-baselines instantaneousSpeed
+   and the §6.7/§6.9 distributions. Recommendation: keep both default-off and close 4b-iv with the two
+   confirmed divergences **documented + toggle-available + decomposed**, or promote-and-re-baseline for
+   faithfulness. **4b-iv is NOT declared closed here** (planner's call).
+
 ## 7. What is and isn't validated
 
 | aspect | status |
@@ -813,6 +913,7 @@ motion, sized at ~0.87×.
 | **Gliding NET vs v1 — variance characterization (§6.7, n=24/16/16/15)** | ◑ **OUTSIDE v1's envelope**: 0.877× at −4.7 σ (pooled), ≈1.2× v1's seed-SD; **localized to precision/logic, NOT the parallel reduction** (CPU≡GPU within each code; gap full-size on v2-CPU-vs-v1-CPU) |
 | **Assist-fraction + joint decomposition vs v1 (§6.9, n=6 each)** | ✓ **MATCHES** — assist gap +0.65 pp (+0.7 σ); per-state/load/bindArc/poseAngle rates + all 3 distributions track v1; §6.2 deficit dissolves into v1's **chaotic same-seed SD 3.3 pp**. ⇒ NOT a localized constant — (B) emergent, accept |
 | **Release logic vs v1 — break-force cap (§6.10)** | ✓ **MATCHED** (behind default-off `-faithfulrelease`): v1's 12 pN deterministic force-cap release ported faithfully (same quantity `forceMag`, threshold, target, ordering); OFF≡HEAD bit-identical, ON CPU≡GPU bit-identical. **Not the residual**: A/B (n=16) net −0.13/−0.73 σ (does not close toward 4.58); fires ~0.5 %/bound-step; re-patterns avgBound (−5 σ) but assist-fraction flat. Promotion (re-baselines all prior numbers) = planner's call |
+| **Rebind refractory vs v1 — rate-faithful `myoRebindTime` (§6.11)** | ✓ **MATCHED** (behind default-off `-faithfulrefractory`): v1's static-global `bindTimer` racy rate (GPU-oracle 0.31) matched **race-free** by a probabilistic 31 % entry into the dt-correct cooldown (per-motor wang-hash, FSM untouched); OFF≡HEAD bit-identical, ON CPU≡GPU bit-identical. **Not the net residual**: A/B (n=16, 2×2 with §6.10) refractory net effect ±0.16 (≤1 σ, sign-unstable) ⇒ **refractory-fixable chunk ≈0, contradicts §6.6's ~4–6 %** (reopen §6.6's net-contributor claim; directedness re-confirmed flat). **avgBound**: offsets the cap's over-suppression (6.53→6.82, toward v1 7.29). Bundle (cell3) net unmoved (+0.19 σ), avgB 6.82 closer to v1 than HEAD 7.89. Residual ⇒ ~entirely irreducible-scheme. Promotion = planner's call |
 
 ## 8. Reproduce
 
@@ -828,6 +929,12 @@ motion, sized at ~0.87×.
 ./run_gliding.sh -gpu -full -grid -faithfulrelease -seed 1 10000   # ON;  drop the flag for the OFF arm
 ./run_phaseC_forcecap.sh 16         # the full OFF/ON A/B (n=16) → RUN_LOGS/2026-06-16_4biv_forcecap/
 python3 RUN_LOGS/2026-06-16_4biv_forcecap/report.py RUN_LOGS/2026-06-16_4biv_forcecap/phaseC.txt
+
+# §6.11 — rate-faithful rebind refractory (31% probabilistic block), default OFF; -faithfulrefractory turns it on:
+./run_gliding.sh -gpu -full -grid -faithfulrefractory -seed 1 10000               # refractory fix alone
+./run_gliding.sh -gpu -full -grid -faithfulrelease -faithfulrefractory -seed 1 10000  # the v1-faithful bundle
+./run_phaseC.sh                     # 3-cell bundled A/B (n=16 grid, n=3 assist) → RUN_LOGS/2026-06-16_4biv_refractory_bundle/
+python3 RUN_LOGS/2026-06-16_4biv_refractory_bundle/report.py
 
 # v1ref (read-only worktree; outputs to a scratch dir — never written into v1ref):
 #   cd /tmp/scratch; BOA_RNG_SEED=<n> java @argfile … BoxOfActin -r -gpu -3js <dir> \

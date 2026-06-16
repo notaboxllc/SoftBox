@@ -36,6 +36,8 @@ public final class GlidingHarness {
     static boolean NO_REFRACTORY = false;        // -norefractory: released motors are immediately bindable
     static boolean FAITHFUL_RELEASE = false;     // §6.10 -faithfulrelease: add v1's force-cap (12 pN) release branch (default off)
                                                  // (kinParams[10]=0) — the OFF bracket for §6.6 (measurement).
+    static boolean FAITHFUL_REFRACTORY = false;  // §6.11 -faithfulrefractory: probabilistic 1-step block at v1's
+                                                 // GPU-oracle effective rate (0.31) vs HEAD's 100%/1-step (default off).
     static double FORCE_BIAS = 0.0;              // -forcebias <eps>: inject a uniform −x seg-side force bias per bound
                                                  // motor (§6.8 susceptibility pre-filter). 0 = production (bit-identical).
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
@@ -73,6 +75,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-freshread")) FRESH_READ = true;             // release-read reorder A/B
             else if (args[i].equals("-norefractory")) NO_REFRACTORY = true;        // rebind-refractory OFF bracket
             else if (args[i].equals("-faithfulrelease")) FAITHFUL_RELEASE = true;   // §6.10 v1 force-cap release branch
+            else if (args[i].equals("-faithfulrefractory")) FAITHFUL_REFRACTORY = true;  // §6.11 rate-faithful rebind refractory
             else if (args[i].equals("-forcebias")) FORCE_BIAS = Double.parseDouble(args[++i]);  // §6.8 susceptibility pre-filter
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
@@ -155,6 +158,7 @@ public final class GlidingHarness {
         mot.setBodyParams(DT); mot.setJointParams(DT); mot.setKinParams(0.006, -0.4, DT); mot.setNucParams(DT);
         if (NO_REFRACTORY) mot.kinParams.set(10, 0f);   // §6.6 OFF bracket: no rebind refractory
         mot.setFaithfulRelease(FAITHFUL_RELEASE, 0.0);  // §6.10 default off (v1 12 pN threshold)
+        mot.setFaithfulRefractory(FAITHFUL_REFRACTORY); // §6.11 default off (HEAD 100%/1-step block)
         mot.nucleotideState.init(MotorStore.NUC_NONE);
 
         int MAXC = SpatialGrid.MAX_CAND;

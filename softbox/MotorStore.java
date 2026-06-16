@@ -86,12 +86,23 @@ public final class MotorStore {
     //   [10]=refractorySteps = ceil(myoRebindTime/dt) (dt-correct rebind cooldown; 0 = none)
     //   [11]=breakForceN (v1 myosinBreakForce·1e-12; the force-cap threshold in N — §6.10)
     //   [12]=faithfulRelease enable (0 = off/production no-op, 1 = on; default off)
+    //   [13]=refractoryBlockProb = probability a release ENTERS the dt-correct cooldown (§6.11).
+    //        Default 1.0 = HEAD's deterministic 100%/1-step block (every release blocked one step).
+    //        -faithfulrefractory sets it to FAITHFUL_BLOCK_PROB (v1-GPU oracle effective rate, §6.6 B1):
+    //        only that fraction of releases incur the 1-step refractory; the rest are immediately
+    //        bindable. Matches v1's RATE (not its racy shared-timer mechanism), race-free.
     public final FloatArray kinParams;
     // Per-motor rebind-cooldown counter: steps remaining in the post-release refractory. Set to
     // refractorySteps on release (boundSeg→FREE_COOLDOWN), decremented each step; at 0 → FREE_BINDABLE.
     public final IntArray   cooldown;   // nMotors
     /** v1 Env.myoRebindTime (Env.java:832) — the minimum post-release time before a head may rebind. */
     public static final double MYO_REBIND_TIME = 1.0e-5;  // s
+    /** §6.11 rate-faithful refractory: v1's GPU-oracle *effective* rebind-block rate (§6.6 B1:
+     *  14×2 GPU 0.317/0.321/0.303 → 0.31). v1's static-global bindTimer is racy/path-dependent
+     *  (0% CPU, 31% GPU); the GPU path is the net-glide oracle, so 0.31 is "the faithful rate."
+     *  §6.6 frames it as v2's position in the ON(100%)↔OFF(0%) bracket ⇒ a 31% probabilistic
+     *  entry into the 1-step block is the faithful match. */
+    public static final float FAITHFUL_BLOCK_PROB = 0.31f;
     // counts (int): [0]=nMotors [1]=stepCount [2]=runSeed [3]=nSeg
     public final IntArray   counts;
     // publishParams (int): [0]=baseSlot (the motor block's first body-view slot)
@@ -136,7 +147,7 @@ public final class MotorStore {
         bindArc  = new FloatArray(nMotors);
         stats    = new IntArray(2 * nMotors);
         capStats = new IntArray(nMotors);          // §6.10 break-force release fires per motor (measurement only)
-        kinParams = new FloatArray(13);
+        kinParams = new FloatArray(14);
         cooldown  = new IntArray(nMotors);
         counts    = new IntArray(4);
         publishParams = new IntArray(1);
@@ -196,6 +207,15 @@ public final class MotorStore {
         // -faithfulrelease flips it on via setFaithfulRelease().
         kinParams.set(11, 12.0e-12f);   // v1 Env.java:799 myosinBreakForce_init = 12.0 pN
         kinParams.set(12, 0.0f);        // default OFF — production no-op
+        // §6.11 rate-faithful refractory: default 1.0 ⇒ every release enters the 1-step block
+        // (HEAD's deterministic behavior; bit-identical). -faithfulrefractory lowers it to 0.31.
+        kinParams.set(13, 1.0f);
+    }
+    /** §6.11: enable the rate-faithful (probabilistic) rebind refractory — match v1's GPU-oracle
+     *  effective block rate (FAITHFUL_BLOCK_PROB) instead of HEAD's 100%/1-step block. Default off
+     *  (blockProb=1.0). Race-free: catchSlipRelease draws a per-(motor,step) wang-hash, no shared state. */
+    public void setFaithfulRefractory(boolean on) {
+        kinParams.set(13, on ? FAITHFUL_BLOCK_PROB : 1.0f);
     }
     /** §6.10: enable v1's deterministic force-cap release (detach when forceMag > myosinBreakForce).
      *  Default off; -faithfulrelease flips it on. pN ≤ 0 keeps the v1 default (12 pN). */

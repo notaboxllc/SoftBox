@@ -83,11 +83,23 @@ public final class NucleotideCycleSystem {
         int refractorySteps = (int) kinParams.get(10);   // ceil(myoRebindTime/dt); 0 = no refractory (-norefractory)
         float breakForceN = kinParams.get(11);           // §6.10 v1 myosinBreakForce·1e-12 (N)
         boolean capOn = kinParams.get(12) > 0.5f;         // §6.10 -faithfulrelease toggle (default off)
+        float blockProb = kinParams.get(13);             // §6.11 P(release enters the 1-step refractory); 1.0 = HEAD
 
         for (@Parallel int m = 0; m < nM; m++) {
             int bs = boundSeg.get(m);
             if (bs >= 0) {
                 stats.set(2 * m, stats.get(2 * m) + 1);
+                // §6.11 rate-faithful refractory: decide ONCE per motor/step whether a release this step
+                // enters the dt-correct cooldown. HEAD (blockProb≥1) ⇒ always enter (deterministic, the
+                // RNG draw is unused ⇒ bit-identical). -faithfulrefractory (blockProb=0.31) ⇒ enter only
+                // ~31% of releases, matching v1's GPU-oracle effective block rate (§6.6). Race-free:
+                // per-(motor,step,seed) wang-hash with a distinct salt — perturbs no other motor's draw.
+                boolean enterRefractory = refractorySteps > 0;
+                if (blockProb < 1.0f) {
+                    int rh = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x52465241);  // refractory salt
+                    float ru = (rh >>> 1) / 2147483647.0f;
+                    enterRefractory = enterRefractory && (ru < blockProb);
+                }
                 // §6.10 — v1 MyoFilLink.ckRelease FIRST branch: deterministic force-cap release. If the
                 // cross-bridge spring magnitude exceeds myosinBreakForce, detach this step and SKIP the
                 // catch-slip draw (v1's `release(); return;`). v1's inRigor gate has no v2 analog (v2 has
@@ -96,7 +108,7 @@ public final class NucleotideCycleSystem {
                 // RNG is wang-hash-keyed per (motor,step), so pre-empting the draw perturbs no other motor.
                 if (capOn && forceMag.get(m) > breakForceN) {
                     capStats.set(m, capStats.get(m) + 1);
-                    if (refractorySteps > 0) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    if (enterRefractory) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
                     else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
                     continue;
                 }
@@ -109,7 +121,8 @@ public final class NucleotideCycleSystem {
                     // dt-correct refractory: hold for refractorySteps steps (fixed PHYSICAL time). At the
                     // production dt this is 1 ⇒ FREE_COOLDOWN for one step, bit-identical to the old
                     // unconditional one-step transition. 0 ⇒ immediately bindable (-norefractory bracket).
-                    if (refractorySteps > 0) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    // §6.11: enterRefractory folds in the probabilistic (rate-faithful) entry above.
+                    if (enterRefractory) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
                     else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
                 }
             } else if (bs == MotorStore.FREE_COOLDOWN) {
