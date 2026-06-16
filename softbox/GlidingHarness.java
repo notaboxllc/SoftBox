@@ -54,6 +54,7 @@ public final class GlidingHarness {
         boolean cycldiag = false;
         boolean grid = false;
         boolean ztrace = false;
+        boolean assistlog = false;
         java.util.List<String> pos = new java.util.ArrayList<>();
         boolean gpu = false;
         for (int i = 0; i < args.length; i++) {
@@ -62,6 +63,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-cycldiag")) cycldiag = true;
             else if (args[i].equals("-grid")) grid = true;
             else if (args[i].equals("-ztrace")) ztrace = true;
+            else if (args[i].equals("-assistlog")) assistlog = true;   // §6.9 per-bound-motor tuple dump (default off)
             else if (args[i].equals("-gpu")) gpu = true;
             else if (args[i].equals("-full")) { bX0 = 5.87; bXlo = -7.0; bXhi = 6.37; bYhalf = 1.0; }  // v1 14×2, ~13.4k motors
             else if (args[i].equals("-v1box")) { bX0 = 1.7; bXlo = -2.0; bXhi = 2.0; bYhalf = 0.5; }   // v1 4×1, exactly 2000 heads
@@ -87,6 +89,7 @@ public final class GlidingHarness {
         if (cycldiag) { cyclediag(sc, Math.max(M, 8000)); return; }
         if (grid) { measureGrid(sc, M, gpu); return; }
         if (ztrace) { ztrace(sc, M, gpu); return; }
+        if (assistlog) { assistLog(sc, M, gpu); return; }
         if (gpu) { gpuProbe(sc, M); return; }
         probe(sc, M);
     }
@@ -310,7 +313,8 @@ public final class GlidingHarness {
                 .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
         }
         tg = tg.transferToHost(DataTransferMode.UNDER_DEMAND, f.coord, f.uVec, f.end1, f.end2, mot.boundSeg,
-                    b.end1, b.end2, mot.nucleotideState, mot.forceDotFil);
+                    b.end1, b.end2, mot.nucleotideState, mot.forceDotFil,
+                    mot.bindArc, b.uVec);   // §6.9: bindArc + head uVec for the per-bound-motor pose log (demand-only; no kernel change)
 
         int nB = 3 * mot.nMotors, nM = mot.nMotors, nSeg = f.n;
         sched = new GridScheduler();
@@ -661,6 +665,67 @@ public final class GlidingHarness {
                         fdN > 0 ? fdSum / fdN : 0.0, fdN > 0 ? (double) fdPos / fdN : 0.0);
             }
         }
+    }
+
+    /**
+     * §6.9 per-bound-motor assist-decomposition logger (measurement only). At post-transient sampled
+     * steps (every OUT_INT=100 after warm=WARM, matching v1's GlidingAssayEvaluator output cadence),
+     * emit one ALOG row per BOUND motor with the planner's tuple:
+     *   {nucleotideState, assistSign, forceDotFil(load), bindArc, poseAngle}
+     * plus bindArcFrac (bindArc/segLen) + segLen for cross-segLen comparability. assistSign REUSES v2's
+     * existing assist metric — sign(forceDotFil), assist = forceDotFil>0 (the same quantity -diag/
+     * -cycldiag/-ztrace aggregate; identical definition to v1's MyoFilLink Dot(F,segU)). poseAngle =
+     * acos(dot(head uVec, bound-seg uVec)) deg — the motor-axis-vs-filament-axis angle the F9 cross-bridge
+     * torque drives toward 90°/120°. Reads EXISTING arrays only; GPU pulls them at the 100-step cadence
+     * (residency preserved). Also prints the marginal ASSIST_SUMMARY (assist-fraction + occupancy +
+     * avgBound) — the Phase-0 regression guard.
+     */
+    static void assistLog(Scene sc, int M, boolean gpu) {
+        final int OUT_INT = 100; final int WARM = 2000;
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        int nB = 3 * mot.nMotors;
+        System.out.printf("%n--- assist-decomp log (%s, %d motors, box x∈[%.1f,%.1f] y±%.1f, seed=0x%X, warm=%d) ---%n",
+                gpu ? "GPU" : "CPU", mot.nMotors, bXlo, bXhi, bYhalf, SEED, WARM);
+        System.out.println("ALOG_HDR seed t motor state assistSign forceDotFil bindArc bindArcFrac poseAngleDeg segLen");
+        long[] stateCnt = new long[4]; long boundObs = 0, assistObs = 0; double boundSum = 0; long sampleN = 0;
+        TornadoExecutionPlan plan = null;
+        if (gpu) { plan = buildPlan(sc); mot.setCounts(0, SEED, f.n); f.counts.set(1, 0); plan.withGridScheduler(sched).execute(); }
+        for (int t = 0; t < M; t++) {
+            if (gpu) {
+                mot.setCounts(t, SEED, f.n); f.counts.set(1, t);
+                TornadoExecutionResult res = plan.withGridScheduler(sched).execute();
+                if (t >= WARM && (t + 1) % OUT_INT == 0)
+                    res.transferToHost(f.uVec, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, b.uVec);
+            } else {
+                step(sc, t);
+            }
+            if (t >= WARM && (t + 1) % OUT_INT == 0) {
+                long bnd = 0;
+                for (int m = 0; m < mot.nMotors; m++) {
+                    int s = mot.boundSeg.get(m);
+                    if (s < 0) continue;
+                    bnd++; boundObs++;
+                    int st = mot.nucleotideState.get(m); stateCnt[st]++;
+                    float fd = mot.forceDotFil.get(m);
+                    int sign = fd > 0 ? 1 : (fd < 0 ? -1 : 0);
+                    if (fd > 0) assistObs++;
+                    float arc = mot.bindArc.get(m), segL = f.segLength.get(s);
+                    int h = 3 * m + 2;
+                    double hux = b.uVec.get(h), huy = b.uVec.get(nB + h), huz = b.uVec.get(2 * nB + h);
+                    double sux = f.uVec.get(s), suy = f.uVec.get(f.n + s), suz = f.uVec.get(2 * f.n + s);
+                    double dot = hux*sux + huy*suy + huz*suz; if (dot > 1) dot = 1; if (dot < -1) dot = -1;
+                    double poseDeg = Math.acos(dot) * 180.0 / Math.PI;
+                    System.out.printf("ALOG 0x%X %d %d %d %d %.6g %.5f %.5f %.3f %.5f%n",
+                            SEED, t + 1, m, st, sign, fd, arc, segL > 0 ? arc / segL : 0.0, poseDeg, segL);
+                }
+                boundSum += bnd; sampleN++;
+            }
+        }
+        long tot = stateCnt[0] + stateCnt[1] + stateCnt[2] + stateCnt[3];
+        System.out.printf("ASSIST_SUMMARY seed=0x%X nObs=%d assistFrac=%.4f occ[NONE/ATP/ADPPi/ADP]=%.4f/%.4f/%.4f/%.4f avgBound=%.3f%n",
+                SEED, boundObs, boundObs > 0 ? (double) assistObs / boundObs : 0.0,
+                tot>0?(double)stateCnt[0]/tot:0, tot>0?(double)stateCnt[1]/tot:0, tot>0?(double)stateCnt[2]/tot:0, tot>0?(double)stateCnt[3]/tot:0,
+                sampleN > 0 ? boundSum / sampleN : 0.0);
     }
 
     /**

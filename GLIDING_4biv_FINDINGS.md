@@ -610,6 +610,113 @@ motion, sized at ~0.87×.
    model property to carry into the contractile work: float32 limits near-cancelling force balances at the
    ~0.1 % level here; a >0.1 % systematic discrepancy there is a logic signal, not a precision artifact.)
 
+   **6.9 — Decompose the assist deficit: the gap is NOT localized to any constant — at matched n it
+   does not even reproduce, dissolving into v1's chaotic same-seed variance. Read = (B), accept,
+   close 4b-iv.** §6.8 ruled out precision and pointed the bug-class branch at "a rate/geometry/
+   integration **constant** that biases the assist/resist balance" (reopening §6.1a/§6.2). This decomposes
+   the suspected **2–3 pp assist-fraction deficit** (§6.2 n=4: v1 ~54.4 % vs v2 ~52 %) to decide the fork:
+   **(A)** a hidden constant localized to one channel (binding geometry / rest-angle / a rate) — would
+   show as a per-state or per-load assist-**rate** offset, or a bindArc/poseAngle **distribution** offset
+   tracking an input; vs **(B)** emergent parallel-scheme coordination — marginals + per-bin rates match,
+   the population merely sits in differently-correlated poses/loads. Measurement only. New (committed,
+   default-off): `GlidingHarness -assistlog` (per-bound-motor tuple `{state, assistSign, forceDotFil,
+   bindArc, poseAngle}` at the 100-step output cadence, post-transient t>0.02 s; reads existing arrays,
+   GPU pulls at cadence — **GRID_ROW bit-identical to HEAD**, a true production no-op). v1: a scratch
+   logging-only `GlidingAssayEvaluator` shadow at `/tmp/v1assist` (`BoA-v1ref` byte-clean) emitting the
+   same tuple. `assistSign = sign(forceDotFil)`, assist = forceDotFil>0 — the **identical** definition in
+   both (`Dot(F_head, segU)`; v2 `CrossBridgeSystem`, v1 `MyoFilLink`). Both at the production 14×2 box
+   (dt 1e-5, 10k steps); v2 = production GPU TaskGraph, v1 = the `-r -gpu` net-glide oracle, **n=6 seeds
+   each**, one matched window/cadence. Raw: `RUN_LOGS/2026-06-15_4biv_assist_decomp/`
+   (`decomposition_report.txt`, `variance_summary.txt`, `v1_alog.txt`, `v2_alog.txt`, `report.py`,
+   `v1_seed1_repeats.txt`).
+
+   **(a) Marginals — the deficit does NOT reproduce at matched n.**
+
+   | quantity | v2 (n=6) | v1 (n=6) | gap (v2−v1) |
+   |---|---|---|---|
+   | **assist-fraction** | **52.63 % ± 0.51** | **51.98 % ± 0.74** | **+0.65 pp (+0.7 σ)** — v2 *higher* |
+   | mean net load (forceDotFil) | +0.231 ± 0.093 pN | +0.317 ± 0.077 pN | +0.086 pN (+0.7 σ) |
+   | occupancy ATP / ADP | 56.81 % / 39.84 % | 56.40 % / 39.84 % | matches (§6.2 confirmed) |
+
+   At one matched measurement, the assist-fraction gap is **+0.65 pp at +0.7 σ — statistically zero, and
+   v2 is nominally the *higher*.** The magnitude-weighted net load (the direct glide driver) likewise
+   matches (+0.7 σ). The §6.2 "2–3 pp deficit" (a single n=4 draw, v1 54.4 %) does **not** survive at n=6
+   with consistent methodology — exactly the loophole §6.5/§6.7 flagged ("v2 sits at the low edge of v1's
+   51.6–58.2 % seed band; v1 assist at n≥16 would tighten this").
+
+   **The cause of the §6.2 artifact — v1's chaotic same-seed variance (the decisive new datum):**
+
+   | code / path | seed-1, independent runs | mean | SD | range |
+   |---|---|---|---|---|
+   | **v1 GPU (oracle)** | 56.17 / 48.82 / 50.16 / 53.91 / 55.45 % | 52.90 % | **3.25 pp** | **7.35 pp** |
+   | **v2 GPU TaskGraph** | 52.37 / 52.37 % | 52.37 % | **0.00** (bit-identical) | 0 |
+
+   v1's GPU path is **chaotically nondeterministic at fixed `BOA_RNG_SEED`** (same seed → completely
+   different bound sets at the same step → Lyapunov microstate divergence; SD ≈ 3.3 pp on assist-fraction),
+   while v2's parallel scheme is **bit-reproducible** (consistent with §6.8's ε=0 bit-identity). v1's
+   same-seed SD (3.3 pp) **dwarfs** both the 0.65 pp gap and the §6.2 2–3 pp "deficit" — the deficit was a
+   small-n draw from v1's high-variance distribution, not a systematic offset.
+
+   **(b) Joints — every per-bin assist RATE tracks v1; every DISTRIBUTION matches (no localized channel).**
+
+   Assist-fraction resolved (v2 vs v1, n in parens):
+
+   | by nucleotide state | v2 | v1 | Δ |
+   |---|---|---|---|
+   | ATP (n≈1950) | 51.41 % | 51.49 % | **−0.08 pp** |
+   | ADP (n≈1380) | 54.57 % | 53.72 % | +0.85 pp |
+   | NONE / ADPPi (n≈30/90, noise) | 51.6 / 53.6 % | 60.0 / 36.3 % | small-n |
+
+   | by poseAngle (deg) | v2 | v1 | | by bindArcFrac | v2 | v1 |
+   |---|---|---|---|---|---|---|
+   | [90,105) | 71.9 % | 70.6 % | | [0.0,0.2) | 52.3 % | 52.8 % |
+   | [105,120) | 59.2 % | 56.8 % | | [0.2,0.4) | 53.5 % | 56.1 % |
+   | [120,135) | 40.2 % | 40.1 % | | [0.4,0.6) | 52.2 % | 51.3 % |
+   | [135,180) | 27.5 % | 29.2 % | | [0.6,0.8) | 50.9 % | 51.2 % |
+   | (by load bin: definitional 0 %/100 % by sign — matches) | | | | [0.8,1.0) | 54.8 % | 49.0 % |
+
+   The two dominant states (ATP, ADP) match to <1 pp; assist falls monotonically with poseAngle in **both**
+   codes, tracking bin-for-bin. Distributions of the bound population:
+
+   | distribution (mean over bound pop) | v2 | v1 |
+   |---|---|---|
+   | bindArcFrac | 0.493 | 0.507 |
+   | poseAngle (deg) | 116.95 | 115.65 |
+   | net load (pN) | +0.237 | +0.321 |
+   | mean \|assist\| / \|resist\| load (pN) | +2.92 / −2.75 | +2.93 / −2.56 |
+
+   The bindArc, poseAngle, and load **distributions are nearly identical** (poseAngle Δ1.3°, bindArcFrac
+   Δ0.014 — both ≪ bin width and well inside v1's run-to-run spread). There is **no rate offset and no
+   distribution offset** that tracks any input (geometry, rest-angle, or rate).
+
+   **⇒ A-vs-B read (per the decision rule): (B) — emergent / within-envelope; NOT a localized constant.**
+   - **(A) is ruled out:** there is **no per-state or per-load assist-rate offset** (ATP/ADP match to
+     <1 pp; per-load rates are definitional), and **no bindArc/poseAngle distribution offset tracking an
+     input** (distributions match within noise). No channel carries a constant-like signature ⇒ **nothing
+     to constant-hunt.**
+   - **(B) holds, in its strongest form:** marginals match (assist gap +0.7 σ ≈ 0), every per-bin rate
+     tracks v1, and the distributions match — and the apparent §6.2 deficit dissolves into v1's **chaotic
+     same-seed envelope (SD 3.3 pp ≫ the 0.65 pp gap)**. The assist/resist balance is **faithful within
+     v1's own (large) run-to-run variance**. This is the variance-characterization closer (§6.7) applied
+     directly to assist-fraction — and it lands inside the envelope.
+   - **Consistency with §6.7/§6.8 (the net-glide residual is untouched and reconciled, not contradicted):**
+     the −13 %/−4.7 σ **net-glide** residual remains real (a *net*-displacement statistic). §6.8's lead was
+     that it is "a constant biasing the assist/resist **balance**" (1.37 %-coherent-force ≈ 2–3 pp assist
+     deficit). §6.9 tests that lead head-on and **eliminates it**: the assist-balance marginal *and* its
+     full joint structure match v1: the net residual is **not carried by an assist-fraction/balance
+     deficit.** Consistent with §6.4 (the `-freshread` reorder shifted assist +0.43 pp but did **not** move
+     net — net and assist-balance are decoupled here). So the net residual is the emergent effect of the
+     parallel one-step-stale scheme on the chaotic trajectory mean (the §6.3/§6.5 force-vs-state timing +
+     the §6.6 avgBound–drag coupling), **architectural — like float32 and the stale-force scheme already
+     named — not a tunable per-channel constant.**
+
+   **⇒ Recommendation to the planner: ACCEPT the ~0.87× net residual as faithful-within-the-parallel-scheme
+   and CLOSE 4b-iv.** The bug-class branch §6.8 opened is now closed from the assist side: there is no
+   localized constant (binding geometry / rest-angle / rate) biasing the assist/resist balance to hunt —
+   the balance, its per-state/load/bindArc/poseAngle structure, and the pose/load distributions all match
+   v1 within v1's own chaotic same-seed variance. **No production physics changed** (`-assistlog` /
+   `-forcebias` default-off; GRID_ROW bit-identical to HEAD).
+
 2. **Box scaling is now closed** as a target — both codes scale weakly and equally in net terms.
 3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
    The residual is correctly sized and re-targeted; whether to burrow is the planner's call.
@@ -628,6 +735,7 @@ motion, sized at ~0.87×.
 | CPU≡GPU on gliding (aggregate-within-SEM) | ✓ avgBound matches; velocity in chaotic spread |
 | **Gliding NET velocity vs v1 (matched box+statistic)** | ◑ **0.87× box-uniform residual** (was mis-framed as 0.51×) — small, sharp, in net directedness |
 | **Gliding NET vs v1 — variance characterization (§6.7, n=24/16/16/15)** | ◑ **OUTSIDE v1's envelope**: 0.877× at −4.7 σ (pooled), ≈1.2× v1's seed-SD; **localized to precision/logic, NOT the parallel reduction** (CPU≡GPU within each code; gap full-size on v2-CPU-vs-v1-CPU) |
+| **Assist-fraction + joint decomposition vs v1 (§6.9, n=6 each)** | ✓ **MATCHES** — assist gap +0.65 pp (+0.7 σ); per-state/load/bindArc/poseAngle rates + all 3 distributions track v1; §6.2 deficit dissolves into v1's **chaotic same-seed SD 3.3 pp**. ⇒ NOT a localized constant — (B) emergent, accept |
 
 ## 8. Reproduce
 
