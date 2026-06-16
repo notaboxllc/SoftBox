@@ -65,6 +65,7 @@ public final class CrossBridgeSystem {
         int nSeg = filCoord.getSize() / 3;
         double myoSpring = xbParams.get(0), j1FMT = xbParams.get(2);
         double dt = xbParams.get(3), headLen = xbParams.get(4);
+        double xbias = xbParams.get(5);   // -forcebias diagnostic: coherent −x seg-side force per bound motor (0 = production)
         double DEG2RAD = Math.PI / 180.0, RAD2DEG = 180.0 / Math.PI;
         int nM = nB / 3;
 
@@ -130,8 +131,8 @@ public final class CrossBridgeSystem {
             bondData.set(d + 3, (float) (THx - T9x - T10x));
             bondData.set(d + 4, (float) (THy - T9y - T10y));
             bondData.set(d + 5, (float) (THz - T9z - T10z));
-            // seg-side: -F, torque TS + T9 + T10
-            bondData.set(d + 6, (float) nFx); bondData.set(d + 7, (float) nFy); bondData.set(d + 8, (float) nFz);
+            // seg-side: -F, torque TS + T9 + T10  (-forcebias subtracts a uniform −x bias on the seg side; 0 in production)
+            bondData.set(d + 6, (float) (nFx - xbias)); bondData.set(d + 7, (float) nFy); bondData.set(d + 8, (float) nFz);
             bondData.set(d + 9,  (float) (TSx + T9x + T10x));
             bondData.set(d + 10, (float) (TSy + T9y + T10y));
             bondData.set(d + 11, (float) (TSz + T9z + T10z));

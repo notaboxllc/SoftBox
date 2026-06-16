@@ -35,6 +35,8 @@ public final class GlidingHarness {
                                                  // reconciled order) vs the default one-step-stale read.
     static boolean NO_REFRACTORY = false;        // -norefractory: released motors are immediately bindable
                                                  // (kinParams[10]=0) — the OFF bracket for §6.6 (measurement).
+    static double FORCE_BIAS = 0.0;              // -forcebias <eps>: inject a uniform −x seg-side force bias per bound
+                                                 // motor (§6.8 susceptibility pre-filter). 0 = production (bit-identical).
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static final double DENSITY = 500.0;        // motors / µm²
@@ -67,6 +69,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-dt")) DT = Double.parseDouble(args[++i]);   // dt-convergence test
             else if (args[i].equals("-freshread")) FRESH_READ = true;             // release-read reorder A/B
             else if (args[i].equals("-norefractory")) NO_REFRACTORY = true;        // rebind-refractory OFF bracket
+            else if (args[i].equals("-forcebias")) FORCE_BIAS = Double.parseDouble(args[++i]);  // §6.8 susceptibility pre-filter
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
         }
@@ -150,7 +153,7 @@ public final class GlidingHarness {
 
         int MAXC = SpatialGrid.MAX_CAND;
         sc.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
-        sc.xbParams = FloatArray.fromElements((float) 1.0e-9, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN);
+        sc.xbParams = FloatArray.fromElements((float) 1.0e-9, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS);
         sc.segMotorCount = new IntArray(nSeg); sc.segMotorOffsets = new IntArray(nSeg + 1); sc.segMotorMyo = new IntArray(nMot);
         sc.reachSeg = new IntArray(nMot * MAXC); sc.reachSeg.init(-1); sc.reachCount = new IntArray(nMot);
         sc.fil = fil; sc.mot = mot;
@@ -686,7 +689,7 @@ public final class GlidingHarness {
         b.yVec.set(h, 0f); b.yVec.set(nB + h, 1f); b.yVec.set(2*nB + h, 0f); b.bRotGam.init(1f);
         mot.boundSeg.set(0, 0); mot.bindArc.set(0, (float) posOnSeg); mot.nucleotideState.set(0, MotorStore.NUC_ATP);
         FloatArray bondData = new FloatArray(CrossBridgeSystem.STRIDE); bondData.init(0f);
-        FloatArray xbParams = FloatArray.fromElements((float) myoSpring, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN);
+        FloatArray xbParams = FloatArray.fromElements((float) myoSpring, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, 0f);
 
         CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
                 mot.boundSeg, mot.bindArc, mot.nucleotideState, bondData, xbParams);

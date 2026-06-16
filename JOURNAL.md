@@ -2,6 +2,29 @@
 
 Last updated: 2026-06-15
 
+## 2026-06-15 — Increment 4b-iv §6.8: fp64 DISCRIMINATOR — precision RULED OUT, residual is LOGIC-class (not the float32 tradeoff)
+The §6.7 −4σ gliding residual (v2 4.00 vs v1 4.58) was localized to **precision-or-logic** (parallel reduction
+exonerated). §6.8 decides via the cheap Phase-1 susceptibility pre-filter — the expensive fp64 build was unneeded.
+
+- **Instrument (committed, diagnostic):** `-forcebias <ε>` injects a uniform −x seg-side force bias per bound motor
+  in `CrossBridgeSystem.bondForces` (`nFx − ε`). `ε=0` is **bit-identical** to the production GPU path (verified,
+  every GRID_ROW field). Padded all four `xbParams` constructions to 6 elems (slot[5]=bias) so `get(5)` is in bounds.
+- **Phase 1 (GPU, 14×2, 10k, n=5/ε; ε unit U=1e-4×5.4e-12=5.4e-16):** susceptibility is **linear**, slope
+  S≈**7.8e12** µm/s per force-unit (ε=300 & 1000 agree to 0.3%; sublinear only far above as avgB collapses).
+  ⇒ float32-scale response S·U ≈ **0.004 µm/s** at ε=1× (measured small points +0.02/+0.07/+0.21 at ε=1/0.5/2, all
+  ≈0 within SEM ~0.2). The 1e-4 coherent bias moves net **≪ 0.578, by ~140×**. Producing the residual needs **137×U
+  = 1.37% of the per-motor force, fully coherent** — float32 is ~0.01% AND incoherent.
+- **Verdict:** Phase-1 ruled out precision → **LOGIC/constant difference** (bug-class). Overturns §6.7's
+  "precision prime suspect" lean. The 1.37%-coherent-force scale = the **~2–3pp assist-fraction deficit** §6.2/§6.7
+  measured — a real directedness/balance difference, not a rounding artifact. **Flagged for planner; NOT chased
+  overnight** (reopen §6.1a chain / §6.2 cycle constants the single-config matched-state tests didn't reach).
+- **Phase 2a (assessed, NOT built):** clean fp64 CPU path = wildly invasive (SoA state all `FloatArray`, shared
+  CPU/GPU stores, no `DoubleArray`; forbidden parallel-double-path or breaks the GPU production path) → **bail per
+  the prompt**, Phase 1 settled it.
+- **Precision floor (corollary):** float32 perturbs this near-cancelling glide observable by ≲0.1% — NOT the
+  bottleneck; the ~13% gap is model-level. Carry into contractile work: >0.1% discrepancy there = logic, not float32.
+- No physics/rate/constant edits to the production path; `-forcebias` default 0. Raw: `RUN_LOGS/2026-06-15_4biv_fp64/`.
+
 ## 2026-06-15 — Docs: added "Document map & oracle posture" section to CLAUDE.md (root-doc roles + inc-5-onward porting-equivalence oracle shift). No source touched.
 
 ## 2026-06-15 — Increment 4b-iv residual: VARIANCE CHARACTERIZATION (the closer) — OUTSIDE v1's envelope, localized to precision/logic NOT the parallel reduction

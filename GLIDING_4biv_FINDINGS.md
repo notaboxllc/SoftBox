@@ -545,6 +545,71 @@ motion, sized at ~0.87×.
    double precision it is the deliberate float32 GPU tradeoff (document); if it persists, a hidden
    logic/constant difference remains and §6.1a/§6.2 reopen. **No physics edits.**
 
+   **6.8 — fp64 discriminator: precision is RULED OUT → the residual is a LOGIC/constant difference, not
+   the float32 GPU tradeoff.** §6.7 localized the −4σ gap (v2 4.00 vs v1 4.58, +0.544 on the *sequential*
+   CPU-vs-CPU path) to **either float32-vs-float64 precision OR a logic/constant difference** (parallel
+   reduction exonerated). This decides which, via the cheap Phase-1 susceptibility pre-filter — the
+   expensive direct fp64 build was not needed (and would have bailed; see Phase-2a scope below). Raw:
+   `RUN_LOGS/2026-06-15_4biv_fp64/` (`phase1_orient.txt`, `phase1_sweep.txt`). Instrument: `-forcebias <ε>`
+   injects a **uniform −x seg-side force bias per bound motor** in `CrossBridgeSystem.bondForces`
+   (`nFx − ε`); `ε=0` is **bit-identical** to production (GRID_ROW every field, GPU). This is the
+   *maximally coherent* float32-scale perturbation ⇒ an **upper bound** on how much a float32 force error
+   of that magnitude could shift the net.
+
+   **Phase 1 — susceptibility (GPU, full 14×2, 10k, n=5/ε).** ε in units of the measured float32 per-step
+   force error **U = 1e-4 × 5.4e-12 = 5.4e-16** (§6.2/§6.3). Net = |netX|:
+
+   | ε (×U) | bias | netMean ± SEM | Δnet vs 0 | avgB |
+   |---|---|---|---|---|
+   | 0    | 0         | 3.875 ± 0.183 | —       | 7.45 |
+   | 0.5  | 2.70e-16  | 3.948 ± 0.094 | +0.073  | 7.62 |
+   | 1    | 5.40e-16  | 3.896 ± 0.141 | **+0.021** | 7.45 |
+   | 2    | 1.08e-15  | 4.090 ± 0.214 | +0.215  | 7.58 |
+   | 100  | 5.40e-14  | 4.562 ± 0.243 | +0.687  | 7.00 |
+   | 300  | 1.62e-13  | 5.139 ± 0.209 | +1.264  | 7.06 |
+   | 1000 | 5.40e-13  | 8.101 ± 0.089 | +4.226  | 6.28 |
+
+   - **Susceptibility is LINEAR (avgB-intact regime):** slope d(net)/d(bias) = **7.81e12** (ε=300) and
+     **7.83e12** (ε=1000) µm/s per force-unit — agree to 0.3%. (Sublinear only far above, ε≥1000, as the
+     fast glide sheds binding: avgB 7.0→6.3→1.9 at ε=1e4; the origin slope is therefore the *maximum*,
+     cleanly bracketed.) Call **S ≈ 7.8e12**.
+   - **Float32-scale response (the readout):** S·U = 7.8e12 × 5.4e-16 = **~0.004 µm/s** at ε=1×; ~0.008 at
+     2×. The directly-measured small points agree within noise (Δnet +0.02/+0.07/+0.21 at ε=1/0.5/2, all
+     consistent with **zero** at combined SEM ~0.2, all ≪ 0.578). **The 1e-4 coherent bias moves net by
+     ≪ 0.578 — by a factor of ~70–140×.**
+   - **Inverted:** producing the +0.578 residual via this channel needs bias **7.4e-14 = 137 × U = 1.37 %
+     of the per-motor cross-bridge force, applied fully coherently every step** (the ε=100 point, +0.687,
+     already ≈ the residual). The float32 rounding error is ~0.01 % of that force **and incoherent**
+     (sign-random per motor/step ⇒ its *mean*-shift effect is far below even this coherent upper bound).
+
+   **⇒ Verdict (Phase-1 ruled out precision → logic, no Phase 2).** A float32-magnitude error — even
+   maximally coherent — is **~140× too small** to produce the −0.578 (~13 %) systematic mean shift. **The
+   residual is NOT float32 precision; it is a LOGIC/constant difference** that survives at matched
+   precision. This *overturns the §6.7 "precision is the prime suspect" lean* and selects the **bug-class**
+   branch: reopen the channels the single-config matched-state tests did not reach (§6.1a chain / §6.2 cycle
+   — a rate, geometry, or integration **constant** that biases the assist/resist balance). **Consistency
+   with §6.7's mechanism:** 1.37 % coherent directed force ≈ the **~2–3 pp assist-fraction deficit** §6.2/
+   §6.7 already measured (v2 ~52 % vs v1 ~54 %), amplified near the 50/50 tug-of-war — i.e. the residual is
+   a real directedness/balance difference, exactly what a small logic/constant gap (or genuine emergent
+   coordination) produces, and exactly what float32 *cannot*. **Flag for the planner; do NOT chase
+   overnight** (per the prompt's bound).
+
+   **Phase-2a scope (assessed, NOT built — would have bailed).** A clean "double throughout the CPU path"
+   fp64 variant is **wildly invasive**: the SoA state is `FloatArray` everywhere (`RigidRodBody`/
+   `FilamentStore`/`MotorStore` = 96 tokens) across ~10 system files (232 tokens total), **no `DoubleArray`
+   anywhere**, and the stores are **shared between the `-cpu` runner and the GPU TaskGraph**. A double CPU
+   path requires either forking the entire state+system set into a parallel `DoubleArray` implementation
+   (the forbidden parallel-double-path; many hours) or converting the shared production state to double
+   (changes/breaks the GPU production path; also forbidden). Per Phase-2a's bail clause this is a
+   report-the-scope, not force-it — and Phase 1 settled the question without it.
+
+   **Measured float32 reliability floor (corollary).** Phase 1 *quantifies* v2-float32's numerical
+   reliability on this near-cancelling observable: the float32 force error (≤1e-4, coherent upper bound)
+   perturbs net glide by **≲0.004 µm/s (~0.1 %)**. So float32 is **not** the bottleneck for the glide
+   number — the ~13 % gap is model-level (logic), ~100× above the precision floor. (The inverse holds as a
+   model property to carry into the contractile work: float32 limits near-cancelling force balances at the
+   ~0.1 % level here; a >0.1 % systematic discrepancy there is a logic signal, not a precision artifact.)
+
 2. **Box scaling is now closed** as a target — both codes scale weakly and equally in net terms.
 3. **Commit policy.** The reconciliation is measurement-only; committed as a methodology + harness update.
    The residual is correctly sized and re-targeted; whether to burrow is the planner's call.

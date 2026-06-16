@@ -244,7 +244,7 @@ public final class MotorStrokeHarness {
 
         int MAXC = SpatialGrid.MAX_CAND;
         sc.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
-        sc.xbParams = FloatArray.fromElements((float) MYO_SPRING, 90f, (float) J1_FMT, (float) dt, (float) MotorStore.HEAD_LEN);
+        sc.xbParams = FloatArray.fromElements((float) MYO_SPRING, 90f, (float) J1_FMT, (float) dt, (float) MotorStore.HEAD_LEN, 0f);   // [5]=forcebias (0 = no bias)
         sc.segMotorCount = new IntArray(nSeg); sc.segMotorOffsets = new IntArray(nSeg + 1); sc.segMotorMyo = new IntArray(nMot);
         sc.bruteReachSeg2 = new FloatArray(nMot * MAXC); sc.bruteReachCount2 = new IntArray(nMot);
         IntArray reachSeg = new IntArray(nMot * MAXC); reachSeg.init(-1);
