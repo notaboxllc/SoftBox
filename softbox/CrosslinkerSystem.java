@@ -64,6 +64,10 @@ public final class CrosslinkerSystem {
             for (int j = 0; j < CrosslinkerStore.STRIDE; j++) xlinkData.set(d + j, 0f);
 
             int a = linkFilA.get(k), b = linkFilB.get(k);
+            // 5c-i: Design-A introduces mid-array FREE holes (key = -1). Skip them so we never index a
+            // filament at -1 (OOB). Dead-but-keyed links (key>=0, linkState<0) are still computed here but
+            // dropped by the gather's if(active) guard — bit-identical to 5b (their payload is never gathered).
+            if (a < 0 || b < 0) continue;   // zeroed payload above ⇒ hole contributes nothing
 
             // pt1 on filA = end1(A) + loc1·uVec(A)
             double l1 = loc1.get(k);
@@ -273,6 +277,70 @@ public final class CrosslinkerSystem {
             int h = wangHash((k * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x584C4B42);  // XLKB break salt
             float u = (h >>> 1) / 2147483647.0f;
             if (u < pBreak) linkState.set(k, CrosslinkerStore.LINK_FREE);   // death = self-write sentinel
+        }
+    }
+
+    // ============== 5c-i: Design-A scan-rank free-list allocator (no compaction, no atomics) ==============
+    //
+    // A formation phase reuses the validated single-threaded CrossBridgeSystem.csrScan prefix-sum VERBATIM
+    // for BOTH prefix sums (free-list build + request rank). The two thin companions below (a flag kernel
+    // and a stream-compaction scatter) are the standard prefix-sum-compaction idiom — single-threaded /
+    // index-ordered ⇒ bit-identical CPU↔GPU, like csrScatter. Per step:
+    //   freeFlags    : freeCount[s] = (linkState[s] is FREE) ? 1 : 0                 (s in [0,C))
+    //   csrScan      : freeOffsets = exclusive prefix sum of freeCount; freeOffsets[C] = nFree   (REUSED)
+    //   freeScatter  : freeList[freeOffsets[s]] = s for each FREE s (index order)
+    //   csrScan      : rankOffsets = exclusive prefix sum of acceptFlag; rankOffsets[K] = nAccepted (REUSED)
+    //   allocate     : request r (accepted) claims freeList[rankOffsets[r]] if rank < nFree (clamp), writes
+    //                  its payload, inits a fresh strain ring, flips linkState FREE→ACTIVE. Distinct ranks
+    //                  → distinct free slots ⇒ one writer per slot, race-free.
+
+    /** freeCount[s] = 1 if slot s is FREE (linkState<0), else 0. Input to the free-list csrScan. */
+    public static void freeFlags(IntArray linkState, IntArray freeCount, IntArray allocCounts) {
+        int C = allocCounts.get(0);
+        for (@Parallel int s = 0; s < C; s++) {
+            freeCount.set(s, linkState.get(s) < 0 ? 1 : 0);
+        }
+    }
+
+    /** Stream-compaction scatter: write each FREE slot index into freeList at its prefix-sum position
+     *  (index order). Single-threaded (like csrScatter) ⇒ deterministic, bit-identical CPU↔GPU. Reads
+     *  linkState directly (csrScan has zeroed freeCount as its cursor side-effect). */
+    public static void freeScatter(IntArray linkState, IntArray freeOffsets, IntArray freeList, IntArray allocCounts) {
+        int C = allocCounts.get(0);
+        for (@Parallel int gid = 0; gid < 1; gid++) {
+            for (int s = 0; s < C; s++) {
+                if (linkState.get(s) < 0) freeList.set(freeOffsets.get(s), s);
+            }
+        }
+    }
+
+    /** Allocate: request r (accepted ⇒ rankOffsets[r+1] > rankOffsets[r]) with dense rank
+     *  rank = rankOffsets[r] claims freeList[rank] when rank < nFree (= freeOffsets[C], the overflow
+     *  clamp), writes its payload into that slot, inits a FRESH strain ring (all-zero + place 0), and
+     *  flips linkState FREE→ACTIVE. Distinct accepted requests have distinct ranks → distinct freeList
+     *  entries → distinct slots ⇒ one writer per slot (race-free, no atomics). Over-clamp requests
+     *  (rank >= nFree) form nothing (reported not-formed by the caller via rank >= nFree). */
+    public static void allocate(
+            IntArray reqFilA, IntArray reqFilB, FloatArray reqLoc1, FloatArray reqLoc2,
+            IntArray rankOffsets, IntArray freeList, IntArray freeOffsets,
+            IntArray linkFilA, IntArray linkFilB, FloatArray loc1, FloatArray loc2,
+            IntArray linkState, FloatArray strainHist, IntArray strainPlace, IntArray allocCounts) {
+        int C = allocCounts.get(0), K = allocCounts.get(1), W = allocCounts.get(2);
+        int nFree = freeOffsets.get(C);
+        for (@Parallel int r = 0; r < K; r++) {
+            int rank = rankOffsets.get(r);
+            boolean accepted = rankOffsets.get(r + 1) > rank;   // accept-flag recovered from the rank scan
+            if (!accepted) continue;
+            if (rank >= nFree) continue;                        // overflow clamp: lowest nFree ranks form
+            int slot = freeList.get(rank);
+            linkFilA.set(slot, reqFilA.get(r));
+            linkFilB.set(slot, reqFilB.get(r));
+            loc1.set(slot, reqLoc1.get(r));
+            loc2.set(slot, reqLoc2.get(r));
+            int base = slot * W;
+            for (int j = 0; j < W; j++) strainHist.set(base + j, 0f);   // fresh strain ring
+            strainPlace.set(slot, 0);
+            linkState.set(slot, CrosslinkerStore.LINK_ACTIVE);          // FREE → ACTIVE (self-write into the claimed slot)
         }
     }
 }

@@ -77,7 +77,29 @@ public final class CrosslinkerStore {
     //      [1]/[2] feed the wang-hash — so the CSR template is reused VERBATIM. ----
     public final IntArray   counts;
 
-    public CrosslinkerStore(int nLinks, int nSeg) {
+    // ====== 5c-i FORMATION / ALLOCATOR (Design A: scan-rank free-list, no compaction) ======
+    // A formation phase: (1) build a free-list = the FREE slots in index order via the validated
+    // csrScan prefix-sum + a stream-compaction scatter; (2) rank accepted requests via csrScan over
+    // accept-flags; (3) request rank r claims freeList[r], writes its payload, flips FREE→ACTIVE
+    // (distinct ranks → distinct free slots ⇒ one writer per slot, race-free, no atomics); (4) clamp
+    // nAccepted to nFree. Existing ACTIVE links never move (Design-A invariant). These arrays + the
+    // request arrays are forward-compatible with 5c-ii (broad-phase fills the requests instead of the
+    // synthetic driver). reqCap = max form-requests per step.
+    public final int        reqCap;
+    public final IntArray   reqFilA, reqFilB;   // request payload: filament slots
+    public final FloatArray reqLoc1, reqLoc2;   // request payload: attachment arcs (µm)
+    public final IntArray   acceptFlag;         // reqCap; per-request accept (1/0); consumed by the rank scan
+    public final IntArray   rankOffsets;        // reqCap+1; exclusive prefix sum of acceptFlag (dense rank); [K]=nAccepted
+    public final IntArray   rankScanCounts;     // csrScan counts for the rank scan ([3]=K this step)
+    public final IntArray   freeCount;          // capacity; freeFlags writes 1 per FREE slot (csrScan input)
+    public final IntArray   freeOffsets;        // capacity+1; exclusive prefix sum of freeCount; [C]=nFree
+    public final IntArray   freeList;           // capacity; FREE slot indices compacted in index order
+    public final IntArray   freeScanCounts;     // csrScan counts for the free-list scan ([3]=C)
+    public final IntArray   allocCounts;        // [0]=C(capacity) [1]=K(requests this step) [2]=STRAIN_WIN
+
+    public CrosslinkerStore(int nLinks, int nSeg) { this(nLinks, nSeg, 1); }
+
+    public CrosslinkerStore(int nLinks, int nSeg, int reqCap) {
         this.nLinks = nLinks;                       // = pool CAPACITY C (the SoA size + CSR loop bound)
         int cap = Math.max(1, nLinks);
         linkFilA  = new IntArray(cap);
@@ -95,12 +117,33 @@ public final class CrosslinkerStore {
         counts    = new IntArray(4);
         counts.set(0, nLinks);
         counts.set(3, nSeg);
+
+        // formation/allocator block
+        this.reqCap = Math.max(1, reqCap);
+        reqFilA = new IntArray(this.reqCap); reqFilB = new IntArray(this.reqCap);
+        reqLoc1 = new FloatArray(this.reqCap); reqLoc2 = new FloatArray(this.reqCap);
+        acceptFlag = new IntArray(this.reqCap);
+        rankOffsets = new IntArray(this.reqCap + 1);
+        rankScanCounts = new IntArray(4);
+        freeCount = new IntArray(cap); freeOffsets = new IntArray(cap + 1); freeList = new IntArray(cap);
+        freeScanCounts = new IntArray(4); freeScanCounts.set(3, cap);   // free-list scan bound = capacity C
+        allocCounts = new IntArray(4);
+        allocCounts.set(0, cap);              // C
+        allocCounts.set(2, STRAIN_WIN);       // W
+
         // unused slots start FREE with a negative key ⇒ skipped by the CSR (key<0) and the gather guard.
         linkState.init(LINK_FREE);
         linkFilA.init(-1);
         linkFilB.init(-1);
         strainHist.init(0f);
         strainPlace.init(0);
+        acceptFlag.init(0);
+    }
+
+    /** Set the number of form-requests K this formation step (the rank-scan bound + alloc K). */
+    public void setRequestCount(int K) {
+        rankScanCounts.set(3, K);
+        allocCounts.set(1, K);
     }
 
     /** restLength = 0.0125 µm (v1 FilLink.java:28), fracMoveBase = 0.4 (v1 FilLink.java:208). */

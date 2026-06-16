@@ -4,7 +4,9 @@
 # that's 5c). Validates 5a: rest hold, stretch-relaxation decay constant (vs the analytic from v1's
 # exact arithmetic, + dt-independence), two-pass CSR gather == brute, CPU≡GPU, all-OFF≡HEAD; and 5b:
 # P_break+EWMA arithmetic vs v1 (gate), empirical off-rate vs k_off·dt, death→inert, CPU≡GPU break
-# path bit-identical, all-OFF≡HEAD (unbinding off ≡ 5a).
+# path bit-identical, all-OFF≡HEAD (unbinding off ≡ 5a); and 5c-i: Design-A scan-rank free-list
+# allocator (synthetic driver) — distinct-slot/free-list/death-reuse/overflow/slot-stability,
+# CPU≡GPU bit-identical, all-OFF≡HEAD (K=0 ≡ 5b).
 #
 #   ./run_xlink.sh            # GPU TaskGraph + CPU cross-check (default M=4000)
 #   ./run_xlink.sh -cpu       # CPU runner only (triage)

@@ -107,8 +107,11 @@ public final class CrosslinkerHarness {
         ok &= allOffUnbind(dt, 1500, cpu);                // unbinding OFF ⇒ 5a path bit-identical
         if (!cpu) ok &= checkCpuGpuBreak();               // RNG/break path bit-identical CPU↔GPU
 
+        // ===================== increment 5c-i: Design-A scan-rank free-list allocator =====================
+        ok &= run5ci(!cpu);                               // 7 checks; CPU≡GPU only when GPU available
+
         System.out.println();
-        System.out.println("=== CROSSLINKER 5a+5b VALIDATION " + (ok ? "PASS" : "FAIL") + " ===");
+        System.out.println("=== CROSSLINKER 5a+5b+5c-i VALIDATION " + (ok ? "PASS" : "FAIL") + " ===");
         if (!ok) {
             System.out.println("BAIL-OUT: a gate failed. Use -cpu to localize (force law vs CSR gather vs integration). Commit nothing.");
             System.exit(1);
@@ -641,6 +644,273 @@ public final class CrosslinkerHarness {
         boolean ok = maxC < 1e-12 && maxU < 1e-12;
         System.out.printf("%n--- all-OFF≡HEAD (5b, %s): unbinding OFF ≡ 5a path, Brownian on (%d steps) ---%n", useCpu ? "CPU" : "GPU", M);
         System.out.printf("  max|Δcoord|=%.3g µm   max|ΔuVec|=%.3g   %s%n", maxC, maxU, ok ? "(lifecycle field + guard are no-ops when unbinding off) ✓" : "*PERTURBS 5a*");
+        return ok;
+    }
+
+    // ================================================== 5c-i: Design-A scan-rank free-list allocator
+    static final class AllocScene {
+        FilamentStore fil; CrosslinkerStore xl;
+        boolean unbindOn; int seed, C, K;
+        TornadoExecutionPlan plan; GridScheduler sched;
+    }
+
+    /** 2 filaments at a controlled strain (frozen pose — 5c-i tests bookkeeping, not forces); a pool of
+     *  capacity C with `nActive` pre-placed ACTIVE links (slots 0..nActive-1), the rest FREE; reqCap=K. */
+    static AllocScene buildAllocScene(int C, int K, int nActive, double strain, double dt, boolean unbindOn, int seed) {
+        AllocScene as = new AllocScene();
+        int nSeg = 2; double L = (FIL_MONO + 1) * Constants.actinMonoRadius;
+        FilamentStore fil = new FilamentStore(nSeg);
+        for (int s = 0; s < nSeg; s++) {
+            fil.monomerCount.set(s, FIL_MONO);
+            fil.setUVec(s, 1f, 0f, 0f); fil.setYVec(s, 0f, 1f, 0f);
+            fil.brownTransScale.set(s, 0f); fil.brownRotScale.set(s, 0f);
+        }
+        fil.setCoord(0, 0f, 0f, 0f);
+        fil.setCoord(1, 0f, 0f, (float) (REST_LEN * (1.0 + strain)));
+        DragTensorSystem.run(fil); fil.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt)); fil.setCounts(0, 0);
+        DerivedGeometrySystem.derive(fil.coord, fil.uVec, fil.yVec, fil.zVec, fil.end1, fil.end2, fil.segLength, fil.counts);
+        CrosslinkerStore xl = new CrosslinkerStore(C, nSeg, K);
+        xl.setParams(REST_LEN, FRAC_MOVE, dt);
+        xl.setOffParams(OFF_CONST, OFF_COEFF, OFF_EXP, dt, REST_LEN);
+        xl.setRequestCount(K);
+        for (int k = 0; k < nActive; k++) xl.setLink(k, 0, 0.5 * L, 1, 0.5 * L);   // pre-placed ACTIVE
+        xl.computeFilLinkCt();
+        as.fil = fil; as.xl = xl; as.unbindOn = unbindOn; as.seed = seed; as.C = C; as.K = K;
+        return as;
+    }
+
+    /** Synthetic deterministic form-requests: K requests between fil0/fil1, all accepted; reqLoc2 carries
+     *  a unique per-(step,r) FINGERPRINT (step·1000+r) so we can verify the exact slot each request lands
+     *  in. No RNG (allocation is the only variable under test). */
+    static void fillRequests(AllocScene as, int step, int nAccept) {
+        CrosslinkerStore xl = as.xl; double L = (FIL_MONO + 1) * Constants.actinMonoRadius;
+        for (int r = 0; r < as.K; r++) {
+            xl.reqFilA.set(r, 0); xl.reqFilB.set(r, 1);
+            xl.reqLoc1.set(r, (float) (0.5 * L));
+            xl.reqLoc2.set(r, (float) (step * 1000 + r));   // fingerprint
+            xl.acceptFlag.set(r, r < nAccept ? 1 : 0);
+        }
+    }
+
+    static void allocBuildFreeList(CrosslinkerStore xl) {
+        CrosslinkerSystem.freeFlags(xl.linkState, xl.freeCount, xl.allocCounts);
+        CrossBridgeSystem.csrScan(xl.freeScanCounts, xl.freeCount, xl.freeOffsets);   // REUSED prefix sum
+        CrosslinkerSystem.freeScatter(xl.linkState, xl.freeOffsets, xl.freeList, xl.allocCounts);
+    }
+    static void allocRankAndPlace(CrosslinkerStore xl) {
+        CrossBridgeSystem.csrScan(xl.rankScanCounts, xl.acceptFlag, xl.rankOffsets);  // REUSED prefix sum
+        CrosslinkerSystem.allocate(xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.rankOffsets, xl.freeList, xl.freeOffsets,
+                xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.allocCounts);
+    }
+
+    /** One allocator step (CPU): death (5b) → build free-list → rank → allocate (the planner phase order,
+     *  so same-step deaths free slots the same-step formation reuses). */
+    static void allocStepCpu(AllocScene as, int step, int nAccept) {
+        CrosslinkerStore xl = as.xl;
+        xl.setCounts(step, as.seed);
+        if (as.unbindOn) CrosslinkerSystem.unbind(as.fil.coord, as.fil.uVec, as.fil.end1, xl.linkFilA, xl.linkFilB,
+                xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams, xl.counts);
+        fillRequests(as, step, nAccept);
+        allocBuildFreeList(xl);
+        allocRankAndPlace(xl);
+    }
+
+    static TornadoExecutionPlan buildAllocPlan(AllocScene as) {
+        FilamentStore f = as.fil; CrosslinkerStore xl = as.xl;
+        TaskGraph tg = new TaskGraph("xalloc")
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION, f.coord, f.uVec, f.end1,
+                    xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams,
+                    xl.freeCount, xl.freeOffsets, xl.freeList, xl.freeScanCounts, xl.rankOffsets, xl.allocCounts)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, xl.counts, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.acceptFlag, xl.rankScanCounts);
+        if (as.unbindOn) tg = tg.task("unbind", CrosslinkerSystem::unbind, f.coord, f.uVec, f.end1,
+                xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams, xl.counts);
+        tg = tg
+            .task("freeFlags", CrosslinkerSystem::freeFlags, xl.linkState, xl.freeCount, xl.allocCounts)
+            .task("scanFree", CrossBridgeSystem::csrScan, xl.freeScanCounts, xl.freeCount, xl.freeOffsets)
+            .task("freeScatter", CrosslinkerSystem::freeScatter, xl.linkState, xl.freeOffsets, xl.freeList, xl.allocCounts)
+            .task("scanRank", CrossBridgeSystem::csrScan, xl.rankScanCounts, xl.acceptFlag, xl.rankOffsets)
+            .task("allocate", CrosslinkerSystem::allocate, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.rankOffsets, xl.freeList, xl.freeOffsets,
+                    xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.allocCounts)
+            .transferToHost(DataTransferMode.UNDER_DEMAND, xl.linkState, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2,
+                    xl.strainHist, xl.strainPlace, xl.freeList, xl.freeOffsets, xl.rankOffsets);
+        sched = new GridScheduler();
+        if (as.unbindOn) addW("xalloc.unbind", pad(as.C));
+        addW("xalloc.freeFlags", pad(as.C));
+        addS("xalloc.scanFree");
+        addS("xalloc.freeScatter");
+        addS("xalloc.scanRank");
+        addW("xalloc.allocate", pad(as.K));
+        as.sched = sched;
+        return new TornadoExecutionPlan(tg.snapshot());
+    }
+
+    // ---- the 7 checks ----
+    static boolean run5ci(boolean gpuAvailable) {
+        System.out.println("\n========== increment 5c-i — Design-A scan-rank free-list allocator (synthetic driver) ==========");
+        boolean ok = true;
+        ok &= ckDistinctAndFreeList();   // #1 distinct-slot/no-double-alloc + #2 free-list correctness
+        ok &= ckDeathReuseStability();   // #3 death→same-step reuse + #5 slot-stability (churn)
+        ok &= ckOverflow();              // #4 overflow clamp
+        if (gpuAvailable) ok &= ckCpuGpu();   // #6 CPU≡GPU bit-identical ≥400 steps
+        ok &= ckAllOffForm(gpuAvailable);     // #7 all-OFF≡HEAD (K=0 ≡ 5b path)
+        return ok;
+    }
+
+    /** #1 + #2: one formation step on an empty pool — free-list = FREE slots in index order; K accepted
+     *  claim K distinct slots in rank order with payloads landing; no double-alloc. */
+    static boolean ckDistinctAndFreeList() {
+        int C = 64, K = 8;
+        AllocScene as = buildAllocScene(C, K, 0, 0.0, 1.0e-5, false, 0xA11);
+        CrosslinkerStore xl = as.xl;
+        xl.setCounts(0, as.seed);
+        fillRequests(as, 0, K);
+        allocBuildFreeList(xl);
+        int nFree = xl.freeOffsets.get(C);
+        boolean flOk = (nFree == C);
+        for (int s = 0; s < nFree && flOk; s++) if (xl.freeList.get(s) != s) flOk = false;   // empty pool ⇒ 0..C-1
+        allocRankAndPlace(xl);
+        int active = countActive(xl);
+        // each request r (rank r, all accepted) claims slot freeList[r]==r; verify landing + fresh ring + distinct
+        boolean distinct = true, land = true, ring = true;
+        java.util.HashSet<Integer> claimed = new java.util.HashSet<>();
+        for (int r = 0; r < K; r++) {
+            int slot = r;   // freeList[r] on empty pool
+            if (!claimed.add(slot)) distinct = false;
+            if (xl.linkState.get(slot) != CrosslinkerStore.LINK_ACTIVE) land = false;
+            if (xl.loc2.get(slot) != (float) (0 * 1000 + r)) land = false;
+            if (xl.strainPlace.get(slot) != 0) ring = false;
+            for (int j = 0; j < CrosslinkerStore.STRAIN_WIN; j++) if (xl.strainHist.get(slot * 10 + j) != 0f) ring = false;
+        }
+        boolean ok = flOk && active == K && distinct && land && ring;
+        System.out.println("\n--- #1/#2 distinct-slot + free-list correctness (empty pool, K=" + K + " accepted) ---");
+        System.out.printf("  free-list = FREE slots in index order: %s  (nFree=%d)%n", flOk ? "✓" : "*WRONG*", nFree);
+        System.out.printf("  %d accepted ⇒ %d ACTIVE; distinct slots=%s; payload landing=%s; fresh strain ring=%s  %s%n",
+                K, active, distinct ? "✓" : "*DUP*", land ? "✓" : "*WRONG*", ring ? "✓" : "*STALE*", ok ? "" : "*FAIL*");
+        return ok;
+    }
+
+    /** #3 + #5: churn (all-ACTIVE pool, high strain ⇒ Bell deaths; K refills/step). Each step verifies
+     *  slot-stability (allocate never writes a slot that was ACTIVE before it) and detects same-step
+     *  death→reuse (a slot ACTIVE→FREE in unbind → ACTIVE again in allocate, fresh ring). */
+    static boolean ckDeathReuseStability() {
+        int C = 16, K = 8, steps = 300;
+        AllocScene as = buildAllocScene(C, K, C, 2.0, 1.0e-4, true, 0xC33);
+        CrosslinkerStore xl = as.xl;
+        boolean stability = true, sawReuse = false, reuseRingOk = true;
+        int reuseSlot = -1, reuseStep = -1;
+        int[] beforeAll = new int[C], afterUnbind = new int[C];
+        int[] preFilA = new int[C]; float[] preLoc2 = new float[C];
+        for (int t = 0; t < steps; t++) {
+            for (int s = 0; s < C; s++) beforeAll[s] = xl.linkState.get(s);
+            xl.setCounts(t, as.seed);
+            CrosslinkerSystem.unbind(as.fil.coord, as.fil.uVec, as.fil.end1, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2,
+                    xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams, xl.counts);
+            for (int s = 0; s < C; s++) afterUnbind[s] = xl.linkState.get(s);
+            // snapshot ACTIVE-before-allocate slots (for stability)
+            for (int s = 0; s < C; s++) { preFilA[s] = xl.linkFilA.get(s); preLoc2[s] = xl.loc2.get(s); }
+            fillRequests(as, t, K);
+            allocBuildFreeList(xl);
+            allocRankAndPlace(xl);
+            for (int s = 0; s < C; s++) {
+                boolean wasActive = afterUnbind[s] >= 0;
+                if (wasActive) {   // slot-stability: an ACTIVE-before-allocate slot must be untouched
+                    if (xl.linkFilA.get(s) != preFilA[s] || xl.loc2.get(s) != preLoc2[s] || xl.linkState.get(s) < 0) stability = false;
+                }
+                // same-step death→reuse: ACTIVE(before) → FREE(unbind) → ACTIVE(after alloc)
+                if (beforeAll[s] >= 0 && afterUnbind[s] < 0 && xl.linkState.get(s) >= 0) {
+                    if (!sawReuse) { sawReuse = true; reuseSlot = s; reuseStep = t; }
+                    if (xl.strainPlace.get(s) != 0) reuseRingOk = false;
+                    float lp = xl.loc2.get(s);   // must be a fingerprint from THIS step's formation
+                    if (!(lp >= t * 1000 && lp < t * 1000 + K)) reuseRingOk = false;
+                }
+            }
+        }
+        boolean ok = stability && sawReuse && reuseRingOk;
+        System.out.println("\n--- #3/#5 death→same-step reuse + slot-stability (churn, C=" + C + " all-ACTIVE, strain 2, " + steps + " steps) ---");
+        System.out.printf("  slot-stability (allocate never overwrites an ACTIVE slot): %s%n", stability ? "✓" : "*MOVED/OVERWROTE*");
+        System.out.printf("  same-step death→reuse observed: %s (first @ slot %d step %d; fresh ring + this-step payload: %s)  %s%n",
+                sawReuse ? "✓" : "*NONE*", reuseSlot, reuseStep, reuseRingOk ? "✓" : "*STALE*", ok ? "" : "*FAIL*");
+        return ok;
+    }
+
+    /** #4: nAccepted > nFree ⇒ exactly nFree form (lowest ranks), the rest not-formed, no OOB. */
+    static boolean ckOverflow() {
+        int C = 8, K = 5, nActive = 6;   // nFree = 2
+        AllocScene as = buildAllocScene(C, K, nActive, 0.0, 1.0e-5, false, 0xD44);
+        CrosslinkerStore xl = as.xl;
+        xl.setCounts(0, as.seed);
+        fillRequests(as, 0, K);          // all 5 accepted
+        allocBuildFreeList(xl);
+        int nFree = xl.freeOffsets.get(C);
+        allocRankAndPlace(xl);
+        int active = countActive(xl);
+        // exactly nFree formed: slots 6,7 ACTIVE with requests 0,1's fingerprints; requests 2,3,4 absent
+        boolean formedOk = (active == nActive + nFree);
+        boolean lowestRanks = xl.linkState.get(6) >= 0 && xl.linkState.get(7) >= 0
+                && xl.loc2.get(6) == 0f && xl.loc2.get(7) == 1f;     // fingerprints of requests 0,1
+        boolean overflowAbsent = true;
+        for (int r = 2; r < K; r++) { float fp = r; for (int s = 0; s < C; s++) if (xl.loc2.get(s) == fp) overflowAbsent = false; }
+        boolean ok = nFree == 2 && formedOk && lowestRanks && overflowAbsent;
+        System.out.println("\n--- #4 overflow clamp (nFree=" + nFree + ", nAccepted=" + K + ") ---");
+        System.out.printf("  exactly nFree=%d formed (lowest ranks), %d over-clamp requests not-formed, no OOB: %s  %s%n",
+                nFree, K - nFree, (formedOk && lowestRanks && overflowAbsent) ? "✓" : "*WRONG*", ok ? "" : "*FAIL*");
+        return ok;
+    }
+
+    /** #6: identical slot assignments + payloads + strain rings + free-list/ranks over ≥400 churn steps,
+     *  CPU runner vs GPU TaskGraph (index-ordered free-list + ranks ⇒ bit-identical, no atomics). */
+    static boolean ckCpuGpu() {
+        int C = 32, K = 6, steps = 400;
+        AllocScene cpu = buildAllocScene(C, K, C, 1.5, 1.0e-4, true, 0xF66);
+        AllocScene gpu = buildAllocScene(C, K, C, 1.5, 1.0e-4, true, 0xF66);
+        TornadoExecutionPlan plan = buildAllocPlan(gpu); GridScheduler sg = gpu.sched;
+        int[] samples = { 1, 50, 200, steps - 1 };
+        int si = 0; long diffs = 0;
+        for (int t = 0; t < steps; t++) {
+            allocStepCpu(cpu, t, K);
+            gpu.xl.setCounts(t, gpu.seed); fillRequests(gpu, t, K); gpu.xl.setRequestCount(K);
+            TornadoExecutionResult r = plan.withGridScheduler(sg).execute();
+            if (si < samples.length && t == samples[si]) {
+                r.transferToHost(gpu.xl.linkState, gpu.xl.linkFilA, gpu.xl.linkFilB, gpu.xl.loc1, gpu.xl.loc2, gpu.xl.strainHist, gpu.xl.strainPlace);
+                for (int s = 0; s < C; s++) {
+                    if (cpu.xl.linkState.get(s) != gpu.xl.linkState.get(s)) diffs++;
+                    if (cpu.xl.linkFilA.get(s) != gpu.xl.linkFilA.get(s)) diffs++;
+                    if (cpu.xl.loc2.get(s) != gpu.xl.loc2.get(s)) diffs++;
+                    if (cpu.xl.strainPlace.get(s) != gpu.xl.strainPlace.get(s)) diffs++;
+                    for (int j = 0; j < CrosslinkerStore.STRAIN_WIN; j++)
+                        if (cpu.xl.strainHist.get(s * 10 + j) != gpu.xl.strainHist.get(s * 10 + j)) diffs++;
+                }
+                si++;
+            }
+        }
+        boolean ok = diffs == 0;
+        System.out.println("\n--- #6 CPU≡GPU bit-identical (C=" + C + ", K=" + K + ", " + steps + " churn steps) ---");
+        System.out.printf("  slot assignments + payloads + strain rings: %d field mismatches  %s%n", diffs, ok ? "(bit-identical) ✓" : "*DIFFERS*");
+        return ok;
+    }
+
+    /** #7: K=0 (no form-requests) ⇒ the allocator is a no-op; linkState evolves identically to the
+     *  5b unbind-only path (bit-identical). Confirms formation default-off ≡ the 5a/5b path. */
+    static boolean ckAllOffForm(boolean gpuAvailable) {
+        int C = 32, steps = 300;
+        AllocScene form = buildAllocScene(C, 1, C, 1.5, 1.0e-4, true, 0x077);   // K-capacity 1 but 0 accepted
+        AllocScene bare = buildAllocScene(C, 1, C, 1.5, 1.0e-4, true, 0x077);
+        for (int t = 0; t < steps; t++) {
+            allocStepCpu(form, t, 0);                       // 0 accepted ⇒ allocate forms nothing
+            bare.xl.setCounts(t, bare.seed);                // bare: unbind only (the 5b path)
+            CrosslinkerSystem.unbind(bare.fil.coord, bare.fil.uVec, bare.fil.end1, bare.xl.linkFilA, bare.xl.linkFilB,
+                    bare.xl.loc1, bare.xl.loc2, bare.xl.linkState, bare.xl.strainHist, bare.xl.strainPlace, bare.xl.offParams, bare.xl.counts);
+        }
+        long diffs = 0;
+        for (int s = 0; s < C; s++) {
+            if (form.xl.linkState.get(s) != bare.xl.linkState.get(s)) diffs++;
+            if (form.xl.strainPlace.get(s) != bare.xl.strainPlace.get(s)) diffs++;
+            for (int j = 0; j < CrosslinkerStore.STRAIN_WIN; j++)
+                if (form.xl.strainHist.get(s * 10 + j) != bare.xl.strainHist.get(s * 10 + j)) diffs++;
+        }
+        boolean ok = diffs == 0;
+        System.out.println("\n--- #7 all-OFF≡HEAD (K=0 formation ≡ 5b unbind-only path, " + steps + " steps) ---");
+        System.out.printf("  %d field mismatches vs the bare 5b path  %s%n", diffs, ok ? "(formation no-op when off) ✓" : "*PERTURBS 5b*");
         return ok;
     }
 

@@ -277,3 +277,87 @@ this flag forward.
   with no change to the `>=0`=ACTIVE contract or the gather guard.
 - Next: 5c (formation + broad-phase FIL×FIL + free-slot allocation + the `STORE_CROSSLINKER` publisher +
   the running-v1 steady-state oracle), torsion (`applyTorsionForce`), 5d (Arp2/3).
+
+---
+
+# Increment 5c-i — link allocator in isolation (Design A: scan-rank free-list, no compaction)
+
+**Status: DONE / green.** The Design-A allocator (free-list build + request rank + allocate + overflow
+clamp) + a synthetic deterministic driver, wired into both runners with the death→free-list→allocate
+phase order. Validated by the 7 self-consistency checks (no v1 oracle — the driver is synthetic).
+`BoA-v1ref` byte-clean; production/`GlidingHarness` byte-unchanged; default-off (K=0).
+**Design A is CONFIRMED — existing links never move; no kick-back to Design B.**
+
+Scope: **allocator bookkeeping only** (a formed link need not produce a correct force yet). OUT (→
+5c-ii/iii): real broad-phase FIL×FIL candidates / `checkToLink` gates / stochastic `P_form` RNG; the
+formation force law / `fracMove`-on-changing-count; the running-v1 steady-state bundle.
+
+## 1. The allocator (Design A, implemented as specified — no redesign)
+Per formation phase, reusing the validated single-threaded **`CrossBridgeSystem.csrScan` prefix-sum
+VERBATIM** for BOTH prefix sums:
+1. **Free-list build** — `freeFlags` (`freeCount[s] = linkState[s]<0 ? 1 : 0`) → `csrScan` (exclusive
+   prefix sum → `freeOffsets`, `freeOffsets[C]=nFree`) → `freeScatter` (stream-compaction: `freeList[
+   freeOffsets[s]] = s` for each FREE s, index order). The two companions (flag + compaction scatter)
+   are the standard prefix-sum-compaction idiom — single-threaded / index-ordered ⇒ bit-identical
+   CPU↔GPU like `csrScatter`. (No new SCAN invented; the bit-identical-critical prefix sum is reused.)
+2. **Rank** — `csrScan` over `acceptFlag` → `rankOffsets`; request `r` gets dense `rank=rankOffsets[r]`,
+   accepted iff `rankOffsets[r+1]>rankOffsets[r]`; `rankOffsets[K]=nAccepted`.
+3. **Allocate** — request rank `r` claims `freeList[r]`, writes its payload, inits a FRESH strain ring
+   (all-zero + place 0), flips `linkState` FREE→ACTIVE. Distinct ranks → distinct free slots ⇒ **one
+   writer per slot, race-free, no atomics, no KernelContext.**
+4. **Overflow clamp** — `if (rank >= nFree) continue;` ⇒ exactly the lowest `nFree` ranks form.
+
+**Determinism:** index-ordered free-list + index-ordered ranks give a fully deterministic assignment
+(request with the smallest index among accepted → smallest free slot) — **no sort needed** (the
+"scan-rank needs a sort" pause condition did not trigger).
+
+## 2. Design-A invariants (the point of 5c-i) — all hold
+- **Existing links never move.** Allocation only writes FREE slots (`freeList` entries are FREE by
+  construction); the per-step slot-stability check (allocate never overwrites a slot ACTIVE before it,
+  over a 300-step churn) **passed**. No compaction was ever needed ⇒ **Design A confirmed**, not Design B.
+- **Gather loop bound → pool capacity `C`** with the §5b `if(active)` guard skipping holes — the gather's
+  link loops already iterate `counts[0]=C` (= capacity), so no change was needed there; the only added
+  guard is the one §5b `if(active)` branch. One necessary companion: **`linkForces` gained a one-line
+  hole-skip** (`if (linkFilA<0) continue`) — Design A introduces never-used FREE slots with key `-1`, and
+  `linkForces` indexes `filEnd1[key]`, so without the skip it would index `[-1]` (OOB). This is a separate
+  OOB-safety guard on the force-compute kernel, NOT a gather change; it is bit-identical to 5b on
+  all-active / dead-but-keyed scenes (dead-but-keyed links are still computed then dropped by the gather
+  guard, exactly as in 5b). *(silent + journal per the recon boundary.)*
+- **Determinism:** bit-identical CPU↔GPU within v2.
+
+## 3. Phase order (death → free-list → allocate) + the v1 comparison
+The step runs **unbind/death (5b) → build free-list → rank → allocate (5c-i)**, so a slot freed by a
+same-step 5b death is immediately reusable by the same-step formation (check #3). **v1 comparison:** v1
+forms during the collision phase (start of step) and frees at cleanup (end of step) via
+`setInactiveFilLinks`, so a v1 link freed in step N is reusable in step **N+1**; v2-5c-i does
+**same-step** reuse (die-then-form within one step). This is the planner-specified ordering for the
+single-pass SoA step — it shifts *when* a freed slot becomes reusable by ≤1 step but does not change
+lifecycle correctness (a dead slot is never double-counted, an active slot is never reallocated). Noted
+as the deliberate v2 ordering.
+
+## 4. Validation (numbers for the planner) — `./run_xlink.sh`, all 7 PASS (GPU + CPU)
+- **#1 distinct-slot / no double-alloc + #2 free-list correctness** (empty pool, K=8 accepted):
+  free-list = FREE slots in index order (nFree=64); 8 accepted ⇒ 8 distinct slots flip ACTIVE; payloads
+  land in the assigned slots; fresh strain rings. ✓
+- **#3 death→same-step reuse + #5 slot-stability** (churn: C=16 all-ACTIVE, strain 2, 300 steps):
+  slot-stability holds every step (allocate never overwrites an ACTIVE slot); same-step death→reuse
+  observed (first @ slot 14, step 11) with a fresh strain ring + this-step payload. ✓
+- **#4 overflow clamp** (nFree=2, nAccepted=5): exactly 2 form (lowest ranks 0,1 → slots 6,7 with their
+  fingerprints), the 3 over-clamp requests are not-formed (their fingerprints absent), no OOB. ✓
+- **#6 CPU≡GPU bit-identical** (C=32, K=6, 400 churn steps): **0 field mismatches** across slot
+  assignments + payloads + strain rings + free-list + ranks. ✓
+- **#7 all-OFF≡HEAD** (K=0 ⇒ allocator no-op): linkState evolves **bit-identically** to the 5b
+  unbind-only path (0 mismatches, 300 steps); all 5a/5b gates reproduce unchanged. ✓
+
+## 5. Carry-forward / open
+- The synthetic driver (`fillRequests`) is the only piece 5c-ii replaces: the broad-phase FIL×FIL
+  candidate generator + `checkToLink` gates + `P_form` RNG fill `reqFilA/reqFilB/reqLoc1/reqLoc2/
+  acceptFlag` instead of the scripted fingerprints. The allocator (free-list/rank/allocate/clamp) rides
+  underneath unchanged. (If formation adds RNG, the WorkerGrid localWork=64 gotcha applies to that
+  kernel — 5c-i's allocator kernels have no RNG.)
+- `reqLoc2` carried a synthetic fingerprint (step·1000+r) to verify exact landing; 5c-ii replaces it with
+  the real attachment arc.
+- Running-v1 oracle still **DEFERRED to 5c-iii** (steady-state plateau / formation≈dissolution).
+  `fracMove`-on-changing-count still deferred to 5c-iii.
+- Next: 5c-ii (broad-phase + gates + `P_form` + the `STORE_CROSSLINKER` publisher), 5c-iii (formation
+  force law + running-v1 steady-state), torsion, 5d (Arp2/3).

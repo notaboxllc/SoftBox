@@ -486,5 +486,28 @@ lifecycle/strain fields in `CrosslinkerStore` + 5b checks in `CrosslinkerHarness
 plateau / formation≈dissolution — is where a running v1 bundle is genuinely needed; 5a/5b were analytic-oracle).
 `k_off(strain 0) = const+coeff = 2 /s` (not `linkOffConst` alone). fracMove-on-death deferred to 5c.
 
-Next: 5c (formation/birth + broad-phase segment↔segment FIL×FIL candidates + free-slot allocation + the
-`STORE_CROSSLINKER` publisher + the running-v1 steady-state oracle), torsion (`applyTorsionForce`), 5d (Arp2/3).
+**Increment 5c-i — DONE (2026-06-16).** The link allocator in isolation — **Design A: scan-rank free-list,
+no compaction**. Each formation phase: build a free-list (the FREE `linkState` slots compacted in index
+order via `freeFlags` → the **reused `csrScan` prefix-sum VERBATIM** → a `freeScatter` stream-compaction);
+rank accepted requests (`csrScan` over accept-flags); `allocate` — request rank r claims `freeList[r]`,
+writes its payload, inits a fresh strain ring, flips `linkState` FREE→ACTIVE (distinct ranks → distinct
+free slots ⇒ one writer/slot, **race-free, no atomics/KernelContext**); clamp `nAccepted` to `nFree`. A
+**synthetic deterministic driver** (no RNG) feeds requests; step order **death(5b)→free-list→allocate**
+(same-step reuse of 5b deaths). **Design A CONFIRMED** — existing ACTIVE links + their strain rings never
+move (slot-stability holds; no compaction needed). The only gather adjustment is the §5b `if(active)` guard
+(the link loops already iterate capacity `C`); `linkForces` gained a 1-line hole-skip (`linkFilA<0`,
+OOB-safety on never-used FREE slots — not a gather change, bit-identical to 5b on active/dead-keyed scenes).
+Validated by 7 self-consistency checks (no v1 oracle — synthetic): distinct-slot/no-double-alloc;
+free-list correctness; death→same-step reuse + fresh ring; overflow clamp; slot-stability; **CPU≡GPU
+bit-identical (0 mismatches, 400 churn steps)**; all-OFF≡HEAD (K=0 ≡ 5b path; 5a/5b gates reproduce).
+`BoA-v1ref` byte-clean; production byte-unchanged. New: `CrosslinkerSystem.freeFlags/freeScatter/allocate`
++ formation block in `CrosslinkerStore` + 5c-i checks in `CrosslinkerHarness`. Report:
+`INC5A_CROSSLINKER_FINDINGS.md` (§5c-i appended); JOURNAL 2026-06-16 (5c-i).
+**5c-i flag for the planner:** 5c-ii replaces ONLY the synthetic `fillRequests` (broad-phase FIL×FIL +
+`checkToLink` gates + `P_form` RNG fill the same `req*`/`acceptFlag` arrays; the allocator rides
+underneath unchanged — RNG ⇒ localWork=64). v2 does **same-step** death→reuse vs v1's form-at-collision /
+free-at-cleanup (reusable step N+1) — a ≤1-step timing choice, not a correctness change.
+
+Next: 5c-ii (broad-phase segment↔segment FIL×FIL candidates + `checkToLink` gates + `P_form` + the
+`STORE_CROSSLINKER` publisher), 5c-iii (formation force law + `fracMove`-on-count + the running-v1
+steady-state oracle), torsion (`applyTorsionForce`), 5d (Arp2/3).
