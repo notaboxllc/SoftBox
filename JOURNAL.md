@@ -2,6 +2,8 @@
 
 Last updated: 2026-06-15
 
+## 2026-06-15 — Docs: added "Document map & oracle posture" section to CLAUDE.md (root-doc roles + inc-5-onward porting-equivalence oracle shift). No source touched.
+
 ## 2026-06-15 — Increment 4b-iv residual: VARIANCE CHARACTERIZATION (the closer) — OUTSIDE v1's envelope, localized to precision/logic NOT the parallel reduction
 The honest close to §6.5/§6.6 (all same-dt mechanisms cleared as the directedness cause): is the ~0.87×
 net residual a real systematic difference, or within v1's true run-to-run spread? Four configs —

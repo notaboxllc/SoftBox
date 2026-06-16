@@ -25,6 +25,44 @@ SoA primitive component arrays the canonical state and keeps that state device-r
 - **Reconciliation convention:** when a v1 physics/numerics change touches a subsystem Soft Box has
   already ported, re-tag v1, regenerate that one fixture, re-validate that one system. Flag it.
 
+## Document map & oracle posture
+
+**Governing docs (define/record Soft Box):**
+- `CLAUDE.md` — cross-session context, invariants, build/run, status (this file)
+- `JOURNAL.md` — terse newest-first log
+- `GLIDING_4biv_FINDINGS.md` — gliding payoff (increment 4b-iv) findings + benchmarks
+
+**v1-reference-only (inherited background — NEVER a Soft Box task):** these describe v1's code,
+biology, or measurements and do NOT live in this repo — they sit in the v1 tree (`~/Code/BoA`, frozen
+mirror `~/Code/BoA-v1ref`) and ride along only as oracle/lessons reference. Do not action them as
+increments.
+- `GPU_STRATEGY.md` — Sim3D→BoA GPU lessons + acceleration strategy
+- `MYOSIN_VALIDATION.md` — v1 lumped-motor validation vs experiment
+- `NMII_BIOLOGY.md` — non-muscle myosin II kinetics/mechanics, biological context for v1 tuning
+- `PT3D_SOA_MIGRATION.md` — a *v1* OOP-heap (Pt3D) refactor design doc; Soft Box is SoA-from-scratch and
+  has no Pt3D graph. Kept as the host-heap-ceiling rationale that motivates Soft Box, not a Soft Box task.
+- `BENCHMARK_dense.md` — a *v1* dense CPU-vs-GPU gliding benchmark (`glidingDense_demo_smoke`); a v1
+  measurement, not a Soft Box gate.
+
+The one v1-reference doc that *does* live in this repo is `fixtures/filament_characterization_v1.md`
+(under `fixtures/`, not root) — the frozen v1 filament measurement the Lp/τ instruments replay.
+
+**Oracle posture (read before scoping any new validation).** v1 (BoA-v1ref) remains the measured
+oracle, but its role changes across the migration:
+- **Through increment 4 (filament / motor / gliding):** v1 supplied *frozen measured fixtures* —
+  gliding velocity & avgBound, myosin binding/force statistics, filament deflection/τ/Lp benchmarks.
+  These are now **largely consumed**; the standing validations replay them, no new capture expected.
+- **Increment 5 onward (crosslinkers, nodes/contractile ring, membrane):** the frozen-fixture well is
+  dry. v1 becomes a **porting-equivalence oracle**, not a biological-truth oracle. Fidelity is
+  established by **co-developed small-scale mechanical checks** — capture a v1 micro-behavior at port
+  time and show v2 reproduces it — proving v2 ported *the same physics*, NOT that v1 is biologically
+  correct. Where v1 itself is new/unsettled (membrane, contractile ring), there may be **no mature v1
+  measurement at all**; fidelity is matched at small scale as the machinery moves over, and any such
+  co-developed check is recorded in JOURNAL.md as a porting-equivalence fixture (and flagged as such —
+  distinct from a biological-target gate).
+- The reconciliation convention above still applies to the *frozen* fixtures; porting-equivalence
+  checks are versioned with the increment that introduces them, not against a v1 tag.
+
 ## Architecture invariants (do not violate without flagging the planner)
 - Entities are integer IDs. State lives in SoA primitive component arrays — separate `xPos[]`,
   `yPos[]`, `zPos[]` (and orientation, force, drag, length arrays), NOT interleaved AoS, NOT
