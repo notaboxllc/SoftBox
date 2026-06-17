@@ -609,3 +609,35 @@ inlined `moveC` exceeds the 600-node inlined-callee cap. New: `DimerStore`, `Dim
 ./run_dimer.sh -cpu         # CPU runner only (triage)
 ./run_dimer.sh -3js threejs_dimer -n 9   # viewer (Y-shaped dimers)
 ```
+**Post-6a rotational-thermostat diagnostic (gate-D 1.40× RESOLVED).** Cut 1 (DECISIVE, `DiffusionHarness`
+Config R): free-rod rotational diffusion `D_rot` −1.8% vs FDT `kT/bRotGam` ⇒ **thermostat at ½kT**. Cut 3
+(`ThermostatDiag`): a directly-thermostatted confined rotational DOF sits at the **exact discrete-AR(1)
+equipartition** `4kT·dt/(γ·c(2−c))` (0.992); the apparent 1.24× vs the continuum `2kT/k_θ` is the
+`1/(1−c/2)=1.25` discrete correction for `c=coeff=0.4`. Cut 2: `⟨θ²⟩∝dt` (fracMove `k_θ=coeff·γ/dt`),
+exactly the scheme's own equipartition at each fixed dt. ⇒ the dimer 1.40× = discrete-vs-continuum factor ×
+residual gate-D AR(1) crudeness — **benign, no thermostat fix.** Report: `INC6A_DIMER_FINDINGS.md` §6a-thermo.
+
+**Increment 6b — DONE (2026-06-17).** The myosin MINIFILAMENT (a rigid-rod backbone OWNING N dimers),
+isometric bed, static, heads free. The **central favorable recon finding realized: SINGLE-ENDED, one pass**
+— the backbone owns its dimers (each keyed to one backbone via `headBackboneSlot`, the motor→segment shape),
+so the gather **REUSES `CrossBridge.csrHistogram/csrScan/csrScatter` VERBATIM** (keyed by `headBackboneSlot`,
+`miniCounts[0]=nDimers/[3]=nBackbones`) + a `backboneGather` (the `segGather` pattern) — **one pass, no
+crosslinker two-pass, no new gather machinery.** Backbone = the **3rd `RigidRodBody` instance** (shared
+systems unchanged). Faithful port of v1 `MyoMiniFilament.constrainEnd1/End2Dimers` (`:436-528`): tether
+`F=myoMiniFilFracMove·1e-6·strain/(dt·(1/rod.bTransGam.y+1/bb.bTransGam.y))` (plain perp drag, NO moveCoeff)
+at `myo1.myoRod.end1` → an **axial** backbone attach point + an align torque to ±backbone axis;
+`myoMiniFilFracMove=0.07`, `myoMiniFilAlign=0.01`, `numMyoDimersEachEnd=8`. 5 gates PASS GPU+CPU: (A)
+**gather==brute bit-identical** + tether vs v1 double-ref maxRel 3.7e-8 + momentum 2e-19 N; (B) isometric
+hold (Brownian-off exact fixed point, Brownian-on bounded thermal); (C) **CPU≡GPU** det 4.5e-6 µm; (D) FDT
+self-consistency (stationary, dt-a-physics-param); (E) **all-OFF≡HEAD** bit-identical. `CrossBridgeSystem`
+byte-unchanged (CSR reused verbatim); production byte-unchanged; `BoA-v1ref` byte-clean. New:
+`MiniFilamentStore`, `MiniFilamentSystem`, `MiniFilamentHarness`, `run_minifil.sh`. Report:
+`INC6B_MINIFILAMENT_FINDINGS.md`; JOURNAL 2026-06-17 (6b).
+```
+./run_minifil.sh            # GPU + CPU cross-check (8 backbones × 16 dimers): gates A–E
+./run_minifil.sh -cpu       # CPU runner only (triage)
+./run_minifil.sh -3js threejs_minifil -n 4   # viewer (backbone + dimer carpet)
+```
+Next within inc 6: the **glide integration** (heads bind→force transmission through the structure, recon
+check #4) + dynamic minifilament assembly; then **6c nodes** (needs a fresh v1 node snapshot per the recon
+settledness gate; reachable on a fixed anchor without the membrane subsystem).
