@@ -659,6 +659,30 @@ byte-clean. Report: `INC6_GLIDE_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6-glide 
 ./run_dimerglide.sh -cpu    # CPU runner only (triage)
 ./run_dimerglide.sh -3js threejs_dimerglide   # viewer (free dimers walking on a pinned filament)
 ```
-Next within inc 6: **minifilament-glide** (part 2 — 32 heads + the 6b backbone gather UNDER LOAD) + dynamic
-assembly; then **6c nodes** (needs a fresh v1 node snapshot per the recon settledness gate; reachable on a
-fixed anchor without the membrane subsystem).
+**Increment 6 glide part 2 — MINIFILAMENT-GLIDE — DONE (2026-06-17).** The 6b single-ended backbone gather
+is now **LOAD-BEARING**: a static minifilament's heads bind/walk on a pinned filament via `CrossBridge`
+(byte-unchanged), and the backbone gathers the collective cross-bridge load through the 6b tether. **The
+headline = `backboneGather`==brute UNDER LOAD, bit-identical.** Combines 6b + dimer-glide (the
+`boundSeg`-gated `DimerCoupling`) on the 4b-iii pinned-filament setup. **No existing file touched** — a new
+harness only. **v1 verified: NO minifilament-level binding gate** (`MyoMiniFilament.constrainEnd1/End2Dimers`
+tether unconditionally; `countBoundMotors` diagnostic-only) ⇒ the per-dimer `MyosinDimer:276` lever-align is
+the only one (already ported). **Geometry:** backbone +x (FREE, no anchor), 6b-splayed dimers, +x filament
+over the end2 up-head field ⇒ the v1 `rodDotFil≥0` predicate admits only end2 up-heads (one polarity engages
+on a single filament — correct physics; bipolar stall/contraction needs the two-antiparallel-filament
+geometry, next). Two INDEPENDENT single-ended gathers/step (backbone-keyed + segment-keyed, both
+`CrossBridge.csr*` VERBATIM). 4 gates PASS GPU+CPU: (#1) UNDER LOAD — backbone gather==brute **bit-identical
+(Δ0)** at load 2.81e-14 N + fil gather==brute (Δ0) + momentum |Σmotor+Σbb+Σfil|=9.8e-20 N + **CPU≡GPU**
+7.4e-7/1.1e-7 µm (300 loaded steps); (#2) binding gates at population scale — 16 dimers mixed states, align
+fires 11/suppressed 5, all match v1; (#3) bipolar collective (observe) — FREE backbone walks +10.85 nm, sign
+tracks the gathered net; (#5) all-OFF≡HEAD bit-identical + control. Regression guard: 6a/6b/dimer-glide all
+re-ran bit-identical PASS. New: `MiniGlideHarness`, `run_miniglide.sh`. Report:
+`INC6_GLIDE_MINIFIL_FINDINGS.md`; JOURNAL 2026-06-17 (6-glide part 2).
+```
+./run_miniglide.sh         # GPU + CPU cross-check: #1 gather-under-load, #2 gates, #3 bipolar, #5 all-OFF
+./run_miniglide.sh -cpu    # CPU runner only (triage)
+./run_miniglide.sh -3js threejs_miniglide   # viewer (a minifilament's heads walking on a pinned filament)
+```
+Next within inc 6: **the contractile two-antiparallel-filament geometry** (the first genuinely contractile
+test — both ends engaging opposite-polarity filaments) + dynamic assembly/`myoMiniLifetime`; then **6c nodes**
+(needs a fresh v1 node snapshot per the recon settledness gate; reachable on a fixed anchor without the
+membrane subsystem).
