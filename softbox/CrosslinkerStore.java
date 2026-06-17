@@ -111,6 +111,16 @@ public final class CrosslinkerStore {
     // formCounts: [0]=nCand [1]=step [2]=seed [3]=xLinkMode(0 both/1 ∥/−1 anti)
     public final IntArray   formCounts;
 
+    // ====== 5c-iii TORSION (v1 FilLink.applyTorsionForce — default-ON: filLinkTorqSpring active=true) ======
+    // Per-link torsional restoring spring aligning the two filaments to their formation orientation
+    // (parallel if linkOrientSame=1 else antiparallel). v1 averages the torque MAGNITUDE over a 5-slot
+    // ValueTracker (filLinkForcesToAve) then scales the (current) unit torsion axis by it.
+    public static final int TORQUE_WIN = 5;     // v1 Env.filLinkForcesToAve
+    public final FloatArray torqueMagHist;      // capacity * TORQUE_WIN, init 0
+    public final IntArray   torqueMagPlace;     // capacity circular pointer, init 0
+    // torsionParams: [0]=filLinkTorqSpring (N/rad), [1]=active (1/0)
+    public final FloatArray torsionParams;
+
     public CrosslinkerStore(int nLinks, int nSeg) { this(nLinks, nSeg, 1); }
 
     public CrosslinkerStore(int nLinks, int nSeg, int reqCap) {
@@ -154,6 +164,10 @@ public final class CrosslinkerStore {
         formParams      = new FloatArray(8);
         formCounts      = new IntArray(4);
         linkOrientSame.init(0);
+        // 5c-iii torsion block
+        torqueMagHist  = new FloatArray(cap * TORQUE_WIN); torqueMagHist.init(0f);
+        torqueMagPlace = new IntArray(cap); torqueMagPlace.init(0);
+        torsionParams  = new FloatArray(2);   // default off; setTorsionParams enables (v1 default)
 
         // unused slots start FREE with a negative key ⇒ skipped by the CSR (key<0) and the gather guard.
         linkState.init(LINK_FREE);
@@ -185,6 +199,13 @@ public final class CrosslinkerStore {
         formCounts.set(3, mode);
     }
     public void setFormStep(int step, int seed) { formCounts.set(1, step); formCounts.set(2, seed); }
+
+    /** v1 FilLink.applyTorsionForce: filLinkTorqSpring=1e-19 N/rad, active by default (Env.java:634 →
+     *  Parameter active=true). active=false defers torsion (5d / off-runs). */
+    public void setTorsionParams(double filLinkTorqSpring, boolean active) {
+        torsionParams.set(0, (float) filLinkTorqSpring);
+        torsionParams.set(1, active ? 1f : 0f);
+    }
 
     /** restLength = 0.0125 µm (v1 FilLink.java:28), fracMoveBase = 0.4 (v1 FilLink.java:208). */
     public void setParams(double restLength, double fracMoveBase, double dt) {

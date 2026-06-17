@@ -565,14 +565,70 @@ public final class CrosslinkerSystem {
     /** Persist orientSame into the formed link's slot, using the SAME rank→freeList mapping as `allocate`
      *  (keeps the 5c-i allocate unchanged / ≤15 args). One writer per slot ⇒ race-free. */
     public static void placeOrient(IntArray reqOrient, IntArray rankOffsets, IntArray freeList, IntArray freeOffsets,
-                                   IntArray linkOrientSame, IntArray allocCounts) {
+                                   IntArray linkOrientSame, FloatArray torqueMagHist, IntArray torqueMagPlace, IntArray allocCounts) {
         int C = allocCounts.get(0), K = allocCounts.get(1);
+        int W = CrosslinkerStore.TORQUE_WIN;
         int nFree = freeOffsets.get(C);
         for (@Parallel int r = 0; r < K; r++) {
             int rank = rankOffsets.get(r);
             if (rankOffsets.get(r + 1) <= rank) continue;
             if (rank >= nFree) continue;
-            linkOrientSame.set(freeList.get(rank), reqOrient.get(r));
+            int slot = freeList.get(rank);
+            linkOrientSame.set(slot, reqOrient.get(r));
+            torqueMagPlace.set(slot, 0);                                   // fresh torsion ring for the formed link
+            int b = slot * W; for (int j = 0; j < W; j++) torqueMagHist.set(b + j, 0f);
+        }
+    }
+
+    // ============== 5c-iii: TORSIONAL alignment spring (v1 FilLink.applyTorsionForce, default-ON) ==============
+    /** Per ACTIVE link, a torsional restoring spring toward the formation orientation (parallel if
+     *  linkOrientSame=1 else antiparallel). Faithful port: torsion axis = unit(uA×uB) [parallel] / unit(uA×(−uB))
+     *  [antiparallel]; angTween = fastAcos(dot) [parallel] / |fastAcos(dot)−π| [antiparallel]; magnitude
+     *  filLinkTorqSpring·angTween averaged over a 5-slot ring (v1 ValueTracker); +torque on A, −torque on B,
+     *  ADDED to the seg-side torque payload (gathered with the translational positional torque). v1's
+     *  checkPt3D() guard (skip when the axis is non-finite — exactly-parallel uA∥uB ⇒ |cross|=0) is ported,
+     *  which is also the §5c-ii near-parallel degenerate-geometry guard. RUN AFTER linkForces (adds to the
+     *  torque slots it set), BEFORE the gather. xlinkData torque slots: A=[3..5], B=[9..11]. */
+    public static void linkTorsion(FloatArray filUVec, IntArray linkFilA, IntArray linkFilB, IntArray linkState,
+                                   IntArray linkOrientSame, FloatArray torqueMagHist, IntArray torqueMagPlace,
+                                   FloatArray xlinkData, FloatArray torsionParams) {
+        if (torsionParams.get(1) < 0.5f) return;                          // torsion disabled
+        int nSeg = filUVec.getSize() / 3;
+        int nLinks = linkFilA.getSize();
+        double spring = torsionParams.get(0);
+        int W = CrosslinkerStore.TORQUE_WIN;
+        for (@Parallel int k = 0; k < nLinks; k++) {
+            if (linkState.get(k) < 0) continue;
+            int a = linkFilA.get(k), b = linkFilB.get(k);
+            if (a < 0 || b < 0) continue;
+            double uax = filUVec.get(a), uay = filUVec.get(nSeg + a), uaz = filUVec.get(2 * nSeg + a);
+            double ubx = filUVec.get(b), uby = filUVec.get(nSeg + b), ubz = filUVec.get(2 * nSeg + b);
+            boolean same = linkOrientSame.get(k) != 0;
+            // torsion axis = uA × (uB or −uB); dot kept as Dot(uA,uB) per v1
+            double vbx = same ? ubx : -ubx, vby = same ? uby : -uby, vbz = same ? ubz : -ubz;
+            double tx = uay * vbz - uaz * vby, ty = uaz * vbx - uax * vbz, tz = uax * vby - uay * vbx;
+            double m2 = tx * tx + ty * ty + tz * tz;
+            if (!(m2 > 1.0e-30)) continue;                                // v1 checkPt3D guard: skip exactly-parallel (|cross|≈0)
+            double im = 1.0 / Math.sqrt(m2); tx *= im; ty *= im; tz *= im;
+            double dot = uax * ubx + uay * uby + uaz * ubz;
+            if (dot > 1.0) dot = 1.0; if (dot < -1.0) dot = -1.0;
+            double angT = same ? fastAcos(dot) : Math.abs(fastAcos(dot) - Math.PI);
+            double curMag = spring * angT;
+            int base = k * W;
+            int p = torqueMagPlace.get(k);
+            torqueMagHist.set(base + p, (float) curMag);
+            torqueMagPlace.set(k, (p + 1) % W);
+            double avg = 0.0; for (int j = 0; j < W; j++) avg += torqueMagHist.get(base + j);
+            avg /= W;
+            double Tx = avg * tx, Ty = avg * ty, Tz = avg * tz;
+            int d = k * CrosslinkerStore.STRIDE;
+            // +T on A (seg-side torque [3..5]), −T on B ([9..11]) — ADD to the translational positional torque
+            xlinkData.set(d + 3,  (float) (xlinkData.get(d + 3)  + Tx));
+            xlinkData.set(d + 4,  (float) (xlinkData.get(d + 4)  + Ty));
+            xlinkData.set(d + 5,  (float) (xlinkData.get(d + 5)  + Tz));
+            xlinkData.set(d + 9,  (float) (xlinkData.get(d + 9)  - Tx));
+            xlinkData.set(d + 10, (float) (xlinkData.get(d + 10) - Ty));
+            xlinkData.set(d + 11, (float) (xlinkData.get(d + 11) - Tz));
         }
     }
 }

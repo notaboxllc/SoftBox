@@ -455,3 +455,59 @@ self-checked below (item 4).
   heavier exact-admission path is the documented escalation.
 - Next: 5c-iii (formation force law + `fracMove`-on-count + running-v1 steady-state), torsion
   (`applyTorsionForce`, consumes `linkOrientSame`), 5d (Arp2/3).
+
+---
+
+# Increment 5c-iii — formation force law (dynamic fracMove) + torsion + the running-v1 plateau
+
+## Phase 1 — force law + per-step fracMove + torsion (DONE / green; the analytic gate)
+
+**Status: DONE / green.** The full v1 `FilLink` force is now live with per-step `fracMove` and the
+default-ON torsional alignment spring. Analytic-oracle (vs v1 arithmetic). `BoA-v1ref` byte-clean;
+production byte-unchanged; crosslinkers default-off.
+
+### What was added
+- **Dynamic `fracMove = 0.4 / max(getLinkCt(segA), getLinkCt(segB), 1)`, recomputed per step.** v1's
+  count-keying read exactly (`FilLink.applyTransForce:206-208`): the **max of the two segments' link
+  counts** — unambiguous, not double-ended-summed, **no pause**. 5a's `linkForces` already computed
+  `0.4/max(ctA,ctB,1)`; 5c-iii feeds it the per-step **`activeLinkCount`** (from the existing
+  `countActiveLinks`, the per-segment histogram of ACTIVE links) instead of the static count. This
+  covers the count going **up** (formation) and **down** (death) — **absorbing 5b's deferred
+  fracMove-on-death**. No new mechanism.
+- **Near-parallel robustness:** the translational force is `forceVec = curForceMag · linkVec` with
+  `linkVec` NOT normalized (no division by `linkLength`) — so a near-zero-length link vector gives a
+  near-zero force, never a blow-up. This is v1's behaviour verbatim (v1 has no special-case); reproduced,
+  not "fixed".
+- **Torsion (`CrosslinkerSystem.linkTorsion`) — ported because it is ON by default.** v1 `Parameter`
+  defaults `active=true` and `filLinkTorqSpring` (Env.java:634, 1e-19 N/rad) is constructed active ⇒
+  `applyForces` runs `applyTorsionForce`. Faithful port: axis = `unit(uA×uB)` (parallel) / `unit(uA×(−uB))`
+  (antiparallel); `angTween = fastAcos(dot)` / `|fastAcos(dot)−π|`; magnitude `filLinkTorqSpring·angTween`
+  averaged over a **5-slot ring** (v1 `ValueTracker(filLinkForcesToAve=5)`); `+T` on segA / `−T` on segB,
+  ADDED to the seg-side torque payload (gathered with the translational positional torque). v1's
+  `checkPt3D()` guard (skip when the axis is non-finite — exactly-parallel `uA∥uB` ⇒ `|cross|=0`) ported,
+  which is also the §5c-ii near-parallel degenerate-geometry guard. Uses the PTX-safe `fastAcos`
+  (`accurateAcos` middle, per the §5c-ii note). New store fields: `torqueMagHist`/`torqueMagPlace`
+  (the ring, reset on formation in `placeOrient`), `torsionParams`, `linkOrientSame` (already persisted
+  in 5c-ii) is the parallel/antiparallel selector. `linkTorsion` runs after `linkForces`, before the gather.
+
+### Phase 1 validation (numbers; `./run_xlink.sh`, all PASS GPU + CPU)
+- **Dynamic fracMove vs v1 `applyTransForce`:** a central filament with **3 links** (count=3 ⇒
+  `fracMove=0.4/3`) then a link killed (count→**2** ⇒ `0.4/2`); the translational force matches v1's
+  formula (with the per-step count) to **max rel 5.26e-8** — float32 floor — for both the count-up and
+  count-down states.
+- **Torsion arithmetic vs v1 `applyTorsionForce`:** parallel (`orientSame=1`) and antiparallel
+  (`orientSame=0`) crosslinked pairs, step-for-step over the 5-slot ring (20 steps): **max rel 5.45e-8**.
+- **CPU≡GPU bit-identical:** force + torsion + gather (off-centre links ⇒ positional torque too, frozen
+  pose, 50 steps): **max|ΔforceSum| = 0, max|ΔtorqueSum| = 0**.
+- **all-OFF≡HEAD:** torsion OFF is bit-identical to the translational-only path (the torsion machinery is
+  a true no-op when disabled); torsion ON measurably contributes (|ΔT| ≠ 0); all 5a/5b/5c-i/5c-ii gates
+  reproduce unchanged.
+
+### Multi-link fracMove — the de-racing divergence (documented)
+v1's `getLinkCt` accumulates *within a step* as links register (`registerWithFilSegments` before
+`applyForces`), so for a multi-link segment v1's per-link `fracMove` is **order/thread-dependent** (an
+early-processed link sees fewer links than a late one; the converged value is the total). v2 uses the
+**deterministic total** active count per segment (order-independent) — the intended steady value, a
+**de-racing divergence** in the §6.12 family (v2 not inheriting a v1 race). Single-link-per-segment
+(`ct=1 ⇒ fracMove=0.4`) is bit-exact to v1; the multi-link Phase-1 check validates the formula with the
+deterministic count.
