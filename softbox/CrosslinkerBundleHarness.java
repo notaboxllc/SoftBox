@@ -157,10 +157,11 @@ public final class CrosslinkerBundleHarness {
         java.util.Random rng = new java.util.Random(seed * 7919L ^ 0xBEEFL);
         FilamentStore fil = new FilamentStore(nSeg);
         IntArray filID = new IntArray(nSeg);
-        double L = 0.20;                                  // µm filament length
+        double L = 0.8;                                   // µm filament length (long ⇒ true ~114:1 aspect at 7 nm Ø)
         int mono = Math.max(1, (int) Math.round(L / Constants.actinMonoRadius) - 1);
-        double zPitch = 0.009;                            // µm inter-filament stack pitch (~grabDist scale)
-        double jit = 0.06;                                // rad angular jitter ⇒ shallow crossings
+        double zPitch = 0.012;                            // µm inter-filament stack pitch
+        double jit = 0.05;                                // rad angular jitter ⇒ shallow crossings
+        double centerStagger = 0.25;                      // A shifted −x, B shifted +x ⇒ antiparallel OVERLAP in the middle
         for (int s = 0; s < nSeg; s++) {
             boolean bundleA = s < nPerBundle;
             int k = bundleA ? s : s - nPerBundle;
@@ -172,11 +173,12 @@ public final class CrosslinkerBundleHarness {
             fil.setUVec(s, (float) (ux * inv), (float) (uy * inv), (float) (uz * inv));
             fil.setYVec(s, 0f, 0f, 1f);
             fil.monomerCount.set(s, mono);
-            // interleave the two stacks in z (B offset by half a pitch); both centred on x=0 so they overlap
+            // interleave the two stacks in z (B offset by half a pitch); A and B staggered along x so their
+            // plus-ends point apart and they overlap (antiparallel) in the central zone — the classic motif.
             double z = (k - (nPerBundle - 1) / 2.0) * zPitch + (bundleA ? 0.0 : 0.5 * zPitch);
             double yoff = (rng.nextDouble() - 0.5) * 0.004;
-            double xoff = (rng.nextDouble() - 0.5) * 0.03;     // small longitudinal stagger
-            fil.setCoord(s, (float) xoff, (float) yoff, (float) z);
+            double xc = (bundleA ? -centerStagger : centerStagger) + (rng.nextDouble() - 0.5) * 0.03;
+            fil.setCoord(s, (float) xc, (float) yoff, (float) z);
             fil.brownTransScale.set(s, (float) Constants.BTransCoeff);
             fil.brownRotScale.set(s, (float) Constants.BRotCoeff);
             filID.set(s, s);
@@ -208,9 +210,11 @@ public final class CrosslinkerBundleHarness {
         System.out.printf("  %d filaments (2 bundles × %d), antiparallel, interdigitated; conc=%.2g pForm=%.4g%n",
                 sc.nFil, nPerBundle, conc, pForm(conc, dt * checkInt));
         new java.io.File(vizDir).mkdirs();
+        // bounds sized to the actual geometry (+ margin) so the viewer frames the whole motif, not a zoom-in
+        double bX = 2 * 0.25 + 0.8 + 0.2, bZ = nPerBundle * 0.012 + 0.1, bY = 0.12;
         int every = Math.max(1, M / 300), frames = 0, peak = 0, report = Math.max(1, M / 10);
         for (int t = 0; t <= M; t++) {
-            if (t % every == 0) writeFrame(vizDir, frames++, t * dt, sc, 0.4, 0.1, 0.15);
+            if (t % every == 0) writeFrame(vizDir, frames++, t * dt, sc, bX, bY, bZ);
             if (t % report == 0) System.out.printf("    t=%.3f s  crosslinks=%d  spread=%.4f%n", t * dt, activeLinks(sc.xl), spread(sc.fil));
             peak = Math.max(peak, activeLinks(sc.xl));
             if (t < M) assembledStepCpu(sc, t);
