@@ -6,6 +6,15 @@ found and fixed; a residual ~3.5× absolute-link-count gap SURFACED + localized 
 validated faithful; the residual lives in the time-evolution of the crossing population, not in any single
 ported component.**
 
+**UPDATE (§7, residual root-cause pass): the ~3.5× gap is now ROOT-CAUSED — it is NOT one mechanism but
+TWO independent multiplicative channels, NEITHER the admission cap. (1) FORMATION ~1.9× = a v1
+mesh-binning ARTIFACT (v1 draws P_form once per mesh-VISIT, and close crossings are visited ~1.9× ⇒ v1
+over-forms; v2's one-draw-per-crossing is the more correct model — v2's distinct crossing population MATCHES
+v1's). (2) RETENTION ~2× = v2 crosslinks carry ~2.1× the per-link strain (measured: v2 ~0.89 vs v1 ~0.42)
+⇒ ~2× the Bell-unbinding rate; localized to the single-link Brownian-driven steady-state strain (a regime
+5a never validated — 5a checked pure decay only). Admission cap EXONERATED (0 drops at fixture conc);
+rotational diffusion MATCHES (~6%). Diagnostic only; no production changes. See §7.**
+
 New: `softbox/CrosslinkerBundleHarness.java`, `run_xlinkbundle.sh`. `BoA-v1ref` byte-clean (all v1 edits
 in a `/tmp/v1xlink` scratch). Production / `GlidingHarness` byte-unchanged; crosslinkers default-off there.
 
@@ -155,3 +164,133 @@ the bundle. No viewer fork.
   coupling's crossing-population evolution (likely upstream/shared, not the crosslinker force/formation code).
 - v1 scratch `/tmp/v1xlink` retains the walls-off gate + funnel/IC instrumentation for the follow-up;
   ensemble ICs + trajectories in `RUN_LOGS/v1_ic_seed{1..6}.csv` / `v1_traj_seed{1..6}.txt`.
+
+---
+
+## 7. RESIDUAL ROOT-CAUSE PASS (the ~3.5× gap, diagnostic only — no production changes)
+
+**Result: the ~3.5× gap is NOT one mechanism — it decomposes MULTIPLICATIVELY into two independent
+channels, and NEITHER is the admission cap. (1) a FORMATION-rate gap (~1.9×) root-caused to a v1
+mesh-binning ARTIFACT (v1 over-draws P_form per crossing), and (2) a RETENTION gap (~2×) root-caused to
+v2 crosslinks carrying ~2.1× the per-link strain → ~2× the Bell-unbinding rate, localized to the
+single-link Brownian-driven steady-state strain (a regime 5a never validated).** The admission cap and
+rotational diffusion are both EXONERATED. Diagnostic instrumentation only; `BoA-v1ref` byte-clean (all v1
+edits in `/tmp/v1xlink`); production / `GlidingHarness` / `CrosslinkerSystem` / `CrosslinkerStore`
+byte-unchanged (only `CrosslinkerBundleHarness.java` gained diagnostic toggles).
+
+### 7.1 The decomposition (the reframing). `-nounbind` splits gross formation from retention.
+6-seed matched-IC ensemble, walls-off both sides, aeta=1.0, @ step ~1400:
+
+| | v1 net | v2 gross (`-nounbind`) | v2 net |
+|---|---|---|---|
+| mean | **~22** | **~14** | **~4.7** |
+
+- **Formation (gross):** v2 ~0.45× v1 (v1 gross ≈ net+breaks ≈ 22–27 since v1 barely breaks).
+- **Retention:** v2 keeps 14→4.7 (**34%**); v1 keeps ~27→22 (**~71%**) — v2 breaks ~2× more.
+- Product 0.45 × (0.34/0.71) ≈ 0.22 ≈ the observed 4.7/22 ⇒ both channels real, ~comparable, multiplicative.
+- v1's logged `filLinkCt` is **net-active** (swap-remove decrements), so v1's near-monotonic rise is genuine
+  accumulation, not a cumulative counter.
+
+### 7.2 Cut 1 — admission cap: EXONERATED (Cut 1a; Cut 1b unnecessary).
+Instrumented the per-event cap-specific drops (gate-passers that lost the one-per-segment min-candidate
+contest), full 6000-step run, seed1:
+
+| conc | cum gatePass | cum capDrop |
+|---|---|---|
+| 1.0 (fixture) | 50 | **0** |
+| 3.0 (stress)  | 144 | 4 (2.8%) |
+
+`gatePass` is ~1/event spread over 200 segments ⇒ same-segment contention ≈ 0 ⇒ **zero cap drops at the
+fixture density.** Matches the 5c-ii self-check (0.93% upper bound). Per the prompt, drops ~nil ⇒ cap
+exonerated ⇒ **Cut 1b (cap-relaxed A/B) skipped** — relaxing a cap that never binds changes nothing. The
+5c-ii one-per-segment-per-step admission stands; the heavier race-free multi-admission is NOT needed.
+
+### 7.3 Cut 2 — rotational diffusion: MATCHES (no upstream-seed failure).
+xLinks-off, matched IC, orientational autocorrelation C(t)=⟨u(t)·u(0)⟩ over 1400 steps:
+
+| | C drop (1400 steps) | implied D_rot |
+|---|---|---|
+| v1 (`xLinkConc=0` scratch) | 1.000→0.914 | ~0.321 /s |
+| v2 (`-rotdiff`) | 1.000→0.909 | ~0.341 /s |
+
+**~6% — matched, like translational (§3).** Not the "v2 rotates faster" failure mode; no pause. (The aeta
+fix scales both `bTransGam` and `bRotGam`, so FDT-consistent rotational diffusion carried over.)
+
+### 7.4 Cut 3 — alignPass/distPass: v2's distinct crossings MATCH v1; v1's raw distPass is INFLATED.
+Instrumented v1 with a distinct-pair dedup (`distinctPairs`, `distPassPairs`) against the raw funnel:
+
+| per formation event (v1 seed1) | v1 raw | v1 DISTINCT | v2 geom(<grab) |
+|---|---|---|---|
+| coarse `calls` / `distinctPairs` | ~6000–8000 | ~6000–6280 | (coarse ~5200–6000) |
+| **distPass** | **~12–29** | **~5–18** | **~8–16** |
+
+- Coarse multiplicity ~1.0–1.3 (mild). **distPass multiplicity ~1.9×**: the close (distance-passing) pairs
+  are spatially adjacent ⇒ they share multiple mesh cells ⇒ the mesh walk visits each ~2×.
+- **v1 distPassDistinct (~10) ≈ v2 geom (~11.5).** The crossing populations MATCH; v2 is NOT crossing-deficient.
+  v1's raw ctlDistPass (~25) was inflated ~2× by mesh multi-cell visiting. The earlier §4.2 "v2 distPass ~half
+  v1" compared v2's deduped count against v1's RAW count — an apples-to-oranges artifact, now corrected.
+
+### 7.5 ROOT #1 (formation channel) — v1's mesh multi-visit gives MULTIPLE P_form draws per crossing.
+v1 runs an **independent `rng.nextDouble() < P_form` draw inside `checkToLink` per mesh-VISIT** (not per
+distinct crossing). A close crossing visited ~1.9× gets ~1.9 independent draws ⇒ effective per-crossing
+formation ≈ 1−(1−0.0952)^1.9 ≈ **0.17** vs v2's faithful one-draw **0.095** (a ~1.8–2× over-formation; the
+measured v1 `formed/distPassDistinct` ≈ 0.26 is even higher, consistent with the closest pairs being visited
+the most). **This is a v1 IMPLEMENTATION ARTIFACT** — v1's formation probability per crossing is set by mesh
+binning, not by `P_form` alone. v2's one-draw-per-crossing is arguably the MORE physically correct model.
+Confirmed by the decisive lever: boosting v2 to `-conc 3` (P_form≈0.26, ≈ v1's effective rate) **raises v2
+formation but the count only reaches ~11 (vs v1 22.5)** — because the retention channel still binds (§7.6).
+
+| v2 link @ step1500 (6-seed mean) | conc=1 | conc=2 | conc=3 | v1 |
+|---|---|---|---|---|
+| | 6.5 | 8.2 | 11.2 | 22.5 |
+
+### 7.6 ROOT #2 (retention channel) — v2 crosslinks carry ~2.1× the strain → ~2× Bell breaks.
+Direct measurement of mean instantaneous active-link strain (= (linkLength−restLength)/restLength), 6-seed,
+steps 600–1500:
+
+| | mean active-link strain |
+|---|---|
+| v1 (`[XSTRAIN]` scratch) | 0.39 / 0.42 / 0.45 → **~0.42** |
+| v2 (`-straindiag`) | 0.76–1.06 → **~0.89** |
+
+At strain 0.42 vs 0.89, `k_off = 1+exp(2·strain)` gives P_break ratio ~2× ⇒ v2 breaks ~2× more (v2 ~46–113
+breaks/run vs v1 ~0–9). **This strain gap is intrinsic and NOT explained by:** diffusion (§7.3 trans + rot
+matched); torsion (`-notorsion` leaves v2 strain ~0.6–1.2, breaks 49 vs 46 — unchanged); the admission cap
+(§7.2); or density/feedback (**at matched LOW link count the gap persists** — v1 nActive=4 → strain 0.31,
+v2 links=2 → strain 0.91; and v2 `-conc 3` with 6–17 links keeps strain ~0.6–1.1, not lower). It is localized
+to the **single-link Brownian-driven steady-state strain** — the translational link-force + integrator
+relaxation of an OFF-COM attachment under Brownian forcing. **5a validated only PURE decay (Brownian OFF) to
+0.0012%; the Brownian-driven steady-state strain — the quantity that actually governs unbinding — was never
+checked.** A given v2 crosslink between two Brownian rods simply sits ~2× more stretched than the equivalent
+v1 link, so it breaks ~2× faster.
+
+### 7.7 Read against the interpretation matrix + the decisive next cut.
+- Cut 1b would close the gap → **NO** (cap exonerated, 0 drops).
+- Cut 2 mismatched → **NO** (matches within ~6%).
+- ⇒ lands on matrix branch 3 ("neither cap nor diffusion; the residual is deeper — representation / coupled
+  dynamics"), but narrowed far past "deeper" into a **two-channel decomposition**: formation = v1 mesh
+  double-draw artifact (v2 more correct); retention = intrinsic single-link Brownian strain.
+- **Decisive next cut (named, NOT run):** a co-developed single-link **Brownian steady-state strain** check —
+  identical 2-rod IC with a deliberately OFF-COM attachment, Brownian ON, v1 vs v2, measure steady-state
+  strain + the rotational relaxation of the attachment point. This extends 5a into the unbinding-governing
+  regime. If v2 relaxes the off-COM attachment slower (rotationally) ⇒ a real translational-force/integrator
+  port discrepancy to fix; if it matches ⇒ a many-body emergent difference and the retention gap is irreducible.
+
+### 7.8 Recommended fix path (for the planner to scope — NOT implemented).
+1. **Formation channel (v1 artifact):** treat v1's per-crossing over-formation as a mesh-binning artifact, NOT
+   a target. Prefer **accepting v2's faithful one-draw-per-crossing as the more correct model** and documenting
+   that v2's absolute link count will sit below v1's inflated count by the mesh-multiplicity factor (~1.9×).
+   (A cosmetic alternative — scaling v2's P_form by the mean multiplicity — would import a v1 artifact; not recommended.)
+2. **Retention channel (load-bearing):** run the §7.7 single-link Brownian-strain check. This is the half that
+   does NOT close by boosting formation, so it is where the real fidelity question lives. If a rotational-relaxation
+   discrepancy surfaces, that is the production fix; if not, the retention gap is the rigid-rod-representation
+   remainder (analogous to the §6.7 gliding parallel-scheme remainder — accept + document).
+3. The confined absolute plateau (≈49) stays parked for the boundary/membrane increment.
+
+### 7.9 Instrumentation (committed in the harness; v1 edits in `/tmp/v1xlink` only).
+- v2 `CrosslinkerBundleHarness`: `-Dstraindiag` (per-step ACTIVE→FREE break tracking + mean/max active-link
+  strain), `-Drotdiff` (xLinks-off C(t)=⟨u·u0⟩), `-notorsion` (torsion-source probe), `-Dformdiag` CAP rows
+  (Cut 1a cap-drop count). Default-off; production paths byte-unchanged.
+- v1 `/tmp/v1xlink`: `[XLINKCT]` gained `distinctPairs`/`distPassDistinct`; new `[XSTRAIN]` (mean/max active
+  strain) + `[ROTDIFF]` (C(t)); `ParameterFiles/boa-xlink-noform` (xLinkConc=0 for the rotational-diffusion
+  isolation). `BoA-v1ref` byte-clean.

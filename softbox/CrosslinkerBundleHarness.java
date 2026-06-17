@@ -73,6 +73,7 @@ public final class CrosslinkerBundleHarness {
     // (they stay packed). Matched here by scaling the drag arrays (FDT-consistent: Brownian force
     // reads bTransGam, so scaling drag auto-scales the kick). Default = the fixture value.
     static double AETA = 1.0;
+    static boolean NO_TORSION = false;   // 5c-iii P2 Cut-extension: disable the torsional spring (strain-source probe)
 
     /** Scale the drag tensors from the Constants.aeta default to the target aeta (drag ∝ aeta;
      *  diffusion = kT/γ ∝ 1/aeta). FDT stays consistent because BrownianForceSystem derives the
@@ -112,6 +113,7 @@ public final class CrosslinkerBundleHarness {
                 case "-checkint" -> checkInt = Integer.parseInt(args[++i]);
                 case "-noform"   -> formOn = false;
                 case "-nounbind" -> unbindOn = false;
+                case "-notorsion"-> NO_TORSION = true;
                 case "-v1"       -> { nFil = V1_NFIL; }   // full v1 density (200 fil)
                 case "-loadic"   -> { icFile = args[++i]; mode = "match"; }
                 case "-offset"   -> stepOffset = Integer.parseInt(args[++i]);
@@ -121,6 +123,7 @@ public final class CrosslinkerBundleHarness {
             }
         }
         if (icFile != null) {
+            if (Boolean.getBoolean("rotdiff")) { runRotDiff(icFile, dt, seed, M); return; }
             runMatch(icFile, dt, conc, checkInt, M, seed, stepOffset, formOn, unbindOn);
             return;
         }
@@ -193,7 +196,7 @@ public final class CrosslinkerBundleHarness {
         xl.setOffParams(OFF_CONST, OFF_COEFF, OFF_EXP, dt, REST_LEN);
         xl.setFormParams(V1_MAX_ANGLE, GRAB_DIST, MIN_SEP, MAX_LINKS_ON_SEG, pForm(conc, dt * checkInt), MIN_FILLINK_SEP, 0);
         xl.setRequestCount(reqCap);
-        xl.setTorsionParams(FIL_TORQ_SPRING, true);
+        xl.setTorsionParams(FIL_TORQ_SPRING, !NO_TORSION);
         BundleScene sc = new BundleScene();
         sc.segCountA = new IntArray(nSeg); sc.segOffsetsA = new IntArray(nSeg + 1); sc.segIdxA = new IntArray(C);
         sc.segCountB = new IntArray(nSeg); sc.segOffsetsB = new IntArray(nSeg + 1); sc.segIdxB = new IntArray(C);
@@ -284,7 +287,7 @@ public final class CrosslinkerBundleHarness {
         xl.setOffParams(OFF_CONST, OFF_COEFF, OFF_EXP, dt, REST_LEN);
         xl.setFormParams(V1_MAX_ANGLE, GRAB_DIST, MIN_SEP, MAX_LINKS_ON_SEG, pForm(conc, dt * checkInt), MIN_FILLINK_SEP, 0);
         xl.setRequestCount(reqCap);
-        xl.setTorsionParams(FIL_TORQ_SPRING, true);
+        xl.setTorsionParams(FIL_TORQ_SPRING, !NO_TORSION);
 
         sc.segCountA = new IntArray(nSeg); sc.segOffsetsA = new IntArray(nSeg + 1); sc.segIdxA = new IntArray(C);
         sc.segCountB = new IntArray(nSeg); sc.segOffsetsB = new IntArray(nSeg + 1); sc.segIdxB = new IntArray(C);
@@ -337,7 +340,7 @@ public final class CrosslinkerBundleHarness {
         xl.setOffParams(OFF_CONST, OFF_COEFF, OFF_EXP, dt, REST_LEN);
         xl.setFormParams(V1_MAX_ANGLE, GRAB_DIST, MIN_SEP, MAX_LINKS_ON_SEG, pForm(conc, dt * checkInt), MIN_FILLINK_SEP, 0);
         xl.setRequestCount(reqCap);
-        xl.setTorsionParams(FIL_TORQ_SPRING, true);
+        xl.setTorsionParams(FIL_TORQ_SPRING, !NO_TORSION);
         sc.segCountA = new IntArray(nSeg); sc.segOffsetsA = new IntArray(nSeg + 1); sc.segIdxA = new IntArray(C);
         sc.segCountB = new IntArray(nSeg); sc.segOffsetsB = new IntArray(nSeg + 1); sc.segIdxB = new IntArray(C);
         sc.fil = fil; sc.xl = xl; sc.filID = filID;
@@ -351,20 +354,80 @@ public final class CrosslinkerBundleHarness {
         BundleScene sc = buildFromIC(icFile, dt, conc, checkInt, seed, true);
         sc.formOn = formOn; sc.unbindOn = unbindOn;
         FORM_DIAG = Boolean.getBoolean("formdiag");
+        boolean strainDiag = Boolean.getBoolean("straindiag");
         System.out.println("\n========== Part 2.2 — v2 walls-off from v1 IC (" + sc.nFil + " seg) ==========");
         System.out.printf("  IC: spread=%.4g µm, candidates=%d, stepOffset=%d (aligns formation to v1 absolute steps)%n",
                 spread(sc.fil), candidateCount(sc), stepOffset);
-        System.out.printf("  %-10s %-10s %-12s %-8s%n", "absStep", "t(s)", "spread(µm)", "links");
+        // 5c-iii P2 residual diag: per-step ACTIVE→FREE (break) tracking + active-link strain stats.
+        boolean[] prevActive = new boolean[sc.xl.nLinks];
+        long cumBreaks = 0;
+        System.out.printf("  %-10s %-10s %-12s %-8s %-10s %-10s %-10s%n", "absStep", "t(s)", "spread(µm)", "links", "cumBreaks", "meanStrn", "maxStrn");
         for (int t = 0; t <= M; t++) {
             int abs = t + stepOffset;
-            if (abs % 20 == 0) System.out.printf("  %-10d %-10.4g %-12.4g %-8d%n", abs, abs * dt, spread(sc.fil), activeLinks(sc.xl));
-            if (t < M) assembledStepCpu(sc, abs);    // abs step ⇒ formation cadence matches v1
+            if (abs % 20 == 0) {
+                if (strainDiag) {
+                    double[] st = strainReport(sc);
+                    System.out.printf("  %-10d %-10.4g %-12.4g %-8d %-10d %-10.4g %-10.4g%n",
+                            abs, abs * dt, spread(sc.fil), activeLinks(sc.xl), cumBreaks, st[0], st[1]);
+                } else {
+                    System.out.printf("  %-10d %-10.4g %-12.4g %-8d%n", abs, abs * dt, spread(sc.fil), activeLinks(sc.xl));
+                }
+            }
+            if (t < M) {
+                for (int k = 0; k < sc.xl.nLinks; k++) prevActive[k] = sc.xl.linkState.get(k) >= 0;
+                assembledStepCpu(sc, abs);    // abs step ⇒ formation cadence matches v1
+                for (int k = 0; k < sc.xl.nLinks; k++) if (prevActive[k] && sc.xl.linkState.get(k) < 0) cumBreaks++;  // ACTIVE→FREE = a break
+            }
             if (!finite(sc.fil)) { System.out.println("  *** NON-FINITE — BLOW-UP ***"); break; }
         }
+        System.out.printf("  TOTAL breaks over run: %d%n", cumBreaks);
+    }
+
+    /** Cut 2: rotational-diffusion isolation. xLinks OFF, Brownian ON, from the matched v1 IC.
+     *  Prints the orientational autocorrelation C(t)=mean over filaments of u(t)·u(0), which decays
+     *  as exp(−2 D_rot t). Compared vs the v1 scratch [ROTDIFF] (xLinkConc=0) at matched steps. */
+    static void runRotDiff(String icFile, double dt, int seed, int M) {
+        BundleScene sc = buildFromIC(icFile, dt, 1.0, 100, seed, true);
+        sc.formOn = false; sc.unbindOn = false;     // pure diffusion, no links
+        FilamentStore f = sc.fil; int n = f.n;
+        float[] u0 = new float[3 * n];
+        for (int i = 0; i < n; i++) { u0[i] = f.uVec.get(i); u0[n + i] = f.uVec.get(n + i); u0[2 * n + i] = f.uVec.get(2 * n + i); }
+        System.out.println("\n========== Cut 2 — rotational diffusion (xLinks OFF, matched IC) ==========");
+        System.out.printf("  %-8s %-10s %-14s %-12s%n", "step", "t(s)", "C(t)=<u.u0>", "transSpread");
+        for (int t = 0; t <= M; t++) {
+            if (t % 100 == 0) {
+                double c = 0;
+                for (int i = 0; i < n; i++)
+                    c += (double) f.uVec.get(i) * u0[i] + (double) f.uVec.get(n + i) * u0[n + i] + (double) f.uVec.get(2 * n + i) * u0[2 * n + i];
+                c /= n;
+                System.out.printf("  %-8d %-10.4g %-14.6f %-12.5f%n", t, t * dt, c, spread(f));
+            }
+            if (t < M) assembledStepCpu(sc, t);
+        }
+    }
+
+    /** Mean + max strain over ACTIVE links (same geometry as CrosslinkerSystem.unbind:
+     *  strain = max(linkLength − restLength,0)/restLength). Returns {meanStrain, maxStrain}. */
+    static double[] strainReport(BundleScene sc) {
+        FilamentStore f = sc.fil; CrosslinkerStore xl = sc.xl; int n = f.n;
+        double sum = 0, mx = 0; int cnt = 0;
+        for (int k = 0; k < xl.nLinks; k++) {
+            if (xl.linkState.get(k) < 0) continue;
+            int a = xl.linkFilA.get(k), b = xl.linkFilB.get(k);
+            if (a < 0 || b < 0) continue;
+            double l1 = xl.loc1.get(k), l2 = xl.loc2.get(k);
+            double p1x = f.end1.get(a) + l1 * f.uVec.get(a), p1y = f.end1.get(n + a) + l1 * f.uVec.get(n + a), p1z = f.end1.get(2 * n + a) + l1 * f.uVec.get(2 * n + a);
+            double p2x = f.end1.get(b) + l2 * f.uVec.get(b), p2y = f.end1.get(n + b) + l2 * f.uVec.get(n + b), p2z = f.end1.get(2 * n + b) + l2 * f.uVec.get(2 * n + b);
+            double ll = Math.sqrt((p2x - p1x) * (p2x - p1x) + (p2y - p1y) * (p2y - p1y) + (p2z - p1z) * (p2z - p1z));
+            double strain = (ll - REST_LEN) / REST_LEN; if (strain < 0) strain = 0;
+            sum += strain; if (strain > mx) mx = strain; cnt++;
+        }
+        return new double[]{ cnt > 0 ? sum / cnt : 0.0, mx };
     }
 
     // ============================================================== assembled CPU step (the reference)
     static boolean FORM_DIAG = false;
+    static long CAP_GATEPASS = 0, CAP_DROPS = 0;   // Cut 1a: cumulative gate-passers vs cap-dropped
     static void formationCpu(BundleScene sc, int step) {
         FilamentStore f = sc.fil; CrosslinkerStore xl = sc.xl;
         xl.setFormStep(step, sc.seed);
@@ -392,6 +455,20 @@ public final class CrosslinkerBundleHarness {
                     step, nc, align, geom, gp, hb.toString());
         }
         CrosslinkerSystem.formAdmitReduce(xl.reqFilA, xl.reqFilB, xl.gatePass, xl.minCand, xl.formCounts);
+        if (FORM_DIAG) {
+            // Cut 1a: count gate-passing candidates DROPPED by the one-per-segment-per-step cap (lost the
+            // per-segment min-candidate contest). Nonzero ⇒ ≥2 gate-passers targeted one segment that step.
+            int gp = 0, capDrop = 0;
+            for (int c = 0; c < xl.reqCap; c++) {
+                if (xl.gatePass.get(c) == 0) continue;
+                gp++;
+                int sa = xl.reqFilA.get(c), sb = xl.reqFilB.get(c);
+                if (xl.minCand.get(sa) != c || xl.minCand.get(sb) != c) capDrop++;
+            }
+            CAP_GATEPASS += gp; CAP_DROPS += capDrop;
+            System.out.printf("    [CAP step=%d] gatePass=%d capDropped=%d (cum gatePass=%d capDrop=%d)%n",
+                    step, gp, capDrop, CAP_GATEPASS, CAP_DROPS);
+        }
         CrosslinkerSystem.formAdmit(xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.gatePass, xl.minCand, xl.activeLinkCount,
                 xl.linkState, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.acceptFlag, xl.formParams, xl.formCounts);
         CrosslinkerSystem.freeFlags(xl.linkState, xl.freeCount, xl.allocCounts);
