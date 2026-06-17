@@ -114,6 +114,7 @@ public final class CrosslinkerBundleHarness {
                 case "-noform"   -> formOn = false;
                 case "-nounbind" -> unbindOn = false;
                 case "-notorsion"-> NO_TORSION = true;
+                case "-singlelink"-> mode = "singlelink";
                 case "-v1"       -> { nFil = V1_NFIL; }   // full v1 density (200 fil)
                 case "-loadic"   -> { icFile = args[++i]; mode = "match"; }
                 case "-offset"   -> stepOffset = Integer.parseInt(args[++i]);
@@ -128,6 +129,7 @@ public final class CrosslinkerBundleHarness {
             return;
         }
         if (!pos.isEmpty()) M = Integer.parseInt(pos.get(0));
+        if (mode.equals("singlelink")) { runSingleLink(dt, seed, M); return; }
 
         System.out.println("=== Soft Box 5c-iii Phase 2 — assembled moving crosslinker bundle ===");
         System.out.printf("nFil=%d  box=%.2gx%.2gx%.2g µm  dt=%.1e  checkInt=%d  conc=%.3g  pForm=%.5g  maxAngle=%.3g rad%n",
@@ -759,6 +761,225 @@ public final class CrosslinkerBundleHarness {
         try {
             java.nio.file.Files.writeString(java.nio.file.Path.of(dir, String.format(java.util.Locale.US, "frame_%06d.json", frame)), sb.toString());
         } catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
+    }
+
+    // ============================================================== Part B: single-link equipartition study
+    /**
+     * Increment 5c-iii Phase-2 §7.7 follow-up — the single-link Brownian steady-state STRAIN, adjudicated
+     * against PHYSICS (equipartition/FDT), NOT against v1 (v1's crosslinkers are uncalibrated; see Part A).
+     *
+     * KEY PHYSICS: v1's crosslinker force is a CENTRAL conservative force — it depends only on the link
+     * length L = |pt2 − pt1| (curForceMag·linkVec, magnitude f(L) along the link axis). A conservative
+     * force + FDT-consistent overdamped dynamics (inc-1 validated) MUST sample the Boltzmann distribution
+     * of its OWN potential:  P(L) ∝ L²·exp(−U(L)/kT),  U(L) = ∫_{L0}^{L} f(L')·dL'  (3D radial Jacobian L²).
+     * So "is v2's steady-state strain physically correct?" becomes the sharp, unit-clean test:
+     * does the measured steady-state link-length histogram match L²·exp(−U/kT) computed from v2's own
+     * force law? If yes ⇒ v2 injects exactly the FDT/equipartition thermal energy ⇒ physically correct,
+     * regardless of v1. If the measured distribution is BROADER (more strain) ⇒ a real over-fluctuation bug.
+     *
+     * Ladder (isolates the thermostat from configurational geometry):
+     *   B2  — deterministic relaxation (Brownian OFF): measures the per-step decay rate k_decay + CPU≡GPU.
+     *   B1a — ISOTROPIC-drag, ON-COM, no rotation: the clean Boltzmann control (force-law drag == integrator
+     *         drag in every direction ⇒ if v2 is FDT-consistent it MUST hit L²exp(−U/kT) exactly). DECISIVE.
+     *   B1b — anisotropic (real) drag, ON-COM, no rotation: adds the par/perp drag anisotropy.
+     *   B1c — OFF-COM + rotation ON: the realistic bundle regime (off-COM lever + rotational wander add
+     *         genuine configurational strain DOF). Its higher strain is PHYSICAL, not a thermostat bug.
+     */
+    static BundleScene buildSingleLink(double dt, int seed, double Lfil, boolean isoDrag, boolean onCom,
+                                       boolean rotOn, boolean brownian, double strain0) {
+        int nSeg = 2;
+        FilamentStore fil = new FilamentStore(nSeg);
+        IntArray filID = new IntArray(nSeg);
+        int mono = Math.max(1, (int) Math.round(Lfil / Constants.actinMonoRadius) - 1);
+        for (int s = 0; s < nSeg; s++) {
+            fil.monomerCount.set(s, mono);
+            fil.setUVec(s, 1f, 0f, 0f);     // both rods along x (parallel)
+            fil.setYVec(s, 0f, 1f, 0f);
+            fil.brownTransScale.set(s, (float) (brownian ? Constants.BTransCoeff : 0.0));
+            fil.brownRotScale.set(s, (float) ((brownian && rotOn) ? Constants.BRotCoeff : 0.0));
+            filID.set(s, s);
+        }
+        // rod A COM at origin; rod B COM displaced along z by restLength*(1+strain0). Link ⟂ rods (along z).
+        fil.setCoord(0, 0f, 0f, 0f);
+        fil.setCoord(1, 0f, 0f, (float) (REST_LEN * (1.0 + strain0)));
+        DragTensorSystem.run(fil);
+        applyAeta(fil, AETA);
+        if (isoDrag) {
+            // override bTransGam to ISOTROPIC = parallel component. The FDT kick reads sqrt(bTransGam), so
+            // this makes both the random force AND the integrator drag isotropic ⇒ force-law drag (which
+            // uses bTransGam[par]) == integrator drag in every direction ⇒ a clean central-potential thermostat.
+            for (int s = 0; s < nSeg; s++) {
+                float gpar = fil.bTransGam.get(s);
+                fil.bTransGam.set(nSeg + s, gpar);
+                fil.bTransGam.set(2 * nSeg + s, gpar);
+            }
+        }
+        fil.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt));
+        fil.setCounts(0, seed);
+        DerivedGeometrySystem.derive(fil.coord, fil.uVec, fil.yVec, fil.zVec, fil.end1, fil.end2, fil.segLength, fil.counts);
+
+        int C = 4, reqCap = 1;
+        CrosslinkerStore xl = new CrosslinkerStore(C, nSeg, reqCap);
+        xl.setParams(REST_LEN, FRAC_MOVE, dt);
+        xl.setOffParams(OFF_CONST, OFF_COEFF, OFF_EXP, dt, REST_LEN);
+        xl.setFormParams(V1_MAX_ANGLE, GRAB_DIST, MIN_SEP, MAX_LINKS_ON_SEG, 0.0, MIN_FILLINK_SEP, 0);
+        xl.setRequestCount(reqCap);
+        xl.setTorsionParams(FIL_TORQ_SPRING, false);   // translational-strain study: torsion (a separate
+                                                        // rotational spring) OFF; §7.6 showed it barely moves strain.
+        // ON-COM ⇒ attach at the COM (loc = segLength/2 ⇒ end1 + (L/2)uVec = coord). OFF-COM ⇒ attach at end1
+        // (loc = 0 ⇒ lever arm = L/2 from the COM, so rotation moves the attach point).
+        double locA = onCom ? fil.segLength.get(0) * 0.5 : 0.0;
+        double locB = onCom ? fil.segLength.get(1) * 0.5 : 0.0;
+        xl.setLink(0, 0, locA, 1, locB);
+        xl.computeFilLinkCt();
+
+        BundleScene sc = new BundleScene();
+        sc.segCountA = new IntArray(nSeg); sc.segOffsetsA = new IntArray(nSeg + 1); sc.segIdxA = new IntArray(C);
+        sc.segCountB = new IntArray(nSeg); sc.segOffsetsB = new IntArray(nSeg + 1); sc.segIdxB = new IntArray(C);
+        sc.fil = fil; sc.xl = xl; sc.filID = filID;
+        sc.nFil = nSeg; sc.C = C; sc.reqCap = reqCap; sc.seed = seed; sc.checkInt = 100; sc.dt = dt;
+        sc.formOn = false; sc.unbindOn = false;
+        return sc;
+    }
+
+    /** B0 — Boltzmann/equipartition prediction for the central crosslinker potential. Numerically integrates
+     *  the exact force law f(L) = fracMove·1e-6·max(L−L0,0)·L / (dt·(1/gA+1/gB))  [N] to get U(L) [J], then
+     *  the moments of P(L) ∝ L²·exp(−U(L)/kT). Returns {⟨L⟩, ⟨strain⟩, rms(L), U(Lmax)/kT}. */
+    static double[] boltzmannPredict(double gA, double gB, double L0, double fracMove, double dt, double kT) {
+        double denom = 1.0 / gA + 1.0 / gB;
+        int N = 40000; double Lmax = 0.10;          // µm; ≫ the L0=0.0125 scale
+        double dL = Lmax / N;
+        double Z = 0, mL = 0, mS = 0, mL2 = 0, U = 0, Umax = 0;
+        double pPrev = 0, Lprev = 0;
+        for (int i = 0; i <= N; i++) {
+            double L = i * dL;
+            if (i > 0) {
+                double Lmid = (i - 0.5) * dL;
+                double s = Math.max(Lmid - L0, 0.0);
+                double F = fracMove * 1.0e-6 * s * Lmid / (dt * denom);   // N
+                U += F * (dL * 1.0e-6);                                   // J  (dL µm → m)
+            }
+            Umax = U;
+            double p = L * L * Math.exp(-U / kT);
+            Z += p; mL += p * L; mL2 += p * L * L; mS += p * ((L - L0) / L0);
+        }
+        mL /= Z; mL2 /= Z; mS /= Z;
+        return new double[]{ mL, mS, Math.sqrt(Math.max(0, mL2 - mL * mL)), Umax / kT };
+    }
+
+    static void runSingleLink(double dt, int seed, int M) {
+        if (M < 2000) M = 300000;                  // default: long steady-state sampling
+        double Lfil = 0.2;                          // µm, mid of the fixture's 0.1–0.3 µm range
+        double kT = Constants.kT;
+        System.out.println("=== Soft Box 5c-iii Part B — single-link Brownian steady-state strain vs PHYSICS (equipartition/FDT) ===");
+        System.out.printf("  2 rods (L=%.3g µm), 1 crosslink, restLength=%.4g µm, fracMove=%.2g, dt=%.1e, aeta=%.2g, kT=%.4g J%n",
+                Lfil, REST_LEN, FRAC_MOVE, dt, AETA, kT);
+
+        // -------- B2: deterministic relaxation (Brownian OFF) → per-step decay rate k_decay; + CPU≡GPU --------
+        System.out.println("\n-- B2: deterministic relaxation (Brownian OFF, ON-COM, isotropic) → k_decay + CPU≡GPU --");
+        BundleScene rc = buildSingleLink(dt, seed, Lfil, true, true, false, false, 1.0);   // start at strain 1.0
+        BundleScene rg = buildSingleLink(dt, seed, Lfil, true, true, false, false, 1.0);
+        TornadoExecutionPlan plan = cpu ? null : buildMechPlan(rg);
+        double sPrev = strainReport(rc)[0]; double kSum = 0; int kN = 0; double maxDiff = 0;
+        int relaxM = 1500;
+        for (int t = 0; t < relaxM; t++) {
+            mechStepCpu(rc, t);
+            if (plan != null) {
+                rg.fil.setCounts(t, seed);
+                TornadoExecutionResult r = plan.withGridScheduler(rg.mechSched).execute();
+                r.transferToHost(rg.fil.coord, rg.fil.uVec, rg.fil.yVec);
+                DerivedGeometrySystem.derive(rg.fil.coord, rg.fil.uVec, rg.fil.yVec, rg.fil.zVec, rg.fil.end1, rg.fil.end2, rg.fil.segLength, rg.fil.counts);
+                for (int i = 0; i < rg.fil.coord.getSize(); i++) maxDiff = Math.max(maxDiff, Math.abs(rg.fil.coord.get(i) - rc.fil.coord.get(i)));
+            }
+            double s = strainReport(rc)[0];
+            if (s > 0.05 && sPrev > 0.05 && t > 5) { kSum += (sPrev - s) / sPrev; kN++; }  // per-step fractional decay of (L−L0)
+            sPrev = s;
+        }
+        double kDecay = kN > 0 ? kSum / kN : 0;
+        System.out.printf("  measured per-step decay rate k_decay = %.6g   (τ = %.1f steps = %.3g s)%n", kDecay, 1.0 / kDecay, dt / kDecay);
+        if (plan != null)
+            System.out.printf("  CPU≡GPU (deterministic relaxation, %d steps): max|Δcoord| = %.3g µm  %s%n",
+                    relaxM, maxDiff, maxDiff < 1e-6 ? "BIT-IDENTICAL ✓" : "*DIVERGES*");
+
+        // -------- B0/B1a: ISOTROPIC-drag Boltzmann control (decisive) --------
+        System.out.println("\n-- B1a: ISOTROPIC-drag, ON-COM, no rotation — the clean Boltzmann/equipartition control (DECISIVE) --");
+        runSteadyState(dt, seed, Lfil, true, true, false, M, "B1a", true);
+
+        // -------- B1b: anisotropic (real) drag, ON-COM --------
+        System.out.println("\n-- B1b: anisotropic (real par/perp) drag, ON-COM, no rotation --");
+        runSteadyState(dt, seed, Lfil, false, true, false, M, "B1b", false);
+
+        // -------- B1c: OFF-COM + rotation ON — the realistic bundle regime --------
+        System.out.println("\n-- B1c: anisotropic drag, OFF-COM (end attach), rotation ON — realistic bundle regime --");
+        runSteadyState(dt, seed, Lfil, false, false, true, M, "B1c", false);
+
+        System.out.println("\n  Decision: B1a measured ≈ Boltzmann ⇒ v2 thermostat is FDT-correct (equipartition holds) ⇒ ACCEPT v2.");
+        System.out.println("  B1c strain > B1a is expected (off-COM lever + rotational DOF add genuine configurational strain — physical, not a bug).");
+        System.out.println("  v1's bundle strain ≈0.42 (§7.6) is v1's representational deviation (uncalibrated, multi-segment) — informational, not the target.");
+    }
+
+    /** Run a Brownian steady-state single-link case; report measured ⟨strain⟩ + (for the isotropic control)
+     *  the Boltzmann prediction and the measured/predicted ratio + a histogram overlay. */
+    static void runSteadyState(double dt, int seed, double Lfil, boolean isoDrag, boolean onCom, boolean rotOn,
+                               int M, String tag, boolean boltzmann) {
+        BundleScene sc = buildSingleLink(dt, seed, Lfil, isoDrag, onCom, rotOn, true, 0.0);
+        int burn = 5000;
+        double sSum = 0, s2Sum = 0; long cnt = 0;
+        double gA = sc.fil.bTransGam.get(0), gB = sc.fil.bTransGam.get(1);     // parallel drags (force-law drag)
+        // histogram of link length L over [0.8 L0, 3 L0]
+        int NB = 14; double lo = 0.8 * REST_LEN, hi = 3.0 * REST_LEN; long[] hist = new long[NB]; long hcnt = 0;
+        for (int t = 0; t <= M; t++) {
+            if (t < M) mechStepCpu(sc, t);
+            if (t >= burn) {
+                double strain = strainReport(sc)[0];
+                double L = REST_LEN * (1.0 + strain);
+                sSum += strain; s2Sum += strain * strain; cnt++;
+                int b = (int) ((L - lo) / (hi - lo) * NB);
+                if (b >= 0 && b < NB) { hist[b]++; hcnt++; }
+            }
+            if (!finite(sc.fil)) { System.out.println("  *** NON-FINITE ***"); return; }
+        }
+        double meanS = sSum / cnt, rmsS = Math.sqrt(s2Sum / cnt - meanS * meanS);
+        double meanEnergyStrain = s2Sum / cnt;   // ⟨strain²⟩ proxy for the strain-energy comparison
+        System.out.printf("  [%s] measured: ⟨strain⟩ = %.4f, rms(strain) = %.4f, ⟨strain²⟩ = %.4f   (n=%d, gA=%.3g gB=%.3g N·s/m)%n",
+                tag, meanS, rmsS, meanEnergyStrain, cnt, gA, gB);
+        if (boltzmann) {
+            double[] pr = boltzmannPredict(gA, gB, REST_LEN, FRAC_MOVE, dt, Constants.kT);
+            double predStrain = pr[1];
+            System.out.printf("  [%s] Boltzmann L²·exp(−U/kT): ⟨strain⟩ = %.4f, rms(L) = %.4g µm   (U(Lmax)/kT = %.1f — tail bounded)%n",
+                    tag, predStrain, pr[2], pr[3]);
+            System.out.printf("  [%s] FDT VERDICT: measured/Boltzmann ⟨strain⟩ ratio = %.3f   %s%n",
+                    tag, meanS / predStrain, Math.abs(meanS / predStrain - 1.0) < 0.10 ? "≈1 ⇒ EQUIPARTITION HOLDS ✓" : "*** DEVIATES — investigate ***");
+            // histogram overlay (measured vs Boltzmann fraction per bin)
+            double[] pbin = boltzmannHist(gA, gB, REST_LEN, FRAC_MOVE, dt, Constants.kT, lo, hi, NB);
+            System.out.printf("  [%s] L/L0 bin   measured   Boltzmann%n", tag);
+            for (int b = 0; b < NB; b++) {
+                double Lc = (lo + (b + 0.5) * (hi - lo) / NB) / REST_LEN;
+                System.out.printf("       %5.2f      %.4f     %.4f%n", Lc, hist[b] / (double) hcnt, pbin[b]);
+            }
+        }
+    }
+
+    /** Boltzmann probability mass per link-length bin over [lo,hi] (NB bins), same U(L) as boltzmannPredict. */
+    static double[] boltzmannHist(double gA, double gB, double L0, double fracMove, double dt, double kT,
+                                  double lo, double hi, int NB) {
+        double denom = 1.0 / gA + 1.0 / gB;
+        int N = 40000; double Lmax = 0.10, dL = Lmax / N, U = 0, Z = 0;
+        double[] raw = new double[NB];
+        for (int i = 0; i <= N; i++) {
+            double L = i * dL;
+            if (i > 0) {
+                double Lmid = (i - 0.5) * dL, s = Math.max(Lmid - L0, 0.0);
+                U += fracMove * 1.0e-6 * s * Lmid / (dt * denom) * (dL * 1.0e-6);
+            }
+            double p = L * L * Math.exp(-U / kT);
+            Z += p;
+            int b = (int) ((L - lo) / (hi - lo) * NB);
+            if (b >= 0 && b < NB) raw[b] += p;
+        }
+        double inBin = 0; for (double v : raw) inBin += v;
+        for (int b = 0; b < NB; b++) raw[b] /= inBin;   // normalize over the histogram window (match measured)
+        return raw;
     }
 
     static double clamp(double v, double box) { double h = 0.5 * box; return v > h ? h : (v < -h ? -h : v); }

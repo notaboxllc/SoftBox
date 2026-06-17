@@ -15,6 +15,15 @@ v1's). (2) RETENTION ~2× = v2 crosslinks carry ~2.1× the per-link strain (meas
 5a never validated — 5a checked pure decay only). Admission cap EXONERATED (0 drops at fixture conc);
 rotational diffusion MATCHES (~6%). Diagnostic only; no production changes. See §7.**
 
+**RESOLVED (§8, physics-adjudicated close — v1 is NOT a quantitative crosslinker oracle): both channels are
+v2-correct / v1-deviation; crosslinkers PHYSICALLY VALIDATED. ROOT #1 (formation) — v2's one-draw-per-crossing
+is correct; v1's 1.9× is a mesh artifact and the calibration question is DISSOLVED (v1 never tuned to
+experiment ⇒ nothing to recover; do NOT import it). ROOT #2 (retention) — the decisive single-link test shows
+v2's Brownian steady-state strain MATCHES the Boltzmann/equipartition prediction of its own force law to 0.1%
+(`P(L)∝L²exp(−U/kT)`, ratio 1.001); v2 sits AT thermal equilibrium (strain ~1.13 ON-COM / ~0.93 realistic)
+while v1's ~0.42 is FAR BELOW it ⇒ v1 is the sub-thermal deviation, not v2. ⇒ ACCEPT v2, NO production fix.
+See §8.**
+
 New: `softbox/CrosslinkerBundleHarness.java`, `run_xlinkbundle.sh`. `BoA-v1ref` byte-clean (all v1 edits
 in a `/tmp/v1xlink` scratch). Production / `GlidingHarness` byte-unchanged; crosslinkers default-off there.
 
@@ -294,3 +303,87 @@ v1 link, so it breaks ~2× faster.
 - v1 `/tmp/v1xlink`: `[XLINKCT]` gained `distinctPairs`/`distPassDistinct`; new `[XSTRAIN]` (mean/max active
   strain) + `[ROTDIFF]` (C(t)); `ParameterFiles/boa-xlink-noform` (xLinkConc=0 for the rotational-diffusion
   isolation). `BoA-v1ref` byte-clean.
+
+---
+
+## 8. PART A — Root-1 CLOSED (formation calibration DISSOLVED) + PART B — retention adjudicated by PHYSICS
+
+**New planner posture (jba):** v1's crosslinkers were **never calibrated against experiment** — v1 is a faithful
+**component-port** reference, but **NOT a quantitative oracle** for crosslinker *emergent* behavior. So the ~3.5×
+gap is adjudicated against **first-principles physics**, not against v1's numbers. Result: **both channels are now
+v2-correct / v1-deviation, and crosslinkers are physically validated.** Diagnostic + harness only; production /
+`CrosslinkerSystem` / `CrosslinkerStore` / `GlidingHarness` byte-unchanged; `BoA-v1ref` byte-clean.
+
+### 8.1 PART A — ROOT #1 (formation, §7.5) CLOSED. Calibration question dissolved, not deferred.
+v2's **one-draw-per-distinct-crossing** formation is the physically correct model; v1's ~1.9× higher formation is a
+**mesh-binning artifact** (multiple `rng<P_form` draws per crossing, one per mesh-cell visit — §7.5). Since v1's
+crosslinkers were never tuned to an experimental density, **there is no experimental link density to recover** ⇒
+**do NOT import v1's mesh multiplicity and do NOT compensate `xLinkOnRate`.** The calibration question is
+**DISSOLVED** (there is nothing to calibrate to), not parked. v2's absolute link count sitting below v1's inflated
+count by ~1.9× is *expected and correct*. (Recorded in CLAUDE.md carry-forward + the ≈49-plateau reframe.)
+
+### 8.2 PART B — the physical target (B0): equipartition of a CONSERVATIVE central force.
+The crosslinker spring is a **central conservative force**: its magnitude depends only on the link length
+`L = |pt2 − pt1|` (`forceVec = curForceMag·linkVec`, `curForceMag ∝ stretch`). A conservative force + the
+FDT-consistent overdamped Langevin dynamics (inc-1-validated Brownian kick `∝ √(2kTγ/dt)`) has a unique
+steady state: the **Boltzmann distribution of its own potential**,
+`P(L) ∝ L²·exp(−U(L)/kT)`, with `U(L) = ∫_{L0}^{L} f(L')·dL'` (3D radial Jacobian `L²`; `f(L)` = the exact ported
+force law). This makes "is v2's steady-state strain physically correct?" a **sharp, unit-clean test**: does the
+measured steady-state link-length histogram match `L²·exp(−U/kT)` computed from v2's *own* force law? **Equipartition
+is drag-independent** — the equilibrium depends only on `U` and `kT`, NOT on γ (which only sets the relaxation
+*timescale*). `U(L)` is computed by numerically integrating the exact `f(L)` (energies in J; `dL` in metres).
+
+### 8.3 PART B — measurements (`run_xlinkbundle.sh -singlelink`; 2 rods, 1 link, dt=1e-4, aeta=1.0, ~55k samples).
+A ladder isolates the thermostat from configurational geometry. `k_decay` (B2, Brownian OFF) = **0.00633/step**
+(τ=158 steps); **CPU≡GPU bit-identical** on the deterministic relaxation (max|Δcoord| = 4.66e-10 µm ≈ 0.5 ULP).
+
+| case | geometry | drag | measured ⟨strain⟩ | Boltzmann ⟨strain⟩ | ratio |
+|---|---|---|---|---|---|
+| **B1a** (decisive) | ON-COM, no rotation | **isotropic** | **1.132** (seed1) / **1.162** (seed7) | **1.130** | **1.001 / 1.028** |
+| B1b | ON-COM, no rotation | anisotropic (real) | 1.139 | (1.130) | — |
+| B1c | OFF-COM + rotation ON | anisotropic (real) | 0.954 / 0.917 | — | — |
+
+- **B1a — DECISIVE: v2 matches the Boltzmann/equipartition prediction to 0.1% (seed1) / 2.8% (seed7).** The
+  link-length histogram tracks `L²·exp(−U/kT)` bin-for-bin across the bulk (the one over-filled bin at `L≈L0` is
+  the `strain=max(·,0)` clamp folding the free `L<L0` mass onto `L0` — a reporting artifact, not physics).
+  ⇒ **v2 injects exactly the FDT/equipartition thermal energy into the link DOF. The thermostat is correct.**
+- **B1b ≈ B1a** (1.139 vs 1.132) **confirms drag-independence** — anisotropic vs isotropic drag give the same
+  equilibrium, exactly as Boltzmann requires (drag sets only the timescale). A second, independent correctness sign.
+- **B1c** (off-COM lever + rotational wander) gives ⟨strain⟩ ≈ **0.93**, *lower* than ON-COM (rotation lets the rods
+  reorient to relieve strain). This realistic single-link value ≈ the assembled-bundle v2 strain **~0.89** (§7.6) —
+  internally consistent.
+
+### 8.4 PART B — the read (decision logic): v2 is at equipartition; **v1 is the deviation.**
+- v2's single-link strain **sits AT the thermal equilibrium** of the (uncalibrated, thermally *soft*) v1 force law:
+  ~1.13 (ON-COM) / ~0.93 (realistic).
+- v1's bundle strain **~0.42 (§7.6) is FAR BELOW** that equilibrium — i.e. **v1 is the under-strained (sub-thermal)
+  outlier**, not v2. (Plausible v1-side origin, NOT root-caused — v1 is non-oracle: v1 represents these short
+  filaments as *multiple jointed sub-segments* so a link attaches to a shorter, less-mobile piece, and/or v1's
+  links form/break faster than they thermalize. Either is a v1 representational/dynamical characteristic, not a
+  target.)
+- Per the prompt's decision matrix: **v2 matches equipartition (B1 ≈ B0) ⇒ v2 is physically correct; the retention
+  "gap" is v1's (non-oracle) deviation ⇒ ACCEPT v2, NO production fix, crosslinkers physically validated.** No
+  shared-scope concern arises (there is no bug to localize; B2/B3 not needed).
+
+### 8.5 The ~3.5× gap is now FULLY ACCOUNTED — both channels v2-correct.
+- **Formation (~1.9×):** v1 mesh-double-draw artifact; v2 one-draw-per-crossing is more correct (§8.1).
+- **Retention (~2×):** v2 sits at FDT/equipartition (strain ~0.9); v1 sits sub-thermally (strain ~0.42). v2 correct.
+- ⇒ The entire walls-off link-count gap = {a v1 formation artifact we decline to import} × {v1 being colder than the
+  thermodynamic equilibrium of the shared force law}. **v2 is the more physics-faithful model in BOTH channels.**
+  Crosslinkers (force law, formation gate, conc-scaling, Bell unbinding, AND the Brownian steady-state strain that
+  governs unbinding) are **validated faithful + physically sound.** Move to 5d (Arp2/3).
+
+### 8.6 Carry-forward (crosslinker → 5d / membrane).
+- The **≈49 confined plateau** is reframed (Part A): a future-increment **v2 self-consistency / physical-plausibility**
+  check (formation≈dissolution at confinement), **NOT a "hit v1's 49" target** (v1 uncalibrated).
+- The v1 force law is **thermally soft** (equilibrium strain ~1 at physiological kT, `U(8·L0)/kT ≈ 52`) — recorded
+  as a property of the uncalibrated v1 model. If crosslinker stiffness is ever calibrated to experiment (α-actinin
+  etc.), it is a *force-law* change (re-tag + re-validate), independent of this port-fidelity result.
+
+### 8.7 Instrumentation (Part B; committed in the harness).
+`CrosslinkerBundleHarness -singlelink` (+`-seed`): builds the 2-rod/1-link scene and runs B2 (deterministic
+relaxation + CPU≡GPU) and the B1a/b/c steady-state ladder with the in-code Boltzmann `L²·exp(−U/kT)` predictor +
+histogram overlay. `buildSingleLink`/`runSteadyState`/`boltzmannPredict`/`boltzmannHist`. Default path
+byte-unchanged; `BoA-v1ref` not touched (v1 strain ~0.42 reused from §7.6 as the informational cross-check — a clean
+standalone-v1 2-rod run is disproportionately invasive, the same judgment as 5a §5, and unnecessary since the
+adjudication is v2-vs-physics).

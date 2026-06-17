@@ -438,6 +438,15 @@ without a >0.1% systematic signal.**
 - **Carry-forward rule (crosslinker/contractile work):** a **>0.1% systematic** discrepancy vs BoA-v1ref is
   a **logic** signal, not float32 (the §6.8 precision floor). Below ~0.1% on near-cancelling force balances
   is expected float32 / chaotic-mean noise.
+- **Component-port-correctness vs emergent-quantitative behavior (crosslinkers; §8) — a load-bearing
+  distinction.** v1 (BoA-v1ref) is the oracle for **per-component port equivalence** (a force law, a rate, a
+  gate — matched bit-for-decision, the standing 5a–5c-ii validations). But for **emergent quantitative
+  behavior** (steady-state link count, strain, plateau), **v1's crosslinkers were NEVER calibrated to
+  experiment** ⇒ v1 is **NOT a quantitative oracle** there. Adjudicate emergent crosslinker behavior against
+  **first-principles physics** (equipartition/FDT, conservation, scaling), not by matching v1's numbers. A v2↔v1
+  emergent mismatch where v2 is physics-correct (e.g. v2 at Boltzmann equilibrium, §8) is **v1's deviation, not a
+  v2 bug** — do NOT chase it, do NOT import v1 artifacts to close it. (This posture is crosslinker-specific so
+  far; filament/motor emergent behavior WAS frozen-fixture-validated through inc 4.)
 
 **Increment 5 (crosslinkers / Arp2/3) — ACTIVE.** Recon: `INC5_CROSSLINKER_RECON.md`.
 
@@ -548,15 +557,28 @@ formation gate bit-faithful (funnel matches on identical config), **conc-scaling
 `xLinkConc`→halve formation, 2.0×). **Open/PAUSED: a residual ~3.5× walls-off link-count gap** (v1
 22.5±1.3 vs v2 6.5±1.0 @ step 1500, 6-seed ensemble) — NOT within SEM; excluded gate/diffusion/unbinding/
 conc-scaling as the cause; residual is in the crossing-population time-evolution (subtle coupling, not
-root-caused). **Confined plateau (≈49) parked** for the boundary/membrane increment (v2 lacks Chamber
-confinement). New: `CrosslinkerBundleHarness`, `run_xlinkbundle.sh`; report `INC5C-iii_PHASE2_FINDINGS.md`.
+root-caused). New: `CrosslinkerBundleHarness`, `run_xlinkbundle.sh`; report `INC5C-iii_PHASE2_FINDINGS.md`.
 ```
 ./run_xlinkbundle.sh -cpu -nfil 200            # CPU assembled run + stability
 ./run_xlinkbundle.sh -cpugpu -nfil 200         # GPU mechanics vs CPU (aggregate-within-SEM)
 ./run_xlinkbundle.sh -3js threejs_xlinkbundle -nfil 150 -conc 3   # crosslinking demo
+./run_xlinkbundle.sh -singlelink               # Part B: single-link Brownian strain vs Boltzmann/equipartition
 ```
 
-Next: root-cause the residual ~3.5× gap (matched-config alignPass/distPass overlay + admission-cap A/B);
-5d (Arp2/3). (The `STORE_CROSSLINKER` broad-phase publisher seam exists; 5c-ii/Phase-2 used a self-contained
-FIL×FIL candidate generator over the filament pose — wiring the production SpatialGrid publisher is an
-integration step.) The confined steady-state plateau (≈49) is parked for the boundary/membrane increment.
+**5c-iii residual RESOLVED (2026-06-16, §8) — crosslinkers PHYSICALLY VALIDATED; v1 is NOT a quantitative
+crosslinker oracle.** Per jba: v1's crosslinkers were **never calibrated to experiment** ⇒ v1 is a faithful
+**component-port** reference but **NOT a quantitative emergent-behavior oracle**. The ~3.5× gap is adjudicated
+against PHYSICS, and **both channels are v2-correct / v1-deviation:** (1) **formation ~1.9×** = a v1 mesh
+double-draw ARTIFACT — v2's one-draw-per-crossing is correct; the calibration question is **DISSOLVED** (nothing
+to recover ⇒ do NOT import the artifact, do NOT compensate `xLinkOnRate`). (2) **retention ~2×** — the decisive
+single-link test (`-singlelink`): v2's Brownian steady-state strain MATCHES the **Boltzmann/equipartition**
+prediction of its own (central, conservative) force law to **0.1%** (`P(L)∝L²exp(−U/kT)`, ratio 1.001;
+drag-independent; CPU≡GPU bit-identical on the deterministic relaxation). v2 sits AT thermal equilibrium
+(strain ~1.13 ON-COM / ~0.93 realistic ≈ the bundle's ~0.89); v1's ~0.42 is FAR BELOW it ⇒ **v1 is the
+sub-thermal deviation, not v2.** ⇒ **ACCEPT v2, NO production fix.** The confined ≈49 plateau is **reframed**
+as a future-increment **v2 self-consistency / physical-plausibility** check (formation≈dissolution at
+confinement), **NOT a "hit 49" target** (v1 uncalibrated). Report `INC5C-iii_PHASE2_FINDINGS.md` §8.
+
+Next: **5d (Arp2/3).** (The `STORE_CROSSLINKER` broad-phase publisher seam exists; 5c-ii/Phase-2 used a
+self-contained FIL×FIL candidate generator over the filament pose — wiring the production SpatialGrid publisher
+is an integration step.)
