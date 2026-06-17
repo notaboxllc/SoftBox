@@ -511,3 +511,58 @@ early-processed link sees fewer links than a late one; the converged value is th
 **de-racing divergence** in the §6.12 family (v2 not inheriting a v1 race). Single-link-per-segment
 (`ct=1 ⇒ fracMove=0.4`) is bit-exact to v1; the multi-link Phase-1 check validates the formula with the
 deterministic count.
+
+## Phase 1.5 — v1-bundle setup cost gate: v1 oracle CHEAP & captured; v2 matched bundle is the large piece → PAUSE for the planner
+
+**v1 oracle — cheap, runnable, CAPTURED.** v1 ships an existing crosslinked-bundle config
+`ParameterFiles/boa-xlink-dense-nomotor` (200 short filaments in a 0.7×0.7×0.3 µm box, no motors, static
+turnover, formation+unbinding+force live; `sideBonds`=mode 0, `maxXLinkBondAngle`=0.6 rad ≈34°,
+`maxLinksOnSeg`=10, `filLinkTorqSpring`=1e-19 active; on/off rates at Java defaults). `FilLink.filLinkCt`
+is the live active-link count. A `/tmp/v1xlink` scratch (BoA-v1ref **byte-clean**) with a one-line
+periodic `filLinkCt` log (after `updateCounters()`), run on the CPU path (`@tornado-argfile`, no `-gpu`),
+gives a **clean steady-state plateau**:
+
+```
+t(s)   0.1  0.2  0.3  0.4  0.5  0.6 … 1.0 … 2.0
+links   19   36   41   46   48   49     49     50      (200 filaments; plateau ≈ 49, stable from ~0.6 s)
+```
+
+So **the deferred running-v1 oracle is in hand: plateau ≈ 49 links / 200 filaments**, ~few min per seed.
+**Cadence note:** this config has `biochemDeltaT`=0.01, `deltaT`=1e-4 ⇒ `crosslinkCheckInt`=100 ⇒
+`dtCheck`=0.01 s ⇒ `P_form = 1−exp(−10·1·0.01) ≈ 0.0952` (formation attempted every 100 steps at ~9.5%/
+candidate — much higher than the 5c-ii default-cadence checks' 0.001).
+
+**v2 matched bundle — the large remaining piece (PAUSE).** v2 has **no moving many-filament crosslinked
+bundle** (the 5a–5c-iii harness scenes are controlled micro-scenes / frozen-pose formation). Standing up a
+matched v2 bundle for an aggregate-within-SEM plateau comparison requires, beyond assembly:
+1. **Box confinement — a force v2 does NOT have.** v1 keeps the 200 filaments dense via `Chamber.makeABox`
+   boundary forces (F1). v2's crosslinker path has no walls; unconfined filaments diffuse out → density
+   drops → the plateau is not comparable. Matching v1's plateau *quantitatively* depends on the
+   confinement model, so a divergence could be a confinement-model artifact rather than logic — exactly
+   the confound the >0.1 %-is-logic rule warns against. Porting v1's boundary (or choosing a wall model) is
+   a real decision, not silent wiring.
+2. **The combined moving loop, never assembled:** zero → Brownian → box → (chain) → unbind → formation
+   (cadence-gated every `crosslinkCheckInt`) → linkForces (dynamic fracMove) → linkTorsion → gather →
+   integrate → derive, over many filaments. The dynamic force↔formation↔unbinding coupling on MOVING
+   filaments is **unvalidated** (Phase 1 validated the force arithmetic on frozen/controlled scenes) —
+   a stability risk to manage.
+3. **Matched random IC + density** (v1 places 200 clustered short filaments via its own RNG).
+
+**Recommendation (planner decides how to source the oracle).** The v1 oracle is cheap and captured
+(plateau ≈ 49). The v2 matched bundle is a substantial sub-increment whose crux is the **box-confinement
+model** (without it the density→plateau comparison is confounded). Options:
+- (A) Authorize building the v2 moving bundle, scoping the confinement model explicitly (port v1's F1, or
+  a defined wall — accepting the comparison is then confinement-model-dependent).
+- (B) Accept Phase 1's analytic closure of the force law + a **v2-only self-consistency** plateau
+  (formation≈dissolution balance + the halve-`xLinkConc`→~halve-plateau scaling — neither needs v1's
+  absolute count nor a matched confinement), comparing the *shape* (not absolute count) to v1's plateau.
+- (C) Another oracle sourcing.
+
+Per the prompt's Phase-1.5 gate ("don't improvise a big harness; the planner decides how to source the
+oracle"), **Phase 2 is paused here.** Phase 1 (force law + fracMove + torsion) is committed and green;
+the v1 oracle is captured for whichever path is chosen.
+
+**Carry-forward:** the analytic-oracle deferral is now *narrowed* — the force-law/gate/rate arithmetic is
+fully analytic-validated through Phase 1 + 5a–5c-ii; only the **running-bundle steady-state plateau**
+remains, and its v1 target (≈49) is captured. The §6.12-style same-step-reuse timing divergence (5c-i)
+would bear on the plateau only at the ≤1-step level (negligible vs the ~0.6 s equilibration).
