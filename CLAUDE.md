@@ -690,20 +690,26 @@ bookkeeping (1:1 port of v1 `captureContractilityTension`/`accumulateContractili
 new gather. **THE CRUX — chain-inclusive tension read:** the minifilament binds INTERIOR segments; the force
 propagates via the chain (F3/F4) to the pinned plus-end. v2 has **NO separate jointForceSum** (the v1 GPU
 `addDeviceJointForce` gotcha CANNOT recur) — `ChainBendingForceSystem.chainForces` + `CrossBridge.segGather` both
-`+=` into the SAME `fil.forceSum`; read PRE-snap after both ⇒ chain-inclusive by construction. 4 gates PASS
-GPU+CPU: (#1) crux — perturb interior seg 5 links from the pin: chain ON ⇒ pin 2.46 pN, chain OFF ⇒ 0, read sums
-chain+direct cross-bridge; (#4) no-motor control — pinned tips held EXACTLY, tension relaxes to 3.3e-4 pN; (#2)
-**IT CONTRACTS** — both poles engage, force ON fil A=−x / B=+x (both inward), anchor tension A=+0.057 B=+0.113 pN
-(both contractile), 261× the no-motor baseline; (#3) **CPU≡GPU** — deterministic chain+PIN bit-identical float32
-(validates `PinSystem` on device), chaotic dynamic-bind aggregate-agrees. **Weak-signal finding (surfaced):** net
-~0.1 pN, converges only over ≳40k steps; ~1.5/8 up-heads bound (duty-ratio-limited, no fresh-motor reservoir);
-held-bound is intrinsically unstable on a pinned filament (strain can't relax ⇒ dynamic release mandatory — v1's
-reason). A strong plateau needs more co-engaged heads (down-head filaments / multiple minifilaments / 6c node).
-**v1 cross-check:** readout SET reproduced 1:1 (viewer panel = v1 `ThreeJSWriter:262-277` schema); a tight numeric
-match deliberately NOT attempted (adapted geometry; v1 contractility uncalibrated — §8 posture). Geometry adapted
-(flagged): both anti-parallel filaments in the +z up-head plane (6b splay is x–z planar vs v1's Y-offset 3D
-splay); fixed central backbone. New: `PinSystem`, `ContractileAssayHarness`, `run_contractile.sh`. Report:
-`INC6_CONTRACTILE_ASSAY_FINDINGS.md`; spec: `INC6_CONTRACTILITY_ASSAY_SURVEY.md`; JOURNAL 2026-06-17.
+`+=` into the SAME `fil.forceSum`; read PRE-snap after both ⇒ chain-inclusive by construction. **Geometry faithful
+to v1 (reworked per jba):** filaments offset in Y at **±0.05 µm** (v1 `contractFilYOffset`, straddling); the
+minifilament is **FREE and undergoing Brownian motion** (backbone + rods + heads) — the v1 **thermal search** that
+lets the heads find/bind the offset filaments (v1 dimer rods are axial ⇒ heads reach ~28 nm, the Brownian wiggle
+bridges to 50 nm); a soft `BackboneAnchorSystem` centering keeps the free minifilament "in the middle" (v1's
+confining-box stand-in). 4 gates PASS GPU+CPU: (#1) crux — perturb interior seg 5 links from the pin: chain ON ⇒
+pin 2.46 pN, chain OFF ⇒ 0, read sums chain+direct cross-bridge; (#4) no-motor control — pinned tips held EXACTLY,
+tension relaxes to 3.3e-4 pN; (#2) **IT CONTRACTS** — both poles engage (avgBound ~2.3/pole), force ON fil A=−x /
+B=+x (both inward), anchor tension A≈+0.27 B≈+0.46 pN (both contractile, SYMMETRIC), ~1100× the no-motor baseline,
+converges by ~20k steps; (#3) **CPU≡GPU** — deterministic chain+PIN bit-identical float32 (validates `PinSystem`
+on device), chaotic full-Brownian path aggregate-agrees. **Signal/held-bound finding (surfaced):** with the
+Brownian search the contraction is symmetric + ~5× stronger; still a single small minifilament ⇒ avgBound
+duty-ratio-limited (~2.3/8 up-heads); held-bound is intrinsically unstable on a pinned filament (strain can't
+relax ⇒ dynamic release mandatory — v1's reason); a stronger plateau scales with co-engaged head count (down-head
+filaments / multiple minifilaments / 6c node). **v1 cross-check:** readout SET reproduced 1:1 (viewer panel = v1
+`ThreeJSWriter:262-277` schema); a tight numeric match deliberately NOT attempted (v1 contractility uncalibrated —
+§8 posture). ONE flagged adaptation: dimer splay is x–Y-planar (heads project ±Y toward the two straddling
+filaments) vs v1's 3D azimuthal splay. New: `PinSystem`, `BackboneAnchorSystem`, `ContractileAssayHarness`,
+`run_contractile.sh`. Report: `INC6_CONTRACTILE_ASSAY_FINDINGS.md`; spec: `INC6_CONTRACTILITY_ASSAY_SURVEY.md`;
+JOURNAL 2026-06-17.
 ```
 ./run_contractile.sh            # GPU + CPU cross-check: #1 crux, #4 control, #2 contracts, #3 CPU≡GPU
 ./run_contractile.sh -cpu       # CPU runner only (triage)

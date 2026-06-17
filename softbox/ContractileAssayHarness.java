@@ -54,10 +54,20 @@ public final class ContractileAssayHarness {
     static final int B = 64;
     static final int SEED = 0xC04711, SEED_BB = 0x5C2F11;
     static final double MYO_SPRING = 1.0e-9, J1_FMT = 0.4;
-    static double REACH = 0.012;                     // myoColTol (bind reach, µm) — set wide enough that a head
-                                                     // can rebind after its ~7 nm stroke (no fresh-motor reservoir)
+    static double YOFF = 0.05;                        // filament ±Y offset (v1 contractFilYOffset) — the two
+                                                     // anti-parallel filaments straddle the central minifilament
+    static double REACH = 0.025;                      // myoColTol (bind/capture radius, µm). The dimer rods are
+                                                     // AXIAL (v1 makeMyosinDimers — radial part commented out) so a
+                                                     // head tip projects only ~(lever+head)≈28 nm perpendicular;
+                                                     // the capture radius + Brownian thermal search bridge the gap
+                                                     // to the ±YOFF filaments (v1's "thermal search is the enabler")
     static double ALIGN_TOL = -0.4;                  // myoMotorAlignWithFilTolerance (v1 default)
     static double KOFF = 100.0;                       // catch-slip base off-rate (v1 default 100/s); -koff overrides
+    static double BROWN_TRANS = 1.0;                  // BTransCoeff — full translational thermal (the head search)
+    static double BROWN_ROT = 0.3;                    // BRotCoeff (v1 contractility pf) — rotational thermal
+    static double ANCHOR_K = 3.0e-4;                  // soft backbone-centering spring (N/m) — keeps the FREE
+                                                     // Brownian minifilament "positioned in the middle" (v1's
+                                                     // thin confining box stand-in); wiggle ~3 nm, drift-bounded
     static final double SIN80 = Math.sin(Math.toRadians(80.0)), COS80 = Math.cos(Math.toRadians(80.0));
     static final int FIL_MONO = 64;                 // 64-monomer segments (v1 stdSegLength override)
 
@@ -98,8 +108,8 @@ public final class ContractileAssayHarness {
         FloatArray bondData, xbParams;
         IntArray segMotorCount, segMotorOffsets, segMotorMyo;
         IntArray reachSeg, reachCount;
-        // pins
-        IntArray pinSeg, pinCounts; FloatArray pinPt;
+        // pins + backbone centering home
+        IntArray pinSeg, pinCounts; FloatArray pinPt; FloatArray bbHome;
         int pinSegA, pinSegB;                          // the two anchor segments (filA plus end / filB plus end)
         double bdAx = -1, bdBx = 1;                     // inward buildDir.x for A (−x) / B (+x)
         int filA0, filB0, segPerFil;                   // segment index ranges: A = [filA0, filA0+K), B = [filB0, ...)
@@ -112,12 +122,11 @@ public final class ContractileAssayHarness {
         //   released head that strokes out of reach cannot rebind — so the dynamic steady-state avgBound
         //   is low; static binding isolates "the bipolar minifilament builds contractile tension".
         boolean dynamicBind = true;
-        // backboneFixed: the minifilament backbone is a rigid bipolar anchor at center (not integrated).
-        // The clean isometric setup — both the motor scaffold and the filament plus-ends are anchored, the
-        // contractile machinery between them builds tension; the stationary head field lets released heads
-        // rebind (maintaining avgBound). v1's minifilament is free + thermal-centred; fixing it is the
-        // deterministic-test adaptation (flagged). The tether still couples the dimers to it.
-        boolean backboneFixed = true;
+        // backboneFixed: default FALSE — the v1 minifilament is FREE and thermal-centred. The backbone is
+        // integrated and undergoes Brownian motion (with the rods/levers/heads), wiggling about the centre;
+        // that thermal search is what lets the heads find and bind the filaments. Setting it true pins the
+        // backbone as a rigid bipolar anchor (a debug/isometric option).
+        boolean backboneFixed = false;
         // last captured per-step tension (pN), set by the CPU step
         double tA = 0, tB = 0;
     }
@@ -125,14 +134,14 @@ public final class ContractileAssayHarness {
     /** Build one filament chain into `fil` segments [base, base+K), plus-end (end2) pinned at pinTipX.
      *  plusSign p=+1 ⇒ plus end at +x (uVec +x); p=−1 ⇒ plus end at −x (uVec −x). Segments march inward
      *  (toward −p·x). Linear topology: seg i's end1 ↔ seg (i+1)'s end2 (end1NbrSide=1, end2NbrSide=0). */
-    static void buildChain(FilamentStore fil, int base, int K, double pinTipX, double p, double z, double L) {
+    static void buildChain(FilamentStore fil, int base, int K, double pinTipX, double p, double yOff, double L) {
         for (int i = 0; i < K; i++) {
             int s = base + i;
             double cx = pinTipX - p * (0.5 * L + i * L);     // local 0 plus-tip at pinTipX; inward as i grows
             fil.monomerCount.set(s, FIL_MONO);
-            fil.setCoord(s, (float) cx, 0f, (float) z);
+            fil.setCoord(s, (float) cx, (float) yOff, 0f);   // offset in Y (straddles the central minifilament)
             fil.setUVec(s, (float) p, 0f, 0f);               // end2 = coord + ½L·uVec = the plus tip
-            fil.setYVec(s, 0f, 1f, 0f);
+            fil.setYVec(s, 0f, 0f, 1f);
             fil.brownTransScale.set(s, 0f); fil.brownRotScale.set(s, 0f);
             if (i < K - 1) { fil.end1NbrSlot.set(s, s + 1); fil.end1NbrSide.set(s, 1); }   // my end1 ↔ nbr end2
             if (i > 0)     { fil.end2NbrSlot.set(s, s - 1); fil.end2NbrSide.set(s, 0); }   // my end2 ↔ nbr end1
@@ -154,19 +163,19 @@ public final class ContractileAssayHarness {
         MiniFilamentStore mini = new MiniFilamentStore(1, nDimers);
         FilamentStore fil = new FilamentStore(nSeg);
 
-        // up-head bindTip field geometry (mirror of MiniGlideHarness): end2 (+x) up-heads land at
-        //   x = ax + projX, z = projZ ; end1 (−x) up-heads at x = ax − projX (ax<0), z = projZ.
+        // head bindTip field geometry: dimers splay in the x–Y plane (p=(0,1,0)), so heads project ±Y to
+        //   reach the two ±YOFF filaments. end2 (+x) +Y-heads land at x = ax + projX, y = +projY; end1 (−x)
+        //   −Y-heads at x = ax − projX (ax<0), y = −projY. The v1 rodDotFil≥0 predicate sorts polarity ⇒
+        //   end2 heads bind filament A (+x, +YOFF), end1 heads bind filament B (−x, −YOFF).
         double projX = MotorStore.ROD_LEN + (MotorStore.LEVER_LEN + MotorStore.HEAD_LEN) * COS80;
-        double projZ = (MotorStore.LEVER_LEN + MotorStore.HEAD_LEN) * SIN80;
         double axMin = bbLen / 2.0 - hz, axMax = bbLen / 2.0;
-        double fieldXc = 0.5 * (axMin + axMax) + projX;       // +x end2 up-head field center
-        double filZ = projZ + 0.003;                          // 3 nm above the up-head tips
+        double fieldXc = 0.5 * (axMin + axMax) + projX;       // +x end2 head field x-center
 
-        // backbone at origin, +x, FREE (held by its tethers; both poles balance it)
+        // backbone at origin, +x, FREE + BROWNIAN (the v1 minifilament wiggles; thermal search enables binding)
         mini.backbone.setCoord(0, 0f, 0f, 0f);
         mini.backbone.setUVec(0, 1f, 0f, 0f);
         mini.backbone.setYVec(0, 0f, 1f, 0f);
-        mini.backbone.brownTransScale.set(0, 0f); mini.backbone.brownRotScale.set(0, 0f);
+        mini.backbone.brownTransScale.set(0, (float) BROWN_TRANS); mini.backbone.brownRotScale.set(0, (float) BROWN_ROT);
         int d = 0;
         for (int e = 0; e < 2; e++) {
             double dir = (e == 0) ? -1.0 : 1.0;               // end1 (−x) / end2 (+x)
@@ -181,15 +190,15 @@ public final class ContractileAssayHarness {
             }
         }
 
-        // two anti-parallel filament chains over the up-head fields. The pin is nOut segments OUTWARD
-        // from the head field so the bound (interior) segment and the pinned segment are separated by a
-        // chain run (the crux). filA = [0,K) plus end +x; filB = [K,2K) plus end −x.
+        // two anti-parallel filament chains, OFFSET in Y (±YOFF — straddling the minifilament, v1 geometry).
+        // The pin is nOut segments OUTWARD from the head field so the bound (interior) segment and the pinned
+        // segment are separated by a chain run (the crux). filA = [0,K) plus +x at +YOFF; filB = [K,2K) plus −x at −YOFF.
         int nOut = Math.max(2, K / 2);
         double pinTipA = fieldXc + nOut * L + 0.5 * L;        // filA plus tip (+x), end2 of seg 0
         double pinTipB = -(fieldXc + nOut * L + 0.5 * L);     // filB plus tip (−x), end2 of seg K
         sc.filA0 = 0; sc.filB0 = K; sc.segPerFil = K;
-        buildChain(fil, 0, K, pinTipA, +1.0, filZ, L);
-        buildChain(fil, K, K, pinTipB, -1.0, filZ, L);
+        buildChain(fil, 0, K, pinTipA, +1.0, +YOFF, L);
+        buildChain(fil, K, K, pinTipB, -1.0, -YOFF, L);
 
         DragTensorSystem.run(fil);
         fil.setParams(dt, 0);
@@ -218,10 +227,11 @@ public final class ContractileAssayHarness {
         // pins: filA plus end = seg 0 (its end2 at pinTipA); filB plus end = seg K (its end2 at pinTipB)
         sc.pinSegA = 0; sc.pinSegB = K;
         sc.pinSeg = IntArray.fromElements(sc.pinSegA, sc.pinSegB);
-        sc.pinPt = FloatArray.fromElements((float) pinTipA, 0f, (float) filZ, (float) pinTipB, 0f, (float) filZ);
+        sc.pinPt = FloatArray.fromElements((float) pinTipA, (float) YOFF, 0f, (float) pinTipB, (float) -YOFF, 0f);
         sc.pinCounts = IntArray.fromElements(2);
         sc.bdAx = -1.0;   // filA pinned +x ⇒ inward −x
         sc.bdBx = +1.0;   // filB pinned −x ⇒ inward +x
+        sc.bbHome = FloatArray.fromElements(0f, 0f, 0f, (float) ANCHOR_K);   // centre the free Brownian backbone
 
         sc.fil = fil; sc.mot = mot; sc.dim = dim; sc.mini = mini;
         if (establishBonds) for (int t = 0; t < 4; t++) bindOnly(sc, t);
@@ -257,6 +267,9 @@ public final class ContractileAssayHarness {
             if (withCycle) NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
             ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
             ChainBendingForceSystem.zeroAccumulators(bb.forceSum, bb.torqueSum, mini.bbCounts);
+            // Brownian thermal search (the v1 enabler): rods + heads + backbone wiggle so the heads find the filaments
+            BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
+            BrownianForceSystem.brownianForce(bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams, mini.bbCounts);
             MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
             DimerCouplingSystem.couple(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg);
             if (sc.tetherOn) {
@@ -270,6 +283,7 @@ public final class ContractileAssayHarness {
             CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
                     mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
             CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+            if (sc.tetherOn && !sc.backboneFixed) BackboneAnchorSystem.center(bb.coord, bb.forceSum, sc.bbHome, mini.bbCounts);
             RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
             if (sc.tetherOn && !sc.backboneFixed) RigidRodLangevinIntegrationSystem.integrate(bb.coord, bb.uVec, bb.yVec, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, mini.bbBodyParams, mini.bbCounts);
             DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
@@ -313,14 +327,14 @@ public final class ContractileAssayHarness {
                     mot.bodyParams, mot.jointParams, mot.nucParams, mot.kinParams,
                     dim.motorA, dim.motorB, dim.parallel, dim.dimerParams,
                     bb.coord, bb.uVec, bb.yVec, bb.zVec, bb.end1, bb.end2, bb.segLength, bb.bTransGam, bb.bRotGam,
-                    bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, mini.bbBodyParams,
+                    bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams,
                     mini.bbInvDragY, mini.headBackboneSlot, mini.motorA, mini.attachAxial, mini.miniData, mini.miniParams,
                     mini.bbDimerCount, mini.bbDimerOffsets, mini.bbDimerList, mini.miniCounts,
                     sc.bondData, sc.xbParams, sc.segMotorCount, sc.segMotorOffsets, sc.segMotorMyo, sc.reachSeg, sc.reachCount,
                     f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.bTransGam, f.bRotGam,
                     f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.params, f.chainParams,
                     f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
-                    sc.pinSeg, sc.pinPt, sc.pinCounts)
+                    sc.pinSeg, sc.pinPt, sc.pinCounts, sc.bbHome)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, mini.bbCounts, f.counts);
         // dynamic binding (catch-slip release + geometric rebind) — skipped in static-bind mode
         if (sc.dynamicBind) {
@@ -332,6 +346,8 @@ public final class ContractileAssayHarness {
         if (withCycle) tg.task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
         tg.task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
           .task("zeroBb", ChainBendingForceSystem::zeroAccumulators, bb.forceSum, bb.torqueSum, mini.bbCounts)
+          .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
+          .task("brownBb", BrownianForceSystem::brownianForce, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams, mini.bbCounts)
           .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
           .task("dimer", DimerCouplingSystem::couple, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg)
           .task("tether", MiniFilamentSystem::tether, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum,
@@ -345,7 +361,8 @@ public final class ContractileAssayHarness {
           .task("integM", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
           .task("deriveM", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
         if (!sc.backboneFixed) {
-            tg.task("integB", RigidRodLangevinIntegrationSystem::integrate, bb.coord, bb.uVec, bb.yVec, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, mini.bbBodyParams, mini.bbCounts)
+            tg.task("center", BackboneAnchorSystem::center, bb.coord, bb.forceSum, sc.bbHome, mini.bbCounts)
+              .task("integB", RigidRodLangevinIntegrationSystem::integrate, bb.coord, bb.uVec, bb.yVec, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, mini.bbBodyParams, mini.bbCounts)
               .task("deriveB", DerivedGeometrySystem::derive, bb.coord, bb.uVec, bb.yVec, bb.zVec, bb.end1, bb.end2, bb.segLength, mini.bbCounts);
         }
         tg.task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
@@ -365,8 +382,8 @@ public final class ContractileAssayHarness {
         sched = new GridScheduler();
         for (String t : new String[]{ "publishHead","reach","release","bind","bond","applyHead","register" }) addW("contract." + t, pad(nM));
         if (withCycle) addW("contract.cycle", pad(nM));
-        for (String t : new String[]{ "zeroMot","joints","integM","deriveM" }) addW("contract." + t, pad(nMB));
-        for (String t : new String[]{ "zeroBb","integB","deriveB","bbGather" }) addW("contract." + t, pad(nBb));
+        for (String t : new String[]{ "zeroMot","brownMot","joints","integM","deriveM" }) addW("contract." + t, pad(nMB));
+        for (String t : new String[]{ "zeroBb","brownBb","center","integB","deriveB","bbGather" }) addW("contract." + t, pad(nBb));
         for (String t : new String[]{ "dimer","tether" }) addW("contract." + t, pad(nD));
         for (String t : new String[]{ "zeroFil","chain","filGather","integFil","deriveFil" }) addW("contract." + t, pad(nSeg));
         for (String t : new String[]{ "bbHist","bbScan","bbScatter","filHist","filScan","filScatter","pin" }) addS("contract." + t);
@@ -513,7 +530,7 @@ public final class ContractileAssayHarness {
         // (plus −x) must feel net +x — both INWARD = contraction. Both anchor tensions positive. The
         // signal is small (only ~1.5 of 8 up-heads bind at once — a single small minifilament, no
         // fresh-motor reservoir) so a long average is used to converge it above the chain baseline.
-        int Mc = Math.max(M, 60000);    // the net signal is weak vs binding noise ⇒ a long average to converge
+        int Mc = Math.max(M, 30000);    // Brownian thermal search ⇒ stronger/symmetric signal, converges by ~20k
         Scene sc = buildScene(dt, 8, 8, true);
         sc.mot.nucleotideState.init(MotorStore.NUC_NONE);
         MotorStore mot = sc.mot; Stats st = new Stats();
@@ -641,8 +658,14 @@ public final class ContractileAssayHarness {
         long[] stateCnt = new long[4]; long strokes = 0; long boundSteps = 0;
         int[] prevState = new int[mot.nMotors], prevBound = new int[mot.nMotors];
         for (int m = 0; m < mot.nMotors; m++) { prevState[m] = mot.nucleotideState.get(m); prevBound[m] = mot.boundSeg.get(m); }
+        RigidRodBody bbody = sc.mini.backbone;
+        double bbxMin = 1e9, bbxMax = -1e9, bbyMin = 1e9, bbyMax = -1e9, bbzMin = 1e9, bbzMax = -1e9;
         for (int t = 0; t < M; t++) {
             cpuStep(sc, t, true);
+            { double x = bbody.coord.get(0), y = bbody.coord.get(1), z = bbody.coord.get(2);
+              bbxMin = Math.min(bbxMin, x); bbxMax = Math.max(bbxMax, x);
+              bbyMin = Math.min(bbyMin, y); bbyMax = Math.max(bbyMax, y);
+              bbzMin = Math.min(bbzMin, z); bbzMax = Math.max(bbzMax, z); }
             if (t >= warm) {
                 sn++; tA += sc.tA; tB += sc.tB;
                 for (int m = 0; m < mot.nMotors; m++) {
@@ -656,6 +679,8 @@ public final class ContractileAssayHarness {
                 }
             } else for (int m = 0; m < mot.nMotors; m++) { prevState[m] = mot.nucleotideState.get(m); prevBound[m] = mot.boundSeg.get(m); }
         }
+        System.out.printf("  backbone excursion (free+Brownian): x∈[%.4f,%.4f] y∈[%.4f,%.4f] z∈[%.4f,%.4f] µm (drift from origin)%n",
+                bbxMin, bbxMax, bbyMin, bbyMax, bbzMin, bbzMax);
         System.out.printf("  bound-state dist: NONE %.0f%% ATP %.0f%% ADPPi %.0f%% ADP %.0f%%; power strokes=%d (%.4f/bound-step)%n",
                 100.0*stateCnt[0]/Math.max(1,boundSteps), 100.0*stateCnt[1]/Math.max(1,boundSteps),
                 100.0*stateCnt[2]/Math.max(1,boundSteps), 100.0*stateCnt[3]/Math.max(1,boundSteps), strokes, strokes/(double)Math.max(1,boundSteps));
@@ -694,10 +719,8 @@ public final class ContractileAssayHarness {
     static void placeDimerAlong(MotorStore mot, int mA, int mB,
                                 double e1x, double e1y, double e1z, double dx, double dy, double dz) {
         double dm = Math.sqrt(dx*dx+dy*dy+dz*dz); dx/=dm; dy/=dm; dz/=dm;
-        double px = -dz, py = 0, pz = dx;
-        double pm = Math.sqrt(px*px+py*py+pz*pz);
-        if (pm < 1e-4) { px = 1; py = 0; pz = 0; pm = 1; }
-        px/=pm; py/=pm; pz/=pm;
+        // splay perpendicular = +Y, so the dimer's two heads project ±Y toward the two ±YOFF filaments
+        double px = 0, py = 1, pz = 0;
         double rl = MotorStore.ROD_LEN, ll = MotorStore.LEVER_LEN, hl = MotorStore.HEAD_LEN;
         double rcx=e1x+0.5*rl*dx, rcy=e1y+0.5*rl*dy, rcz=e1z+0.5*rl*dz;
         double e2x=e1x+rl*dx, e2y=e1y+rl*dy, e2z=e1z+rl*dz;
@@ -720,9 +743,11 @@ public final class ContractileAssayHarness {
         double hcx = le2x + 0.5*hl*lux, hcy = le2y + 0.5*hl*luy, hcz = le2z + 0.5*hl*luz;
         b.setCoord(head, (float) hcx, (float) hcy, (float) hcz);
         b.setUVec(head, (float) lux, (float) luy, (float) luz); b.setYVec(head, (float) nx, (float) ny, (float) nz);
-        b.brownTransScale.set(rod, 0f);   b.brownRotScale.set(rod, 0f);
-        b.brownTransScale.set(lever, 0f); b.brownRotScale.set(lever, 0f);
-        b.brownTransScale.set(head, 0f);  b.brownRotScale.set(head, 0f);
+        // Brownian: rod + head ON (the thermal search), lever OFF (v1 MyoLever has no Brownian) — matches
+        // MotorStore.assembleArticulated. This is what lets the heads search and bind the offset filaments.
+        b.brownTransScale.set(rod, (float) BROWN_TRANS);   b.brownRotScale.set(rod, (float) BROWN_ROT);
+        b.brownTransScale.set(lever, 0f);                  b.brownRotScale.set(lever, 0f);
+        b.brownTransScale.set(head, (float) BROWN_TRANS);  b.brownRotScale.set(head, (float) BROWN_ROT);
     }
 
     // ============================================================== viewer (v1 contractility panel)
@@ -776,8 +801,8 @@ public final class ContractileAssayHarness {
         // v1 contractility readout panel (ThreeJSWriter schema)
         sb.append(String.format(java.util.Locale.US,
             ",\"contractility\":{\"tensionA_pN\":%.5g,\"tensionB_pN\":%.5g,"
-            + "\"anchorA\":{\"x\":%.5g,\"y\":0,\"z\":%.5g},\"anchorB\":{\"x\":%.5g,\"y\":0,\"z\":%.5g}}",
-            sc.tA, sc.tB, sc.pinPt.get(0), sc.pinPt.get(2), sc.pinPt.get(3), sc.pinPt.get(5)));
+            + "\"anchorA\":{\"x\":%.5g,\"y\":%.5g,\"z\":%.5g},\"anchorB\":{\"x\":%.5g,\"y\":%.5g,\"z\":%.5g}}",
+            sc.tA, sc.tB, sc.pinPt.get(0), sc.pinPt.get(1), sc.pinPt.get(2), sc.pinPt.get(3), sc.pinPt.get(4), sc.pinPt.get(5)));
         sb.append(String.format(java.util.Locale.US,
             ",\"stats\":{\"step\":%d,\"simTime\":%.5g,\"boundHeads\":%d,\"peakBound\":%d,\"avgBound\":%.4g,\"ewmaBound\":%.4g,"
             + "\"meanTension_pN\":%.5g,\"avgTension_pN\":%.5g,\"ewmaTension_pN\":%.5g,\"peakTension_pN\":%.5g,\"firstBindStep\":%d,\"hasMotor\":true}",
