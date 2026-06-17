@@ -41,11 +41,18 @@ public final class DimerGlideHarness {
     public static void main(String[] args) {
         double dt = 1.0e-5;
         String vizDir = null;
+        String assayDir = null;
         for (int i = 0; i < args.length; i++) {
-            switch (args[i]) { case "-cpu" -> cpu = true; case "-3js" -> vizDir = args[++i]; default -> {} }
+            switch (args[i]) {
+                case "-cpu" -> cpu = true;
+                case "-3js" -> vizDir = args[++i];
+                case "-assay" -> assayDir = args[++i];
+                default -> {}
+            }
         }
         System.out.println("=== Soft Box increment 6 glide (part 1) — DIMER-GLIDE (two-head motor on a pinned filament) ===");
         System.out.println("CrossBridge binding + binding-gated dimer coupling + force transmission; free dimer translocates.\n");
+        if (assayDir != null) { runAssayViz(dt, assayDir); return; }   // gliding assay: FIXED dimers, FREE filament
         if (vizDir != null) { runViz(dt, vizDir); return; }
 
         boolean g2 = checkBindingGate(dt);
@@ -63,6 +70,7 @@ public final class DimerGlideHarness {
         FloatArray bondData, xbParams;
         IntArray segMotorCount, segMotorOffsets, segMotorMyo;
         FloatArray bruteFilF, bruteFilT;
+        IntArray reachSeg, reachCount;       // dynamic-binding scratch (gliding assay)
         boolean anchored;
     }
 
@@ -377,6 +385,157 @@ public final class DimerGlideHarness {
         }
     }
     static double maxDiff(FloatArray a, FloatArray b) { double m=0; for (int i=0;i<a.getSize();i++) m=Math.max(m, Math.abs(a.get(i)-b.get(i))); return m; }
+
+    // ---- dimer placement (splayed rest: rods coincident along dir, levers ±80° ⇒ 160° apart) ----
+    static final double SIN80 = Math.sin(Math.toRadians(80.0)), COS80 = Math.cos(Math.toRadians(80.0));
+    static void placeDimerAlong(MotorStore mot, int mA, int mB,
+                                double e1x, double e1y, double e1z, double dx, double dy, double dz, float brownScale) {
+        double dm = Math.sqrt(dx*dx+dy*dy+dz*dz); dx/=dm; dy/=dm; dz/=dm;
+        double px = -dz, py = 0, pz = dx;
+        double pm = Math.sqrt(px*px+py*py+pz*pz);
+        if (pm < 1e-4) { px = 1; py = 0; pz = 0; pm = 1; }
+        px/=pm; py/=pm; pz/=pm;
+        double rl = MotorStore.ROD_LEN, ll = MotorStore.LEVER_LEN, hl = MotorStore.HEAD_LEN;
+        double rcx=e1x+0.5*rl*dx, rcy=e1y+0.5*rl*dy, rcz=e1z+0.5*rl*dz;
+        double e2x=e1x+rl*dx, e2y=e1y+rl*dy, e2z=e1z+rl*dz;
+        placeArm(mot, mA, rcx,rcy,rcz, dx,dy,dz, px,py,pz, e2x,e2y,e2z,  +1, ll, hl, brownScale);
+        placeArm(mot, mB, rcx,rcy,rcz, dx,dy,dz, px,py,pz, e2x,e2y,e2z,  -1, ll, hl, brownScale);
+    }
+    static void placeArm(MotorStore mot, int m, double rcx, double rcy, double rcz,
+                         double dx, double dy, double dz, double px, double py, double pz,
+                         double e2x, double e2y, double e2z, int splay, double ll, double hl, float brownScale) {
+        int rod = mot.rodIdx(m), lever = mot.leverIdx(m), head = mot.headIdx(m);
+        RigidRodBody b = mot.body;
+        b.setCoord(rod, (float) rcx, (float) rcy, (float) rcz);
+        b.setUVec(rod, (float) dx, (float) dy, (float) dz); b.setYVec(rod, (float) px, (float) py, (float) pz);
+        double lux = COS80*dx + splay*SIN80*px, luy = COS80*dy + splay*SIN80*py, luz = COS80*dz + splay*SIN80*pz;
+        double nx = dy*pz - dz*py, ny = dz*px - dx*pz, nz = dx*py - dy*px;
+        double lcx = e2x + 0.5*ll*lux, lcy = e2y + 0.5*ll*luy, lcz = e2z + 0.5*ll*luz;
+        b.setCoord(lever, (float) lcx, (float) lcy, (float) lcz);
+        b.setUVec(lever, (float) lux, (float) luy, (float) luz); b.setYVec(lever, (float) nx, (float) ny, (float) nz);
+        double le2x = e2x + ll*lux, le2y = e2y + ll*luy, le2z = e2z + ll*luz;
+        double hcx = le2x + 0.5*hl*lux, hcy = le2y + 0.5*hl*luy, hcz = le2z + 0.5*hl*luz;
+        b.setCoord(head, (float) hcx, (float) hcy, (float) hcz);
+        b.setUVec(head, (float) lux, (float) luy, (float) luz); b.setYVec(head, (float) nx, (float) ny, (float) nz);
+        b.brownTransScale.set(rod, brownScale);   b.brownRotScale.set(rod, brownScale);
+        b.brownTransScale.set(lever, 0f);          b.brownRotScale.set(lever, 0f);
+        b.brownTransScale.set(head, brownScale);   b.brownRotScale.set(head, brownScale);
+    }
+
+    // ============================================================== gliding assay: FIXED dimers + FREE filament
+    /** A gliding assay where the FIXED elements are DIMERS (not single myosins): a bed of anchored
+     *  two-head dimers + a FREE chain filament that glides over them (the GlidingHarness step + the
+     *  binding-gated dimer coupling). Viewer only. */
+    static Scene buildAssayScene(double dt) {
+        Scene sc = new Scene(); sc.anchored = true;
+        // GlidingHarness-scale geometry: 64-monomer segments, filament at z=0, anchors at −0.05 (heads flop
+        // down to bind). Binding is sparse (~0.5% of heads), so — exactly like the single-motor assay
+        // (6200 motors → ~7.6 bound) — a WIDE, DENSE bed of dimers is needed for a few to be bound at once.
+        int nSeg = 8, filMono = 64;
+        double L = (filMono + 1) * Constants.actinMonoRadius;
+        double zFil = 0.0;
+
+        // ---- free chain filament along +x, centered, glides −x over the bed ----
+        FilamentStore fil = new FilamentStore(nSeg);
+        for (int s = 0; s < nSeg; s++) {
+            fil.monomerCount.set(s, filMono);
+            fil.setUVec(s, 1f, 0f, 0f); fil.setYVec(s, 0f, 1f, 0f);
+            fil.setCoord(s, (float) ((s - (nSeg - 1) / 2.0) * L), 0f, (float) zFil);
+            fil.brownTransScale.set(s, (float) Constants.BTransCoeff);
+            boolean end = (s == 0 || s == nSeg - 1);
+            fil.brownRotScale.set(s, (float) (end ? Constants.BRotCoeff : 0.0));
+            if (s < nSeg - 1) { fil.end2NbrSlot.set(s, s + 1); fil.end2NbrSide.set(s, 0); }
+            if (s > 0)        { fil.end1NbrSlot.set(s, s - 1); fil.end1NbrSide.set(s, 1); }
+        }
+        DragTensorSystem.run(fil); fil.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt)); fil.setCounts(0, 0xF11A);
+        fil.chainParams.set(0, (float) dt); fil.chainParams.set(1, 0.5f); fil.chainParams.set(2, 0.1f);
+        fil.chainParams.set(3, 0.2f); fil.chainParams.set(4, 0f); fil.chainParams.set(5, 1.0e-20f);
+        fil.chainParams.set(6, (float) Constants.actinMonoRadius);
+        DerivedGeometrySystem.derive(fil.coord, fil.uVec, fil.yVec, fil.zVec, fil.end1, fil.end2, fil.segLength, fil.counts);
+
+        // ---- a density bed of FIXED dimers around the filament path (the gliding-assay strip) ----
+        // Binding is intrinsically sparse (heads flop down to z=0 only occasionally), so — like the
+        // single-motor assay (6200 motors → ~7.6 bound) — we need a wide, dense bed so the wandering
+        // filament always overlies a populated strip. nDimers from a density; two coupled motors per dimer.
+        double filSpan = nSeg * L;
+        double bedLo = -0.5 * filSpan - L, bedHi = 0.5 * filSpan + L, bedYh = 0.25;   // wide bed (filament wanders in y)
+        int nDimers = (int) Math.round(500.0 * (bedHi - bedLo) * (2 * bedYh));        // 500 dimers/µm² (v1 motor density)
+        MotorStore mot = new MotorStore(2 * nDimers);
+        DimerStore dim = new DimerStore(nDimers);
+        java.util.Random rng = new java.util.Random(12345);
+        for (int d = 0; d < nDimers; d++) {
+            double ax = bedLo + rng.nextDouble() * (bedHi - bedLo);
+            double ay = -bedYh + rng.nextDouble() * (2 * bedYh);
+            // two coupled motors standing +z, tails 2 nm apart (a fixed dimer); anchored by assembleArticulated
+            mot.assembleArticulated(2 * d,     (float) ax,           (float) ay, (float) ANCHOR_Z, 0f, 0f, 1f, (float) Constants.BTransCoeff);
+            mot.assembleArticulated(2 * d + 1, (float) (ax + 0.002), (float) ay, (float) ANCHOR_Z, 0f, 0f, 1f, (float) Constants.BTransCoeff);
+            dim.pair(d, 2 * d, 2 * d + 1, true);
+        }
+        DragTensorSystem.run(mot);
+        mot.setBodyParams(dt); mot.setJointParams(dt); mot.setKinParams(0.006, -0.4, dt); mot.setNucParams(dt);
+        mot.nucleotideState.init(MotorStore.NUC_NONE);
+        dim.setDimerParams(dt);   // faithful coupling (lever-align 0.4)
+
+        int MAXC = SpatialGrid.MAX_CAND;
+        sc.bondData = new FloatArray(2 * nDimers * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
+        sc.xbParams = FloatArray.fromElements((float) MYO_SPRING, 90f, (float) J1_FMT, (float) dt, (float) MotorStore.HEAD_LEN, 0f);
+        sc.segMotorCount = new IntArray(nSeg); sc.segMotorOffsets = new IntArray(nSeg + 1); sc.segMotorMyo = new IntArray(2 * nDimers);
+        sc.reachSeg = new IntArray(2 * nDimers * MAXC); sc.reachSeg.init(-1); sc.reachCount = new IntArray(2 * nDimers);
+        sc.fil = fil; sc.mot = mot; sc.dim = dim;
+        return sc;
+    }
+
+    /** One gliding-assay step: GlidingHarness.stepOrig + the binding-gated dimer coupling (anchored dimers,
+     *  free filament). CPU runner (viewer). */
+    static void assayStep(Scene sc, int t) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; DimerStore dim = sc.dim; RigidRodBody b = mot.body;
+        mot.setCounts(t, 0x6D9A0E, f.n); f.counts.set(1, t);
+        // dynamic binding
+        MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
+        BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
+        NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+        BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
+        // motor + dimer dynamics
+        ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
+        BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
+        MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
+        TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts);
+        DimerCouplingSystem.couple(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg);
+        CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
+        CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+        RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+        DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        CrossBridgeSystem.registerForceDot(sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts);
+        // filament dynamics: chain + Brownian + the gathered cross-bridge, then integrate (the filament GLIDES)
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+        BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sc.segMotorCount);
+        CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
+        CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
+        CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
+        RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+    }
+
+    static void runAssayViz(double dt, String dir) {
+        System.out.println("Gliding assay with FIXED DIMERS (not single myosins): a free filament glides over an anchored dimer bed.");
+        Scene sc = buildAssayScene(dt);
+        new java.io.File(dir).mkdirs();
+        int M = 20000, every = Math.max(1, M / 400), frames = 0;
+        double boundSum = 0; int n = 0; double filX0 = filComX(sc.fil);
+        for (int t = 0; t <= M; t++) {
+            if (t % every == 0) writeFrame(dir, frames++, t * dt, sc);
+            assayStep(sc, t);
+            boundSum += countBound(sc.mot); n++;
+        }
+        double filDx = (filComX(sc.fil) - filX0) * 1e3;
+        System.out.printf("viewer: wrote %d frames to %s%n", frames, dir);
+        System.out.printf("  avgBound = %.1f / %d heads;  filament COM Δx = %.1f nm over %d steps (glides −x)%n",
+                boundSum / n, sc.mot.nMotors, filDx, M);
+    }
+    static double filComX(FilamentStore f) { double s = 0; for (int i = 0; i < f.n; i++) s += f.coord.get(i); return s / f.n; }
 
     // ============================================================== viewer
     static final String[] STATE_NAME = { "NONE", "ATP", "ADPPi", "ADP" };
