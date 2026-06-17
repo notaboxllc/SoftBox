@@ -76,6 +76,48 @@ a helper with 2× inlined `moveC` exceeds TornadoVM's **600-node inlined-callee 
 Exception`, node count 602). The kernel method itself has no such cap; only the small `moveC`/`accurateAcos`
 helpers are inlined. (Reuse this pattern for 6b's minifilament gather kernel.)
 
+## §6a-thermo — rotational-thermostat equipartition diagnostic (the gate-D 1.40×, RESOLVED)
+
+**Why.** Gate D found the lever fluctuation at **1.40× the AR(1) ½kT estimate**, tentatively called
+"scheme-relative." That was incomplete (the crosslinker is *also* fracMove-coupled and matched
+equipartition cleanly, §8). The dimer lever is the **first rotational DOF anchored to equipartition**,
+so the real question: is v2's **rotational thermalization** at ½kT, or off ~1.4× (which would silently
+bias *every* rotational DOF — filaments, motors, the gliding assay — passing v1-matching while failing
+physics)? Cleared before 6b stacks a backbone + N levers on it. Diagnostic only — **no production fix**.
+
+**Cut 1 (DECISIVE) — free-rod rotational thermostat is at ½kT.** Already in `DiffusionHarness` Config R
+(`./run_gpu.sh -cpu`): a free rod's orientational autocorrelation `⟨u(t)·u(0)⟩ = exp(−2 D_rot t)` gives
+`D_rot = 18.28` vs the FDT prediction `kT/bRotGam = 18.61 rad²/s` — **−1.8% (≈1.0×, slightly UNDER, NOT
+1.4× over)**. Translational control clean (D_par −2.5%, D_perp −1.2%/+0.1%). The Brownian amplitude is
+FDT-consistent **by construction** (`randTorque = rScale·√(2kT/dt)·√(bRotGam)·g` ⇒ injected per-step
+angular MSD = 2·(kT/bRotGam)·dt = 2 D_rot dt) and the integrator faithfully accumulates it. **⇒ no
+upstream rotational-thermostat miscalibration; the dimer 1.40× is NOT a thermostat bug.** (The planned v1
+free-rod cross-check is **moot**: the decision logic only invokes it on a ~1.4× free-rod result; Cut 1 is
+clean — and v2's Brownian/integration are ported **0-diff** from v1, so v1 shares the same FDT-consistent
+thermostat by construction. Not run — `BoA-v1ref` byte-clean.)
+
+**Cut 3 — a clean, directly-thermostatted confined rotational DOF sits at the scheme's EXACT discrete
+equipartition.** A single rod (Brownian ON) held to a fixed rest by the same fracMove torsional law as
+the lever-align (isolates the scheme from the lever's *indirect* drive + the gate-D AR(1) crudeness):
+`measVar/predDiscrete = 0.992` where `predDiscrete = 4kT·dt/(γ·c(2−c))` is the **exact discrete-AR(1)**
+steady state (2 transverse DOF, per-step decay c = coeff = 0.4). The naive **continuum** `2kT/k_θ`
+under-predicts by `1/(1−c/2) = 1.25×` — exactly the apparent 1.24× — a **discrete-vs-continuum AR(1)
+correction, not a thermostat error**. (`softbox/ThermostatDiag.java`.)
+
+**Cut 2 — the confined fluctuation is dt-scaled but exactly the scheme's own equipartition at each dt.**
+`⟨θ²⟩ ∝ dt` (4.6e-3 / 9.2e-3 / 1.8e-2 rad² at dt 5e-6/1e-5/2e-5), yet `meas/predDiscrete ≈ 1.0`
+throughout (0.996/0.992/0.987). The fracMove relaxation is **not a fixed-stiffness spring** —
+`k_θ = coeff·γ/dt` — so its equilibrium amplitude is dt-set (**scheme-relative**, shared by the §8
+translational crosslinker, which likewise samples its *own* Boltzmann), but it is **exactly** the
+scheme's own discrete equipartition at each fixed (production) dt. There is no dt-independent
+½kT-physical anchor for a damping-limited DOF; FDT self-consistency is the right test, and it holds.
+
+**Read / decision.** Rotational **thermostat at ½kT** (Cut 1) + a directly-thermostatted confined
+rotational DOF at the **exact discrete equipartition** (Cut 3, 0.992) ⇒ the gate-D **1.40× = the 1.25×
+discrete-vs-continuum AR(1) factor × residual gate-D crudeness** (the lever is Brownian-OFF ⇒ indirectly
+driven; gate D's σ² was measured align-off while ρ was align-on — these don't compose into a clean AR(1)).
+**Benign — no thermostat fix; the rotational foundation is CLEAR ⇒ 6b proceeds.** Run: `softbox.ThermostatDiag`.
+
 ## Next: 6b (minifilament)
 The backbone (a 3rd `RigidRodBody` instance) owns N dimers; the head↔backbone coupling is **single-ended**
 (reuse the `CrossBridge` CSR-inverse ONE pass, backbone-side — recon §2/§6). 6a's `DimerStore`/coupling is
