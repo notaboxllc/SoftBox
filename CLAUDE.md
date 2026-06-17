@@ -534,8 +534,29 @@ at near-parallel **crossings**, not stacked-parallel pairs. (c) The one-per-seg 
 non-binding divergence from v1; 5c-iii's steady-state should re-confirm at production density. (d) The
 **running-v1 oracle + `fracMove`-on-count remain DEFERRED to 5c-iii**.
 
-Next: 5c-iii (formation force law + `fracMove`-on-changing-count + the running-v1 steady-state oracle —
-plateau / formation≈dissolution / halve-`xLinkConc`), torsion (`applyTorsionForce`, consumes
-`linkOrientSame`), 5d (Arp2/3). (The `STORE_CROSSLINKER` broad-phase publisher seam exists; 5c-ii used a
-self-contained FIL×FIL candidate generator over the filament pose — wiring the production SpatialGrid
-publisher is a 5c-iii/integration step.)
+**Increment 5c-iii — Phase 1 + Phase 2 DONE (2026-06-16).** Phase 1 (force law: dynamic `fracMove` +
+torsion default-ON) analytic-gate green. **Phase 2 — the ASSEMBLED moving bundle + confinement-free v1
+validation + demo.** `CrosslinkerBundleHarness` wires the full per-step loop (formation↔force/torsion↔
+unbind↔integrate) over a many-filament free-rod bundle, both runners. Per-step order faithful to v1
+(`BoxOfActin.doLoop`): zero→brownian→[checkInt=100] formation→unbind(ckLinkBreak, every step, BEFORE
+force)→countActive(dynamic fracMove)→linkForces→torsion→2-pass gather→integrate→derive. **STABLE** (CPU
+200 fil×6000; GPU mechanics 16-kernel graph 200 fil×3000, CPU≡GPU aggregate 0.000%). **The dominant v1↔v2
+confound FOUND+FIXED: the fixture sets `aeta=1.0` Pa·s (10× the v2 `Constants.aeta=0.1`); v2 over-diffused
+10× and dispersed.** Fixed by `applyAeta()` drag-scaling (FDT-consistent, not a physics change); post-fix
+v2 diffusion matches v1. Validated against a walls-off `/tmp/v1xlink` scratch (`BoA-v1ref` byte-clean):
+formation gate bit-faithful (funnel matches on identical config), **conc-scaling PASS** (halve
+`xLinkConc`→halve formation, 2.0×). **Open/PAUSED: a residual ~3.5× walls-off link-count gap** (v1
+22.5±1.3 vs v2 6.5±1.0 @ step 1500, 6-seed ensemble) — NOT within SEM; excluded gate/diffusion/unbinding/
+conc-scaling as the cause; residual is in the crossing-population time-evolution (subtle coupling, not
+root-caused). **Confined plateau (≈49) parked** for the boundary/membrane increment (v2 lacks Chamber
+confinement). New: `CrosslinkerBundleHarness`, `run_xlinkbundle.sh`; report `INC5C-iii_PHASE2_FINDINGS.md`.
+```
+./run_xlinkbundle.sh -cpu -nfil 200            # CPU assembled run + stability
+./run_xlinkbundle.sh -cpugpu -nfil 200         # GPU mechanics vs CPU (aggregate-within-SEM)
+./run_xlinkbundle.sh -3js threejs_xlinkbundle -nfil 150 -conc 3   # crosslinking demo
+```
+
+Next: root-cause the residual ~3.5× gap (matched-config alignPass/distPass overlay + admission-cap A/B);
+5d (Arp2/3). (The `STORE_CROSSLINKER` broad-phase publisher seam exists; 5c-ii/Phase-2 used a self-contained
+FIL×FIL candidate generator over the filament pose — wiring the production SpatialGrid publisher is an
+integration step.) The confined steady-state plateau (≈49) is parked for the boundary/membrane increment.
