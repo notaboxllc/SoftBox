@@ -582,3 +582,30 @@ confinement), **NOT a "hit 49" target** (v1 uncalibrated). Report `INC5C-iii_PHA
 Next: **5d (Arp2/3).** (The `STORE_CROSSLINKER` broad-phase publisher seam exists; 5c-ii/Phase-2 used a
 self-contained FIL×FIL candidate generator over the filament pose — wiring the production SpatialGrid publisher
 is an integration step.)
+
+**Increment 6 (myosin structures: dimers / minifilaments / nodes) — recon DONE; 6a DONE.** Recon:
+`INC6_MYOSTRUCT_RECON.md` (the coupling-cost map: **dimer = no gather**, **minifilament = single-ended one-pass
+gather** — less than the crosslinker two-pass, **node = reachable WITHOUT membrane** on a fixed anchor but
+fails the settledness gate; snapshot-currency: dimer/minifilament CURRENT @ 06-13, nodes NOT settled — fresh
+snapshot needed). Suggested staging **6a dimer → 6b minifilament → 6c node**.
+
+**Increment 6a — DONE (2026-06-17).** The myosin DIMER coupling (two motors), validated on a pre-placed
+ISOMETRIC bed; static assembly, heads FREE. The **SIMPLEST** of the three structure couplings: each motor
+belongs to exactly one dimer ⇒ the dimer **self-writes both sides directly into its two uniquely-owned
+rod/lever sub-body slots — NO gather, no atomics** (disjoint pairing `motorA(d)=2d`, `motorB(d)=2d+1`).
+Faithful port of v1 `MyosinDimer.enforceParallel/AntiParallel` (`MyosinDimer.java:163–273` rod couplings +
+`:111–135` lever-align to 160°): the PAIRS spring (`moveC` reused VERBATIM from `MotorJointSystem`) + 4
+rod-coupling variants + the lever-align torque; v1 defaults `myoDimerFracMove=0.2`,
+`myoDimerLeverFracMoveTorq=0.4`. 6 gates PASS GPU+CPU: (A) force arithmetic isolated vs an independent
+double reference **maxRel 6.6e-8** + exact equal-opposite; (B) rest hold (160.0000° exact fixed point); (C)
+relaxation dt-invariant 8.4e-7; (D) lever angle Brownian-on stationary/bounded/FDT-thermal (mean 152.6° = a
+fluctuation shift of the bounded θ coord, NOT drift — §8 posture: gated on FDT self-consistency not v1's
+number); (E) CPU≡GPU det 3.5e-6 µm / Brownian Δ0.000°; (F) all-OFF≡HEAD bit-identical. **TornadoVM gotcha
+(reuse for 6b):** the rod-link math must be inlined into the top-level @Parallel kernel — a helper with 2×
+inlined `moveC` exceeds the 600-node inlined-callee cap. New: `DimerStore`, `DimerCouplingSystem`,
+`MyosinDimerHarness`, `run_dimer.sh`. Report: `INC6A_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6a).
+```
+./run_dimer.sh              # GPU + CPU cross-check (32 dimers / 64 motors): gates A–F
+./run_dimer.sh -cpu         # CPU runner only (triage)
+./run_dimer.sh -3js threejs_dimer -n 9   # viewer (Y-shaped dimers)
+```
