@@ -638,6 +638,27 @@ byte-unchanged (CSR reused verbatim); production byte-unchanged; `BoA-v1ref` byt
 ./run_minifil.sh -cpu       # CPU runner only (triage)
 ./run_minifil.sh -3js threejs_minifil -n 4   # viewer (backbone + dimer carpet)
 ```
-Next within inc 6: the **glide integration** (heads bind→force transmission through the structure, recon
-check #4) + dynamic minifilament assembly; then **6c nodes** (needs a fresh v1 node snapshot per the recon
-settledness gate; reachable on a fixed anchor without the membrane subsystem).
+
+**Increment 6 glide part 1 — DIMER-GLIDE — DONE (2026-06-17).** The dimer is now a FUNCTIONAL two-head
+motor: a free dimer (NO anchor) whose two heads bind/walk on a pinned filament via `CrossBridge` (reused,
+byte-unchanged), translocating under the head force. **The one new physics = the binding-dependent coupling
+gate:** `DimerCouplingSystem.couple` gained a `boundSeg` param + a guard — the lever-align is **SUPPRESSED
+when BOTH heads are bound** (v1 `MyosinDimer.java:276` `!myo1.onFil|!myo2.onFil`, `onFil⟺boundSeg≥0`), else
+fires; rod-couplings unconditional (verified: that line is the ONLY binding gate). **One-impl: bit-identical
+for 6a/6b** (their `boundSeg` is all `-1` ⇒ align always fires; 6a/6b re-ran bit-identical PASS). 4 gates
+PASS GPU+CPU: (#1) force transmission — fil gather==brute bit-identical + momentum 2e-19 N + **CPU≡GPU**
+4.4e-8 µm; (#2) **binding gate bit-for-decision vs v1** (fires both-free/one-bound rel 4.6e-10, suppressed
+both-bound =0); (#3) translocation — free dimer walks **+9.38 nm +x toward the actin plus-end** (the Newton
+reaction to 4b-iii's −x FILAMENT force; the free MOTOR walks opposite the surface-assay filament glide —
+emergent, v1 informational); (#5) **all-OFF≡HEAD** dimer-off ≡ single-motor/4b-iii path bit-identical. New:
+`DimerGlideHarness`, `run_dimerglide.sh`; modified `DimerCouplingSystem`/`MyosinDimerHarness`/
+`MiniFilamentHarness` (+boundSeg gate, re-validated). `CrossBridge` + production byte-unchanged; `BoA-v1ref`
+byte-clean. Report: `INC6_GLIDE_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6-glide part 1).
+```
+./run_dimerglide.sh         # GPU + CPU cross-check: #1 transmission, #2 gate, #3 walk, #5 all-OFF
+./run_dimerglide.sh -cpu    # CPU runner only (triage)
+./run_dimerglide.sh -3js threejs_dimerglide   # viewer (free dimers walking on a pinned filament)
+```
+Next within inc 6: **minifilament-glide** (part 2 — 32 heads + the 6b backbone gather UNDER LOAD) + dynamic
+assembly; then **6c nodes** (needs a fresh v1 node snapshot per the recon settledness gate; reachable on a
+fixed anchor without the membrane subsystem).

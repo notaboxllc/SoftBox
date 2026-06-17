@@ -176,7 +176,7 @@ public final class MiniFilamentHarness {
             MotorJointSystem.joints(mb.coord, mb.uVec, mb.segLength, mb.bTransGam, mb.bRotGam,
                     mb.forceSum, mb.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
             DimerCouplingSystem.couple(mb.coord, mb.uVec, mb.segLength, mb.bTransGam, mb.bRotGam,
-                    mb.forceSum, mb.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams);
+                    mb.forceSum, mb.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg);
             if (tetherOn) {
                 MiniFilamentSystem.tether(mb.coord, mb.uVec, mb.segLength, mb.bTransGam, mb.bRotGam,
                         mb.forceSum, mb.torqueSum, bb.coord, bb.uVec, mini.bbInvDragY,
@@ -209,7 +209,7 @@ public final class MiniFilamentHarness {
                     bb.bTransGam, bb.bRotGam, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque,
                     bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams,
                     mini.bbInvDragY, mini.headBackboneSlot, mini.motorA, mini.attachAxial, mini.miniData, mini.miniParams,
-                    mini.bbDimerCount, mini.bbDimerOffsets, mini.bbDimerList, mini.miniCounts)
+                    mini.bbDimerCount, mini.bbDimerOffsets, mini.bbDimerList, mini.miniCounts, mot.boundSeg)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, mini.bbCounts)
             .task("zeroM", ChainBendingForceSystem::zeroAccumulators, mb.forceSum, mb.torqueSum, mot.counts)
             .task("zeroB", ChainBendingForceSystem::zeroAccumulators, bb.forceSum, bb.torqueSum, mini.bbCounts)
@@ -220,7 +220,7 @@ public final class MiniFilamentHarness {
             .task("joints", MotorJointSystem::joints, mb.coord, mb.uVec, mb.segLength, mb.bTransGam, mb.bRotGam,
                     mb.forceSum, mb.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
             .task("dimer", DimerCouplingSystem::couple, mb.coord, mb.uVec, mb.segLength, mb.bTransGam, mb.bRotGam,
-                    mb.forceSum, mb.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams)
+                    mb.forceSum, mb.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg)
             .task("tether", MiniFilamentSystem::tether, mb.coord, mb.uVec, mb.segLength, mb.bTransGam, mb.bRotGam,
                     mb.forceSum, mb.torqueSum, bb.coord, bb.uVec, mini.bbInvDragY,
                     mini.headBackboneSlot, mini.motorA, mini.attachAxial, mini.miniData, mini.miniParams)

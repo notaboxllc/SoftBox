@@ -153,7 +153,7 @@ public final class MyosinDimerHarness {
                     b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
             if (dimerOn)
                 DimerCouplingSystem.couple(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam,
-                        b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams);
+                        b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg);
             RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum,
                     b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
             DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
@@ -167,7 +167,7 @@ public final class MyosinDimerHarness {
                     b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength,
                     b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, b.randForce, b.randTorque,
                     b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.jointParams, mot.nucleotideState,
-                    dim.motorA, dim.motorB, dim.parallel, dim.dimerParams)
+                    dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts)
             .task("zero", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
             .task("brownian", BrownianForceSystem::brownianForce,
@@ -178,7 +178,7 @@ public final class MyosinDimerHarness {
                     mot.nucleotideState, mot.jointParams, mot.counts)
             .task("dimer", DimerCouplingSystem::couple,
                     b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum,
-                    dim.motorA, dim.motorB, dim.parallel, dim.dimerParams)
+                    dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg)
             .task("integrate", RigidRodLangevinIntegrationSystem::integrate,
                     b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque,
                     b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
@@ -244,7 +244,7 @@ public final class MyosinDimerHarness {
 
         ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
         DimerCouplingSystem.couple(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam,
-                b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams);
+                b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg);
 
         double[] ref = refDimerForce(b, mot, dt);   // {FrodA(3),TrodA(3),FrodB(3),TrodB(3),TleverA(3),TleverB(3)}
         int rodA = mot.rodIdx(0), rodB = mot.rodIdx(1), leverA = mot.leverIdx(0), leverB = mot.leverIdx(1);

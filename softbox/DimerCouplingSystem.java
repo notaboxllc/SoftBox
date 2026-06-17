@@ -85,7 +85,7 @@ public final class DimerCouplingSystem {
             FloatArray bTransGam, FloatArray bRotGam,
             FloatArray forceSum, FloatArray torqueSum,
             IntArray motorA, IntArray motorB, IntArray parallel,
-            FloatArray dimerParams) {
+            FloatArray dimerParams, IntArray boundSeg) {
 
         int nB = coord.getSize() / 3;
         int nD = motorA.getSize();
@@ -154,7 +154,12 @@ public final class DimerCouplingSystem {
             }
 
             // ---- lever-alignment torque (parallel only; v1 alignUVecLeversTorque, restore 160°) ----
-            if (par) {
+            // BINDING GATE (v1 MyosinDimer.java:276 — enforceParallel): the lever-align fires only if
+            // at least one head is OFF filament (!myo1.onFil | !myo2.onFil); when BOTH heads are bound
+            // it is SUPPRESSED. onFil ⟺ boundSeg >= 0. (Free-head scenes have boundSeg all FREE_BINDABLE
+            // ⇒ bothBound=false ⇒ align always fires, bit-identical to the pre-glide always-on path.)
+            boolean bothBound = boundSeg.get(mA) >= 0 && boundSeg.get(mB) >= 0;
+            if (par && !bothBound) {
                 int leverA = 3 * mA + 1, leverB = 3 * mB + 1;
                 double u1x = uVec.get(leverA), u1y = uVec.get(nB + leverA), u1z = uVec.get(2 * nB + leverA);
                 double u2x = uVec.get(leverB), u2y = uVec.get(nB + leverB), u2z = uVec.get(2 * nB + leverB);
