@@ -682,7 +682,33 @@ re-ran bit-identical PASS. New: `MiniGlideHarness`, `run_miniglide.sh`. Report:
 ./run_miniglide.sh -cpu    # CPU runner only (triage)
 ./run_miniglide.sh -3js threejs_miniglide   # viewer (a minifilament's heads walking on a pinned filament)
 ```
-Next within inc 6: **the contractile two-antiparallel-filament geometry** (the first genuinely contractile
-test — both ends engaging opposite-polarity filaments) + dynamic assembly/`myoMiniLifetime`; then **6c nodes**
-(needs a fresh v1 node snapshot per the recon settledness gate; reachable on a fixed anchor without the
-membrane subsystem).
+**Increment 6 — MINIMAL CONTRACTILE ASSAY — DONE (2026-06-17).** The first genuinely contractile test: two
+anti-parallel pinned filament chains pulled toward each other by a central bipolar minifilament; contractile
+tension read at the pins. A faithful ASSEMBLY of the validated structures (4a/4b/6a/6b + inc-2 chain) + ONE new
+device kernel (`PinSystem`, the v1 `applyBenchmarkPins` position-snap end-pin) + the host-side tension/stat
+bookkeeping (1:1 port of v1 `captureContractilityTension`/`accumulateContractilityStats`). NO new force law, NO
+new gather. **THE CRUX — chain-inclusive tension read:** the minifilament binds INTERIOR segments; the force
+propagates via the chain (F3/F4) to the pinned plus-end. v2 has **NO separate jointForceSum** (the v1 GPU
+`addDeviceJointForce` gotcha CANNOT recur) — `ChainBendingForceSystem.chainForces` + `CrossBridge.segGather` both
+`+=` into the SAME `fil.forceSum`; read PRE-snap after both ⇒ chain-inclusive by construction. 4 gates PASS
+GPU+CPU: (#1) crux — perturb interior seg 5 links from the pin: chain ON ⇒ pin 2.46 pN, chain OFF ⇒ 0, read sums
+chain+direct cross-bridge; (#4) no-motor control — pinned tips held EXACTLY, tension relaxes to 3.3e-4 pN; (#2)
+**IT CONTRACTS** — both poles engage, force ON fil A=−x / B=+x (both inward), anchor tension A=+0.057 B=+0.113 pN
+(both contractile), 261× the no-motor baseline; (#3) **CPU≡GPU** — deterministic chain+PIN bit-identical float32
+(validates `PinSystem` on device), chaotic dynamic-bind aggregate-agrees. **Weak-signal finding (surfaced):** net
+~0.1 pN, converges only over ≳40k steps; ~1.5/8 up-heads bound (duty-ratio-limited, no fresh-motor reservoir);
+held-bound is intrinsically unstable on a pinned filament (strain can't relax ⇒ dynamic release mandatory — v1's
+reason). A strong plateau needs more co-engaged heads (down-head filaments / multiple minifilaments / 6c node).
+**v1 cross-check:** readout SET reproduced 1:1 (viewer panel = v1 `ThreeJSWriter:262-277` schema); a tight numeric
+match deliberately NOT attempted (adapted geometry; v1 contractility uncalibrated — §8 posture). Geometry adapted
+(flagged): both anti-parallel filaments in the +z up-head plane (6b splay is x–z planar vs v1's Y-offset 3D
+splay); fixed central backbone. New: `PinSystem`, `ContractileAssayHarness`, `run_contractile.sh`. Report:
+`INC6_CONTRACTILE_ASSAY_FINDINGS.md`; spec: `INC6_CONTRACTILITY_ASSAY_SURVEY.md`; JOURNAL 2026-06-17.
+```
+./run_contractile.sh            # GPU + CPU cross-check: #1 crux, #4 control, #2 contracts, #3 CPU≡GPU
+./run_contractile.sh -cpu       # CPU runner only (triage)
+./run_contractile.sh -3js threejs_contractile -steps 30000   # viewer (the v1 contractility panel)
+```
+Next within inc 6: **stronger engagement** for a sharp contractile plateau (down-head filaments / multiple
+minifilaments) + dynamic assembly/`myoMiniLifetime`; then **6c nodes** (needs a fresh v1 node snapshot per the
+recon settledness gate; reachable on a fixed anchor without the membrane subsystem).
