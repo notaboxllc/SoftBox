@@ -343,4 +343,236 @@ public final class CrosslinkerSystem {
             linkState.set(slot, CrosslinkerStore.LINK_ACTIVE);          // FREE → ACTIVE (self-write into the claimed slot)
         }
     }
+
+    // ============== 5c-ii: crosslinker FORMATION (broad-phase FIL×FIL + checkToLink gates + P_form) ==============
+    //
+    // Replaces the 5c-i SYNTHETIC fillRequests with real formation that fills the SAME request arrays; the
+    // 5c-i scan-rank allocator underneath is UNCHANGED. Per step (after 5b unbind, before the 5c-i allocator):
+    //   filFilCandidates : broad-phase — distinct unordered cross-filament segment pairs within a coarse
+    //                      capsule-bound → reqFilA[c]/reqFilB[c] (the candidate set; unused slots key −1).
+    //   formGates        : per-candidate-LOCAL gates (each writes its own flag/payload — race-free): the v1
+    //                      checkToLink alignment (mode 0/1/−1, fastAcos), the line-segment closest-approach
+    //                      (lineSegmentIntersectTest) crossLinkGrabDist test, orientSame, loc1/loc2 (+v1 jitter),
+    //                      and the P_form wang-hash draw. gatePass[c] = all passed.
+    //   formAdmitReduce  : per-segment min gate-passing candidate index (admission — one new link/seg/step).
+    //   countActiveLinks : start-of-step ACTIVE links per segment (saturation).
+    //   formAdmit        : c admitted iff it is the min-candidate-index for BOTH its segments AND both pass
+    //                      saturation (count<cap) AND spacing (≥minSep from every existing link), all vs
+    //                      start-of-step state ⇒ exact with NO same-step cross-candidate dependency. → acceptFlag.
+    //   [5c-i allocator]  : csrScan(rank) → allocate (unchanged); then placeOrient persists orientSame.
+    //
+    // The one-per-segment-per-step cap is a DELIBERATE non-binding divergence from v1 (which admits all that
+    // pass, in scan order), justified only while same-step same-segment multi-formation is ~0 (self-checked).
+    // RNG = reused wang-hash, salts XLFP/XLJ1/XLJ2 (distinct from break XLKB + the motor salts). localWork=64.
+
+    /** v1 Pt3D.fastAcos — VERBATIM (sqrt small-angle approx for |dot|>0.95, Math.acos in the middle).
+     *  The default maxXLinkBondAngle=π/12 lands the alignment threshold inside the dot>0.95 sqrt branch, so
+     *  the gate decision is bit-exact there; in the middle (|dot|≤0.95) the angle always exceeds the default
+     *  threshold ⇒ gate fails either way (decision bit-exact regardless of the acos value). */
+    private static double fastAcos(double dot) {
+        if (dot > 0.95) { double t = 1.0 - dot; if (t < 0) t = 0; return Math.sqrt(2.0 * t); }
+        if (dot < -0.95) { double t = 1.0 + dot; if (t < 0) t = 0; return Math.PI - Math.sqrt(2.0 * t); }
+        return accurateAcos(dot);   // PTX-safe acos (Math.acos does not lower on the PTX backend)
+    }
+
+    /** PTX-safe acos (same polynomial + Newton refinement as CrossBridgeSystem.accurateAcos). v1's
+     *  fastAcos uses the |dot|>0.95 sqrt approx for the alignment threshold (the default maxXLinkBondAngle
+     *  = π/12 lands there, so that decision is bit-exact); the middle branch only decides far-misaligned
+     *  pairs (always > the default threshold ⇒ fail either way), so this stands in for Math.acos there. */
+    private static double accurateAcos(double x) {
+        if (x > 1.0) x = 1.0;
+        if (x < -1.0) x = -1.0;
+        double y;
+        if (x > 0.95) { double t = 1.0 - x; if (t < 0.0) t = 0.0; y = Math.sqrt(2.0 * t); }
+        else if (x < -0.95) { double t = 1.0 + x; if (t < 0.0) t = 0.0; y = 3.141592653589793 - Math.sqrt(2.0 * t); }
+        else {
+            double ax = (x < 0.0) ? -x : x;
+            double p = (-0.0187293 * ax + 0.0742610) * ax - 0.2121144;
+            p = (p * ax + 1.5707963); p = p * Math.sqrt(1.0 - ax);
+            y = (x < 0.0) ? (3.141592653589793 - p) : p;
+        }
+        double s = Math.sin(y);
+        if (s > 1.0e-12 || s < -1.0e-12) { y = y + (Math.cos(y) - x) / s; }
+        s = Math.sin(y);
+        if (s > 1.0e-12 || s < -1.0e-12) { y = y + (Math.cos(y) - x) / s; }
+        return y;
+    }
+
+    /** Broad-phase FIL×FIL branch: emit distinct unordered cross-filament segment pairs (i<j,
+     *  filID[i]≠filID[j]) whose capsule bounding spheres are within crossLinkGrabDist (a complete superset
+     *  of the fine-gate passers, since closest-approach ≥ centerDist − ½lenI − ½lenJ). Single-threaded ⇒
+     *  deterministic index order, bit-identical CPU↔GPU. Unused candidate slots keyed −1 (skipped downstream). */
+    public static void filFilCandidates(FloatArray filCoord, FloatArray filSegLength, IntArray filID,
+                                        IntArray reqFilA, IntArray reqFilB, FloatArray formParams, IntArray formCounts) {
+        int nSeg = filCoord.getSize() / 3;
+        int reqCap = reqFilA.getSize();
+        double grab = formParams.get(6);
+        for (@Parallel int gid = 0; gid < 1; gid++) {
+            int c = 0;
+            for (int i = 0; i < nSeg; i++) {
+                double cix = filCoord.get(i), ciy = filCoord.get(nSeg + i), ciz = filCoord.get(2 * nSeg + i);
+                double hi = 0.5 * filSegLength.get(i);
+                for (int j = i + 1; j < nSeg; j++) {
+                    if (filID.get(i) == filID.get(j)) continue;                  // exclude same-filament (v1 filID!=filID)
+                    double dx = cix - filCoord.get(j), dy = ciy - filCoord.get(nSeg + j), dz = ciz - filCoord.get(2 * nSeg + j);
+                    double cd = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    double bound = hi + 0.5 * filSegLength.get(j) + grab;
+                    if (cd > bound) continue;                                    // coarse capsule-bound prune
+                    if (c < reqCap) { reqFilA.set(c, i); reqFilB.set(c, j); c++; }
+                }
+            }
+            formCounts.set(0, c);
+            for (int k = c; k < reqCap; k++) { reqFilA.set(k, -1); reqFilB.set(k, -1); }
+        }
+    }
+
+    /** Per-candidate-LOCAL gates + P_form (each candidate writes its own slot ⇒ race-free). Ports v1
+     *  checkToLink: alignment (mode), lineSegmentIntersectTest closest-approach vs crossLinkGrabDist,
+     *  orientSame, loc±jitter clamp, P_form = 1−exp(−kon·conc·dtCheck). */
+    public static void formGates(FloatArray filUVec, FloatArray filEnd1, FloatArray filEnd2, FloatArray filSegLength,
+                                 IntArray reqFilA, IntArray reqFilB, FloatArray reqLoc1, FloatArray reqLoc2,
+                                 IntArray reqOrient, IntArray gatePass, FloatArray formParams, IntArray formCounts) {
+        int nSeg = filUVec.getSize() / 3;
+        int reqCap = reqFilA.getSize();
+        int step = formCounts.get(1), seed = formCounts.get(2), mode = formCounts.get(3);
+        double maxAngle = formParams.get(0), grabSq = formParams.get(1);
+        double pForm = formParams.get(4), jit = formParams.get(5);
+
+        for (@Parallel int c = 0; c < reqCap; c++) {
+            gatePass.set(c, 0); reqOrient.set(c, 0);
+            int a = reqFilA.get(c), b = reqFilB.get(c);
+            if (a < 0 || b < 0) continue;                                  // unused candidate slot
+
+            // alignment gate (v1 checkToLink mode switch)
+            double uax = filUVec.get(a), uay = filUVec.get(nSeg + a), uaz = filUVec.get(2 * nSeg + a);
+            double ubx = filUVec.get(b), uby = filUVec.get(nSeg + b), ubz = filUVec.get(2 * nSeg + b);
+            double dot = uax * ubx + uay * uby + uaz * ubz;
+            double angT = fastAcos(dot), angTR = fastAcos(-dot);
+            boolean alignOk;
+            if (mode == 1)       alignOk = angT  <= maxAngle;
+            else if (mode == -1) alignOk = angTR <= maxAngle;
+            else                 alignOk = (angT <= maxAngle) || (angTR <= maxAngle);   // mode 0 (both)
+            if (!alignOk) continue;
+            reqOrient.set(c, dot >= 0.0 ? 1 : 0);                          // v1 FilLink.set: orientSame = (angle≤π/2)
+
+            // line-segment closest approach (v1 Thing.lineSegmentIntersectTest), end2 = end1 + len·uVec
+            double e1ax = filEnd1.get(a), e1ay = filEnd1.get(nSeg + a), e1az = filEnd1.get(2 * nSeg + a);
+            double e2ax = filEnd2.get(a), e2ay = filEnd2.get(nSeg + a), e2az = filEnd2.get(2 * nSeg + a);
+            double e1bx = filEnd1.get(b), e1by = filEnd1.get(nSeg + b), e1bz = filEnd1.get(2 * nSeg + b);
+            double e2bx = filEnd2.get(b), e2by = filEnd2.get(nSeg + b), e2bz = filEnd2.get(2 * nSeg + b);
+            double r1x = e2ax - e1ax, r1y = e2ay - e1ay, r1z = e2az - e1az;   // ray1 = fil_a dir
+            double r2x = e2bx - e1bx, r2y = e2by - e1by, r2z = e2bz - e1bz;   // ray2 = fil_b dir
+            double r3x = e1bx - e1ax, r3y = e1by - e1ay, r3z = e1bz - e1az;   // ray3 = b.end1 − a.end1
+            double r4x = r1y * r2z - r1z * r2y, r4y = r1z * r2x - r1x * r2z, r4z = r1x * r2y - r1y * r2x;  // ray4 = ray1×ray2
+            double smallNum = 1e-20;
+            if (r4x < smallNum && r4y < smallNum && r4z < smallNum) continue;  // v1 parallel test (verbatim)
+            double denom = r4x * r4x + r4y * r4y + r4z * r4z;
+            // alpha = ray4·(ray3×ray2)/denom
+            double c32x = r3y * r2z - r3z * r2y, c32y = r3z * r2x - r3x * r2z, c32z = r3x * r2y - r3y * r2x;
+            double alpha = (r4x * c32x + r4y * c32y + r4z * c32z) / denom;
+            if (alpha < 0.0 || alpha > 1.0) continue;
+            double c31x = r3y * r1z - r3z * r1y, c31y = r3z * r1x - r3x * r1z, c31z = r3x * r1y - r3y * r1x;
+            double beta = (r4x * c31x + r4y * c31y + r4z * c31z) / denom;
+            if (beta < 0.0 || beta > 1.0) continue;
+            double p1x = e1ax + alpha * r1x, p1y = e1ay + alpha * r1y, p1z = e1az + alpha * r1z;
+            double p2x = e1bx + beta * r2x,  p2y = e1by + beta * r2y,  p2z = e1bz + beta * r2z;
+            double ddx = p1x - p2x, ddy = p1y - p2y, ddz = p1z - p2z;
+            double conDistSq = ddx * ddx + ddy * ddy + ddz * ddz;
+            if (conDistSq >= grabSq) continue;                              // crossLinkGrabDist distance gate
+
+            // loc = ptDist(end1, conPt) + jitter, clamped to [0,length]  (v1 checkToLink; jitter via wang-hash)
+            int base = (c * 1000003) ^ (step * 999983) ^ (seed * 7919);
+            double da = Math.sqrt((p1x - e1ax) * (p1x - e1ax) + (p1y - e1ay) * (p1y - e1ay) + (p1z - e1az) * (p1z - e1az));
+            double db = Math.sqrt((p2x - e1bx) * (p2x - e1bx) + (p2y - e1by) * (p2y - e1by) + (p2z - e1bz) * (p2z - e1bz));
+            float uj1 = (wangHash(base ^ 0x584C4A31) >>> 1) / 2147483647.0f;   // XLJ1
+            float uj2 = (wangHash(base ^ 0x584C4A32) >>> 1) / 2147483647.0f;   // XLJ2
+            double loc1 = da + (2.0 * uj1 - 1.0) * jit;
+            double loc2 = db + (2.0 * uj2 - 1.0) * jit;
+            double lenA = filSegLength.get(a), lenB = filSegLength.get(b);
+            if (loc1 > lenA) loc1 = lenA; if (loc1 < 0.0) loc1 = 0.0;
+            if (loc2 > lenB) loc2 = lenB; if (loc2 < 0.0) loc2 = 0.0;
+            reqLoc1.set(c, (float) loc1); reqLoc2.set(c, (float) loc2);
+
+            // P_form (v1: form iff rng.nextDouble() < pForm)
+            float up = (wangHash(base ^ 0x584C4650) >>> 1) / 2147483647.0f;    // XLFP
+            if (up < pForm) gatePass.set(c, 1);
+        }
+    }
+
+    /** Admission reduce: per segment, the MIN gate-passing candidate index targeting it (either side).
+     *  Single-threaded ⇒ deterministic per-segment min-reduction (the CSR-by-segment slice min, without
+     *  materializing the CSR). Sentinel = reqCap (> any candidate index). */
+    public static void formAdmitReduce(IntArray reqFilA, IntArray reqFilB, IntArray gatePass, IntArray minCand, IntArray formCounts) {
+        int reqCap = reqFilA.getSize(), nSeg = minCand.getSize();
+        for (@Parallel int gid = 0; gid < 1; gid++) {
+            for (int s = 0; s < nSeg; s++) minCand.set(s, reqCap);
+            for (int c = 0; c < reqCap; c++) {
+                if (gatePass.get(c) == 0) continue;
+                int a = reqFilA.get(c), b = reqFilB.get(c);
+                if (c < minCand.get(a)) minCand.set(a, c);
+                if (c < minCand.get(b)) minCand.set(b, c);
+            }
+        }
+    }
+
+    /** Start-of-step ACTIVE links per segment (saturation count). Single-threaded. */
+    public static void countActiveLinks(IntArray linkState, IntArray linkFilA, IntArray linkFilB,
+                                        IntArray activeLinkCount, IntArray formCounts) {
+        int C = linkState.getSize(), nSeg = activeLinkCount.getSize();
+        for (@Parallel int gid = 0; gid < 1; gid++) {
+            for (int s = 0; s < nSeg; s++) activeLinkCount.set(s, 0);
+            for (int L = 0; L < C; L++) {
+                if (linkState.get(L) < 0) continue;
+                int a = linkFilA.get(L), b = linkFilB.get(L);
+                activeLinkCount.set(a, activeLinkCount.get(a) + 1);
+                activeLinkCount.set(b, activeLinkCount.get(b) + 1);
+            }
+        }
+    }
+
+    /** Admission: candidate c is admitted (acceptFlag=1) iff it passed the local gates AND it is the
+     *  min-candidate-index for BOTH its segments (one new link per segment per step) AND both segments
+     *  pass saturation (count<cap) AND spacing (loc ≥ minSep from every existing ACTIVE link on that
+     *  segment) — all checked against start-of-step state. Per-candidate parallel; reads-only the shared
+     *  state ⇒ race-free. */
+    public static void formAdmit(IntArray reqFilA, IntArray reqFilB, FloatArray reqLoc1, FloatArray reqLoc2,
+                                 IntArray gatePass, IntArray minCand, IntArray activeLinkCount,
+                                 IntArray linkState, IntArray linkFilA, IntArray linkFilB, FloatArray loc1, FloatArray loc2,
+                                 IntArray acceptFlag, FloatArray formParams, IntArray formCounts) {
+        int reqCap = reqFilA.getSize(), C = linkState.getSize();
+        double minSep = formParams.get(2);
+        int maxLinks = (int) formParams.get(3);
+        for (@Parallel int c = 0; c < reqCap; c++) {
+            acceptFlag.set(c, 0);
+            if (gatePass.get(c) == 0) continue;
+            int segA = reqFilA.get(c), segB = reqFilB.get(c);
+            if (minCand.get(segA) != c || minCand.get(segB) != c) continue;                 // one-per-segment cap
+            if (activeLinkCount.get(segA) >= maxLinks || activeLinkCount.get(segB) >= maxLinks) continue;  // saturation
+            double la = reqLoc1.get(c), lb = reqLoc2.get(c);
+            boolean ok = true;
+            for (int L = 0; L < C; L++) {                                                   // spacing vs existing links
+                if (linkState.get(L) < 0) continue;
+                int fa = linkFilA.get(L), fb = linkFilB.get(L);
+                if (fa == segA && Math.abs(la - loc1.get(L)) < minSep) ok = false;
+                if (fb == segA && Math.abs(la - loc2.get(L)) < minSep) ok = false;
+                if (fa == segB && Math.abs(lb - loc1.get(L)) < minSep) ok = false;
+                if (fb == segB && Math.abs(lb - loc2.get(L)) < minSep) ok = false;
+            }
+            if (ok) acceptFlag.set(c, 1);
+        }
+    }
+
+    /** Persist orientSame into the formed link's slot, using the SAME rank→freeList mapping as `allocate`
+     *  (keeps the 5c-i allocate unchanged / ≤15 args). One writer per slot ⇒ race-free. */
+    public static void placeOrient(IntArray reqOrient, IntArray rankOffsets, IntArray freeList, IntArray freeOffsets,
+                                   IntArray linkOrientSame, IntArray allocCounts) {
+        int C = allocCounts.get(0), K = allocCounts.get(1);
+        int nFree = freeOffsets.get(C);
+        for (@Parallel int r = 0; r < K; r++) {
+            int rank = rankOffsets.get(r);
+            if (rankOffsets.get(r + 1) <= rank) continue;
+            if (rank >= nFree) continue;
+            linkOrientSame.set(freeList.get(rank), reqOrient.get(r));
+        }
+    }
 }

@@ -361,3 +361,97 @@ as the deliberate v2 ordering.
   `fracMove`-on-changing-count still deferred to 5c-iii.
 - Next: 5c-ii (broad-phase + gates + `P_form` + the `STORE_CROSSLINKER` publisher), 5c-iii (formation
   force law + running-v1 steady-state), torsion, 5d (Arp2/3).
+
+---
+
+# Increment 5c-ii — crosslinker formation (broad-phase FIL×FIL + checkToLink gates + P_form)
+
+**Status: DONE / green.** Real formation that fills the 5c-i request arrays; the 5c-i scan-rank allocator
+underneath is **unchanged**. Pipeline per step: broad-phase FIL×FIL candidates → per-candidate-local gates
++ `P_form` RNG → one-per-segment min-reduction admission → fill request arrays → 5c-i allocator. Wired into
+both runners. Validated on the analytic oracle (gate-by-gate arithmetic vs v1; running-v1 bundle stays
+deferred to 5c-iii). `BoA-v1ref` byte-clean; production/`GlidingHarness` byte-unchanged; default-off (pForm=0).
+
+OUT (→ 5c-iii / 5d): the formation **force law** + `fracMove`-on-changing-count; the **running-v1 bundle**
+/ steady-state plateau / halve-`xLinkConc`; Arp2/3.
+
+## 1. What was built (CrosslinkerSystem)
+- `filFilCandidates` — broad-phase FIL×FIL branch: distinct unordered cross-filament segment pairs
+  (`i<j`, `filID[i]≠filID[j]`) within a coarse capsule bound → `reqFilA/reqFilB` (unused slots key −1).
+  Single-threaded ⇒ deterministic index order; complete superset of the fine-gate passers.
+- `formGates` — per-candidate-LOCAL (each writes its own slot ⇒ race-free): v1 `checkToLink` alignment
+  (mode 0/1/−1, **`fastAcos` ported**), the v1 `lineSegmentIntersectTest` closest-approach vs
+  `crossLinkGrabDist²`, `orientSame` (dot sign, v1 `FilLink.set`), `loc1/loc2` (+v1 jitter), and the
+  `P_form = 1−exp(−xLinkOnRate·xLinkConc·dtCheck)` wang-hash draw.
+- `formAdmitReduce` — per-segment min gate-passing candidate index (single-threaded reduction).
+- `countActiveLinks` — start-of-step ACTIVE links per segment (saturation count).
+- `formAdmit` — the admission decision (below) → `acceptFlag` (the 5c-i request accept-flag).
+- `placeOrient` — persists `orientSame` into the formed link's slot via the same rank→freeList mapping
+  (keeps the 5c-i `allocate` unchanged / ≤15 args).
+- Store: `linkOrientSame`, `reqOrient`, `gatePass`, `minCand`, `activeLinkCount`, `formParams`, `formCounts`.
+
+## 2. The admission decision (planner — implemented as specified)
+Geometry/RNG gates are per-candidate-local (race-free). Saturation + spacing are cross-candidate. Resolved
+by **cap admission at one new link per segment per step** via a deterministic min-candidate-index
+reduction: candidate `c` is admitted iff it is the **minimum candidate index** among gate-passing
+candidates targeting `segA` **AND** among those targeting `segB`, **and** both segments pass **saturation**
+(`activeLinkCount[seg] < maxXLinksOnSeg`) **and** **spacing** (`c`'s loc ≥ `minSepBetweenXLinks` from every
+existing ACTIVE link on that segment) — **all vs start-of-step state** (after the 5b death, before this
+step's formation). Because ≤1 new link lands per segment per step, saturation + spacing are exact with **no
+same-step cross-candidate dependency** (no parallel-greedy machine). Implemented as a single-threaded
+per-segment min-reduction (`formAdmitReduce`) feeding a parallel read-only admission test (`formAdmit`) —
+the CSR-by-segment min, without materializing the CSR; deterministic, race-free, bit-identical CPU↔GPU.
+
+This is a **deliberate non-binding divergence** from v1 (which admits all that pass, in scan order),
+self-checked below (item 4).
+
+## 3. Faithfulness notes / discoveries
+- **`Math.acos` does NOT lower on the PTX backend** (`emitReinterpret unimplemented`). `fastAcos`'s middle
+  branch (`|dot|≤0.95`) was swapped to the PTX-proven `accurateAcos` polynomial (same as `CrossBridgeSystem`).
+  The default `maxXLinkBondAngle = π/12` lands the alignment threshold in the `|dot|>0.95` **sqrt** branch
+  (ported verbatim ⇒ that decision is bit-exact); the middle only decides far-misaligned pairs (angle ≥
+  acos(0.95) ≈ 18.2° > the π/12 = 15° threshold ⇒ fail either way), so `accurateAcos` there is
+  decision-bit-exact for the default. *(silent + journal.)*
+- **Firing cadence (ported):** `crosslinkFiresThisStep` fires every `crosslinkCheckInt` steps;
+  `dtCheck = deltaT·crosslinkCheckInt`; default `crosslinkCheckInt = biochemDeltaT/deltaT = 1e-3/1e-4 = 10`.
+  Not ambiguous (no pause). `P_form(v1 default) = 1−exp(−10·1·1e-3) = 9.995e-4`.
+- **v1's `lineSegmentIntersectTest` is degenerate for exactly-parallel segments** (`ray1×ray2≈0` → its
+  "parallel" guard returns no-collision) and ill-conditioned for nearly-parallel — so v1 forms links at
+  near-parallel **crossings** (interior closest approach), not stacked-parallel pairs. The test scene is a
+  crossing bundle (filaments tilted in xy, stacked in z) accordingly. Ported verbatim incl. the parallel
+  guard's component-wise `< 1e-20` quirk (consistently matched by the v1 host reference).
+- **RNG salts** (reused wang-hash, distinct from break `XLKB` + the motor salts): `P_form` `0x584C4650`
+  ("XLFP"), loc jitter `0x584C4A31`/`0x584C4A32` ("XLJ1"/"XLJ2"). The loc jitter MAGNITUDE is faithful
+  (±`minFilLinkSep`) but the specific value differs from v1's MersenneTwister draw (the established
+  RNG-divergence posture; the spacing LOGIC is what's validated).
+- `orientSame` is computed + validated at formation and persisted into the link slot (`linkOrientSame`),
+  forward-compatible with the torsional spring (deferred); the 5c-i `allocate` stays unchanged.
+
+## 4. Validation (numbers for the planner) — `./run_xlink.sh`, all 6 PASS (GPU + CPU)
+- **#1 broad-phase candidate-set** (8 fil × 2 seg): nCand=112; emitted set == host enumeration; unordered/
+  distinct (i<j, no dup); **same-filament pairs excluded**; complete superset of the fine-gate passers. ✓
+- **#2 gate arithmetic bit-exact vs v1 `checkToLink`** (modes 0/1/−1, 828 candidates spanning the alignment
+  AND distance boundaries): **0 decision mismatches** vs the v1 formula (alignment `fastAcos`, lineSeg
+  `crossLinkGrabDist²` distance, `orientSame`). ✓
+- **#3 P_form formula + cadence + empirical:** formula vs v1 literal **Δ=0.000%**; `dtCheck = 1e-4 s`,
+  `P_form=9.995e-4`; empirical per-candidate fire fraction at `pForm=0.30` = **0.29970 (Δ=0.101%)** over
+  4000 steps (108 geometry-passers) — matches within sampling. ✓
+- **#4 one-per-segment cap contention self-check (THE flagged decision)** — 36-filament dense focal bundle,
+  default params, 20000 steps: **gate-passers = 3657; same-step same-segment contention = 34 seg-steps
+  (0.0017/step); cap-dropped = 34 = 0.93% of would-be formations** ⇒ cap **NON-BINDING**. Contention scales
+  as N²·P_form² (N = gate-passing neighbors/segment); this bundle (all filaments crossing near one focal
+  point) is a near-worst-case density, so 0.93% is an **upper bound** — realistic distributed crossings
+  (fewer neighbors/segment) give ≪ this. No PAUSE (≪ the heavier-admission threshold).
+- **#5 CPU≡GPU bit-identical** (20-fil bundle, 400 churn steps, full pipeline): formed-link sets (state +
+  payload + orientSame) — **0 field mismatches**. ✓
+- **#6 all-OFF≡HEAD** (pForm=0 ⇒ no candidate fires): bit-identical to the no-formation 5b/5c-i path
+  (0 mismatches, 300 steps); all 5a/5b/5c-i gates reproduce unchanged. ✓
+
+## 5. Carry-forward / open
+- **Running-v1 oracle still DEFERRED to 5c-iii** (steady-state plateau, formation≈dissolution,
+  halve-`xLinkConc` — needs a running v1 bundle). `fracMove`-on-changing-count also 5c-iii.
+- The one-per-segment-per-step cap is confirmed non-binding (0.93% upper bound); 5c-iii's steady-state
+  should re-confirm at production density. If a denser regime ever drives contention up, the planner's
+  heavier exact-admission path is the documented escalation.
+- Next: 5c-iii (formation force law + `fracMove`-on-count + running-v1 steady-state), torsion
+  (`applyTorsionForce`, consumes `linkOrientSame`), 5d (Arp2/3).

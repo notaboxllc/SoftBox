@@ -97,6 +97,20 @@ public final class CrosslinkerStore {
     public final IntArray   freeScanCounts;     // csrScan counts for the free-list scan ([3]=C)
     public final IntArray   allocCounts;        // [0]=C(capacity) [1]=K(requests this step) [2]=STRAIN_WIN
 
+    // ====== 5c-ii FORMATION (broad-phase FIL×FIL + checkToLink gates + P_form) ======
+    // The broad-phase fills reqFilA/reqFilB (candidate segment pairs); formGates writes reqLoc1/reqLoc2/
+    // reqOrient + gatePass (per-candidate-local); admission writes acceptFlag (one new link/segment/step).
+    public final IntArray   linkOrientSame;     // capacity; link payload: 1 = parallel, 0 = antiparallel (v1 FilLink.orientSame)
+    public final IntArray   reqOrient;          // reqCap; per-candidate orientSame
+    public final IntArray   gatePass;           // reqCap; per-candidate geometry+P_form pass (pre-admission)
+    public final IntArray   minCand;            // nSeg; min gate-passing candidate index targeting each segment (admission)
+    public final IntArray   activeLinkCount;    // nSeg; start-of-step ACTIVE links per segment (saturation)
+    // formParams: [0]=maxXLinkBondAngle(rad) [1]=crossLinkGrabDist^2 [2]=minSepBetweenXLinks [3]=maxXLinksOnSeg
+    //   [4]=P_form [5]=minFilLinkSep(loc jitter half-range) [6]=crossLinkGrabDist(coarse bound)
+    public final FloatArray formParams;
+    // formCounts: [0]=nCand [1]=step [2]=seed [3]=xLinkMode(0 both/1 ∥/−1 anti)
+    public final IntArray   formCounts;
+
     public CrosslinkerStore(int nLinks, int nSeg) { this(nLinks, nSeg, 1); }
 
     public CrosslinkerStore(int nLinks, int nSeg, int reqCap) {
@@ -131,6 +145,16 @@ public final class CrosslinkerStore {
         allocCounts.set(0, cap);              // C
         allocCounts.set(2, STRAIN_WIN);       // W
 
+        // 5c-ii formation block
+        linkOrientSame  = new IntArray(cap);
+        reqOrient       = new IntArray(this.reqCap);
+        gatePass        = new IntArray(this.reqCap);
+        minCand         = new IntArray(nSeg);
+        activeLinkCount = new IntArray(nSeg);
+        formParams      = new FloatArray(8);
+        formCounts      = new IntArray(4);
+        linkOrientSame.init(0);
+
         // unused slots start FREE with a negative key ⇒ skipped by the CSR (key<0) and the gather guard.
         linkState.init(LINK_FREE);
         linkFilA.init(-1);
@@ -145,6 +169,22 @@ public final class CrosslinkerStore {
         rankScanCounts.set(3, K);
         allocCounts.set(1, K);
     }
+
+    /** 5c-ii formation gate params (v1 Env defaults: maxXLinkBondAngle=π/12, crossLinkGrabDist=2·monomerDiam,
+     *  minSepBetweenXLinks=5·monomerDiam, maxXLinksOnSeg=10, minFilLinkSep=2·monomerDiam). pForm precomputed
+     *  = 1−exp(−xLinkOnRate·xLinkConc·dtCheck), dtCheck = deltaT·crosslinkCheckInt. mode: 0 both / 1 ∥ / −1 anti. */
+    public void setFormParams(double maxAngle, double grabDist, double minSep, int maxLinksOnSeg,
+                              double pForm, double minFilLinkSep, int mode) {
+        formParams.set(0, (float) maxAngle);
+        formParams.set(1, (float) (grabDist * grabDist));
+        formParams.set(2, (float) minSep);
+        formParams.set(3, (float) maxLinksOnSeg);
+        formParams.set(4, (float) pForm);
+        formParams.set(5, (float) minFilLinkSep);
+        formParams.set(6, (float) grabDist);
+        formCounts.set(3, mode);
+    }
+    public void setFormStep(int step, int seed) { formCounts.set(1, step); formCounts.set(2, seed); }
 
     /** restLength = 0.0125 µm (v1 FilLink.java:28), fracMoveBase = 0.4 (v1 FilLink.java:208). */
     public void setParams(double restLength, double fracMoveBase, double dt) {

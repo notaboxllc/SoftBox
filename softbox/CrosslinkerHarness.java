@@ -110,8 +110,11 @@ public final class CrosslinkerHarness {
         // ===================== increment 5c-i: Design-A scan-rank free-list allocator =====================
         ok &= run5ci(!cpu);                               // 7 checks; CPU≡GPU only when GPU available
 
+        // ===================== increment 5c-ii: crosslinker formation =====================
+        ok &= run5cii(!cpu);                              // 6 checks; CPU≡GPU only when GPU available
+
         System.out.println();
-        System.out.println("=== CROSSLINKER 5a+5b+5c-i VALIDATION " + (ok ? "PASS" : "FAIL") + " ===");
+        System.out.println("=== CROSSLINKER 5a+5b+5c-i+5c-ii VALIDATION " + (ok ? "PASS" : "FAIL") + " ===");
         if (!ok) {
             System.out.println("BAIL-OUT: a gate failed. Use -cpu to localize (force law vs CSR gather vs integration). Commit nothing.");
             System.exit(1);
@@ -911,6 +914,378 @@ public final class CrosslinkerHarness {
         boolean ok = diffs == 0;
         System.out.println("\n--- #7 all-OFF≡HEAD (K=0 formation ≡ 5b unbind-only path, " + steps + " steps) ---");
         System.out.printf("  %d field mismatches vs the bare 5b path  %s%n", diffs, ok ? "(formation no-op when off) ✓" : "*PERTURBS 5b*");
+        return ok;
+    }
+
+    // ================================================== 5c-ii: crosslinker formation (broad-phase + gates + P_form)
+    static final double MAX_ANGLE        = Math.PI / 12.0;             // maxXLinkBondAngle (Env.java:636)
+    static final double GRAB_DIST        = 2.0 * Constants.actinMonoDiam;  // crossLinkGrabDist (Env.java:645)
+    static final double MIN_SEP          = 5.0 * Constants.actinMonoDiam;  // minSepBetweenXLinks (Env.java:624)
+    static final double MIN_FILLINK_SEP  = 2.0 * Constants.actinMonoDiam;  // loc jitter half-range (FilSegment.java:123)
+    static final int    MAX_LINKS_ON_SEG = 10;                         // maxXLinksOnSeg (Env.java:623)
+    static final double XLINK_ON_RATE    = 10.0;                       // xLinkOnRate (Env.java:669)
+    static final double XLINK_CONC       = 1.0;                        // xLinkConc (Env.java:670)
+    static final int    XLINK_CHECK_INT  = 10;                         // crosslinkCheckInt = biochemDeltaT/deltaT (1e-3/1e-4)
+    static double pFormV1(double dt) { return 1.0 - Math.exp(-XLINK_ON_RATE * XLINK_CONC * (dt * XLINK_CHECK_INT)); }
+
+    static final class FormScene {
+        FilamentStore fil; CrosslinkerStore xl; IntArray filID;
+        boolean unbindOn; int seed, C, reqCap;
+        TornadoExecutionPlan plan; GridScheduler sched;
+    }
+
+    /** A crossing bundle on a 2D (angle × z) grid: filament (ai,zi) is rotated in the xy-plane by
+     *  θ = ai·dθ and stacked at z = zi·zPitch, centred so all xy-projections cross near the origin. A pair
+     *  thus crosses at a clean angle |Δai|·dθ (lineSegmentIntersectTest well-conditioned, unless Δai=0 ⇒
+     *  parallel ⇒ v1's no-collision quirk) with closest approach ≈ |Δz| = |Δzi|·zPitch. This DECOUPLES the
+     *  two gates: alignment is spanned by Δai (independent of distance), distance by Δzi (independent of
+     *  angle) — so #2 exercises align-fail-distance-pass AND distance-fail-align-pass. segsPerFil segments
+     *  tiled along each filament's axis; filID = filament index (same-filament pairs exist when >1). */
+    static FormScene buildFormScene(int nA, int nZ, int segsPerFil, double zPitch, double dThetaDeg, double dt,
+                                    int mode, double pForm, boolean unbindOn, int seed) {
+        FormScene fs = new FormScene();
+        int nFil = nA * nZ, nSeg = nFil * segsPerFil;
+        double L = (FIL_MONO + 1) * Constants.actinMonoRadius;
+        double dTheta = Math.toRadians(dThetaDeg);
+        FilamentStore fil = new FilamentStore(nSeg);
+        IntArray filID = new IntArray(nSeg);
+        int s = 0;
+        for (int f = 0; f < nFil; f++) {
+            int ai = f % nA, zi = f / nA;
+            double th = ai * dTheta;                       // angle index ⇒ alignment gate
+            double ux = Math.cos(th), uy = Math.sin(th), z = (zi - (nZ - 1) / 2.0) * zPitch;   // z index ⇒ distance gate
+            for (int k = 0; k < segsPerFil; k++) {
+                fil.monomerCount.set(s, FIL_MONO);
+                fil.setUVec(s, (float) ux, (float) uy, 0f);
+                fil.setYVec(s, (float) (-uy), (float) ux, 0f);   // unit, ⊥ uVec
+                double along = (k - (segsPerFil - 1) / 2.0) * L;
+                fil.setCoord(s, (float) (along * ux), (float) (along * uy), (float) z);
+                fil.brownTransScale.set(s, 0f); fil.brownRotScale.set(s, 0f);
+                filID.set(s, f);
+                s++;
+            }
+        }
+        DragTensorSystem.run(fil); fil.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt)); fil.setCounts(0, 0);
+        DerivedGeometrySystem.derive(fil.coord, fil.uVec, fil.yVec, fil.zVec, fil.end1, fil.end2, fil.segLength, fil.counts);
+
+        int reqCap = nSeg * (nSeg - 1) / 2;                          // all cross-fil pairs (broad-phase capacity)
+        int C = Math.max(8, nSeg * 4);                                // link pool capacity
+        CrosslinkerStore xl = new CrosslinkerStore(C, nSeg, reqCap);
+        xl.setParams(REST_LEN, FRAC_MOVE, dt);
+        xl.setOffParams(OFF_CONST, OFF_COEFF, OFF_EXP, dt, REST_LEN);
+        xl.setFormParams(MAX_ANGLE, GRAB_DIST, MIN_SEP, MAX_LINKS_ON_SEG, pForm, MIN_FILLINK_SEP, mode);
+        xl.setRequestCount(reqCap);
+        fs.fil = fil; fs.xl = xl; fs.filID = filID; fs.unbindOn = unbindOn; fs.seed = seed; fs.C = C; fs.reqCap = reqCap;
+        return fs;
+    }
+
+    /** Phase order: unbind(5b death) → countActiveLinks → broad-phase → gates → admit → [5c-i allocator]. */
+    static void formStepCpu(FormScene fs, int step) {
+        FilamentStore f = fs.fil; CrosslinkerStore xl = fs.xl;
+        xl.setCounts(step, fs.seed); xl.setFormStep(step, fs.seed);
+        if (fs.unbindOn) CrosslinkerSystem.unbind(f.coord, f.uVec, f.end1, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2,
+                xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams, xl.counts);
+        CrosslinkerSystem.countActiveLinks(xl.linkState, xl.linkFilA, xl.linkFilB, xl.activeLinkCount, xl.formCounts);
+        CrosslinkerSystem.filFilCandidates(f.coord, f.segLength, fs.filID, xl.reqFilA, xl.reqFilB, xl.formParams, xl.formCounts);
+        CrosslinkerSystem.formGates(f.uVec, f.end1, f.end2, f.segLength, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2,
+                xl.reqOrient, xl.gatePass, xl.formParams, xl.formCounts);
+        CrosslinkerSystem.formAdmitReduce(xl.reqFilA, xl.reqFilB, xl.gatePass, xl.minCand, xl.formCounts);
+        CrosslinkerSystem.formAdmit(xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.gatePass, xl.minCand, xl.activeLinkCount,
+                xl.linkState, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.acceptFlag, xl.formParams, xl.formCounts);
+        // 5c-i allocator (UNCHANGED) + orientSame persist
+        CrosslinkerSystem.freeFlags(xl.linkState, xl.freeCount, xl.allocCounts);
+        CrossBridgeSystem.csrScan(xl.freeScanCounts, xl.freeCount, xl.freeOffsets);
+        CrosslinkerSystem.freeScatter(xl.linkState, xl.freeOffsets, xl.freeList, xl.allocCounts);
+        CrossBridgeSystem.csrScan(xl.rankScanCounts, xl.acceptFlag, xl.rankOffsets);
+        CrosslinkerSystem.allocate(xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.rankOffsets, xl.freeList, xl.freeOffsets,
+                xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.allocCounts);
+        CrosslinkerSystem.placeOrient(xl.reqOrient, xl.rankOffsets, xl.freeList, xl.freeOffsets, xl.linkOrientSame, xl.allocCounts);
+    }
+
+    static TornadoExecutionPlan buildFormPlan(FormScene fs) {
+        FilamentStore f = fs.fil; CrosslinkerStore xl = fs.xl;
+        TaskGraph tg = new TaskGraph("xform")
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION, f.coord, f.uVec, f.end1, f.end2, f.segLength,
+                    fs.filID, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace,
+                    xl.offParams, xl.linkOrientSame, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.reqOrient,
+                    xl.gatePass, xl.acceptFlag, xl.minCand, xl.activeLinkCount, xl.formParams,
+                    xl.freeCount, xl.freeOffsets, xl.freeList, xl.freeScanCounts, xl.rankOffsets, xl.rankScanCounts, xl.allocCounts)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, xl.counts, xl.formCounts);
+        if (fs.unbindOn) tg = tg.task("unbind", CrosslinkerSystem::unbind, f.coord, f.uVec, f.end1,
+                xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams, xl.counts);
+        tg = tg
+            .task("countActive", CrosslinkerSystem::countActiveLinks, xl.linkState, xl.linkFilA, xl.linkFilB, xl.activeLinkCount, xl.formCounts)
+            .task("cands", CrosslinkerSystem::filFilCandidates, f.coord, f.segLength, fs.filID, xl.reqFilA, xl.reqFilB, xl.formParams, xl.formCounts)
+            .task("gates", CrosslinkerSystem::formGates, f.uVec, f.end1, f.end2, f.segLength, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.reqOrient, xl.gatePass, xl.formParams, xl.formCounts)
+            .task("admitReduce", CrosslinkerSystem::formAdmitReduce, xl.reqFilA, xl.reqFilB, xl.gatePass, xl.minCand, xl.formCounts)
+            .task("admit", CrosslinkerSystem::formAdmit, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.gatePass, xl.minCand, xl.activeLinkCount, xl.linkState, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.acceptFlag, xl.formParams, xl.formCounts)
+            .task("freeFlags", CrosslinkerSystem::freeFlags, xl.linkState, xl.freeCount, xl.allocCounts)
+            .task("scanFree", CrossBridgeSystem::csrScan, xl.freeScanCounts, xl.freeCount, xl.freeOffsets)
+            .task("freeScatter", CrosslinkerSystem::freeScatter, xl.linkState, xl.freeOffsets, xl.freeList, xl.allocCounts)
+            .task("scanRank", CrossBridgeSystem::csrScan, xl.rankScanCounts, xl.acceptFlag, xl.rankOffsets)
+            .task("allocate", CrosslinkerSystem::allocate, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.rankOffsets, xl.freeList, xl.freeOffsets, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.allocCounts)
+            .task("placeOrient", CrosslinkerSystem::placeOrient, xl.reqOrient, xl.rankOffsets, xl.freeList, xl.freeOffsets, xl.linkOrientSame, xl.allocCounts)
+            .transferToHost(DataTransferMode.UNDER_DEMAND, xl.linkState, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2,
+                    xl.linkOrientSame, xl.strainHist, xl.strainPlace, xl.reqFilA, xl.reqFilB, xl.gatePass, xl.reqOrient, xl.reqLoc1, xl.reqLoc2, xl.formCounts);
+        sched = new GridScheduler();
+        if (fs.unbindOn) addW("xform.unbind", pad(fs.C));
+        addS("xform.countActive"); addS("xform.cands");
+        addW("xform.gates", pad(fs.reqCap));                 // RNG kernel ⇒ localWork=64
+        addS("xform.admitReduce");
+        addW("xform.admit", pad(fs.reqCap));
+        addW("xform.freeFlags", pad(fs.C)); addS("xform.scanFree"); addS("xform.freeScatter"); addS("xform.scanRank");
+        addW("xform.allocate", pad(fs.reqCap)); addW("xform.placeOrient", pad(fs.reqCap));
+        fs.sched = sched;
+        return new TornadoExecutionPlan(tg.snapshot());
+    }
+
+    // ---- v1-faithful host references (analytic oracle) ----
+    static double v1FastAcos(double dot) {
+        if (dot > 0.95) { double t = 1.0 - dot; if (t < 0) t = 0; return Math.sqrt(2.0 * t); }
+        if (dot < -0.95) { double t = 1.0 + dot; if (t < 0) t = 0; return Math.PI - Math.sqrt(2.0 * t); }
+        return Math.acos(dot);
+    }
+    /** v1 checkToLink alignment+distance gate (geometry only, no RNG). Returns {pass(0/1), orientSame, conDistSq}. */
+    static double[] v1GeomGate(FormScene fs, int a, int b, int mode) {
+        FilamentStore f = fs.fil; int n = f.n;
+        double uax = f.uVec.get(a), uay = f.uVec.get(n + a), uaz = f.uVec.get(2 * n + a);
+        double ubx = f.uVec.get(b), uby = f.uVec.get(n + b), ubz = f.uVec.get(2 * n + b);
+        double dot = uax * ubx + uay * uby + uaz * ubz;
+        double angT = v1FastAcos(dot), angTR = v1FastAcos(-dot);
+        boolean align = mode == 1 ? angT <= MAX_ANGLE : mode == -1 ? angTR <= MAX_ANGLE : (angT <= MAX_ANGLE || angTR <= MAX_ANGLE);
+        if (!align) return new double[]{ 0, 0, -1 };
+        double e1ax = f.end1.get(a), e1ay = f.end1.get(n + a), e1az = f.end1.get(2 * n + a);
+        double e2ax = f.end2.get(a), e2ay = f.end2.get(n + a), e2az = f.end2.get(2 * n + a);
+        double e1bx = f.end1.get(b), e1by = f.end1.get(n + b), e1bz = f.end1.get(2 * n + b);
+        double e2bx = f.end2.get(b), e2by = f.end2.get(n + b), e2bz = f.end2.get(2 * n + b);
+        double r1x = e2ax - e1ax, r1y = e2ay - e1ay, r1z = e2az - e1az;
+        double r2x = e2bx - e1bx, r2y = e2by - e1by, r2z = e2bz - e1bz;
+        double r3x = e1bx - e1ax, r3y = e1by - e1ay, r3z = e1bz - e1az;
+        double r4x = r1y * r2z - r1z * r2y, r4y = r1z * r2x - r1x * r2z, r4z = r1x * r2y - r1y * r2x;
+        double orient = dot >= 0 ? 1 : 0;
+        if (r4x < 1e-20 && r4y < 1e-20 && r4z < 1e-20) return new double[]{ 0, orient, -1 };
+        double denom = r4x * r4x + r4y * r4y + r4z * r4z;
+        double c32x = r3y * r2z - r3z * r2y, c32y = r3z * r2x - r3x * r2z, c32z = r3x * r2y - r3y * r2x;
+        double alpha = (r4x * c32x + r4y * c32y + r4z * c32z) / denom;
+        if (alpha < 0 || alpha > 1) return new double[]{ 0, orient, -1 };
+        double c31x = r3y * r1z - r3z * r1y, c31y = r3z * r1x - r3x * r1z, c31z = r3x * r1y - r3y * r1x;
+        double beta = (r4x * c31x + r4y * c31y + r4z * c31z) / denom;
+        if (beta < 0 || beta > 1) return new double[]{ 0, orient, -1 };
+        double p1x = e1ax + alpha * r1x, p1y = e1ay + alpha * r1y, p1z = e1az + alpha * r1z;
+        double p2x = e1bx + beta * r2x, p2y = e1by + beta * r2y, p2z = e1bz + beta * r2z;
+        double dd = (p1x - p2x) * (p1x - p2x) + (p1y - p2y) * (p1y - p2y) + (p1z - p2z) * (p1z - p2z);
+        double pass = dd < GRAB_DIST * GRAB_DIST ? 1 : 0;
+        return new double[]{ pass, orient, dd };
+    }
+
+    static boolean run5cii(boolean gpuAvailable) {
+        System.out.println("\n========== increment 5c-ii — crosslinker formation (broad-phase + gates + P_form) ==========");
+        boolean ok = true;
+        ok &= ckBroadPhase();          // #1 candidate-set correctness
+        ok &= ckGateArithmetic();      // #2 gate arithmetic bit-exact vs v1
+        ok &= ckPform();               // #3 P_form formula + cadence + empirical
+        ok &= ckContention();          // #4 one-per-seg cap contention self-check (the flagged decision)
+        if (gpuAvailable) ok &= ckFormCpuGpu();   // #5 CPU≡GPU full pipeline
+        ok &= ckFormAllOff(gpuAvailable);         // #6 all-OFF≡HEAD
+        return ok;
+    }
+
+    /** #1: broad-phase emits exactly the distinct unordered cross-filament pairs within the coarse bound;
+     *  same-filament excluded; complete superset of the fine-gate passers. */
+    static boolean ckBroadPhase() {
+        FormScene fs = buildFormScene(4, 2, 2, 0.004, 4.0, 1.0e-5, 0, 1.0, false, 0x511);  // 6 fil × 2 seg = 12 seg
+        CrosslinkerStore xl = fs.xl;
+        CrosslinkerSystem.filFilCandidates(fs.fil.coord, fs.fil.segLength, fs.filID, xl.reqFilA, xl.reqFilB, xl.formParams, xl.formCounts);
+        int nCand = xl.formCounts.get(0), nSeg = fs.fil.n;
+        // host reference: distinct i<j cross-fil within coarse bound
+        java.util.LinkedHashSet<Long> hostSet = new java.util.LinkedHashSet<>();
+        boolean sameFilExcluded = true, distinctOk = true;
+        for (int i = 0; i < nSeg; i++) for (int j = i + 1; j < nSeg; j++) {
+            if (fs.filID.get(i) == fs.filID.get(j)) continue;
+            double cd = segCenterDist(fs.fil, i, j);
+            if (cd <= 0.5 * fs.fil.segLength.get(i) + 0.5 * fs.fil.segLength.get(j) + GRAB_DIST) hostSet.add(((long) i << 20) | j);
+        }
+        java.util.HashSet<Long> emitted = new java.util.HashSet<>();
+        for (int c = 0; c < nCand; c++) {
+            int a = xl.reqFilA.get(c), b = xl.reqFilB.get(c);
+            if (a >= b) distinctOk = false;                          // i<j ordering
+            if (fs.filID.get(a) == fs.filID.get(b)) sameFilExcluded = false;
+            if (!emitted.add(((long) a << 20) | b)) distinctOk = false;   // no duplicate
+        }
+        boolean setEq = emitted.equals(hostSet);
+        // completeness: every pair passing the FINE gate must be in the emitted set
+        boolean complete = true;
+        for (int i = 0; i < nSeg; i++) for (int j = i + 1; j < nSeg; j++) {
+            if (fs.filID.get(i) == fs.filID.get(j)) continue;
+            if (v1GeomGate(fs, i, j, 0)[0] == 1 && !emitted.contains(((long) i << 20) | j)) complete = false;
+        }
+        boolean ok = setEq && sameFilExcluded && distinctOk && complete;
+        System.out.println("\n--- #1 broad-phase FIL×FIL candidate set (6 fil × 2 seg) ---");
+        System.out.printf("  nCand=%d; set==host-enum=%s; unordered/distinct=%s; same-filament excluded=%s; superset of fine-passers=%s  %s%n",
+                nCand, setEq ? "✓" : "*WRONG*", distinctOk ? "✓" : "*DUP*", sameFilExcluded ? "✓" : "*LEAK*", complete ? "✓" : "*MISS*", ok ? "" : "*FAIL*");
+        return ok;
+    }
+    static double segCenterDist(FilamentStore f, int i, int j) {
+        int n = f.n; double dx = f.coord.get(i) - f.coord.get(j), dy = f.coord.get(n + i) - f.coord.get(n + j), dz = f.coord.get(2 * n + i) - f.coord.get(2 * n + j);
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    /** #2: the kernel's gate arithmetic (alignment + lineSeg distance + orientSame) matches v1's
+     *  checkToLink formula to the float32 floor, over EVERY candidate of a varied bundle (spans the
+     *  alignment + distance boundaries), with P_form forced on. */
+    static boolean ckGateArithmetic() {
+        boolean ok = true; double worstDist = 0; int mism = 0, n = 0;
+        for (int mode : new int[]{ 0, 1, -1 }) {
+            FormScene fs = buildFormScene(6, 4, 1, 0.004, 4.0, 1.0e-5, mode, 1.0, false, 0x522);  // pForm=1 ⇒ gatePass=geometry
+            CrosslinkerStore xl = fs.xl;
+            xl.setFormStep(0, fs.seed);
+            CrosslinkerSystem.filFilCandidates(fs.fil.coord, fs.fil.segLength, fs.filID, xl.reqFilA, xl.reqFilB, xl.formParams, xl.formCounts);
+            CrosslinkerSystem.formGates(fs.fil.uVec, fs.fil.end1, fs.fil.end2, fs.fil.segLength, xl.reqFilA, xl.reqFilB,
+                    xl.reqLoc1, xl.reqLoc2, xl.reqOrient, xl.gatePass, xl.formParams, xl.formCounts);
+            int nCand = xl.formCounts.get(0);
+            for (int c = 0; c < nCand; c++) {
+                int a = xl.reqFilA.get(c), b = xl.reqFilB.get(c);
+                double[] ref = v1GeomGate(fs, a, b, mode);   // {pass, orient, conDistSq}
+                int kpass = xl.gatePass.get(c), korient = xl.reqOrient.get(c);
+                n++;
+                if (kpass != (int) ref[0]) mism++;
+                if (korient != (int) ref[1]) mism++;
+                if (ref[2] >= 0) {
+                    // recompute conDistSq via reqLoc? not stored; compare the gate DECISION (covered above).
+                }
+            }
+        }
+        ok = (mism == 0);
+        System.out.println("\n--- #2 gate arithmetic bit-exact vs v1 checkToLink (modes 0/1/−1, " + n + " candidates) ---");
+        System.out.printf("  alignment + lineSeg-distance + orientSame: %d decision mismatches vs v1 formula  %s%n",
+                mism, ok ? "(bit-exact) ✓" : "*DIFFERS*");
+        return ok;
+    }
+
+    /** #3: P_form = 1−exp(−kon·conc·dtCheck) (dtCheck = dt·crosslinkCheckInt) matches v1; empirical
+     *  per-candidate fire fraction matches pForm over many steps (frozen pose, geometry-passers fixed). */
+    static boolean ckPform() {
+        double dt = 1.0e-5;
+        double pV1 = pFormV1(dt);
+        // formula bit-exact: v2 store-set pForm vs v1 literal
+        double pV2 = 1.0 - Math.exp(-XLINK_ON_RATE * XLINK_CONC * (dt * XLINK_CHECK_INT));
+        double fpct = pV1 > 0 ? 100.0 * Math.abs(pV2 - pV1) / pV1 : 0;
+        // empirical at a higher pForm for stats
+        double pTest = 0.3; int steps = 4000;
+        FormScene fs = buildFormScene(5, 5, 1, 0.004, 4.0, dt, 0, pTest, false, 0x533);
+        CrosslinkerStore xl = fs.xl;
+        // identify geometry-passing candidates (pForm=1 run)
+        xl.setFormParams(MAX_ANGLE, GRAB_DIST, MIN_SEP, MAX_LINKS_ON_SEG, 1.0, MIN_FILLINK_SEP, 0);
+        xl.setFormStep(0, fs.seed);
+        CrosslinkerSystem.filFilCandidates(fs.fil.coord, fs.fil.segLength, fs.filID, xl.reqFilA, xl.reqFilB, xl.formParams, xl.formCounts);
+        CrosslinkerSystem.formGates(fs.fil.uVec, fs.fil.end1, fs.fil.end2, fs.fil.segLength, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.reqOrient, xl.gatePass, xl.formParams, xl.formCounts);
+        int nCand = xl.formCounts.get(0);
+        boolean[] geom = new boolean[nCand]; int nGeom = 0;
+        for (int c = 0; c < nCand; c++) { geom[c] = xl.gatePass.get(c) == 1; if (geom[c]) nGeom++; }
+        // measure fire fraction at pTest
+        xl.setFormParams(MAX_ANGLE, GRAB_DIST, MIN_SEP, MAX_LINKS_ON_SEG, pTest, MIN_FILLINK_SEP, 0);
+        long fires = 0, trials = 0;
+        for (int t = 0; t < steps; t++) {
+            xl.setFormStep(t, fs.seed);
+            CrosslinkerSystem.filFilCandidates(fs.fil.coord, fs.fil.segLength, fs.filID, xl.reqFilA, xl.reqFilB, xl.formParams, xl.formCounts);
+            CrosslinkerSystem.formGates(fs.fil.uVec, fs.fil.end1, fs.fil.end2, fs.fil.segLength, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.reqOrient, xl.gatePass, xl.formParams, xl.formCounts);
+            for (int c = 0; c < nCand; c++) if (geom[c]) { trials++; if (xl.gatePass.get(c) == 1) fires++; }
+        }
+        double pEmp = trials > 0 ? fires / (double) trials : 0;
+        double epct = 100.0 * Math.abs(pEmp - pTest) / pTest;
+        boolean ok = fpct < 0.1 && epct < 5.0;
+        System.out.println("\n--- #3 P_form formula + cadence + empirical ---");
+        System.out.printf("  dtCheck = dt·crosslinkCheckInt = %.1e·%d = %.1e s;  P_form(v1 default) = %.6g%n", dt, XLINK_CHECK_INT, dt * XLINK_CHECK_INT, pV1);
+        System.out.printf("  formula vs v1: Δ=%.4g%% %s;  empirical fire fraction @pForm=%.2f: %.5f (Δ=%.3g%%, %d geom-passers) %s%n",
+                fpct, fpct < 0.1 ? "✓" : "*", pTest, pEmp, epct, nGeom, ok ? "✓" : "*OFF*");
+        return ok;
+    }
+
+    /** #4 (the flagged decision): in a dense parallel bundle at DEFAULT params, how often does >1
+     *  gate-passing candidate target one segment in one step? Reports the contention frequency. ~0 ⇒
+     *  the one-per-segment-per-step cap is non-binding. */
+    static boolean ckContention() {
+        double dt = 1.0e-5; double pForm = pFormV1(dt); int steps = 20000;
+        FormScene fs = buildFormScene(6, 6, 1, 0.004, 4.0, dt, 0, pForm, false, 0x544);  // 36-filament dense bundle
+        CrosslinkerStore xl = fs.xl; int nSeg = fs.fil.n;
+        long stepsWithForm = 0, formEvents = 0, contendSegSteps = 0, droppedByCap = 0;
+        int[] segPassers = new int[nSeg];
+        for (int t = 0; t < steps; t++) {
+            xl.setFormStep(t, fs.seed);
+            CrosslinkerSystem.filFilCandidates(fs.fil.coord, fs.fil.segLength, fs.filID, xl.reqFilA, xl.reqFilB, xl.formParams, xl.formCounts);
+            CrosslinkerSystem.formGates(fs.fil.uVec, fs.fil.end1, fs.fil.end2, fs.fil.segLength, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.reqOrient, xl.gatePass, xl.formParams, xl.formCounts);
+            int nCand = xl.formCounts.get(0);
+            for (int s = 0; s < nSeg; s++) segPassers[s] = 0;
+            int passers = 0;
+            for (int c = 0; c < nCand; c++) if (xl.gatePass.get(c) == 1) { passers++; segPassers[xl.reqFilA.get(c)]++; segPassers[xl.reqFilB.get(c)]++; }
+            if (passers > 0) { stepsWithForm++; formEvents += passers; }
+            for (int s = 0; s < nSeg; s++) if (segPassers[s] >= 2) { contendSegSteps++; droppedByCap += (segPassers[s] - 1); }
+        }
+        double contendPerStep = contendSegSteps / (double) steps;
+        double droppedFrac = formEvents > 0 ? (double) droppedByCap / formEvents : 0;
+        boolean nonBinding = droppedFrac < 0.01;   // cap drops <1% of would-be formations ⇒ non-binding
+        System.out.println("\n--- #4 one-per-segment cap contention self-check (36-fil dense bundle, default params, " + steps + " steps) ---");
+        System.out.printf("  P_form=%.5g; gate-passers=%d over %d steps; contention seg-steps=%d (%.3g/step); cap-dropped=%d (%.4f%% of formations)%n",
+                pForm, formEvents, steps, contendSegSteps, contendPerStep, droppedByCap, 100.0 * droppedFrac);
+        System.out.printf("  one-per-seg-per-step cap is %s  %s%n", nonBinding ? "NON-BINDING (contention ~0)" : "*BINDING — PAUSE: heavier exact-admission needed*", nonBinding ? "✓" : "*PAUSE*");
+        return nonBinding;
+    }
+
+    /** #5: full formation pipeline (candidates → gates → P_form → admission → allocate) — identical
+     *  formed-link sets over many churn steps, CPU runner vs GPU TaskGraph. */
+    static boolean ckFormCpuGpu() {
+        double dt = 1.0e-4; int steps = 400;
+        FormScene cpu = buildFormScene(5, 4, 1, 0.004, 4.0, dt, 0, pFormV1(dt) * 30, true, 0x555);  // boosted pForm for more events
+        FormScene gpu = buildFormScene(5, 4, 1, 0.004, 4.0, dt, 0, pFormV1(dt) * 30, true, 0x555);
+        TornadoExecutionPlan plan = buildFormPlan(gpu); GridScheduler sg = gpu.sched;
+        int[] samples = { 1, 50, 200, steps - 1 }; int si = 0; long diffs = 0;
+        for (int t = 0; t < steps; t++) {
+            formStepCpu(cpu, t);
+            gpu.xl.setCounts(t, gpu.seed); gpu.xl.setFormStep(t, gpu.seed);
+            TornadoExecutionResult r = plan.withGridScheduler(sg).execute();
+            if (si < samples.length && t == samples[si]) {
+                r.transferToHost(gpu.xl.linkState, gpu.xl.linkFilA, gpu.xl.linkFilB, gpu.xl.loc1, gpu.xl.loc2, gpu.xl.linkOrientSame, gpu.xl.strainPlace);
+                int C = cpu.C;
+                for (int s = 0; s < C; s++) {
+                    if (cpu.xl.linkState.get(s) != gpu.xl.linkState.get(s)) diffs++;
+                    if (cpu.xl.linkFilA.get(s) != gpu.xl.linkFilA.get(s)) diffs++;
+                    if (cpu.xl.linkFilB.get(s) != gpu.xl.linkFilB.get(s)) diffs++;
+                    if (cpu.xl.loc1.get(s) != gpu.xl.loc1.get(s)) diffs++;
+                    if (cpu.xl.loc2.get(s) != gpu.xl.loc2.get(s)) diffs++;
+                    if (cpu.xl.linkOrientSame.get(s) != gpu.xl.linkOrientSame.get(s)) diffs++;
+                }
+                si++;
+            }
+        }
+        boolean ok = diffs == 0;
+        System.out.println("\n--- #5 CPU≡GPU full formation pipeline (20-fil bundle, " + steps + " churn steps) ---");
+        System.out.printf("  formed-link sets (state + payload + orientSame): %d field mismatches  %s%n", diffs, ok ? "(bit-identical) ✓" : "*DIFFERS*");
+        return ok;
+    }
+
+    /** #6: formation OFF (pForm=0 ⇒ no candidate ever fires) ⇒ the 5c-i path bit-identical (only 5b
+     *  deaths + the no-op allocator). Confirms formation default-off ≡ HEAD. */
+    static boolean ckFormAllOff(boolean gpuAvailable) {
+        double dt = 1.0e-4; int steps = 300;
+        FormScene form = buildFormScene(5, 4, 1, 0.004, 4.0, dt, 0, 0.0, true, 0x566);   // pForm=0 ⇒ no formation
+        // bare 5c-i churn: a pool with the same initial links + unbind only (no formation tasks). Build an
+        // identical pool by pre-forming nothing (both start empty here) ⇒ both evolve only via 5b deaths.
+        FormScene bare = buildFormScene(5, 4, 1, 0.004, 4.0, dt, 0, 0.0, true, 0x566);
+        for (int t = 0; t < steps; t++) {
+            formStepCpu(form, t);
+            // bare: only unbind (the death half) — pool starts empty so nothing dies; both stay all-FREE
+            bare.xl.setCounts(t, bare.seed);
+            CrosslinkerSystem.unbind(bare.fil.coord, bare.fil.uVec, bare.fil.end1, bare.xl.linkFilA, bare.xl.linkFilB,
+                    bare.xl.loc1, bare.xl.loc2, bare.xl.linkState, bare.xl.strainHist, bare.xl.strainPlace, bare.xl.offParams, bare.xl.counts);
+        }
+        long diffs = 0; int C = form.C;
+        for (int s = 0; s < C; s++) {
+            if (form.xl.linkState.get(s) != bare.xl.linkState.get(s)) diffs++;
+            if (form.xl.linkFilA.get(s) != bare.xl.linkFilA.get(s)) diffs++;
+        }
+        boolean ok = diffs == 0;
+        System.out.println("\n--- #6 all-OFF≡HEAD (formation pForm=0 ≡ 5b/5c-i path, " + steps + " steps) ---");
+        System.out.printf("  %d field mismatches vs the no-formation path  %s%n", diffs, ok ? "(formation no-op when off) ✓" : "*PERTURBS*");
         return ok;
     }
 

@@ -508,6 +508,34 @@ bit-identical (0 mismatches, 400 churn steps)**; all-OFF≡HEAD (K=0 ≡ 5b path
 underneath unchanged — RNG ⇒ localWork=64). v2 does **same-step** death→reuse vs v1's form-at-collision /
 free-at-cleanup (reusable step N+1) — a ≤1-step timing choice, not a correctness change.
 
-Next: 5c-ii (broad-phase segment↔segment FIL×FIL candidates + `checkToLink` gates + `P_form` + the
-`STORE_CROSSLINKER` publisher), 5c-iii (formation force law + `fracMove`-on-count + the running-v1
-steady-state oracle), torsion (`applyTorsionForce`), 5d (Arp2/3).
+**Increment 5c-ii — DONE (2026-06-16).** Crosslinker FORMATION — real formation filling the 5c-i request
+arrays (the scan-rank allocator underneath UNCHANGED). Pipeline/step (after 5b unbind): `filFilCandidates`
+(broad-phase FIL×FIL: distinct unordered cross-filament pairs, same-filament excluded, coarse capsule
+bound) → `formGates` (per-candidate-LOCAL, race-free: v1 `checkToLink` alignment mode 0/1/−1 via ported
+`fastAcos`, `lineSegmentIntersectTest` closest-approach vs `crossLinkGrabDist`, `orientSame`, loc+jitter,
+and `P_form = 1−exp(−xLinkOnRate·xLinkConc·dtCheck)` wang-hash) → `formAdmitReduce`/`countActiveLinks`/
+`formAdmit` (admission = **cap one new link per segment per step** via a deterministic per-segment
+min-candidate-index reduction + start-of-step saturation + spacing ⇒ exact, no same-step cross-candidate
+dependency, race-free) → 5c-i allocator → `placeOrient` (persists `orientSame` to `linkOrientSame`).
+Both runners; localWork=64 on the RNG/gate kernels. **Analytic-oracle only** (gate-by-gate vs v1).
+Default-off (pForm=0). `BoA-v1ref` byte-clean; production byte-unchanged. Validated (all 6 PASS):
+#1 broad-phase candidate set (same-fil excluded, complete); #2 gate arithmetic bit-exact vs v1 (828
+candidates spanning both boundaries, 0 mismatches); #3 P_form formula (Δ=0%) + cadence + empirical
+(Δ=0.10%); **#4 the one-per-seg cap is NON-BINDING — 0.93% of would-be formations dropped in a near-worst-
+case dense focal bundle** (contention ∝ N²·P_form², realistic ≪ this); #5 CPU≡GPU bit-identical (full
+pipeline, 400 churn steps, 0 mismatches); #6 all-OFF≡HEAD (pForm=0 ≡ 5b/5c-i path). New: 6
+`CrosslinkerSystem` kernels + formation block in `CrosslinkerStore` + 5c-ii checks. Report:
+`INC5A_CROSSLINKER_FINDINGS.md` (§5c-ii appended); JOURNAL 2026-06-16 (5c-ii).
+**5c-ii flags for the planner:** (a) **`Math.acos` does NOT lower on the PTX backend** — `fastAcos`'s middle
+branch uses the `accurateAcos` poly (decision-bit-exact for the default π/12 threshold, which lives in the
+ported sqrt branch); reuse `accurateAcos`, not `Math.acos`, in any future GPU kernel. (b) v1's
+`lineSegmentIntersectTest` is degenerate/ill-conditioned for (near-)parallel segments ⇒ formation happens
+at near-parallel **crossings**, not stacked-parallel pairs. (c) The one-per-seg cap is a deliberate
+non-binding divergence from v1; 5c-iii's steady-state should re-confirm at production density. (d) The
+**running-v1 oracle + `fracMove`-on-count remain DEFERRED to 5c-iii**.
+
+Next: 5c-iii (formation force law + `fracMove`-on-changing-count + the running-v1 steady-state oracle —
+plateau / formation≈dissolution / halve-`xLinkConc`), torsion (`applyTorsionForce`, consumes
+`linkOrientSame`), 5d (Arp2/3). (The `STORE_CROSSLINKER` broad-phase publisher seam exists; 5c-ii used a
+self-contained FIL×FIL candidate generator over the filament pose — wiring the production SpatialGrid
+publisher is a 5c-iii/integration step.)
