@@ -429,18 +429,20 @@ public final class DimerGlideHarness {
     static Scene buildAssayScene(double dt) {
         Scene sc = new Scene(); sc.anchored = true;
         // GlidingHarness-scale geometry: 64-monomer segments, filament at z=0, anchors at −0.05 (heads flop
-        // down to bind). Binding is sparse (~0.5% of heads), so — exactly like the single-motor assay
-        // (6200 motors → ~7.6 bound) — a WIDE, DENSE bed of dimers is needed for a few to be bound at once.
-        int nSeg = 8, filMono = 64;
+        // down to bind). 8 µm × 4 µm mat of dimers @ 500 heads/µm²; a ~2 µm filament starting with its
+        // barbed (plus) end at the mat's right edge, gliding −x across the mat.
+        int nSeg = 11, filMono = 64;                    // 11 × 65 monomers ≈ 1.93 µm filament
         double L = (filMono + 1) * Constants.actinMonoRadius;
         double zFil = 0.0;
+        double matXhalf = 4.0, matYhalf = 2.0;          // 8 µm (glide/x) × 4 µm (width/y)
 
         // ---- free chain filament along +x, centered, glides −x over the bed ----
         FilamentStore fil = new FilamentStore(nSeg);
         for (int s = 0; s < nSeg; s++) {
             fil.monomerCount.set(s, filMono);
             fil.setUVec(s, 1f, 0f, 0f); fil.setYVec(s, 0f, 1f, 0f);
-            fil.setCoord(s, (float) ((s - (nSeg - 1) / 2.0) * L), 0f, (float) zFil);
+            // plus-end (end2 of the last segment) at the right edge (x = +matXhalf); step back by L
+            fil.setCoord(s, (float) (matXhalf - 0.5 * L - (nSeg - 1 - s) * L), 0f, (float) zFil);
             fil.brownTransScale.set(s, (float) Constants.BTransCoeff);
             boolean end = (s == 0 || s == nSeg - 1);
             fil.brownRotScale.set(s, (float) (end ? Constants.BRotCoeff : 0.0));
@@ -457,9 +459,8 @@ public final class DimerGlideHarness {
         // Binding is intrinsically sparse (heads flop down to z=0 only occasionally), so — like the
         // single-motor assay (6200 motors → ~7.6 bound) — we need a wide, dense bed so the wandering
         // filament always overlies a populated strip. nDimers from a density; two coupled motors per dimer.
-        double filSpan = nSeg * L;
-        double bedLo = -0.5 * filSpan - L, bedHi = 0.5 * filSpan + L, bedYh = 0.25;   // wide bed (filament wanders in y)
-        int nDimers = (int) Math.round(500.0 * (bedHi - bedLo) * (2 * bedYh));        // 500 dimers/µm² (v1 motor density)
+        double bedLo = -matXhalf, bedHi = matXhalf, bedYh = matYhalf;                 // the full 8 × 4 µm mat
+        int nDimers = (int) Math.round(250.0 * (bedHi - bedLo) * (2 * bedYh));        // 250 dimers/µm² = 500 heads/µm²
         MotorStore mot = new MotorStore(2 * nDimers);
         DimerStore dim = new DimerStore(nDimers);
         java.util.Random rng = new java.util.Random(12345);
@@ -475,6 +476,8 @@ public final class DimerGlideHarness {
         mot.setBodyParams(dt); mot.setJointParams(dt); mot.setKinParams(0.006, -0.4, dt); mot.setNucParams(dt);
         mot.nucleotideState.init(MotorStore.NUC_NONE);
         dim.setDimerParams(dt);   // faithful coupling (lever-align 0.4)
+        DerivedGeometrySystem.derive(mot.body.coord, mot.body.uVec, mot.body.yVec, mot.body.zVec,
+                mot.body.end1, mot.body.end2, mot.body.segLength, mot.counts);   // init end1/end2 for the t=0 frame
 
         int MAXC = SpatialGrid.MAX_CAND;
         sc.bondData = new FloatArray(2 * nDimers * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
@@ -519,21 +522,114 @@ public final class DimerGlideHarness {
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
     }
 
+    /** GPU TaskGraph for the assay — GlidingHarness's device-resident gliding step + the binding-gated
+     *  dimer coupling (inserted after the anchor). Default order (release/cycle read last step's load). */
+    static TornadoExecutionPlan buildAssayPlan(Scene sc) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; DimerStore dim = sc.dim; RigidRodBody b = mot.body;
+        TaskGraph tg = new TaskGraph("dassay")
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION,
+                    b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, b.bTransGam, b.bRotGam,
+                    b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.brownTransScale, b.brownRotScale,
+                    mot.head, mot.uVec, mot.rodUVec, mot.anchor, mot.boundSeg, mot.bindArc, mot.nucleotideState,
+                    mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.stats, mot.capStats, mot.cooldown,
+                    mot.bodyParams, mot.jointParams, mot.nucParams, mot.kinParams,
+                    dim.motorA, dim.motorB, dim.parallel, dim.dimerParams,
+                    sc.bondData, sc.xbParams, sc.segMotorCount, sc.segMotorOffsets, sc.segMotorMyo, sc.reachSeg, sc.reachCount,
+                    f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.bTransGam, f.bRotGam,
+                    f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.brownTransScale, f.brownRotScale,
+                    f.params, f.chainParams, f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, f.counts)
+            .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
+            .task("reach", BindingDetectionSystem::bruteReachable, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts)
+            .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts)
+            .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts)
+            .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts)
+            .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
+            .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
+            .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
+            .task("anchor", TailAnchorSystem::anchor, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts)
+            .task("dimer", DimerCouplingSystem::couple, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg)
+            .task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams)
+            .task("applyHead", CrossBridgeSystem::applyHeadForce, sc.bondData, b.forceSum, b.torqueSum, mot.counts)
+            .task("integMot", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
+            .task("deriveMot", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts)
+            .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
+            .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
+            .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
+            .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
+            .task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, sc.segMotorCount)
+            .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, sc.segMotorCount, sc.segMotorOffsets)
+            .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo)
+            .task("gather", CrossBridgeSystem::segGather, sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts)
+            .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
+            .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
+            .transferToHost(DataTransferMode.UNDER_DEMAND, b.end1, b.end2, mot.boundSeg, mot.nucleotideState, f.end1, f.end2, f.coord);
+
+        int nB = 3 * mot.nMotors, nM = mot.nMotors, nSeg = f.n, nD = sc.dim.nDimers;
+        sched = new GridScheduler();
+        for (String t : new String[]{ "publishHead","reach","release","bind","cycle","anchor","bond","applyHead","register" }) addW("dassay." + t, pad(nM));
+        for (String t : new String[]{ "zeroMot","brownMot","joints","integMot","deriveMot" }) addW("dassay." + t, pad(nB));
+        addW("dassay.dimer", pad(nD));
+        for (String t : new String[]{ "zeroFil","brownFil","chain","gather","integFil","deriveFil" }) addW("dassay." + t, pad(nSeg));
+        for (String t : new String[]{ "csrHist","csrScan","csrScatter" }) addS("dassay." + t);
+        return new TornadoExecutionPlan(tg.snapshot());
+    }
+
     static void runAssayViz(double dt, String dir) {
         System.out.println("Gliding assay with FIXED DIMERS (not single myosins): a free filament glides over an anchored dimer bed.");
         Scene sc = buildAssayScene(dt);
+        MotorStore mot = sc.mot; RigidRodBody b = mot.body; FilamentStore f = sc.fil;
         new java.io.File(dir).mkdirs();
-        int M = 20000, every = Math.max(1, M / 400), frames = 0;
-        double boundSum = 0; int n = 0; double filX0 = filComX(sc.fil);
-        for (int t = 0; t <= M; t++) {
-            if (t % every == 0) writeFrame(dir, frames++, t * dt, sc);
-            assayStep(sc, t);
-            boundSum += countBound(sc.mot); n++;
+        int M = 100000, every = Math.max(1, M / 400), frames = 0, stride = Math.max(1, mot.nMotors / 1500);
+        System.out.printf("config: %d dimers (%d motors) over 8×4 µm @ 500 heads/µm²; %d-seg filament (~%.2f µm), barbed-end at right edge.%n",
+                sc.dim.nDimers, mot.nMotors, f.n, f.n * 65.0 * Constants.actinMonoRadius);
+        System.out.printf("running %d GPU steps (~%.2f s sim time); rendering ~%d sampled motors + the filament.%n", M, M * dt, mot.nMotors / stride);
+        TornadoExecutionPlan plan = buildAssayPlan(sc);
+        double filX0 = filComX(f), boundSum = 0; int nb = 0;
+        writeAssayFrame(dir, frames++, 0.0, sc, stride);            // initial state (host)
+        long t0 = System.currentTimeMillis();
+        for (int t = 0; t < M; t++) {
+            mot.setCounts(t, 0x6D9A0E, f.n); f.counts.set(1, t);
+            TornadoExecutionResult res = plan.withGridScheduler(sched).execute();
+            if ((t + 1) % every == 0) {
+                res.transferToHost(b.end1, b.end2, mot.boundSeg, mot.nucleotideState, f.end1, f.end2, f.coord);
+                writeAssayFrame(dir, frames++, (t + 1) * dt, sc, stride);
+                boundSum += countBound(mot); nb++;
+            }
         }
-        double filDx = (filComX(sc.fil) - filX0) * 1e3;
-        System.out.printf("viewer: wrote %d frames to %s%n", frames, dir);
-        System.out.printf("  avgBound = %.1f / %d heads;  filament COM Δx = %.1f nm over %d steps (glides −x)%n",
-                boundSum / n, sc.mot.nMotors, filDx, M);
+        double filDx = (filComX(f) - filX0);
+        double secs = (System.currentTimeMillis() - t0) / 1000.0;
+        System.out.printf("viewer: wrote %d frames to %s  (%.0f steps/s)%n", frames, dir, M / secs);
+        System.out.printf("  avgBound ≈ %.1f / %d heads;  filament COM Δx = %.2f µm over %d steps (glides −x %.2f µm/s)%n",
+                boundSum / nb, mot.nMotors, filDx, M, Math.abs(filDx) / (M * dt));
+    }
+
+    /** Sampled frame: the whole filament + every `stride`-th motor + ALL bound motors (the active ones). */
+    static void writeAssayFrame(String dir, int frame, double t, Scene sc, int stride) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        StringBuilder sb = new StringBuilder(1 << 20);
+        sb.append(String.format(java.util.Locale.US, "{\"frame\":%d,\"t\":%.6g,\"bounds\":{\"xDim\":8.0,\"yDim\":4.0,\"zDim\":0.4}", frame, t));
+        sb.append(",\"segments\":[");
+        for (int s = 0; s < f.n; s++) { if (s > 0) sb.append(',');
+            sb.append(String.format(java.util.Locale.US, "{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":1.0,\"cofilinCount\":0}",
+                s, f.end1.get(s),f.end1.get(f.n+s),f.end1.get(2*f.n+s), f.end2.get(s),f.end2.get(f.n+s),f.end2.get(2*f.n+s), Constants.radius)); }
+        sb.append("],\"myosins\":[");
+        boolean first = true;
+        for (int m = 0; m < mot.nMotors; m++) {
+            boolean bound = mot.boundSeg.get(m) >= 0;
+            if (!(m % stride == 0 || bound)) continue;
+            if (!first) sb.append(','); first = false;
+            int rod = 3*m, lever = 3*m+1, head = 3*m+2; String st = STATE_NAME[mot.nucleotideState.get(m)];
+            sb.append(String.format(java.util.Locale.US,
+                "{\"id\":%d,\"rod\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.4g,\"invisible\":false},"
+                + "\"lever\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.4g},"
+                + "\"motor\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.4g,\"state\":\"%s\"}}",
+                m, b.end1X(rod),b.end1Y(rod),b.end1Z(rod), b.end2X(rod),b.end2Y(rod),b.end2Z(rod), MotorStore.ROD_R,
+                b.end1X(lever),b.end1Y(lever),b.end1Z(lever), b.end2X(lever),b.end2Y(lever),b.end2Z(lever), MotorStore.LEVER_R,
+                b.end1X(head),b.end1Y(head),b.end1Z(head), b.end2X(head),b.end2Y(head),b.end2Z(head), MotorStore.HEAD_R, st)); }
+        sb.append("]}");
+        try { java.nio.file.Files.writeString(java.nio.file.Path.of(dir, String.format(java.util.Locale.US,"frame_%06d.json", frame)), sb.toString()); }
+        catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
     }
     static double filComX(FilamentStore f) { double s = 0; for (int i = 0; i < f.n; i++) s += f.coord.get(i); return s / f.n; }
 
