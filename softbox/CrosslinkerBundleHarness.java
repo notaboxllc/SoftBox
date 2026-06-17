@@ -115,6 +115,7 @@ public final class CrosslinkerBundleHarness {
                 case "-v1"       -> { nFil = V1_NFIL; }   // full v1 density (200 fil)
                 case "-loadic"   -> { icFile = args[++i]; mode = "match"; }
                 case "-offset"   -> stepOffset = Integer.parseInt(args[++i]);
+                case "-twobundles" -> mode = "twobundles";
                 case "-3js"      -> { mode = "viz"; vizDir = args[++i]; }
                 default          -> pos.add(args[i]);
             }
@@ -135,8 +136,88 @@ public final class CrosslinkerBundleHarness {
             case "disperse" -> runDisperse(nFil, boxX, boxY, boxZ, dt, conc, checkInt, M, seed);
             case "viz"      -> runViz(nFil, boxX, boxY, boxZ, dt, conc, checkInt, M, seed, vizDir);
             case "cpugpu"   -> runCpuGpu(nFil, boxX, boxY, boxZ, dt, conc, checkInt, M, seed);
+            case "twobundles" -> runTwoBundles(nFil <= 0 ? 8 : Math.max(2, nFil / 8), dt, conc, checkInt, M, seed, vizDir);
             default         -> runBundle(nFil, boxX, boxY, boxZ, dt, conc, checkInt, M, seed, formOn, unbindOn, brownian, !cpu);
         }
+    }
+
+    // ============================================================== two antiparallel bundles
+    /** Two interdigitated, near-antiparallel bundles of actin (a crosslinker analogue of the minimal
+     *  contractile motif). Bundle A points +x, bundle B points −x; each bundle is a stack of nPerBundle
+     *  near-parallel filaments. Per-filament angular jitter makes A↔B pairs CROSS at shallow angles (v1's
+     *  lineSegmentIntersectTest is degenerate for exactly-parallel pairs — §5c-ii — so links form at
+     *  crossings, not stacked pairs). The two stacks are interleaved in z at ~grabDist so the antiparallel
+     *  crossings fall within crossLinkGrabDist and crosslinkers form between the bundles. aeta=1.0 (slow
+     *  diffusion ⇒ the bundles hold their shape).
+     *  NOTE: crosslinkers are PASSIVE springs — they tether the two bundles at the overlap; they do NOT
+     *  actively CONTRACT (that needs myosin motors sliding the antiparallel filaments, not yet wired into
+     *  this harness). This shows the crosslinked antiparallel-bundle structure, not active contraction. */
+    static BundleScene buildTwoBundles(int nPerBundle, double dt, double conc, int checkInt, int seed) {
+        int nSeg = 2 * nPerBundle;
+        java.util.Random rng = new java.util.Random(seed * 7919L ^ 0xBEEFL);
+        FilamentStore fil = new FilamentStore(nSeg);
+        IntArray filID = new IntArray(nSeg);
+        double L = 0.20;                                  // µm filament length
+        int mono = Math.max(1, (int) Math.round(L / Constants.actinMonoRadius) - 1);
+        double zPitch = 0.009;                            // µm inter-filament stack pitch (~grabDist scale)
+        double jit = 0.06;                                // rad angular jitter ⇒ shallow crossings
+        for (int s = 0; s < nSeg; s++) {
+            boolean bundleA = s < nPerBundle;
+            int k = bundleA ? s : s - nPerBundle;
+            double dir = bundleA ? 1.0 : -1.0;            // A → +x, B → −x (antiparallel)
+            // small per-filament tilt so neighbours cross instead of staying perfectly (anti)parallel
+            double uy = (rng.nextDouble() - 0.5) * 2 * jit, uz = (rng.nextDouble() - 0.5) * 2 * jit;
+            double ux = dir * Math.sqrt(Math.max(0.1, 1.0 - uy * uy - uz * uz));
+            double inv = 1.0 / Math.sqrt(ux * ux + uy * uy + uz * uz);
+            fil.setUVec(s, (float) (ux * inv), (float) (uy * inv), (float) (uz * inv));
+            fil.setYVec(s, 0f, 0f, 1f);
+            fil.monomerCount.set(s, mono);
+            // interleave the two stacks in z (B offset by half a pitch); both centred on x=0 so they overlap
+            double z = (k - (nPerBundle - 1) / 2.0) * zPitch + (bundleA ? 0.0 : 0.5 * zPitch);
+            double yoff = (rng.nextDouble() - 0.5) * 0.004;
+            double xoff = (rng.nextDouble() - 0.5) * 0.03;     // small longitudinal stagger
+            fil.setCoord(s, (float) xoff, (float) yoff, (float) z);
+            fil.brownTransScale.set(s, (float) Constants.BTransCoeff);
+            fil.brownRotScale.set(s, (float) Constants.BRotCoeff);
+            filID.set(s, s);
+        }
+        DragTensorSystem.run(fil); applyAeta(fil, AETA);
+        fil.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt)); fil.setCounts(0, seed);
+        DerivedGeometrySystem.derive(fil.coord, fil.uVec, fil.yVec, fil.zVec, fil.end1, fil.end2, fil.segLength, fil.counts);
+        int reqCap = Math.max(1, nSeg * (nSeg - 1) / 2);
+        int C = Math.max(64, nSeg * 6);
+        CrosslinkerStore xl = new CrosslinkerStore(C, nSeg, reqCap);
+        xl.setParams(REST_LEN, FRAC_MOVE, dt);
+        xl.setOffParams(OFF_CONST, OFF_COEFF, OFF_EXP, dt, REST_LEN);
+        xl.setFormParams(V1_MAX_ANGLE, GRAB_DIST, MIN_SEP, MAX_LINKS_ON_SEG, pForm(conc, dt * checkInt), MIN_FILLINK_SEP, 0);
+        xl.setRequestCount(reqCap);
+        xl.setTorsionParams(FIL_TORQ_SPRING, true);
+        BundleScene sc = new BundleScene();
+        sc.segCountA = new IntArray(nSeg); sc.segOffsetsA = new IntArray(nSeg + 1); sc.segIdxA = new IntArray(C);
+        sc.segCountB = new IntArray(nSeg); sc.segOffsetsB = new IntArray(nSeg + 1); sc.segIdxB = new IntArray(C);
+        sc.fil = fil; sc.xl = xl; sc.filID = filID;
+        sc.nFil = nSeg; sc.C = C; sc.reqCap = reqCap; sc.seed = seed; sc.checkInt = checkInt; sc.dt = dt;
+        sc.formOn = true; sc.unbindOn = true;
+        return sc;
+    }
+
+    static void runTwoBundles(int nPerBundle, double dt, double conc, int checkInt, int M, int seed, String vizDir) {
+        if (vizDir == null) vizDir = "threejs_twobundles";
+        BundleScene sc = buildTwoBundles(nPerBundle, dt, conc, checkInt, seed);
+        System.out.println("\n========== two antiparallel actin bundles, crosslinked (passive — NO motors) ==========");
+        System.out.printf("  %d filaments (2 bundles × %d), antiparallel, interdigitated; conc=%.2g pForm=%.4g%n",
+                sc.nFil, nPerBundle, conc, pForm(conc, dt * checkInt));
+        new java.io.File(vizDir).mkdirs();
+        int every = Math.max(1, M / 300), frames = 0, peak = 0, report = Math.max(1, M / 10);
+        for (int t = 0; t <= M; t++) {
+            if (t % every == 0) writeFrame(vizDir, frames++, t * dt, sc, 0.4, 0.1, 0.15);
+            if (t % report == 0) System.out.printf("    t=%.3f s  crosslinks=%d  spread=%.4f%n", t * dt, activeLinks(sc.xl), spread(sc.fil));
+            peak = Math.max(peak, activeLinks(sc.xl));
+            if (t < M) assembledStepCpu(sc, t);
+            if (!finite(sc.fil)) { System.out.println("  *** NON-FINITE ***"); break; }
+        }
+        System.out.printf("  wrote %d frames to %s; peak crosslinks = %d, final = %d%n", frames, vizDir, peak, activeLinks(sc.xl));
+        System.out.println("  (crosslinkers TETHER the antiparallel bundles at their overlap; contraction would need myosin.)");
     }
 
     // ============================================================== scene

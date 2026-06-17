@@ -11,6 +11,7 @@
 #   ./run_xlinkbundle.sh -disperse -nfil 200   # Part 2.1: bundle density vs t
 #   ./run_xlinkbundle.sh -loadic RUN_LOGS/v1_ic_seed1.csv -offset 20   # Part 2.2: v2 from a v1 IC
 #   ./run_xlinkbundle.sh -3js threejs_xlinkbundle -nfil 150 -conc 3    # the crosslinking demo
+#   ./run_xlinkbundle.sh -twobundles -nfil 200 -conc 6 3000            # two antiparallel bundles, crosslinked (passive)
 set -e
 TORNADOVM_HOME="$HOME/Code/TornadoVM/dist/tornadovm-4.0.1-dev-ptx-linux-amd64/tornadovm-4.0.1-dev-ptx"
 TDIR="$TORNADOVM_HOME/share/java/tornado"
