@@ -756,7 +756,47 @@ neither tightens the axial residual nor perturbs the within-SEM match (the safe 
 steadiness fix, the box is the general primitive for its own sake). New: `ContainmentSystem` + contractile
 `-drift` mode + gates #5/#6/#7. Report: `INC6_CONTAINMENT_FINDINGS.md`; JOURNAL 2026-06-17.
 
-Next within inc 6: **stronger engagement** for a sharp contractile plateau (down-head filaments / multiple
-minifilaments — a tighter/denser scene would make the chamber box load-bearing) + dynamic
-assembly/`myoMiniLifetime`; then **6c nodes** (needs a fresh v1 node snapshot per the recon settledness
-gate; reachable on a fixed anchor without the membrane subsystem).
+**Increment 6c Stage A — the protein NODE entity (radial motor-bundle, fixed anchor) — DONE (2026-06-18).**
+The protein node built FRESH as a motor-bundle (recon `INC6_NODE_RECON.md`): a fixed-anchor sphere node —
+the **4th `RigidRodBody`** (isotropic sphere drag, radius 0.05 µm, NEVER integrated = the v1 `AnchorNode`
+immobilization) — owning **radially-splayed singlet myosins + dimers**. The node mechanism IS the
+minifilament's (a rigid body owning motor-children via a fracMove tether + a single-ended backbone-side
+gather); the only differences are GEOMETRY (radial sphere-surface splay vs the minifilament's axial
+end-clusters) + the node also carries singlets — both PLACEMENT. **The ONE new kernel = `NodeSystem.tether`**
+(radial surface tether): faithful port of v1 `ProteinNode.keepMyosinsOnSurface`/`keepMyosinDimersOnSurface`
+— the SAME fracMove spring LAW as the minifilament (`F=coeff·1e-6·strain/(dt·(1/rod.bTransGam.y +
+1/node.bTransGam.y))`, from the rod end1) with RADIAL attach (`surface=coord+ru·u+ry·y+rz·z`, zVec=u×y
+in-kernel). SINGLET coeff `attnForce/numNodeMyos` (0.4/nSing), force at the rod CENTER (no torque); DIMER
+coeff `attnForce·myoDimerFracMove` (0.08), force at the rod END1 (+torque), node reaction at the surface
+point; NO axis-align torque (verified BoA-v1ref — unlike the minifilament). The radial tether is the node's
+LOCALIZED physics (the per-entity-system pattern), NOT a fork: radial splay genuinely needs y/z offsets +
+the singlet/dimer torque asymmetry, inexpressible by the axial minifilament tether — it reuses the tether
+LAW + the gather machinery BYTE-UNCHANGED. **Reused byte-unchanged:** the single-ended gather
+(`CrossBridge.csr*` keyed by `attachNode` + `MiniFilamentSystem.backboneGather` over a stride-6 `nodeData`);
+binding + cross-bridge; the **12 pN cap** (`setFaithfulRelease`); `ContainmentSystem`; the shared rod
+systems; Motor/Dimer stores + coupling. 7 gates PASS GPU+CPU: #1a gather==brute isolated (Δ0, momentum
+3.4e-20 N, 12 singlet+12 dimer owned); #1b gather UNDER LOAD (node+fil gather==brute Δ0 at real cross-bridge
+load, full-system momentum 1.6e-19 N, **CPU≡GPU 2.1e-6 µm**, 23-task TaskGraph); #2 a radial head binds via
+the real pathway; #3 the 12 pN cap fires on a 13 pN node bond (capStats=1); #4 containment confines the node
+body (0.180→0.167 µm); #5 fixed anchor Δpose=0 under load; #6 all-OFF≡HEAD bit-identical + control.
+**TornadoVM:** 20 logical tether args → 15 via planar packing (`attachKey`=node|motor, `radial`=X|Y|Z,
+signed `attachCoeffK` carries atEnd1) + in-kernel zVec. **Seam #1 (separable motor/nucleation) kept OPEN**
+for Stage B. New files only: `NodeStore`, `NodeSystem`, `ProteinNodeHarness`, `run_node.sh`; no shared file
+touched ⇒ prior harnesses byte-unchanged (minifil+dimer re-run PASS); `BoA-v1ref` byte-clean; production
+untouched; node default-off. Report: `INC6C_NODE_STAGEA_FINDINGS.md`; JOURNAL 2026-06-18.
+```
+./run_node.sh              # GPU + CPU cross-check (gather, gather-under-load, binding, cap, containment, anchor)
+./run_node.sh -cpu         # CPU runner only (triage)
+./run_node.sh -3js threejs_node -n 3   # viewer (radially-splayed nodes)
+```
+**Increment 6c Stage B — PENDING (the nucleation-function):** runtime filament BIRTH on `FilamentStore`
+(today fully static) — add a `filState` lifecycle sentinel + per-system active guards + reuse the inc-5
+scan-rank allocator + stochastic-formation pipeline, with a per-node nucleation emitter (rate `kNodeNuc·dt`,
+born pre-bonded). **Re-confirm the nucleation specifics (rate, pre-bond geometry, formin release) against a
+fresh `ProteinNode.java` snapshot** at build (the recon settledness gate — that file still has physics churn).
+Growth/polymerization (monomer-vs-segment granularity) is a SECOND new capability, likely deferred; seam #2
+(the actin pool behind one accessor) flagged for then.
+
+Also pending within inc 6: **stronger engagement** for a sharp contractile plateau (down-head filaments /
+multiple minifilaments — a tighter/denser scene would make the chamber box load-bearing) + dynamic
+minifilament assembly/`myoMiniLifetime`.

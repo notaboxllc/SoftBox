@@ -2,6 +2,45 @@
 
 Last updated: 2026-06-18
 
+## 2026-06-18 — INC 6c STAGE A: the protein NODE entity (radial motor-bundle, fixed anchor) — DONE
+The protein node built FRESH as a motor-bundle, reusing the SETTLED minifilament machinery. **All 7 gates
+PASS GPU + CPU.** Report: `INC6C_NODE_STAGEA_FINDINGS.md`.
+- **What:** a fixed-anchor sphere node (the **4th `RigidRodBody`**, isotropic sphere drag, radius 0.05 µm,
+  never integrated = the v1 `AnchorNode` immobilization) owning radially-splayed singlet myosins + dimers.
+  The node mechanism IS the minifilament's (rigid body owning motor-children via fracMove tether + a
+  single-ended backbone-side gather); the only differences are GEOMETRY (radial sphere-surface splay vs
+  axial clusters) + the node also carries singlets. Both are placement.
+- **The ONE new kernel = `NodeSystem.tether`** (radial surface tether) — faithful port of v1
+  `ProteinNode.keepMyosinsOnSurface`/`keepMyosinDimersOnSurface`: the SAME fracMove spring LAW as the
+  minifilament (`F=coeff·1e-6·strain/(dt·(1/rod.bTransGam.y+1/node.bTransGam.y))`, from rod end1) with
+  RADIAL attach (`surface = coord + ru·u + ry·y + rz·z`, zVec=u×y in-kernel). Singlet: coeff
+  `attnForce/numNodeMyos` (0.4/nSing), force at rod CENTER (no torque); dimer: coeff
+  `attnForce·myoDimerFracMove` (0.08), force at rod END1 (+torque), node reaction at the surface point.
+  NO axis-align torque (verified in BoA-v1ref — unlike the minifilament).
+- **Reused BYTE-UNCHANGED (no fork):** the single-ended gather (`CrossBridge.csr*` keyed by attachNode +
+  `MiniFilamentSystem.backboneGather` over a stride-6 nodeData); binding + cross-bridge; the 12 pN cap
+  (`setFaithfulRelease`); `ContainmentSystem`; the shared rod systems; Motor/Dimer stores + coupling.
+- **The radial tether is node-SPECIFIC, not a fork:** radial splay genuinely needs y/z offsets + the
+  singlet/dimer torque asymmetry, inexpressible by the axial minifilament tether. It's the node's
+  localized physics (the per-entity-system pattern) reusing the LAW + the gather machinery byte-unchanged.
+- **Gates:** #1a gather==brute isolated (Δ0, momentum 3.4e-20 N, 12 singlet+12 dimer owned); #1b gather
+  UNDER LOAD (node + fil gather==brute Δ0 at real cross-bridge load, full-system momentum 1.6e-19 N,
+  **CPU≡GPU 2.1e-6 µm**, 23-task TaskGraph); #2 radial head binds via the real pathway; #3 the 12 pN cap
+  fires on a 13 pN node bond (capStats=1); #4 containment confines the node body (0.180→0.167 µm); #5
+  fixed anchor Δpose=0 under load; #6 all-OFF≡HEAD bit-identical + control.
+- **TornadoVM:** 20 logical tether args → 15 via planar packing (attachKey=node|motor, radial=X|Y|Z,
+  signed attachCoeffK carries atEnd1) + in-kernel zVec.
+- **Seam #1 kept open** for Stage B (nucleation + runtime filament birth — the inc-5 scan-rank allocator
+  is the template; re-confirm the nucleation specifics vs a fresh `ProteinNode.java` snapshot at build).
+- New files only: `NodeStore`, `NodeSystem`, `ProteinNodeHarness`, `run_node.sh`. No shared file touched
+  ⇒ prior harnesses byte-unchanged (minifil + dimer re-run PASS). `BoA-v1ref` byte-clean; production
+  untouched; node default-off in production.
+```
+./run_node.sh              # GPU + CPU cross-check (gather, gather-under-load, binding, cap, containment, anchor)
+./run_node.sh -cpu         # CPU runner only (triage)
+./run_node.sh -3js threejs_node -n 3   # viewer (radially-splayed nodes)
+```
+
 ## 2026-06-18 — FAITHFUL DENSE GLIDING COMPUTE BENCHMARK (multi-filament + grid binding) — vs BoA `BENCHMARK_dense.md`. The directly-matching harness for BoA's dense-gliding weak-scaling sweep. **Headline: with FAITHFUL multi-filament grid binding, SoftBox is 2–4× SLOWER than BoA's GPU, gap WIDENING with scale — bottlenecked by the single-threaded inc-3 grid build.** New file `DenseGlidingHarness.java` only; `GlidingHarness`/all systems/stores reused (a few default-off flags added to `GlidingHarness`); `BoA-v1ref` byte-clean.
 **What it is:** 400·scale filaments + 98000·scale motors over BoA's box schedule `boxXY=14·√scale × 0.5 µm`, density 500 motors/µm² — the dense gliding bed, NOT the single-filament velocity assay. Binding uses the inc-3 device GRID broad-phase + the inc-4a consumer (publishers → grid build → `broadPhase` → `invertCandidates` → `computeReachable`), feeding the SAME `reachSeg/reachCount` that `bindNearest` consumes; everything downstream is the validated `GlidingHarness` gliding force chain. **GRID==BRUTE GATE PASS** (`-gridcheck`): the grid reachable set == `bruteReachable` (every motor×segment) bit-exact on identical positions — the dense binding path is faithful. (The gate must compare both reachables PRE-integrate; my first cut compared across an integrate step → spurious mismatch — fixed.)
 **Faithful GPU sweep (RTX 5070; grid binding; warmup-windowed ms/step; clean — no broadphase overflow maxCand≤88<256, no NaN):** data `RUN_LOGS_densesweep.txt`.
