@@ -1,6 +1,38 @@
 # Soft Box Project Journal
 
-Last updated: 2026-06-17
+Last updated: 2026-06-18
+
+## 2026-06-18 — FAITHFUL DENSE GLIDING COMPUTE BENCHMARK (multi-filament + grid binding) — vs BoA `BENCHMARK_dense.md`. The directly-matching harness for BoA's dense-gliding weak-scaling sweep. **Headline: with FAITHFUL multi-filament grid binding, SoftBox is 2–4× SLOWER than BoA's GPU, gap WIDENING with scale — bottlenecked by the single-threaded inc-3 grid build.** New file `DenseGlidingHarness.java` only; `GlidingHarness`/all systems/stores reused (a few default-off flags added to `GlidingHarness`); `BoA-v1ref` byte-clean.
+**What it is:** 400·scale filaments + 98000·scale motors over BoA's box schedule `boxXY=14·√scale × 0.5 µm`, density 500 motors/µm² — the dense gliding bed, NOT the single-filament velocity assay. Binding uses the inc-3 device GRID broad-phase + the inc-4a consumer (publishers → grid build → `broadPhase` → `invertCandidates` → `computeReachable`), feeding the SAME `reachSeg/reachCount` that `bindNearest` consumes; everything downstream is the validated `GlidingHarness` gliding force chain. **GRID==BRUTE GATE PASS** (`-gridcheck`): the grid reachable set == `bruteReachable` (every motor×segment) bit-exact on identical positions — the dense binding path is faithful. (The gate must compare both reachables PRE-integrate; my first cut compared across an integrate step → spurious mismatch — fixed.)
+**Faithful GPU sweep (RTX 5070; grid binding; warmup-windowed ms/step; clean — no broadphase overflow maxCand≤88<256, no NaN):** data `RUN_LOGS_densesweep.txt`.
+
+| scale | motors | filaments | SoftBox GPU ms/step | BoA GPU ms/step | SoftBox/BoA | avgBound |
+|---|---|---|---|---|---|---|
+| 0.5× | 49 000 | 200 | 113.6 | 53.4 | 2.1× slower | 805 |
+| 1× | 98 000 | 400 | 259.3 | 89.7 | 2.9× slower | 2007 |
+| 2× | 196 000 | 800 | 539.1 | 168.7 | 3.2× slower | 3327 |
+| 4× | 392 000 | 1 600 | 1171.0 | 343.7 | 3.4× slower | 4659 |
+| 8× | 784 000 | 3 200 | 2515.6 | 659.1 | 3.8× slower | 6663 |
+
+**Root cause = the single-threaded inc-3 grid build.** `SpatialGrid.gridHistogram` + `gridScatter` are `@Parallel(gid<1)` ONE-GPU-thread O(N) passes (designed race-free for inc-3's N=512); at 50k–800k view bodies they dominate and serialize. The bare motor core is cheap (see below); the per-step time is grid-build-bound and slightly super-linear (113→259→539→1171→2516 ≈ ∝N^1.1). **The optimization lever = a PARALLEL grid build (counting-sort / atomic-free segmented histogram), exactly what BoA's `gridScatter` already is** (it was BoA's dominant kernel too).
+**⚠️ DO NOT trust the earlier single-filament "motor-mat" numbers as a comparison** (`GlidingHarness -densemat`, this session: 1× 11.6 / 8× 84.3 ms/step, ~8× "faster" than BoA; `-box` adds ≤2.6%). Those are **binding-FREE** (one filament, brute over 11 segs) — they measure motor integration throughput only and are NOT a faithful dense-gliding comparison. The faithful number is the table above (2–4× slower).
+**`-brute` diagnostic (GPU-parallel `bruteReachable` instead of the grid, to isolate the grid-build cost): added but BROKEN** — hits a TornadoVM `failed guarantee: invalid variable` lowering error in the brute-branch TaskGraph. Default-off; the validated grid path is unaffected (`-gridcheck` still PASS). **Debug tomorrow** (or go straight for the parallel grid build, the real fix).
+**New:** `DenseGlidingHarness.java` (modes `-gridcheck` / `-scale N [-cpu] [-brute] M`), `run_densesweep.sh`, `RUN_LOGS_densesweep.txt`; `GlidingHarness` gained default-off `-densemat N`/`-box`/`-boxall` (single-filament motor-mat probes — existing paths functionally unchanged). **Tomorrow:** parallelize the grid build (the lever), re-sweep; fix/retire `-brute`; optional CPU sweep at small scales.
+
+## 2026-06-17 — DEFERRED BENCHMARK TARGET — match BoA v5 dense-contractile GPU/CPU sweep (BLOCKED ON POLYMERIZATION). Survey/scoping only; no SoftBox code written. The goal: reproduce BoA's dense contractile compute sweep in SoftBox's ECS/GPU path to test the "ECS is faster than the BoA GPU path" hypothesis. **CANNOT run yet — the v5 filaments POLYMERIZE (turnover ON) and SoftBox has no polymerization / runtime filament birth-and-growth** (the unbuilt inc-6c element — see `INC6_NODE_RECON.md` §2). Revisit once polymerization lands.
+**The BoA target = "dense contractile benchmark v5: 4× density (40× areal)" (2026-06-13).** Source: `~/Code/BoA/JOURNAL.md:718` + `~/Code/BoA/BENCHMARK_contractile_dense.md` (v4 base) + data/driver `~/Code/BoA/RUN_LOGS/2026-06-13_dense_v5_4xdensity/` (`bcd_summary.txt`, `run_bcd.sh`, `gen_fixture.py`). Fixture base `ParameterFiles/boa10-64Seg-dyn-dense` (`-dyn` ⇒ turnover ON; 64-monomer segs; segs grow ~2.8× over a run — 1× ends ~23.7k segs from 4k fils).
+**Exact scene to match (counts + box, per scale; dt=1e-4; 650 steps = warmup 300 + window 350; ms/step = window_wall/350 via in-process windowed timing):** `boxXY=10·√scale µm`, depth 0.5; `initialFilaments = initialMyoMiniFils = 4000·scale`; each minifil 16 dimers (8/end) ⇒ 32 heads; crosslinkers `grab=0.05, maxFilLinkDist=0.02, xLinkOnRate=400, xLinkConc=1.0`.
+
+| scale | boxXY µm | filaments | minifils | active xlinks (GPU) | BoA CPU ms/step | BoA GPU ms/step | BoA GPU/CPU |
+|---|---|---|---|---|---|---|---|
+| 0.5× | 7.071 | 2 000 | 2 000 | 1 693 | 117.2 | 86.4 | 0.74 |
+| 1× | 10.0 | 4 000 | 4 000 | 3 363 | 215.0 | 134.5 | 0.63 |
+| 2× | 14.142 | 8 000 | 8 000 | 6 575 | 434.3 | 246.4 | 0.57 |
+| 4× | 20.0 | 16 000 | 16 000 | 12 579 | 865.6 | 494.3 | 0.57 |
+| 8× | 28.284 | 32 000 | 32 000 | 25 136 | 1777.2 | 1030.2 | 0.58 |
+
+BoA verdict: at this 40× density GPU **wins** at every scale, saturating ~1.75× faster (GPU/CPU≈0.57). 8× ≈ 32k fil + 32k minifil ≈ **~1M heads**; BoA hit ~25.5 GB RSS / 3.8 GB VRAM (`-Xmx26G`). **The number to beat is the BoA GPU column.**
+**SoftBox gap before this can run (the build, once polymerization exists):** (1) **polymerization/turnover** — the hard blocker; (2) a NEW dense-contractile-network harness composing minifilament binding + cross-bridge gather + nucleotide cycle + chain forces + crosslinker formation/force/unbind + containment + integration into ONE device-resident GPU TaskGraph at up to 32k+32k entities (today: `ContractileAssayHarness`=1 minifil+2 fil fixed; crosslinkers validated but never wired to a minifil scene); (3) raise `SpatialGrid.MAX_CAND=256` + structure array caps for 40× areal density (silent broad-phase drops = unfaithful). All SoftBox structure pieces are validated in isolation (6a/6b/glide/contractile-assay/containment + 5a–5c-iii crosslinkers) — the work is composition-at-scale + turnover, not new physics. Run GPU + CPU (the GPU/CPU ratio is the comparable quantity); de-risk at 0.5×/1× before 4×/8×.
 
 ## 2026-06-17 — Increment 6 — GENERAL IN-VITRO-CHAMBER CONTAINMENT BOX DONE. A general, entity-agnostic containment primitive (the simulation-domain boundary / in vitro chamber); the contractile assay consumes it with ZERO regression. 7 contractile gates PASS GPU+CPU + 9 prior harnesses re-run bit-identical. NEW file `ContainmentSystem.java` only + the contractile harness; no shared system/store touched; production/`GlidingHarness` byte-unchanged; `BoA-v1ref` byte-clean. Report: `INC6_CONTAINMENT_FINDINGS.md`.
 **What it is / is NOT:** a general `ContainmentSystem` confining **positions, not class identities** — one kernel over a `RigidRodBody`'s pose+drag+accumulators, invoked per store like the shared integrator/Brownian/derive ⇒ confines filament segments, motor sub-bodies, minifilament backbones, (future) nodes with the SAME code. It is the **in-vitro experimental chamber** (coverslip/flow-cell), a reusable primitive every in vitro assay consumes — **NOT the membrane subsystem** (the deferred dynamic cortex, inc 7, is a distinct later thing).

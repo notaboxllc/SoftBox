@@ -1,0 +1,17 @@
+===== scale 0.5 (M=400) =====
+config: scale=0.500  box 9.90×9.90×0.5 µm  filaments=200 (1200 segs)  motors=49000  bodies(view)=50200  dt=1e-05
+  GPU THROUGHPUT: 8.8 steps/s (113.62 ms/step) at 49000 motors / 200 filaments
+  avgBound=805 (0.016/motor)  maxCandCount=78  maxReachCount=2  MAX_CAND=256 (ok)  NaN=false
+===== scale 2 (M=400) =====
+config: scale=2.00  box 19.80×19.80×0.5 µm  filaments=800 (4800 segs)  motors=196000  bodies(view)=200800  dt=1e-05
+  GPU THROUGHPUT: 1.9 steps/s (539.05 ms/step) at 196000 motors / 800 filaments
+  avgBound=3327 (0.017/motor)  maxCandCount=86  maxReachCount=2  MAX_CAND=256 (ok)  NaN=false
+===== scale 4 (M=300) =====
+config: scale=4.00  box 28.00×28.00×0.5 µm  filaments=1600 (9600 segs)  motors=392000  bodies(view)=401600  dt=1e-05
+  GPU THROUGHPUT: 0.9 steps/s (1170.96 ms/step) at 392000 motors / 1600 filaments
+  avgBound=4659 (0.012/motor)  maxCandCount=88  maxReachCount=2  MAX_CAND=256 (ok)  NaN=false
+===== scale 8 (M=240) =====
+config: scale=8.00  box 39.60×39.60×0.5 µm  filaments=3200 (19200 segs)  motors=784000  bodies(view)=803200  dt=1e-05
+  GPU THROUGHPUT: 0.4 steps/s (2515.60 ms/step) at 784000 motors / 3200 filaments
+  avgBound=6663 (0.008/motor)  maxCandCount=88  maxReachCount=2  MAX_CAND=256 (ok)  NaN=false
+SWEEP_DONE
