@@ -2,6 +2,45 @@
 
 Last updated: 2026-06-18
 
+## 2026-06-18 — INC 6: the NODE in the MINIMAL CONTRACTILE ASSAY (node ⇄ minifilament swap) — DONE
+Qualitative "see the node do contractile work": SWAP the free minifilament for a free, box-confined
+protein NODE at the overlap centre of the contractile assay; its radial myosins bind the two
+anti-parallel pinned filaments and pull them into contraction, tension read through the existing
+instrumentation. **4 gates PASS GPU + CPU; all prior harnesses bit-identical.** Nucleation OFF (this
+exercises the node's MOTOR-function). Report: `INC6_NODE_CONTRACTILE_FINDINGS.md`.
+- **A harness COMPOSITION over validated pieces — NO new force law, NO new gather, NO shared-kernel
+  change.** Reused byte-unchanged: the contractile scene (two anti-parallel pinned chains, `PinSystem`,
+  the chamber box, the 12 pN cap, the chain-inclusive pre-snap tension read) + the Stage-A node
+  (`NodeStore` tether LAW + single-ended CSR gather) + binding/cross-bridge + containment. Only new code:
+  `NodeContractileHarness` + `run_nodecontract.sh` ⇒ prior harnesses bit-identical **by construction**
+  (node/minifilament/contractile/dimer all re-run PASS).
+- **Both poles engage naturally (the radial-splay payoff):** the node's heads splay radially over the
+  sphere (Fibonacci); the two filaments straddle it in ±Y, pinned at opposite +x/−x plus-ends, overlapping
+  ACROSS the node. The v1 `rodDotFil≥0` predicate sorts polarity automatically — the **+x hemisphere binds
+  filament A, the −x hemisphere binds filament B** (the radial node is intrinsically bipolar). No bespoke
+  per-pole placement; heads pointing at neither dangle (sparse-field, biological).
+- **IT CONTRACTS (gate #2):** steady anchor tension A=+1.24 / B=+1.79 pN (both contractile), avgBound on
+  A=3.28 / B=3.81 (both poles), mean 1.52 pN = 4660× the no-motor baseline, peak 4.99. **Same regime as the
+  minifilament** (v1 ref 1.84 pN) — the SANITY ballpark, not a target (§8: v1's assay used a minifilament ⇒
+  no v1 numeric oracle for a node). Seg-side force on A is −x, on B is +x (both inward).
+- **CPU≡GPU (gate #3):** deterministic chain+PIN bit-identical (Δ 7.1e-8 µm / 2.7e-17 N); chaotic
+  dynamic-bind windowed avgBound GPU 2.10 = CPU 2.10 (aggregate-within-SEM).
+- **The chamber confines the free node (gate #5)** — entity-agnostic `ContainmentSystem` over the node
+  `RigidRodBody`: no-op inside (bit-identical), inward force past a wall (Fy −2.8e-11 N). **The 12 pN cap**
+  is enabled (faithful) and inherited byte-unchanged. **No-motor control (gate #4):** pins hold exactly,
+  bare-chain tension relaxes to 0.00033 pN.
+- **Free (default) vs fixed-anchor (`-anchor`, the ring's mode):** both validated, same regime — free
+  drifts ±0.03 µm (held by bonds + box, A/B 1.24/1.79 pN), anchored holds exactly at origin (A/B
+  1.28/1.66 pN). Free recommended for this swap (mirrors the free minifilament).
+- **Foreshadows** the post-node fixed-anchor contractile RING (a ring of nodes + this tension read — all
+  primitives now exist); Test B (two nodes via polymerizing nucleated actin) follows once polymerization
+  lands. `BoA-v1ref` byte-clean; production byte-unchanged; nucleation off.
+```
+./run_nodecontract.sh        # GPU + CPU: #2 contracts, #3 CPU≡GPU, #4 control, #5 containment
+./run_nodecontract.sh -cpu -diag                              # per-pole engagement diagnostic
+./run_nodecontract.sh -3js threejs_nodecontract -steps 30000  # viewer (v1 contractility panel, node centre)
+```
+
 ## 2026-06-18 — INC 6c STAGE B2: the node NUCLEATION-FUNCTION (formin actin nucleation) — DONE
 The node's implicit-formin actin nucleation (seam #1, additive over Stage A) — **the first dynamic actin
 CREATION in SoftBox**, completing the node (motor-bundle + nucleation). **All 8 gates PASS GPU + CPU; all

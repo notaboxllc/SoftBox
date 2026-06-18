@@ -853,6 +853,33 @@ only; `BoA-v1ref` byte-clean; production a no-op (`forminsPerNode=0`). Report:
 ./run_nodenuc.sh           # GPU + CPU cross-check (rate, tether, dissolution, pool, no-op, damping, publish-guard, CPU≡GPU)
 ./run_nodenuc.sh -cpu      # CPU runner only (triage)
 ```
+**Increment 6 — the NODE in the MINIMAL CONTRACTILE ASSAY (node ⇄ minifilament swap) — DONE
+(2026-06-18).** Qualitative "the node does contractile work": SWAP the free minifilament for a free,
+box-confined protein NODE at the overlap centre of the contractile assay; its radial myosins bind the two
+anti-parallel pinned filaments and pull them into contraction, tension read through the existing
+instrumentation. **A harness COMPOSITION over validated pieces — NO new force law / gather / shared-kernel
+change** (reused byte-unchanged: the contractile scene + `PinSystem` + chamber box + 12 pN cap +
+chain-inclusive pre-snap read + the Stage-A node tether/gather + binding + containment). **Both poles
+engage NATURALLY** — the node's radial Fibonacci splay + the v1 `rodDotFil≥0` polarity sort make the **+x
+hemisphere bind filament A, the −x hemisphere bind filament B** (the radial node is intrinsically bipolar;
+no bespoke per-pole placement). The two filaments straddle the node in ±Y, overlapping across it, pinned at
+opposite +x/−x plus-ends. 4 gates PASS GPU+CPU: #2 IT CONTRACTS (steady tension A=+1.24 / B=+1.79 pN both
+contractile, avgBound A=3.28 / B=3.81 both poles, mean 1.52 pN = 4660× baseline, peak 4.99 — **same regime
+as the minifilament**, v1 ref 1.84 pN, the SANITY ballpark not a target since v1's assay used a
+minifilament ⇒ no v1 numeric oracle for a node, §8); #3 CPU≡GPU (deterministic chain+PIN bit-identical Δ
+7.1e-8 µm; chaotic windowed avgBound GPU 2.10 = CPU 2.10); #4 no-motor control (pins hold exactly, tension
+→0.00033 pN); #5 the chamber confines the free node (entity-agnostic, no-op inside bit-identical, inward
+past a wall). **Free (default) vs fixed-anchor (`-anchor`, the ring's mode)** both validated, same regime.
+Nucleation OFF (exercises the MOTOR-function). New files only (`NodeContractileHarness`,
+`run_nodecontract.sh`) ⇒ prior harnesses bit-identical (node/minifil/contractile/dimer re-run PASS);
+`BoA-v1ref` byte-clean; production untouched. Report: `INC6_NODE_CONTRACTILE_FINDINGS.md`; JOURNAL
+2026-06-18. **Foreshadows the post-node fixed-anchor contractile RING.**
+```
+./run_nodecontract.sh        # GPU + CPU: #2 contracts, #3 CPU≡GPU, #4 control, #5 containment
+./run_nodecontract.sh -cpu -diag                              # per-pole engagement diagnostic
+./run_nodecontract.sh -3js threejs_nodecontract -steps 30000  # viewer (v1 contractility panel, node centre)
+```
+
 **Migration edge (the node is COMPLETE; these wait on v1 / membrane work):** growth/polymerization
 (monomer-vs-segment granularity); filament death/turnover (freed seeds persist — if a long run accumulates too
 many, that bounds run length: flag); the **membrane formin nucleation** (jba's in-development damped-filament
