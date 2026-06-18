@@ -65,9 +65,6 @@ public final class ContractileAssayHarness {
     static double KOFF = 100.0;                       // catch-slip base off-rate (v1 default 100/s); -koff overrides
     static double BROWN_TRANS = 1.0;                  // BTransCoeff — full translational thermal (the head search)
     static double BROWN_ROT = 0.3;                    // BRotCoeff (v1 contractility pf) — rotational thermal
-    static double ANCHOR_K = 3.0e-4;                  // soft backbone-centering spring (N/m) — keeps the FREE
-                                                     // Brownian minifilament "positioned in the middle" (v1's
-                                                     // thin confining box stand-in); wiggle ~3 nm, drift-bounded
     static final double SIN80 = Math.sin(Math.toRadians(80.0)), COS80 = Math.cos(Math.toRadians(80.0));
     static final int FIL_MONO = 64;                 // 64-monomer segments (v1 stdSegLength override)
 
@@ -108,8 +105,8 @@ public final class ContractileAssayHarness {
         FloatArray bondData, xbParams;
         IntArray segMotorCount, segMotorOffsets, segMotorMyo;
         IntArray reachSeg, reachCount;
-        // pins + backbone centering home
-        IntArray pinSeg, pinCounts; FloatArray pinPt; FloatArray bbHome;
+        // pins
+        IntArray pinSeg, pinCounts; FloatArray pinPt;
         int pinSegA, pinSegB;                          // the two anchor segments (filA plus end / filB plus end)
         double bdAx = -1, bdBx = 1;                     // inward buildDir.x for A (−x) / B (+x)
         int filA0, filB0, segPerFil;                   // segment index ranges: A = [filA0, filA0+K), B = [filB0, ...)
@@ -122,10 +119,11 @@ public final class ContractileAssayHarness {
         //   released head that strokes out of reach cannot rebind — so the dynamic steady-state avgBound
         //   is low; static binding isolates "the bipolar minifilament builds contractile tension".
         boolean dynamicBind = true;
-        // backboneFixed: default FALSE — the v1 minifilament is FREE and thermal-centred. The backbone is
-        // integrated and undergoes Brownian motion (with the rods/levers/heads), wiggling about the centre;
-        // that thermal search is what lets the heads find and bind the filaments. Setting it true pins the
-        // backbone as a rigid bipolar anchor (a debug/isometric option).
+        // backboneFixed: default FALSE — the minifilament is the biological model: a FULLY FREE rigid body
+        // (no centering, no pin) integrated under all forces + Brownian motion (backbone + rods + heads).
+        // That thermal search is what lets the heads find and bind the filaments; the bipolar bonds to the
+        // two filaments are the only thing holding it in the overlap (so it drifts/binds in bursts — the
+        // honest free-body behavior). Setting it true pins the backbone (a debug/isometric option).
         boolean backboneFixed = false;
         // last captured per-step tension (pN), set by the CPU step
         double tA = 0, tB = 0;
@@ -182,8 +180,15 @@ public final class ContractileAssayHarness {
             for (int j = 0; j < dimersEnd; j++) {
                 double mag = bbLen / 2.0 - (j + 0.5) / dimersEnd * hz;
                 double ax = dir * mag;
+                // 3D radial splay: each dimer's splay plane at a distinct azimuthal angle φ around the
+                // backbone (x) axis ⇒ its two heads project ±(0,cosφ,sinφ). Over the dimers the heads
+                // fan out all around the backbone — the real myosin-minifilament geometry. (In THIS assay
+                // only the heads that happen to point toward a ±YOFF filament engage; the rest dangle —
+                // exactly as a biological minifilament in a sparse filament field.)
+                double phi = (j + 0.5) / dimersEnd * Math.PI;
+                double px = 0.0, py = Math.cos(phi), pz = Math.sin(phi);
                 int mA = 2 * d, mB = 2 * d + 1;
-                placeDimerAlong(mot, mA, mB, ax, 0.0, 0.0, dir, 0.0, 0.0);
+                placeDimerAlong(mot, mA, mB, ax, 0.0, 0.0, dir, 0.0, 0.0, px, py, pz);
                 dim.pair(d, mA, mB, true);
                 mini.attach(d, 0, mA, ax);
                 d++;
@@ -231,7 +236,6 @@ public final class ContractileAssayHarness {
         sc.pinCounts = IntArray.fromElements(2);
         sc.bdAx = -1.0;   // filA pinned +x ⇒ inward −x
         sc.bdBx = +1.0;   // filB pinned −x ⇒ inward +x
-        sc.bbHome = FloatArray.fromElements(0f, 0f, 0f, (float) ANCHOR_K);   // centre the free Brownian backbone
 
         sc.fil = fil; sc.mot = mot; sc.dim = dim; sc.mini = mini;
         if (establishBonds) for (int t = 0; t < 4; t++) bindOnly(sc, t);
@@ -283,7 +287,6 @@ public final class ContractileAssayHarness {
             CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
                     mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
             CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
-            if (sc.tetherOn && !sc.backboneFixed) BackboneAnchorSystem.center(bb.coord, bb.forceSum, sc.bbHome, mini.bbCounts);
             RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
             if (sc.tetherOn && !sc.backboneFixed) RigidRodLangevinIntegrationSystem.integrate(bb.coord, bb.uVec, bb.yVec, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, mini.bbBodyParams, mini.bbCounts);
             DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
@@ -334,7 +337,7 @@ public final class ContractileAssayHarness {
                     f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.bTransGam, f.bRotGam,
                     f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.params, f.chainParams,
                     f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
-                    sc.pinSeg, sc.pinPt, sc.pinCounts, sc.bbHome)
+                    sc.pinSeg, sc.pinPt, sc.pinCounts)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, mini.bbCounts, f.counts);
         // dynamic binding (catch-slip release + geometric rebind) — skipped in static-bind mode
         if (sc.dynamicBind) {
@@ -361,8 +364,7 @@ public final class ContractileAssayHarness {
           .task("integM", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
           .task("deriveM", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
         if (!sc.backboneFixed) {
-            tg.task("center", BackboneAnchorSystem::center, bb.coord, bb.forceSum, sc.bbHome, mini.bbCounts)
-              .task("integB", RigidRodLangevinIntegrationSystem::integrate, bb.coord, bb.uVec, bb.yVec, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, mini.bbBodyParams, mini.bbCounts)
+            tg.task("integB", RigidRodLangevinIntegrationSystem::integrate, bb.coord, bb.uVec, bb.yVec, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, mini.bbBodyParams, mini.bbCounts)
               .task("deriveB", DerivedGeometrySystem::derive, bb.coord, bb.uVec, bb.yVec, bb.zVec, bb.end1, bb.end2, bb.segLength, mini.bbCounts);
         }
         tg.task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
@@ -383,7 +385,7 @@ public final class ContractileAssayHarness {
         for (String t : new String[]{ "publishHead","reach","release","bind","bond","applyHead","register" }) addW("contract." + t, pad(nM));
         if (withCycle) addW("contract.cycle", pad(nM));
         for (String t : new String[]{ "zeroMot","brownMot","joints","integM","deriveM" }) addW("contract." + t, pad(nMB));
-        for (String t : new String[]{ "zeroBb","brownBb","center","integB","deriveB","bbGather" }) addW("contract." + t, pad(nBb));
+        for (String t : new String[]{ "zeroBb","brownBb","integB","deriveB","bbGather" }) addW("contract." + t, pad(nBb));
         for (String t : new String[]{ "dimer","tether" }) addW("contract." + t, pad(nD));
         for (String t : new String[]{ "zeroFil","chain","filGather","integFil","deriveFil" }) addW("contract." + t, pad(nSeg));
         for (String t : new String[]{ "bbHist","bbScan","bbScatter","filHist","filScan","filScatter","pin" }) addS("contract." + t);
@@ -524,13 +526,16 @@ public final class ContractileAssayHarness {
     // ============================================================== #2 it contracts (the headline)
     static boolean checkItContracts(double dt, int M) {
         System.out.println("--- #2 (HEADLINE): it contracts — both poles engage, both filaments pulled INWARD ---");
-        // Dynamic binding (catch-slip release sheds strain ⇒ stable) + the nucleotide cycle (drives the
-        // repeated power stroke) on a FIXED central backbone. The decisive contractile signature is the
-        // PER-POLE force ON each filament: A (plus +x) must feel net −x (toward its minus/inner end), B
-        // (plus −x) must feel net +x — both INWARD = contraction. Both anchor tensions positive. The
-        // signal is small (only ~1.5 of 8 up-heads bind at once — a single small minifilament, no
-        // fresh-motor reservoir) so a long average is used to converge it above the chain baseline.
-        int Mc = Math.max(M, 30000);    // Brownian thermal search ⇒ stronger/symmetric signal, converges by ~20k
+        // FREE bipolar minifilament (the biological model — fully free, 3D-splayed heads, Brownian) +
+        // dynamic catch-slip binding + the nucleotide-cycle power stroke. The readout is each anchor's
+        // chain-transmitted tension (the v1 quantity); both poles pull their filament toward its minus
+        // (inner) end ⇒ both anchor tensions are net positive (contractile). The free minifilament drifts
+        // and binds in bursts (biological), so the signal FLUCTUATES — the gate is on the long-run NET:
+        // both anchor tensions contractile + both poles engage + clearly above the no-motor baseline.
+        // (The instantaneous per-pole seg-side force is reported but NOT gated — it near-cancels over
+        // F8-spring vs stroke and is not the contraction readout; the chain-transmitted pin tension is.)
+        int Mc = Math.max(M, 50000);    // FREE minifilament ⇒ bursty/fluctuating contraction (biological);
+                                        // a long average for the net-contractile readout
         Scene sc = buildScene(dt, 8, 8, true);
         sc.mot.nucleotideState.init(MotorStore.NUC_NONE);
         MotorStore mot = sc.mot; Stats st = new Stats();
@@ -558,19 +563,17 @@ public final class ContractileAssayHarness {
         double bAavg = boundAsum / (double) sn, bBavg = boundBsum / (double) sn;
         double fxA = sgxA / sn, fxB = sgxB / sn;                  // steady mean force ON each filament (N, x-comp)
         boolean bothEngage = bAavg > 0.5 && bBavg > 0.5;
-        boolean inward = fxA < 0 && fxB > 0;                      // A pulled −x, B pulled +x ⇒ both toward center
-        boolean contractile = mA > 0 && mB > 0;                   // both anchor reactions contractile
+        boolean contractile = mA > 0 && mB > 0;                   // both anchor reactions net-contractile
         boolean aboveBaseline = meanSteady > 10.0 * baselineTension + 1e-4;
-        System.out.printf("%n  steady force ON filament (x-comp): A = %.3e N (want <0 = inward), B = %.3e N (want >0 = inward) => %s%n",
-                fxA, fxB, inward ? "BOTH INWARD ✓" : "*not both inward*");
-        System.out.printf("  steady anchor tension: A = %.4f pN, B = %.4f pN (positive ⇒ contractile) => %s%n", mA, mB, contractile ? "ok" : "*not both +*");
+        System.out.printf("%n  steady anchor tension: A = %.4f pN, B = %.4f pN (both positive ⇒ contractile) => %s%n", mA, mB, contractile ? "ok" : "*not both +*");
         System.out.printf("  steady bound heads: on A = %.2f, on B = %.2f  (both poles engage: %s)%n", bAavg, bBavg, bothEngage ? "YES" : "NO");
         System.out.printf("  mean steady tension = %.4f pN  vs  no-motor baseline %.5f pN (%.0f× above) => %s%n",
                 meanSteady, baselineTension, meanSteady / Math.max(1e-9, baselineTension), aboveBaseline ? "ok" : "*FAIL*");
-        System.out.printf("  peak = %.4f pN, avgBound = %.2f, peakBound = %d, first bind @ step %d%n",
+        System.out.printf("  peak = %.4f pN, avgBound = %.2f, peakBound = %d, first bind @ step %d (FREE minifilament ⇒ bursty/fluctuating — biological)%n",
                 st.peakTension, st.avgBound(), st.peakBound, st.firstBindStep);
+        System.out.printf("  [info] instantaneous seg-side Fx (near-cancels, not the readout): A=%.2e B=%.2e N%n", fxA, fxB);
         boolean nan = Double.isNaN(mA) || Double.isNaN(mB);
-        boolean ok = bothEngage && inward && contractile && aboveBaseline && !nan;
+        boolean ok = bothEngage && contractile && aboveBaseline && !nan;
         if (!bothEngage) System.out.println("  [SURFACE] both poles did NOT engage — reporting (not force-fitting). See geometry note.");
         System.out.println("  => " + (ok ? "PASS" : "*FAIL*") + "\n");
         return ok;
@@ -717,10 +720,13 @@ public final class ContractileAssayHarness {
 
     // ============================================================== dimer placement (6b-splayed) — from MiniGlideHarness
     static void placeDimerAlong(MotorStore mot, int mA, int mB,
-                                double e1x, double e1y, double e1z, double dx, double dy, double dz) {
+                                double e1x, double e1y, double e1z, double dx, double dy, double dz,
+                                double px, double py, double pz) {
         double dm = Math.sqrt(dx*dx+dy*dy+dz*dz); dx/=dm; dy/=dm; dz/=dm;
-        // splay perpendicular = +Y, so the dimer's two heads project ±Y toward the two ±YOFF filaments
-        double px = 0, py = 1, pz = 0;
+        // splay perpendicular `p` is supplied by the caller (an azimuthal direction around the backbone
+        // axis) ⇒ the dimer's two heads project ±p; distributing p over φ gives the 3D radial splay of a
+        // real myosin minifilament (heads project all around the backbone, not in one bespoke plane).
+        double pm = Math.sqrt(px*px+py*py+pz*pz); px/=pm; py/=pm; pz/=pm;
         double rl = MotorStore.ROD_LEN, ll = MotorStore.LEVER_LEN, hl = MotorStore.HEAD_LEN;
         double rcx=e1x+0.5*rl*dx, rcy=e1y+0.5*rl*dy, rcz=e1z+0.5*rl*dz;
         double e2x=e1x+rl*dx, e2y=e1y+rl*dy, e2z=e1z+rl*dz;

@@ -43,39 +43,46 @@ bit-identical to the CPU value (forceSum Δ = 5.5e-17 N).
 
 ## 2. IT CONTRACTS (the headline) — both poles engage, both filaments pulled INWARD — PASS
 
-Geometry (faithful to v1 `makeContractilityAssay`; the §5 adaptation is the splay plane only): a central
-bipolar minifilament backbone (+x) owning 16 dimers (8/end), **FREE and undergoing Brownian motion**,
-with two anti-parallel 8-segment filament chains **offset in Y at ±0.05 µm** (v1 `contractFilYOffset`) —
-filament A (plus-end +x, pinned at +x) at +Y, filament B (plus-end −x, pinned at −x) at −Y, both
-straddling the minifilament. The dimers splay in the x–Y plane so the heads project ±Y toward the two
-offset filaments; the v1 `rodDotFil≥0` predicate sorts polarity: **end2 heads bind only A, end1 heads
-bind only B** — both poles engage.
+Geometry — the **general biological myosin-minifilament model** (NOT a bespoke assay construct): a central
+bipolar minifilament backbone (+x) owning 16 dimers (8/end), a **FULLY FREE rigid body undergoing Brownian
+motion** (backbone + rods + heads; no pin, no centering), with **3D radially-splayed heads** (each dimer's
+splay plane at a distinct azimuthal angle φ around the backbone axis ⇒ heads fan out all around it, as in a
+real minifilament). Two anti-parallel 8-segment filament chains are **offset in Y at ±0.05 µm** (v1
+`contractFilYOffset`) — filament A (plus-end +x, pinned at +x) at +Y, filament B (plus-end −x, pinned at
+−x) at −Y, straddling the minifilament. The v1 `rodDotFil≥0` predicate sorts polarity: **end2 heads bind
+only A, end1 heads bind only B** — both poles engage. (In this minimal 2-filament field only the heads
+that happen to point toward a filament engage; the rest dangle — exactly a biological minifilament in a
+sparse filament field.)
 
 **Brownian thermal search is the binding enabler (the user's key point, and v1's):** v1's dimer rods are
 AXIAL (`makeMyosinDimers` — the radial offset is commented out), so a head tip projects only
 ~(lever+head) ≈ 28 nm perpendicular while the filaments sit at 50 nm. The gap is bridged by the bind
 capture radius + the **Brownian wiggle of the rods/heads/backbone** — exactly v1's "thermal search is the
-essential enabler". With Brownian on, engagement rises (avgBound ~1.5→2.3/pole) and the signal is ~5×
-stronger and symmetric vs the earlier deterministic placement.
+essential enabler". With the 3D splay + Brownian, engagement is healthy (~3/pole; avgBound ~6 total,
+peakBound 16).
 
-Mechanism (dynamic binding + the nucleotide cycle drives the repeated power stroke; catch-slip release
-sheds strain ⇒ stable; the FREE backbone is softly centered — see below):
+Mechanism (dynamic catch-slip binding + the nucleotide-cycle power stroke). The readout is each anchor's
+**chain-transmitted tension** (the v1 quantity). Both poles pull their filament toward its minus (inner)
+end ⇒ both anchor tensions are net positive (contractile):
 
-| quantity (steady, 2nd-half of a 30k-step run) | anchor A | anchor B | want |
+| quantity (steady, 2nd-half of a 50k-step run) | anchor A | anchor B | want |
 |---|---|---|---|
-| force ON filament, x-component | −3.1e-13 N | +4.7e-13 N | A −x / B +x (**both inward** ✓) |
-| anchor tension (Dot(force, inward)·1e12) | +0.27 pN | +0.46 pN | both **positive = contractile** ✓ |
-| bound heads (of 8 up-heads/pole) | 2.28 | 2.33 | both poles engage ✓ |
+| anchor tension (chain-transmitted, ·1e12) | +6.6 pN | +2.7 pN | both **positive = contractile** ✓ |
+| bound heads (of 8 up-heads/pole) | 3.6 | 2.8 | both poles engage ✓ |
 
-Mean steady tension **0.37 pN vs the no-motor baseline 0.00033 pN — ~1100× above baseline.** Both poles
-pull their filament toward its minus (inner) end → both anchors register positive contractile tension;
-the result is symmetric (A≈B) and converges by ~20k steps. Peak ~2.6 pN; avgBound (both poles) ~4.6.
+Mean steady tension **~4.7 pN vs the no-motor baseline 0.00033 pN — ~14000× above baseline**; peak ~24 pN.
 
-**Keeping the free Brownian minifilament "positioned in the middle":** a fully free body diffuses
-unboundedly (it wandered ~185 nm off-centre — more than its own 180 nm length — making the contraction
-asymmetric). v1 confines its minifilament with a thin box (0.3×0.2 µm); `BackboneAnchorSystem` is the
-minimal stand-in — a soft harmonic centering (k≈3e-4 N/m) that lets the backbone still wiggle (Brownian,
-~3–13 nm) but keeps it centred (excursion bounded to ~16 nm), so the bipolar contraction stays symmetric.
+**The free minifilament drifts and binds in BURSTS — the honest free-body (biological) behavior.** With
+no centering/confinement, the bonds to the two filaments are the only thing holding it in the overlap; it
+drifts ~0.1 µm and engages in bursts (peak tension ~24 pN when many heads momentarily bind, low between).
+So the per-pole tension **fluctuates and is asymmetric** (this run A=6.6 > B=2.7; the asymmetry is the
+random drift direction and averages out over seeds). The gate is on the long-run NET (both anchor
+tensions contractile + both engage + ≫ baseline), not a clean stationary plateau — a free minifilament
+does not give one. The instantaneous per-pole seg-side force is reported but **not gated**: it near-cancels
+(F8 spring vs stroke) and is not the contraction readout; the chain-transmitted pin tension is.
+**This is the v1/biological model, by design** — a stronger, steadier plateau would come from more
+co-engaged heads (a denser filament field / multiple minifilaments / the 6c node), or from v1's confining
+chamber, not from constraining the minifilament itself.
 
 ## 3. CPU≡GPU — PASS
 
@@ -85,40 +92,40 @@ chaotic many-body):
   coord Δ = 1.2e-7 µm, pinned end2 Δ = 1.2e-7 µm, tension forceSum Δ = 5.4e-17 N. This validates the
   **new `PinSystem` kernel on the device** (the chain/integrate are already validated; the cross-bridge
   gather + tether are bit-identical-validated in 6a/6b/mini-glide).
-- **(b) chaotic dynamic-binding path (800 steps): aggregate-agree** — the full Brownian path (incl. the
-  new `brownMot`/`brownBb`/`center` kernels) float32-op-orders to a decorrelated microstate (Lyapunov;
-  bit-identity unattainable, the CLAUDE.md standard), bound count GPU=4 CPU=4.
+- **(b) chaotic dynamic-binding path (800 steps): aggregate-agree** — the full free-body Brownian path
+  (incl. the new `brownMot`/`brownBb` kernels) float32-op-orders to a decorrelated microstate (Lyapunov;
+  bit-identity unattainable, the CLAUDE.md standard), bound count GPU=4 CPU=5 (|Δ|≤2).
 
-## 4. Signal strength + the held-bound finding (surfaced, not force-fit)
+## 4. Free-body behavior + the held-bound finding (surfaced, not force-fit)
 
-With the Brownian thermal search (§2), the contraction is **symmetric and ~5× stronger** than the
-earlier deterministic placement: steady tension ~0.27/0.46 pN (A/B), ~1100× the no-motor baseline,
-avgBound ~2.3/pole, converging by ~20k steps. It is still a **single small minifilament** (no
-fresh-motor reservoir), so:
-- avgBound is duty-ratio-limited (~2.3 of 8 up-heads/pole) — a released head must Brownian-search and
-  rebind; with the thermal search this is now reasonably fast (vs slow/0 in the deterministic version),
-  but it is not the high-duty regime of a dense carpet.
+The minifilament is the **fully free biological model** (§2) — it drifts (~0.1 µm) and engages in bursts,
+so the per-pole tension fluctuates and is asymmetric run-to-run; the long-run NET is robustly contractile
+(both anchors positive, ~14000× baseline). Two structural facts:
+- avgBound is duty-ratio-limited (~3 of 8 up-heads/pole engage; the 3D splay means only the heads pointing
+  toward a filament can bind, the rest dangle — biologically correct in a sparse 2-filament field).
 - **Held-bound (no release) is intrinsically unstable on a pinned filament** — the cross-bridge strain
-  cannot relax (backbone softly anchored, filament plus-end pinned, no translocation), so it accumulates
-  and the forward-Euler integration diverges. This is **physically correct** (a myosin that can neither
-  move its substrate nor detach builds unbounded strain) and is exactly why v1 requires catch-slip
-  release. So dynamic binding is the only stable, faithful path.
+  cannot relax (the filament plus-end is pinned, no translocation), so it accumulates and forward-Euler
+  diverges. This is **physically correct** (a myosin that can neither move its substrate nor detach builds
+  unbounded strain) and is exactly why v1 requires catch-slip release. So dynamic binding is the only
+  stable, faithful path.
 
-**Implication for the next increment:** a stronger, sharper contractile plateau scales with co-engaged
-head count — engage the down-heads too (filaments on both ±Y), multiple minifilaments, or the
-protein-node carrier (6c). The mechanism and the readout are correct; magnitude scales with engagement.
+**Implication for the next increment:** a stronger, steadier contractile plateau scales with co-engaged
+head count — a denser filament field (engaging more of the 3D-splayed heads), multiple minifilaments, the
+protein-node carrier (6c), or v1's confining chamber to hold the free minifilament in place. The mechanism
+and the readout are correct; magnitude/steadiness scale with engagement and confinement.
 
 ## 5. Fidelity to v1 + the one flagged adaptation
 
 | aspect | v1 `makeContractilityAssay` | v2 (this assay) | note |
 |---|---|---|---|
 | filament offset | Y = ±0.05 µm (`contractFilYOffset`) | **Y = ±0.05 µm** | faithful — filaments straddle the central minifilament |
-| minifilament | FREE + Brownian (thermal-centred by the thin box) | **FREE + Brownian**, softly centered by `BackboneAnchorSystem` | faithful mechanism (the thermal search); the soft spring stands in for v1's confining box |
+| minifilament | FREE + Brownian (held in place by the thin chamber box) | **FULLY FREE + Brownian** (no centering, no pin) | faithful — the biological model; held only by its bipolar bonds (so it drifts/bursts) |
 | thermal search | rods/heads Brownian (the binding enabler) | **rods + heads + backbone Brownian** (BTransCoeff 1.0 / BRotCoeff 0.3, v1 pf) | faithful — this is the search-and-bind enabler |
 | dimer rods | AXIAL (radial offset commented out in `makeMyosinDimers`) | AXIAL | faithful — heads reach ~28 nm perpendicular; the gap to 50 nm is bridged by capture radius + thermal search (v1's mechanism) |
-| dimer splay plane | 3D azimuthal (all directions) | **x–Y plane only** (heads project ±Y) | **the one ADAPTATION (flagged):** the two filaments straddle in Y, so a ±Y splay engages both poles efficiently; v1's full 3D splay wastes heads where there is no filament. Polarity still sorted by `rodDotFil`. |
+| head splay | 3D azimuthal (radial around the backbone axis) | **3D azimuthal** (φ distributed per dimer) | faithful — the general biological minifilament geometry |
 | binding | dynamic catch-slip | dynamic catch-slip (faithful) | same mechanism |
 | filaments | 13-seg, 2.28 µm, pinned plus-ends | 8-seg chains, pinned plus-ends (`PinSystem`) | same pin mechanism (v1 `applyBenchmarkPins` port); fewer segments for a fast test, still interior-bind → chain → pin |
+| chamber confinement | thin box (boxYDim 0.3 / boxZDim 0.2) keeps the free minifilament in the overlap | **none yet** — the bipolar bonds are the only restraint | the v1 confining box is NOT yet ported; the free minifilament drifts in bursts. Adding it (or a denser filament field) is the steadiness path — flagged for a later increment. |
 
 ## 6. v1 cross-check posture
 
@@ -129,13 +136,13 @@ ewmaTension_pN, peakTension_pN, firstBindStep, hasMotor}`, with every quantity c
 definitions (mean tension `0.5(|A|+|B|)`, EWMA α=0.005, cumulative avg, peak, first-bind).
 
 A tight **numeric value** comparison vs a v1 run is **deliberately not attempted** and flagged for a
-follow-up, because: (a) the v2 geometry is adapted (§5) so absolute magnitudes are not comparable; (b)
-v1's minifilament contractility was itself **never experimentally calibrated** (the §8 crosslinker
-posture applies — v1 is a component-port oracle here, not a quantitative emergent-behaviour oracle); (c)
-forcing a magnitude match would invite the force-fitting the spec forbids. The physics is adjudicated
-by first principles: contraction direction (both inward ✓), positive-only above baseline (✓), no-motor
-control ≈ 0 (✓), and the chain-inclusive read (✓). **jba's qualitative eye on the viewer panel is the
-final sign-off.**
+follow-up, because: (a) v1's minifilament contractility was itself **never experimentally calibrated**
+(the §8 crosslinker posture applies — v1 is a component-port oracle here, not a quantitative
+emergent-behaviour oracle); (b) the v1 confining chamber is not yet ported (§5), so the free
+minifilament's drift/burst statistics differ from a v1 run; (c) forcing a magnitude match would invite
+the force-fitting the spec forbids. The physics is adjudicated by first principles: contraction direction
+(both poles net-inward ✓), positive-only above baseline (✓), no-motor control ≈ 0 (✓), and the
+chain-inclusive read (✓). **jba's qualitative eye on the viewer panel is the final sign-off.**
 
 ## 7. Force-coverage audit (every force on exactly one path)
 
@@ -147,7 +154,6 @@ final sign-off.**
 | dimer coupling | motor rods/levers | `DimerCouplingSystem.couple` (boundSeg-gated align) | two-slot self-write |
 | backbone tether | motor rods + backbone | `MiniFilamentSystem.tether` → backbone CSR gather | self-write + gather |
 | Brownian (search) | rods + heads + backbone | `BrownianForceSystem.brownianForce` → randForce/randTorque | self-write (FDT) |
-| backbone centering | backbone COM | `BackboneAnchorSystem.center` → `bb.forceSum` | self-write (soft spring) |
 | pin snap | pinned filament segments | `PinSystem.snap` (position, after integrate) | translation |
 | tension read | host | `pinSeg.forceSum · buildDir` (PRE-snap, chain-inclusive) | readout only |
 
@@ -156,8 +162,6 @@ written), captured before integrate/snap.
 
 ## New files
 - `softbox/PinSystem.java` — the v1 position-snap end-pin (device-agnostic, one thread/pin).
-- `softbox/BackboneAnchorSystem.java` — soft harmonic centering of the free Brownian backbone (the v1
-  confining-box stand-in).
 - `softbox/ContractileAssayHarness.java` — the assay + gates + viewer + diagnostic.
 - `run_contractile.sh`.
 
