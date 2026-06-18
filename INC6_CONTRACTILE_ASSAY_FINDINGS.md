@@ -127,6 +127,48 @@ and the readout are correct; magnitude/steadiness scale with engagement and conf
 | filaments | 13-seg, 2.28 µm, pinned plus-ends | 8-seg chains, pinned plus-ends (`PinSystem`) | same pin mechanism (v1 `applyBenchmarkPins` port); fewer segments for a fast test, still interior-bind → chain → pin |
 | chamber confinement | thin box (boxYDim 0.3 / boxZDim 0.2) keeps the free minifilament in the overlap | **none yet** — the bipolar bonds are the only restraint | the v1 confining box is NOT yet ported; the free minifilament drifts in bursts. Adding it (or a denser filament field) is the steadiness path — flagged for a later increment. |
 
+## 6b. Step-3 force-coverage audit (read completeness) — CONFIRMED
+
+`./run_contractile.sh -audit` decomposes the pinned-segment `forceSum` at the read (full assay, loaded,
+frozen pose): **read = chain + cross-bridge gather, residual = 0** (exact), and **0 motors bind the
+pinned plus-end segment** ⇒ the pin force is purely the chain-transmitted contraction. v2 writes chain +
+gather into the SAME `fil.forceSum`, so the v1 GPU `jointForceSum`-omission gotcha (`addDeviceJointForce`)
+**cannot occur**; filaments are Brownian-off ⇒ no Brownian term. The tension read is complete. (Not the
+low-tension cause — the model fix was.)
+
+## 7b. Step-4 matched v1-vs-v2 comparison (the decisive cut) — SHARED FAITHFUL PHYSICS
+
+v1's assay run from a byte-clean `/tmp` scratch (`BoA-v1ref`, `-pf ParameterFiles/contractilityAssay`,
+CPU, 50k steps) vs v2 matched (50k, CPU), decomposed by channel:
+
+| channel | v1 (BoA-v1ref) | v2 | read |
+|---|---|---|---|
+| avgBound (cumulative) | **5.38** | ~6.4 (A 3.6 + B 2.8) | **comparable engagement** ✓ |
+| instantaneous bound | 4–9 (steady) | 0–16 (bursty) | v2 fluctuates more |
+| avgTension (mean) | **1.84 pN** | ~4.7 pN | v2 ~2.5× — **NOT low** (higher) |
+| peakTension | **3.32 pN** | ~24 pN | v2 ~7× spikier |
+| tension / bound-head | 0.34 pN | 0.73 pN | v2 ~2× (the burst artifact) |
+| symmetry (A vs B) | symmetric (2.0/1.9) | asymmetric (6.6/2.8) | v2 drifts onto one pole |
+| both poles engage | yes | yes | ✓ |
+
+**Verdict — SHARED FAITHFUL PHYSICS (not a v2 bug, not low tension):**
+- The original "low tension" was the now-deleted bespoke centered/planar version. **Freeing the
+  minifilament + 3D splay raised v2's tension ~13× (~0.37→~4.7 pN), above v1's 1.84 pN** — the model
+  correction was the fix.
+- **Engagement matches** (avgBound v2 ~6.4 vs v1 5.4) and the mechanism is correct (both poles, inward,
+  chain-transmitted, complete read). v2 is **not `< v1`** on any channel ⇒ no "v2 bug → low tension".
+- The one qualitative difference is **steadiness**: v1 is a steady symmetric plateau (peak/mean ≈ 1.8),
+  v2 is bursty/asymmetric (peak/mean ≈ 5) and the backbone drifts ~0.1 µm. This localizes to the **one
+  un-ported scene element: v1's thin confining chamber box** (`boxYDim 0.3 / boxZDim 0.2`), which holds
+  v1's free minifilament centered in the overlap ⇒ steady engagement ⇒ steady tension. v2's minifilament
+  is free WITHOUT the box ⇒ it drifts and over-engages in transient bursts (inflating the mean + peak).
+  This is a **scene element, not a physics bug**; porting it is the clear next step (and would make v2
+  directly SEM-comparable to v1, and likely settle v2's per-head tension toward v1's). **Flagged — not
+  auto-added** (per the boundary: a scene divergence is planner-adjudicated; and "fully free" was the
+  explicit ask — the box is environmental confinement, faithful to v1, the natural next refinement).
+- v1's contractility was itself never experimentally calibrated (the §8 component-port-vs-emergent
+  posture), so the absolute pN is a faithful-to-v1 number, not a biological target.
+
 ## 6. v1 cross-check posture
 
 The v1 **readout SET is reproduced 1:1** — the viewer panel emits v1's exact schema

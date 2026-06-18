@@ -81,6 +81,7 @@ public final class ContractileAssayHarness {
                 case "-reach" -> REACH = Double.parseDouble(args[++i]);
                 case "-koff" -> KOFF = Double.parseDouble(args[++i]);
                 case "-diag" -> diag = true;
+                case "-audit" -> { auditPinForce(dt, Math.max(M, 8000)); return; }
                 default -> {}
             }
         }
@@ -628,6 +629,62 @@ public final class ContractileAssayHarness {
         boolean ok = detOk && aggOk;
         System.out.println("  => " + (ok ? "PASS" : "*FAIL*") + "\n");
         return ok;
+    }
+
+    // ============================================================== Step-3: tension-read force-coverage audit
+    /** Brute-decompose the pinned-segment forceSum at the read (the full assay, loaded) into chain (joint)
+     *  + cross-bridge gather + Brownian, and confirm the read uses the COMPLETE sum. The v1 crux was the
+     *  chain force (v1 jointForceSum via addDeviceJointForce) being omitted ⇒ tension reads low; v2 writes
+     *  chain + gather into the SAME forceSum, so the read is complete by construction — this verifies it. */
+    static void auditPinForce(double dt, int M) {
+        System.out.printf("--- Step-3 audit: pinned-segment force-coverage at the read (full assay, %d steps) ---%n", M);
+        Scene sc = buildScene(dt, 8, 8, true);
+        sc.mot.nucleotideState.init(MotorStore.NUC_NONE);
+        for (int t = 0; t < M; t++) cpuStep(sc, t, true);     // run to a loaded state
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; int N = f.n;
+        RigidRodBody b = mot.body; int pa = sc.pinSegA, pb = sc.pinSegB;
+        // FREEZE the pose; recompute the bond forces at this exact pose (so chain & gather are evaluated at
+        // the SAME pose ⇒ exact decomposition, no integrate-step pose drift).
+        MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
+        CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
+        // the READ value: forceSum = chain + cross-bridge gather (exactly what captureTension reads, pre-snap)
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+        ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sc.segMotorCount);
+        CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
+        CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
+        CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
+        double readAx = f.forceSum.get(pa), readAy = f.forceSum.get(N + pa), readAz = f.forceSum.get(2 * N + pa);
+        double readBx = f.forceSum.get(pb);
+        // how many motors are bound DIRECTLY to each pinned (plus-end) segment? (heads bind interior ⇒ expect 0)
+        int boundToPinA = 0, boundToPinB = 0;
+        for (int m = 0; m < mot.nMotors; m++) { int s = mot.boundSeg.get(m); if (s == pa) boundToPinA++; if (s == pb) boundToPinB++; }
+        // decompose: re-zero + run ONLY the chain (no gather) at the SAME frozen pose ⇒ chain-transmitted force
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+        ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        double chainAx = f.forceSum.get(pa), chainAy = f.forceSum.get(N + pa), chainAz = f.forceSum.get(2 * N + pa);
+        double chainBx = f.forceSum.get(pb);
+        // the cross-bridge gather's contribution to the pinned seg = Σ bondData seg-side over motors bound to it
+        double gatherAx = 0, gatherBx = 0;
+        for (int m = 0; m < mot.nMotors; m++) {
+            int s = mot.boundSeg.get(m); int d = m * CrossBridgeSystem.STRIDE;
+            if (s == pa) gatherAx += sc.bondData.get(d + 6);
+            if (s == pb) gatherBx += sc.bondData.get(d + 6);
+        }
+        // filaments have Brownian OFF ⇒ no Brownian term. So read == chain + gather. Verify.
+        double residA = Math.abs(readAx - (chainAx + gatherAx));
+        double residB = Math.abs(readBx - (chainBx + gatherBx));
+        System.out.printf("  pinned seg A: read forceSum=(%.4e,%.4e,%.4e) N ; tension=%.4f pN%n", readAx, readAy, readAz, readAx * sc.bdAx * 1e12);
+        System.out.printf("  decomposition A: chain=%.4e + gather=%.4e (motors bound to pin=%d) ; |read−(chain+gather)|=%.2e N%n",
+                chainAx, gatherAx, boundToPinA, residA);
+        System.out.printf("  pinned seg B: read=%.4e = chain %.4e + gather %.4e (bound=%d) ; resid=%.2e N%n",
+                readBx, chainBx, gatherBx, boundToPinB, residB);
+        boolean complete = residA < 1e-15 && residB < 1e-15;
+        boolean pinIsChain = boundToPinA == 0 && boundToPinB == 0;   // heads bind interior ⇒ pin force is pure chain transmission
+        System.out.printf("  ⇒ read = chain + gather (no omission): %s ; pin force is chain-transmitted (no direct cross-bridge on the pin): %s%n",
+                complete ? "CONFIRMED" : "*MISMATCH*", pinIsChain ? "CONFIRMED" : "(some heads bound the pin seg)");
+        System.out.println("  (v2 writes chain + gather into the SAME fil.forceSum ⇒ the v1 jointForceSum-omission gotcha cannot occur; filaments Brownian-off ⇒ no Brownian term.)");
     }
 
     // ============================================================== cocked-stall probe (free backbone)

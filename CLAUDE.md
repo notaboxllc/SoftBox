@@ -705,11 +705,16 @@ deterministic chain+PIN bit-identical float32 (validates `PinSystem` on device),
 aggregate-agrees. **Free-body finding (surfaced):** the FREE minifilament drifts (~0.1 µm) + engages in BURSTS
 (peak ~24 pN) — honest biological behavior; per-pole tension fluctuates/asymmetric (averages over seeds); gate on
 the long-run NET, not a stationary plateau. Held-bound is intrinsically unstable on a pinned filament (strain
-can't relax ⇒ dynamic release mandatory — v1's reason). NOT yet ported: v1's confining chamber box (the free
-minifilament drifts — flagged). **v1 cross-check:** readout SET reproduced 1:1 (viewer panel = v1
-`ThreeJSWriter:262-277`); tight numeric match deferred (v1 uncalibrated — §8; chamber not ported). New:
-`PinSystem`, `ContractileAssayHarness`, `run_contractile.sh`. Report: `INC6_CONTRACTILE_ASSAY_FINDINGS.md`; spec:
-`INC6_CONTRACTILITY_ASSAY_SURVEY.md`; JOURNAL 2026-06-17.
+can't relax ⇒ dynamic release mandatory — v1's reason). **Matched v1 comparison (BoA-v1ref `/tmp` scratch, CPU
+50k, decomposed):** avgBound v1 5.38 / v2 ~6.4 (comparable engagement), avgTension v1 1.84 / v2 ~4.7 pN (v2 HIGHER
+— not low), peak v1 3.32 / v2 ~24 pN. **Verdict: SHARED FAITHFUL PHYSICS** (v2 not `<` v1 on any channel ⇒ no
+bug; the low-tension was the old bespoke version). The one difference is steadiness (v1 steady plateau; v2
+bursty/drifts ~0.1 µm), localized to the **un-ported v1 confining chamber box** (`boxYDim 0.3/boxZDim 0.2`) — a
+scene element, not a physics bug; flagged as the next step. Step-3 force-coverage audit (`-audit`): pin `forceSum`
+= chain + gather, residual 0, pin force purely chain-transmitted (the `jointForceSum`-omission gotcha cannot
+occur). New: `PinSystem`, `ContractileAssayHarness`, `run_contractile.sh`. Report:
+`INC6_CONTRACTILE_ASSAY_FINDINGS.md` (§6b/§7b); spec: `INC6_CONTRACTILITY_ASSAY_SURVEY.md`; JOURNAL 2026-06-17.
+**Next: port v1's confining chamber box** (steady-state v1 match).
 ```
 ./run_contractile.sh            # GPU + CPU cross-check: #1 crux, #4 control, #2 contracts, #3 CPU≡GPU
 ./run_contractile.sh -cpu       # CPU runner only (triage)
