@@ -880,12 +880,54 @@ Nucleation OFF (exercises the MOTOR-function). New files only (`NodeContractileH
 ./run_nodecontract.sh -3js threejs_nodecontract -steps 30000  # viewer (v1 contractility panel, node centre)
 ```
 
-**Migration edge (the node is COMPLETE; these wait on v1 / membrane work):** growth/polymerization
-(monomer-vs-segment granularity); filament death/turnover (freed seeds persist — if a long run accumulates too
-many, that bounds run length: flag); the **membrane formin nucleation** (jba's in-development damped-filament
-work — the damping principle generalizes); branched networks; the dynamic cortex; the optional `nodeTorqSpring`
-alignment. **Post-node horizon:** a fixed-anchor minimal contractile RING (a ring of nucleating nodes + the
-contractile-assay tension read — all primitives now exist).
+**Increment 6c — actin POLYMERIZATION: barbed-end elongation (lengthen + split, growth-only) — DONE
+(2026-06-18).** The **first dynamic actin GROWTH in SoftBox** (filaments were static-length through inc 6).
+Filaments elongate at the **node-side barbed end** (recon `INC6C_POLYMERIZATION_RECON.md`, granularity fork
+resolved favorably): **the granularity mapping is "lengthen the terminal segment, then split"** — v1 and
+SoftBox are the SAME shape (a length-mutable rod carrying `monomerCount`, `segLength=(monomerCount+1)·
+actinMonoRadius`, the drag-from-`monomerCount` recompute on both sides), so growth turned on a **dormant,
+shape-compatible** path, NOT a biochem layer. Per biochem cadence: `grow` lengthens (`monomerCount++` at
+**[actin]-dependent** `P=onRate·conc·biochemDeltaT`, `coord += ½·monoRadius·uVec` keeping end1/node FIXED, end2
+OUTWARD — v1 `incCoord`); at 64 monomers `markSplits`→**B1 scan-rank allocator (REUSED VERBATIM)**→`splitWire`
+shrinks the parent (32, end1 fixed), sets the child (32), and **rewires the chain neighbors of {parent G, child
+C, G's old end2-neighbor Mold}** so the chain stays linear `node—G(tip)—C—Mold—…` (distinct tips ⇒ distinct
+{G,C,Mold} ⇒ race-free, no atomics). Growing tips = node-bonded segments (`seedNode≥0`, reusing B2's bond).
+**The device drag recompute decision = DEVICE** (recon flag d): `Math.log` LOWERS on the PTX backend
+(`BrownianForceSystem` proves it), so `recomputeDrag` is a real device per-slot port of `DragTensorSystem.run`
+(segLength + clamp + the SHARED rod-drag formula), not the host all-slots fallback. **The pool is seam #2**:
+growth READS `ActinPool.conc()` (B2 nucleation was [actin]-INDEPENDENT — growth adds the read) + DEPLETES it
+per monomer. **8 gates PASS GPU+CPU:** (1) lengthen (recomputeDrag==host DragTensorSystem maxRel 1.1e-7;
+P_emp 0.1738 vs 0.1740); (2) **split@64 — the headline correctness gate** (lone + inserted-between-`Mold`
+cases both give a valid reciprocal linear chain, conserved 64→32+32, child outward, end1 fixed, **CPU≡GPU
+bit-identical lifecycle Δcoord 1.4e-9 µm**); (3) rate first-order (P(15µM)/P(7.5µM)=2.005) + pool depletes
+conservatively + slows as it drains; (4) growing-end (contour 0.086→2.50 µm/29×, tip held 4e-5 µm from node);
+(5) **no-op-when-off bit-identical to a static baseline**; (6) CPU≡GPU full pipeline 12000 steps (Δcoord
+0.00); (7) drag-clamp fidelity (3-monomer seed clamps to stdSegLength·mono — **faithful to v1
+FilSegment:409-419**, recon flag c); (8) participates + dt-stable (80k Brownian steps, bounded, chain
+reciprocal valid). **Default-OFF; B1/B2/node regressions bit-identical.** New files only:
+`GrowthSystem`/`GrowthStore`/`GrowthHarness`/`run_growth.sh` +3 Constants additions (no existing value
+changed) ⇒ prior harnesses byte-unchanged; `BoA-v1ref` byte-clean; production untouched. Report:
+`INC6C_POLYMERIZATION_FINDINGS.md`; JOURNAL 2026-06-18.
+```
+./run_growth.sh            # GPU + CPU cross-check (lengthen, split@64, rate+pool, growing-end, no-op, drag-clamp, participates, CPU≡GPU)
+./run_growth.sh -cpu       # CPU runner only (triage)
+```
+**Flagged v1 divergences (behavior-faithful, not class-faithful):** formin kept on the stable tip slot G (v1
+`transferEnd2Plasmid` moves it to the child — topologically equivalent); **DEPOLYMERIZATION/TREADMILLING
+DEFERRED** (the next layer, tied to filament turnover; growth-only/monotonic is what Test B bridging needs —
+`ActinPool.put`/restore NOT added yet); no per-monomer nucleotide (ATP→ADP) state; the stall-force modulation
+(`getPolyRateEnd2`) + the `nodeTorqSpring` align torque deferred (second-layer refinements). Capacity bounds run
+length (split children persist without turnover; a tip with no free slot simply doesn't split — graceful).
+
+**Migration edge (the node + GROWTH are COMPLETE; these wait on v1 / membrane work):** depolymerization /
+treadmilling (the next layer — pointed-end shrink + `ActinPool.put`/restore, tied to filament death/turnover);
+filament death/turnover (freed seeds + split children persist — if a long run accumulates too many, that bounds
+run length: flag); the **membrane formin nucleation** (jba's in-development damped-filament work — the damping
+principle generalizes); branched networks; the dynamic cortex; the optional `nodeTorqSpring` alignment.
+**Post-node horizon:** **Test B** (two nodes' nucleated filaments GROW long enough to bridge → captured by each
+other's myosins → walk together — now reachable: nucleation + growth + capture + walk all exist) and a
+fixed-anchor minimal contractile RING (a ring of nucleating + growing nodes + the contractile-assay tension
+read — all primitives now exist).
 
 Also pending within inc 6: **stronger engagement** for a sharp contractile plateau (down-head filaments /
 multiple minifilaments — a tighter/denser scene would make the chamber box load-bearing) + dynamic

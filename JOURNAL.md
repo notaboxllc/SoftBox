@@ -2,6 +2,45 @@
 
 Last updated: 2026-06-18
 
+## 2026-06-18 — INC 6c: actin POLYMERIZATION — barbed-end elongation (lengthen + split, growth-only) — DONE
+The **first dynamic actin GROWTH in SoftBox** (filaments were static-length through inc 6). Filaments now
+elongate at the **node-side barbed end** — `monomerCount++` at the **[actin]-dependent rate**, **splitting at
+64 monomers** via B1's allocator + a **correct, gated 3-slot chain rewire**, **depleting the actin pool**;
+growth **device-resident**, **default-OFF**, **CPU≡GPU**. **8 gates PASS GPU + CPU; B1/B2 regressions
+bit-identical.** Built from the v1 BEHAVIOR (recon), not a class port. Report:
+`INC6C_POLYMERIZATION_FINDINGS.md`. New files only (`GrowthSystem`/`GrowthStore`/`GrowthHarness`/
+`run_growth.sh`) + 3 Constants additions (no existing value changed) ⇒ prior harnesses byte-unchanged.
+- **The granularity mapping realized: "lengthen the terminal segment, then split."** v1 and SoftBox are the
+  SAME shape (a length-mutable rod carrying `monomerCount`, `segLength=(monomerCount+1)·actinMonoRadius`, the
+  drag-from-monomerCount recompute on both sides) — so growth turned on a **dormant, shape-compatible** path,
+  NOT a biochem layer. `grow` lengthens (`coord += ½·monoRadius·uVec`, end1/node FIXED, end2 outward — v1
+  `incCoord`); at 64 `markSplits`→**B1 allocator (reused VERBATIM)**→`splitWire` shrinks the parent (32, end1
+  fixed), sets the child (32), and rewires `{G, C, Mold}` so the chain stays linear `node—G—C—Mold—…`.
+- **The split's 3-slot chain rewire (recon flag b — the main risk) is CORRECT + gated** (gate 2): lone-tip
+  AND inserted-between-`Mold` cases both give a valid reciprocal linear chain, monomers conserved (64→32+32),
+  geometry consistent (child outward, end1 fixed), **CPU≡GPU bit-identical lifecycle (Δcoord 1.4e-9 µm)**;
+  reciprocity re-verified over an 80k-step Brownian run (gate 8, dt-stable). Distinct tips ⇒ distinct
+  `{G,C,Mold}` ⇒ race-free, no atomics.
+- **Device drag recompute (recon flag d → device):** `Math.log` LOWERS on the PTX backend
+  (`BrownianForceSystem` proves it) ⇒ `recomputeDrag` is a real device per-slot port of `DragTensorSystem.run`
+  (segLength + clamp + the SHARED rod-drag formula), NOT the host all-slots fallback. (Caveat: runs over all
+  slots each cadence — a single-slot variant is a ring-scale optimization, not needed now.)
+- **[actin]-dependent rate + pool (seam #2, gate 3):** `P = onRate·conc·biochemDeltaT`, first-order
+  (P(15µM)/P(7.5µM)=**2.005**); growth READS `ActinPool.conc()` (B2 nucleation was [actin]-INDEPENDENT — growth
+  adds the read) and DEPLETES it per monomer (15.000→10.204 µm conservative); the rate **slows as the pool
+  drains** (first-order). Growing tips = node-bonded segments (`seedNode≥0`, reusing B2's bond).
+- **Growing-end (recon flag a, gate 4):** barbed end = **end1** (consistent with B2's tether); contour
+  0.086→2.50 µm (29×), tip end1 held within 4e-5 µm of the node ⇒ extends OUTWARD. **Drag clamp (flag c,
+  gate 7):** a 3-monomer seed clamps to `stdSegLength·mono` drag — **faithful to v1 FilSegment:409-419** (not
+  a bug). **No-op-when-off (gate 5):** growth OFF ⇒ bit-identical to a static baseline (Δcoord 0.00).
+  **CPU≡GPU (gate 6, full pipeline 12000 steps):** all lifecycle mismatches 0, **Δcoord 0.00 µm**.
+- **Flagged v1 divergences (behavior-faithful):** formin kept on the stable tip slot G (v1 moves it to the
+  child — topologically equivalent); **depolymerization/treadmilling DEFERRED** (next layer, tied to filament
+  turnover; growth-only/monotonic is what Test B bridging needs — `ActinPool.put`/restore not added yet); no
+  per-monomer nucleotide state; the stall-force modulation + `nodeTorqSpring` deferred (second-layer). Capacity
+  bounds run length (split children persist without turnover; a tip with no free slot simply doesn't split).
+- **Horizon:** growth unlocks **Test B** (grow → bridge → capture → walk) + the fixed-anchor contractile ring.
+
 ## 2026-06-18 — INC 6: the NODE in the MINIMAL CONTRACTILE ASSAY (node ⇄ minifilament swap) — DONE
 Qualitative "see the node do contractile work": SWAP the free minifilament for a free, box-confined
 protein NODE at the overlap centre of the contractile assay; its radial myosins bind the two

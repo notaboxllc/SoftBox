@@ -71,4 +71,9 @@ public final class Constants {
     public static final double actinConcInit = 15.0;              // µM  (Env.actinConc_init:405)
     public static final double nodeRadius  = 0.05;                // µm  (Env.nodeRadius_init:430)
     public static final double fracMove    = 0.5;                 // PAIRS move coeff (Env.fracMove_init:134); the node-tether spring coeff
+
+    // --- inc 6c: actin POLYMERIZATION (barbed-end elongation; v1 FilSegment / Env) ---
+    public static final double biochemDeltaT      = 1.0e-3;       // s   (Env.biochemDeltaT_init:111) — the biochem clock
+    public static final double kATPOn2WithFormin  = 11.6;         // µM⁻¹s⁻¹ barbed-end on-rate at a formin/node (Env.java:718)
+    public static final int    minMonomerCt       = 30;           // interior min-length clamp (FilSegment.java:411)
 }
