@@ -2,6 +2,41 @@
 
 Last updated: 2026-06-18
 
+## 2026-06-18 — INC 6c: Test B — the SCPR primitive (two nodes capture-and-pull) — Gate 0 PASS; Stage 1 assembled
+The first **emergent** test (inflection from porting to emergence). **Pure composition** — NO new force law /
+gather / shared-kernel edit; new files only (`TestBScprHarness.java`, `run_testb.sh`) ⇒ prior assays +
+production byte-unchanged, `BoA-v1ref` byte-clean. Report: `INC6C_TESTB_SCPR_FINDINGS.md`.
+- **Gate 0 (GATING) PASS — cross-node capture works.** The one real unknown: does binding reject a foreign-node
+  segment / filter on `seedNode`? **NO — binding is structurally `seedNode`-agnostic.** `seedNode` is absent
+  from `BindingDetectionSystem`/`CrossBridgeSystem`/`SpatialGrid`/`SpatialBodyView` (it lives only in
+  nucleation/growth); the path is geometric, filtered by `ownerStore` (motor↔fil) only. Probe: a filament
+  tagged `seedNode=A` planted at node B's head ⇒ **node-B motor binds it** (boundSeg→A's fil), **bit-identical
+  CPU≡GPU** (deterministic bind, 0 mismatches). Gate 0 PASS ⇒ Stage 1 unblocked (no hard-bail).
+- **Stage 1 — the two-node SCPR assay, assembled + running CPU+GPU.** Two FREE box-confined nodes, each
+  formin-nucleating (`forminsPerNode` random-radial sites) + growing actin, a radial myosin shell, the 12 pN
+  cap + faithful release, containment. **The integration crux SOLVED without a shared-kernel edit:** nucleation
+  + growth both allocate from the SAME `FilamentStore` but their request conventions collide (`emit` clears
+  only `[0,nNodes)`, `markSplits` clears all) ⇒ nucleation gets **dedicated request+rank arrays**, growth uses
+  the store's; two sequential B1-allocator passes share the rebuilt free-list. FREE slots **parked far** keep
+  them off the brute-reachable candidate set (no `filState` binding guard). **CPU≡GPU aggregate-agree** on the
+  **45-task GPU pipeline** (growth+split+nucleation+bind+gather+cross-bridge+chain+3 bodies, device-resident):
+  windowed avgBound GPU 15.60 = CPU 15.60, active-fil 56 = 56.
+- **Readout / headline.** Cross-node captures **OCCUR** stochastically (gap 0.25: peak 4, avg ~2.3); **self-
+  capture DOMINATES** (~30 — a node's own radial filaments sit in its own shell). The **clean net inter-node
+  approach at n=2 is an OBSERVATION, not a clean positive** (exactly the task's predicted SCPR rarity): the
+  net distance is seed/geometry-dependent and tends to drift **apart** — **the partner steals your near-side
+  filaments, so your residual self-pull is toward your far side, away from the partner** (a real n=2 geometric
+  artifact, NOT a sign bug — the pull *direction* is validated by Gate 0 + the contractile assay; same
+  `CrossBridgeSystem`). **Geometric finding:** the `rodDotFil≥0` gate makes cross-capture require the foreign
+  filament to nearly **bridge to the partner node** (the inherent SCPR search cost). The many-node statistical
+  SCPR effect (ring condensation) + ensemble confirmation are the **follow-on**.
+- **Seam #3 (formin-site placement) registered** — `forminSiteDir(node,site)` + `Placement` enum (RANDOM
+  default; SPECIFIED hook pluggable without a refactor). Test B stays on random-radial; specified NOT built.
+- **Self-capture** observed + reported (dominant; confounds the n=2 net readout) — NOT suppressed (follow-on).
+- **Flags:** `-nodebrown` (default 0.05) damps the tiny-node thermal wander to resolve the directed regime
+  (node = a large/slow complex in vivo; node-body scale only, no FDT/Brownian-system touch); `FilamentStore`
+  capacity bounds run length (no turnover yet). New-files-only; prior `run_node.sh` re-ran PASS.
+
 ## 2026-06-18 — INC 6c: actin POLYMERIZATION — barbed-end elongation (lengthen + split, growth-only) — DONE
 The **first dynamic actin GROWTH in SoftBox** (filaments were static-length through inc 6). Filaments now
 elongate at the **node-side barbed end** — `monomerCount++` at the **[actin]-dependent rate**, **splitting at

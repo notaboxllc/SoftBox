@@ -919,15 +919,53 @@ DEFERRED** (the next layer, tied to filament turnover; growth-only/monotonic is 
 (`getPolyRateEnd2`) + the `nodeTorqSpring` align torque deferred (second-layer refinements). Capacity bounds run
 length (split children persist without turnover; a tip with no free slot simply doesn't split — graceful).
 
+**Increment 6c — Test B: the SCPR primitive (two nodes capture-and-pull) — Gate 0 PASS; Stage 1 assembled
+(2026-06-18).** The first **emergent** test (porting→emergence). **Pure COMPOSITION** of validated pieces —
+NO new force law / gather / shared-kernel edit; new files only (`TestBScprHarness`, `run_testb.sh`) ⇒ prior
+assays + production byte-unchanged, `BoA-v1ref` byte-clean. **Gate 0 (GATING) PASS — cross-node capture works:**
+the one real unknown was whether binding rejects a foreign-node segment / filters on `seedNode`; it does NOT —
+`seedNode` is **structurally absent** from `BindingDetectionSystem`/`CrossBridgeSystem`/`SpatialGrid`/
+`SpatialBodyView` (lives only in nucleation/growth), the path is geometric + `ownerStore`-filtered only. Probe:
+a filament tagged `seedNode=A` at node B's head ⇒ node-B motor binds it, **bit-identical CPU≡GPU**. **Stage 1 —
+two FREE box-confined nodes formin-nucleate + grow + capture + (try to) pull**, full per-step loop on CPU + a
+**45-task device-resident GPU TaskGraph**, **CPU≡GPU aggregate-agree** (avgBound 15.60=15.60, active-fil 56=56).
+**Integration crux solved w/o a shared-kernel edit:** nucleation + growth both allocate from one `FilamentStore`
+but `emit` clears only `acceptFlag[0..nNodes)` while `markSplits` clears all ⇒ **nucleation gets dedicated
+request+rank arrays**, growth uses the store's; two sequential B1-allocator passes share the rebuilt free-list;
+FREE slots **parked far** stay off the brute-reachable candidate set (no `filState` binding guard). **Readout:**
+cross-node captures **OCCUR** stochastically (peak ~4); **self-capture DOMINATES** (~30 — own radial filaments
+in own shell). **The clean net inter-node approach at n=2 is an OBSERVATION, not a clean positive** (the task's
+predicted SCPR rarity): net distance is seed/geometry-dependent + tends to drift **apart** — **the partner steals
+your near-side filaments ⇒ residual self-pull is toward your far side, away from the partner** (a real n=2
+geometric artifact, NOT a sign bug — the pull direction is validated by Gate 0 + the contractile assay, same
+`CrossBridgeSystem`; cross-capture needs the foreign filament to nearly bridge to the partner per `rodDotFil≥0`).
+Many-node ring condensation + ensemble confirmation = follow-on. **`-nodebrown`** (default 0.05) damps the tiny
+node sphere's thermal wander to resolve the directed regime (node = large/slow complex in vivo; node-body scale
+only). Report: `INC6C_TESTB_SCPR_FINDINGS.md`; JOURNAL 2026-06-18.
+```
+./run_testb.sh             # GPU + CPU: Gate 0 → CPU≡GPU → Stage 1 (distance trace + cross/self-capture readout)
+./run_testb.sh -cpu        # CPU runner only (triage)
+./run_testb.sh -gate0      # Gate 0 only (the cross-node-capture gating probe)
+./run_testb.sh -cpu -3js threejs_testb   # viewer (two nodes nucleating/growing/capturing)
+```
+
+**Seams registry (parameterized extension points kept OPEN):** **#1 motor/nucleation** (the node's
+motor-function is separable from its nucleation-function — Stage A); **#2 the actin pool** (`ActinPool`, scalar
+now / a depletable field later, behind `available()`/`take()`/`conc()`); **#3 formin-site placement** (Test B —
+`TestBScprHarness.forminSiteDir(node,site)` + the `Placement` enum: RANDOM-radial default, a SPECIFIED inter-site
+arrangement plugs in without a refactor; specified NOT built — jba's call).
+
 **Migration edge (the node + GROWTH are COMPLETE; these wait on v1 / membrane work):** depolymerization /
 treadmilling (the next layer — pointed-end shrink + `ActinPool.put`/restore, tied to filament death/turnover);
 filament death/turnover (freed seeds + split children persist — if a long run accumulates too many, that bounds
 run length: flag); the **membrane formin nucleation** (jba's in-development damped-filament work — the damping
 principle generalizes); branched networks; the dynamic cortex; the optional `nodeTorqSpring` alignment.
-**Post-node horizon:** **Test B** (two nodes' nucleated filaments GROW long enough to bridge → captured by each
-other's myosins → walk together — now reachable: nucleation + growth + capture + walk all exist) and a
-fixed-anchor minimal contractile RING (a ring of nucleating + growing nodes + the contractile-assay tension
-read — all primitives now exist).
+**Post-node horizon:** **Test B — Gate 0 PASS + Stage 1 assembled (2026-06-18, above):** cross-node capture is a
+working primitive (CPU≡GPU); the clean net approach at n=2 is confounded by self-capture (an n=2 artifact —
+ensemble / ring condensation is the follow-on). Remaining horizon: the many-node **fixed-anchor minimal
+contractile RING** (a ring of nucleating + growing nodes + the contractile-assay tension read — all primitives
+now exist; this is where SCPR condensation is a many-node statistical effect, not the n=2 artifact) and Test B
+ensemble/aimed-placement confirmation.
 
 Also pending within inc 6: **stronger engagement** for a sharp contractile plateau (down-head filaments /
 multiple minifilaments — a tighter/denser scene would make the chamber box load-bearing) + dynamic
