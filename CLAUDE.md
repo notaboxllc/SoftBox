@@ -719,10 +719,44 @@ gather, residual 0, pin force purely chain-transmitted (the `jointForceSum`-omis
 (§4/§6b/§7b); spec: `INC6_CONTRACTILITY_ASSAY_SURVEY.md`; JOURNAL 2026-06-17. Optional next: port v1's confining
 chamber box (removes the residual mild drift).
 ```
-./run_contractile.sh            # GPU + CPU cross-check: #1 crux, #4 control, #2 contracts, #3 CPU≡GPU
+./run_contractile.sh            # GPU + CPU cross-check: #1 crux, #4 control, #5 no-op, #6 general, #7 box CPU≡GPU, #2 contracts, #3 CPU≡GPU
 ./run_contractile.sh -cpu       # CPU runner only (triage)
+./run_contractile.sh -cpu -drift 50000   # matched box OFF vs ON (drift + tension)
 ./run_contractile.sh -3js threejs_contractile -steps 30000   # viewer (the v1 contractility panel)
 ```
+
+**Increment 6 — GENERAL IN-VITRO-CHAMBER CONTAINMENT BOX — DONE (2026-06-17).** A general,
+entity-agnostic containment primitive (`ContainmentSystem`) — the simulation-domain boundary, the
+stand-in for the **in vitro experimental chamber** (coverslip / flow-cell) that bounds every in vitro
+assay. **It is SHARED INFRASTRUCTURE over `RigidRodBody`** (like the integrator / Brownian / derive
+systems): one kernel over a body's pose+drag+accumulators, invoked **once per store**, so it confines
+filament segments, motor sub-bodies, minifilament backbones, and (future) nodes with the SAME code —
+confining **POSITIONS, not class identities**. **It is NOT the membrane subsystem** (the deferred
+dynamic cell cortex, inc 7, is a distinct later thing — this is the simple static experimental
+boundary). Faithful port of v1's **free-body box law**: detection `Chamber.amICollidingOuter`
+(`Chamber.java:125-138`) + force `MyoMiniFilament.checkOuterBugCollision` (`:546-560`,
+`mag=nodeFracMove·1e-6·delta·bTransGam.x/collisionDeltaT` at both endpoints ⇒ force+torque, every
+`collisionCheckInt=10` steps via a step-gate so the GPU graph stays fixed; v1 `nodeFracMove=0.5`,
+`collisionDeltaT=1e-4`, R=0.005). **The SAFETY property — no-op when not binding:** a body inside the
+inset box yields zero penetration ⇒ the accumulators are NOT touched (no `+=0`, no write) ⇒ adding it to
+an in-bounds harness is **bit-identical** (the regression guard, by construction). **NOT ported
+(flagged — abstract-from-the-second-instance):** v1's SEPARATE `FilSegment.bugForcesFromInside` law
+(`0.1·min(fturn,ftrans)`, an extra torque-drag clamp) — never exercised (the contractile filaments are
+pinned+inset, never reach a wall); v1 also leaves individual `MyoMotor`s un-boxed (only the
+minifilament backbone is actively confined; v2 matches). 7 contractile gates PASS GPU+CPU (#5 no-op
+bit-identity: HUGE-box ≡ box-off bit-identical; #6 general: a filament seg / motor sub-body / backbone
+each placed past a wall pushed back inward; #7 box CPU≡GPU: force ΔF=0.0 exact, torque float32 FMA
+last-bit) + **9 prior harnesses re-run bit-identical**. **The box is a faithful QUIESCENT no-op in the
+cap-ON contractile scene** (box ON ≡ box OFF bit-identical on every channel): the free minifilament's
+residual ~0.12 µm drift is **AXIAL** (x; box half-wall 1.995 µm, 17× the drift — can't tighten it),
+while the lateral Y/Z the thin box tightly confines (walls 0.145/0.095) stays at 0.070/0.045 — the 12 pN
+cap (c7a2257) already keeps the minifilament inside the chamber. So the chamber is present, faithful,
+and ready (gate #6 proves it fires the instant a body crosses a wall) but does not engage here — it
+neither tightens the axial residual nor perturbs the within-SEM match (the safe outcome; the cap was the
+steadiness fix, the box is the general primitive for its own sake). New: `ContainmentSystem` + contractile
+`-drift` mode + gates #5/#6/#7. Report: `INC6_CONTAINMENT_FINDINGS.md`; JOURNAL 2026-06-17.
+
 Next within inc 6: **stronger engagement** for a sharp contractile plateau (down-head filaments / multiple
-minifilaments) + dynamic assembly/`myoMiniLifetime`; then **6c nodes** (needs a fresh v1 node snapshot per the
-recon settledness gate; reachable on a fixed anchor without the membrane subsystem).
+minifilaments — a tighter/denser scene would make the chamber box load-bearing) + dynamic
+assembly/`myoMiniLifetime`; then **6c nodes** (needs a fresh v1 node snapshot per the recon settledness
+gate; reachable on a fixed anchor without the membrane subsystem).

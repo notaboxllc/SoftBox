@@ -82,6 +82,7 @@ public final class ContractileAssayHarness {
                 case "-koff" -> KOFF = Double.parseDouble(args[++i]);
                 case "-diag" -> diag = true;
                 case "-audit" -> { auditPinForce(dt, Math.max(M, 8000)); return; }
+                case "-drift" -> { driftCompare(dt, Math.max(M, 50000)); return; }
                 default -> {}
             }
         }
@@ -93,9 +94,12 @@ public final class ContractileAssayHarness {
 
         boolean g1 = checkChainInclusiveRead(dt);     // the crux (controlled)
         boolean g4 = checkNoMotorControl(dt);          // no-motor control + all-OFF≡bare-filament
+        boolean g5 = checkContainmentNoOp(dt);         // SAFETY: containment no-op inside ⇒ bit-identical
+        boolean g6 = checkContainmentGeneral(dt);      // GENERAL: confines every RigidRodBody store type
+        boolean g7 = checkContainmentCpuGpu(dt);       // containment CPU≡GPU bit-identical
         boolean g2 = checkItContracts(dt, M);          // the headline: it contracts (both poles engage)
         boolean g3 = checkCpuGpu(dt);                  // CPU≡GPU
-        boolean ok = g1 && g2 && g3 && g4;
+        boolean ok = g1 && g2 && g3 && g4 && g5 && g6 && g7;
         System.out.println("\n=== CONTRACTILE ASSAY VALIDATION " + (ok ? "PASS" : "FAIL") + " ===");
         if (!ok) { System.out.println("BAIL-OUT: a gate failed. Commit nothing."); System.exit(1); }
     }
@@ -128,6 +132,13 @@ public final class ContractileAssayHarness {
         boolean backboneFixed = false;
         // last captured per-step tension (pN), set by the CPU step
         double tA = 0, tB = 0;
+        // The GENERAL in-vitro-chamber containment box (ContainmentSystem). Default ON: the box
+        // confines the FREE minifilament backbone exactly as v1 does (MyoMiniFilament endpoints,
+        // every collisionCheckInt steps). The filaments are pinned + inset by a margin so they never
+        // reach a wall (their box force is identically zero) — faithful to v1, where the box is a
+        // general all-players primitive but only the drifting free body actually feels it here.
+        boolean boxOn = true;
+        FloatArray boxParams;   // [tau, boxX, boxY, boxZ, R, coeff, checkInt]
     }
 
     /** Build one filament chain into `fil` segments [base, base+K), plus-end (end2) pinned at pinTipX.
@@ -243,6 +254,11 @@ public final class ContractileAssayHarness {
         sc.bdAx = -1.0;   // filA pinned +x ⇒ inward −x
         sc.bdBx = +1.0;   // filB pinned −x ⇒ inward +x
 
+        // the in-vitro chamber box (v1 contractility scene: 4.0 × 0.3 × 0.2 µm; nodeFracMove 0.5;
+        // collisionDeltaT 1e-4 with dt 1e-5 ⇒ checkInt 10; inset R = minifilament radius 0.005 µm).
+        sc.boxParams = FloatArray.fromElements(1.0e-4f, 4.0f, 0.3f, 0.2f,
+                (float) MiniFilamentStore.BACKBONE_R, 0.5f, 10f);
+
         sc.fil = fil; sc.mot = mot; sc.dim = dim; sc.mini = mini;
         if (establishBonds) for (int t = 0; t < 4; t++) bindOnly(sc, t);
         return sc;
@@ -294,6 +310,9 @@ public final class ContractileAssayHarness {
                     mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
             CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
             RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+            // in-vitro chamber box: confine the free backbone (v1 MyoMiniFilament.checkOuterBugCollision)
+            if (sc.boxOn && sc.tetherOn && !sc.backboneFixed)
+                ContainmentSystem.confine(bb.coord, bb.uVec, bb.segLength, bb.bTransGam, bb.forceSum, bb.torqueSum, sc.boxParams, mini.bbCounts);
             if (sc.tetherOn && !sc.backboneFixed) RigidRodLangevinIntegrationSystem.integrate(bb.coord, bb.uVec, bb.yVec, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, mini.bbBodyParams, mini.bbCounts);
             DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
             if (sc.tetherOn && !sc.backboneFixed) DerivedGeometrySystem.derive(bb.coord, bb.uVec, bb.yVec, bb.zVec, bb.end1, bb.end2, bb.segLength, mini.bbCounts);
@@ -343,7 +362,7 @@ public final class ContractileAssayHarness {
                     f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.bTransGam, f.bRotGam,
                     f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.params, f.chainParams,
                     f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
-                    sc.pinSeg, sc.pinPt, sc.pinCounts)
+                    sc.pinSeg, sc.pinPt, sc.pinCounts, sc.boxParams)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, mini.bbCounts, f.counts);
         // dynamic binding (catch-slip release + geometric rebind) — skipped in static-bind mode
         if (sc.dynamicBind) {
@@ -369,6 +388,9 @@ public final class ContractileAssayHarness {
           .task("applyHead", CrossBridgeSystem::applyHeadForce, sc.bondData, b.forceSum, b.torqueSum, mot.counts)
           .task("integM", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
           .task("deriveM", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        if (sc.boxOn && !sc.backboneFixed) {
+            tg.task("confineBb", ContainmentSystem::confine, bb.coord, bb.uVec, bb.segLength, bb.bTransGam, bb.forceSum, bb.torqueSum, sc.boxParams, mini.bbCounts);
+        }
         if (!sc.backboneFixed) {
             tg.task("integB", RigidRodLangevinIntegrationSystem::integrate, bb.coord, bb.uVec, bb.yVec, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, mini.bbBodyParams, mini.bbCounts)
               .task("deriveB", DerivedGeometrySystem::derive, bb.coord, bb.uVec, bb.yVec, bb.zVec, bb.end1, bb.end2, bb.segLength, mini.bbCounts);
@@ -392,6 +414,7 @@ public final class ContractileAssayHarness {
         if (withCycle) addW("contract.cycle", pad(nM));
         for (String t : new String[]{ "zeroMot","brownMot","joints","integM","deriveM" }) addW("contract." + t, pad(nMB));
         for (String t : new String[]{ "zeroBb","brownBb","integB","deriveB","bbGather" }) addW("contract." + t, pad(nBb));
+        if (sc.boxOn && !sc.backboneFixed) addW("contract.confineBb", pad(nBb));
         for (String t : new String[]{ "dimer","tether" }) addW("contract." + t, pad(nD));
         for (String t : new String[]{ "zeroFil","chain","filGather","integFil","deriveFil" }) addW("contract." + t, pad(nSeg));
         for (String t : new String[]{ "bbHist","bbScan","bbScatter","filHist","filScan","filScatter","pin" }) addS("contract." + t);
@@ -634,6 +657,181 @@ public final class ContractileAssayHarness {
         boolean ok = detOk && aggOk;
         System.out.println("  => " + (ok ? "PASS" : "*FAIL*") + "\n");
         return ok;
+    }
+
+    // ============================================================== #5 containment no-op (the SAFETY gate)
+    /** The safety/regression gate: containment adds EXACTLY ZERO force inside the box ⇒ adding it to an
+     *  in-bounds scene is bit-identical. (a) unit: a backbone fully inside ⇒ accumulators untouched; pushed
+     *  out ⇒ a nonzero INWARD force. (b) regression: the full dynamic assay with a HUGE box (never triggers)
+     *  is BIT-IDENTICAL to box-off — proving the no-op-inside property over a real trajectory. */
+    static boolean checkContainmentNoOp(double dt) {
+        System.out.println("--- #5 (SAFETY): containment is a NO-OP inside the box ⇒ bit-identical (regression guard) ---");
+        Scene sc = buildScene(dt, 8, 8, false);
+        RigidRodBody bb = sc.mini.backbone; int N = bb.n;
+        sc.mini.setBackboneCounts(0, SEED_BB);   // step 0 ⇒ the collision cadence fires
+        // (a-inside) backbone at origin (fully inside) ⇒ no write at all
+        ChainBendingForceSystem.zeroAccumulators(bb.forceSum, bb.torqueSum, sc.mini.bbCounts);
+        ContainmentSystem.confine(bb.coord, bb.uVec, bb.segLength, bb.bTransGam, bb.forceSum, bb.torqueSum, sc.boxParams, sc.mini.bbCounts);
+        double insideMax = 0;
+        for (int k = 0; k < bb.forceSum.getSize(); k++) insideMax = Math.max(insideMax, Math.abs(bb.forceSum.get(k)) + Math.abs(bb.torqueSum.get(k)));
+        boolean insideNoOp = insideMax == 0.0;
+        // (a-outside) push the backbone center past the +y wall (halfY = 0.145 µm) ⇒ inward (−y) force
+        bb.setCoord(0, 0f, 0.30f, 0f); bb.setUVec(0, 1f, 0f, 0f);
+        ChainBendingForceSystem.zeroAccumulators(bb.forceSum, bb.torqueSum, sc.mini.bbCounts);
+        ContainmentSystem.confine(bb.coord, bb.uVec, bb.segLength, bb.bTransGam, bb.forceSum, bb.torqueSum, sc.boxParams, sc.mini.bbCounts);
+        double fy = bb.forceSum.get(N);   // y-component of body 0 (N=1)
+        boolean pushesIn = fy < 0.0;
+        System.out.printf("  (a) inside ⇒ |force|+|torque| max = %.3e (exactly 0 ⇒ untouched): %s%n", insideMax, insideNoOp ? "ok" : "*FAIL*");
+        System.out.printf("  (a) pushed out +y ⇒ inward force Fy = %.3e N (< 0): %s%n", fy, pushesIn ? "ok" : "*FAIL*");
+        // (b) regression: HUGE box (never triggers) ≡ box-off, bit-identical over a real dynamic trajectory
+        int M = 400;
+        Scene a = buildScene(dt, 8, 8, true); a.mot.nucleotideState.init(MotorStore.NUC_NONE);
+        a.boxOn = true; a.boxParams = FloatArray.fromElements(1.0e-4f, 1.0e6f, 1.0e6f, 1.0e6f, (float) MiniFilamentStore.BACKBONE_R, 0.5f, 10f);
+        Scene b = buildScene(dt, 8, 8, true); b.mot.nucleotideState.init(MotorStore.NUC_NONE); b.boxOn = false;
+        for (int t = 0; t < M; t++) { cpuStep(a, t, true); cpuStep(b, t, true); }
+        double dCoord = maxDiff(a.mini.backbone.coord, b.mini.backbone.coord);
+        double dForce = maxDiff(a.fil.forceSum, b.fil.forceSum);
+        double dBb = maxDiff(a.mini.backbone.forceSum, b.mini.backbone.forceSum);
+        int dBound = 0; for (int m = 0; m < a.mot.nMotors; m++) if (a.mot.boundSeg.get(m) != b.mot.boundSeg.get(m)) dBound++;
+        boolean bitId = dCoord == 0.0 && dForce == 0.0 && dBb == 0.0 && dBound == 0;
+        System.out.printf("  (b) HUGE-box ≡ box-off (%d dynamic steps): Δcoord=%.1e Δfilforce=%.1e Δbbforce=%.1e mismatched-bonds=%d => %s%n",
+                M, dCoord, dForce, dBb, dBound, bitId ? "BIT-IDENTICAL" : "*FAIL*");
+        boolean ok = insideNoOp && pushesIn && bitId;
+        System.out.println("  => " + (ok ? "PASS" : "*FAIL*") + "  (containment adds exactly zero force inside the box)\n");
+        return ok;
+    }
+
+    // ============================================================== #6 general containment (entity-agnostic)
+    /** The box is entity-agnostic: it confines ANY RigidRodBody store. Place a representative body of each
+     *  v2 store type (filament segment / motor sub-body / minifilament backbone) past a wall, run
+     *  confine+integrate, and confirm each is pushed back toward inside — proving one kernel over positions,
+     *  not class identities. */
+    static boolean checkContainmentGeneral(double dt) {
+        System.out.println("--- #6 (GENERAL): the box confines every RigidRodBody store type (positions, not classes) ---");
+        Scene sc = buildScene(dt, 8, 8, false);
+        boolean fOk = confinePullsIn("filament segment", sc.fil.coord, sc.fil.uVec, sc.fil.yVec, sc.fil.segLength,
+                sc.fil.bTransGam, sc.fil.bRotGam, sc.fil.forceSum, sc.fil.torqueSum, sc.fil.randForce, sc.fil.randTorque,
+                sc.boxParams, sc.fil.params, sc.fil.counts);
+        boolean mOk = confinePullsIn("motor sub-body", sc.mot.body.coord, sc.mot.body.uVec, sc.mot.body.yVec, sc.mot.body.segLength,
+                sc.mot.body.bTransGam, sc.mot.body.bRotGam, sc.mot.body.forceSum, sc.mot.body.torqueSum, sc.mot.body.randForce, sc.mot.body.randTorque,
+                sc.boxParams, sc.mot.bodyParams, sc.mot.counts);
+        boolean bOk = confinePullsIn("minifilament backbone", sc.mini.backbone.coord, sc.mini.backbone.uVec, sc.mini.backbone.yVec, sc.mini.backbone.segLength,
+                sc.mini.backbone.bTransGam, sc.mini.backbone.bRotGam, sc.mini.backbone.forceSum, sc.mini.backbone.torqueSum, sc.mini.backbone.randForce, sc.mini.backbone.randTorque,
+                sc.boxParams, sc.mini.bbBodyParams, sc.mini.bbCounts);
+        boolean ok = fOk && mOk && bOk;
+        System.out.println("  => " + (ok ? "PASS" : "*FAIL*") + "\n");
+        return ok;
+    }
+    /** Place body 0 past the +y wall, run confine + one integrate step (no Brownian), confirm it moves inward. */
+    static boolean confinePullsIn(String name, FloatArray coord, FloatArray uVec, FloatArray yVec, FloatArray segLength,
+                                  FloatArray bTransGam, FloatArray bRotGam, FloatArray forceSum, FloatArray torqueSum,
+                                  FloatArray randForce, FloatArray randTorque, FloatArray boxParams, FloatArray bodyParams, IntArray counts) {
+        int N = coord.getSize() / 3;
+        counts.set(1, 0);   // step 0 ⇒ cadence fires
+        coord.set(0, 0f); coord.set(N, 0.30f); coord.set(2 * N, 0f);          // body 0 center at y=0.30 (> halfY 0.145)
+        uVec.set(0, 1f); uVec.set(N, 0f); uVec.set(2 * N, 0f);
+        yVec.set(0, 0f); yVec.set(N, 1f); yVec.set(2 * N, 0f);
+        randForce.init(0f); randTorque.init(0f);
+        double y0 = coord.get(N);
+        ChainBendingForceSystem.zeroAccumulators(forceSum, torqueSum, counts);
+        ContainmentSystem.confine(coord, uVec, segLength, bTransGam, forceSum, torqueSum, boxParams, counts);
+        double fy = forceSum.get(N);
+        RigidRodLangevinIntegrationSystem.integrate(coord, uVec, yVec, forceSum, torqueSum, randForce, randTorque, bTransGam, bRotGam, bodyParams, counts);
+        double y1 = coord.get(N);
+        boolean in = fy < 0.0 && y1 < y0;
+        System.out.printf("  %-22s y: %.4f → %.4f µm (Fy=%.2e N, inward) => %s%n", name, y0, y1, fy, in ? "ok" : "*FAIL*");
+        return in;
+    }
+
+    // ============================================================== #7 containment CPU≡GPU (bit-identical)
+    /** The containment kernel is non-chaotic single-eval ⇒ bit-identical CPU↔GPU (the 6a/6b/gather standard).
+     *  Build a standalone RigidRodBody bed straddling several walls and compare the GPU 1-task confine to CPU. */
+    static boolean checkContainmentCpuGpu(double dt) {
+        System.out.println("--- #7: containment CPU≡GPU (bit-identical) ---");
+        if (cpu) { System.out.println("  skipped (-cpu)\n"); return true; }
+        int n = 8;
+        FloatArray boxParams = FloatArray.fromElements(1.0e-4f, 4.0f, 0.3f, 0.2f, (float) MiniFilamentStore.BACKBONE_R, 0.5f, 10f);
+        IntArray counts = IntArray.fromElements(n, 0, 0, n);   // step 0 ⇒ fires
+        RigidRodBody cpuB = makeWallBed(n);
+        RigidRodBody gpuB = makeWallBed(n);
+        // CPU
+        ChainBendingForceSystem.zeroAccumulators(cpuB.forceSum, cpuB.torqueSum, counts);
+        ContainmentSystem.confine(cpuB.coord, cpuB.uVec, cpuB.segLength, cpuB.bTransGam, cpuB.forceSum, cpuB.torqueSum, boxParams, counts);
+        // GPU (1-task plan)
+        ChainBendingForceSystem.zeroAccumulators(gpuB.forceSum, gpuB.torqueSum, counts);
+        TaskGraph tg = new TaskGraph("confChk")
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION, gpuB.coord, gpuB.uVec, gpuB.segLength, gpuB.bTransGam, gpuB.forceSum, gpuB.torqueSum, boxParams)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, counts)
+            .task("confine", ContainmentSystem::confine, gpuB.coord, gpuB.uVec, gpuB.segLength, gpuB.bTransGam, gpuB.forceSum, gpuB.torqueSum, boxParams, counts)
+            .transferToHost(DataTransferMode.UNDER_DEMAND, gpuB.forceSum, gpuB.torqueSum);
+        sched = new GridScheduler(); addW("confChk.confine", pad(n));
+        TornadoExecutionPlan plan = new TornadoExecutionPlan(tg.snapshot());
+        plan.withGridScheduler(sched).execute().transferToHost(gpuB.forceSum, gpuB.torqueSum);
+        double dF = maxDiff(cpuB.forceSum, gpuB.forceSum), dT = maxDiff(cpuB.torqueSum, gpuB.torqueSum);
+        double maxF = 0, maxT = 0;
+        for (int k = 0; k < cpuB.forceSum.getSize(); k++) { maxF = Math.max(maxF, Math.abs(cpuB.forceSum.get(k))); maxT = Math.max(maxT, Math.abs(cpuB.torqueSum.get(k))); }
+        // force EXACTLY bit-identical; torque is the cross-product r×F where the GPU may FMA-contract ⇒ a
+        // float32 last-bit difference (≪ float32 eps · |T|) — "bit-identical to printed precision" (CLAUDE.md).
+        // (Absolute floor 1e-25 N·m ≫ the FMA residual ~1e-34 and ≪ the per-endpoint torque ~1e-18.)
+        boolean ok = dF == 0.0 && dT < Math.max(1.0e-25, 1.0e-5 * maxT);
+        System.out.printf("  %d-body wall bed (mix of inside/over each wall): max wall force=%.3e N, torque=%.3e N·m; ΔF=%.1e (exact) ΔT=%.1e (float32 last-bit) => %s%n",
+                n, maxF, maxT, dF, dT, ok ? "BIT-IDENTICAL" : "*FAIL*");
+        System.out.println("  => " + (ok ? "PASS" : "*FAIL*") + "\n");
+        return ok;
+    }
+    /** A standalone bed: body 0 inside; bodies 1-6 each pushed past one wall (±x,±y,±z); body 7 a corner. */
+    static RigidRodBody makeWallBed(int n) {
+        RigidRodBody bd = new RigidRodBody(n);
+        double[] g = DragTensorSystem.rodDragSI(MiniFilamentStore.BACKBONE_LEN, MiniFilamentStore.BACKBONE_R);
+        float[][] pos = { {0,0,0}, {2.1f,0,0}, {-2.1f,0,0}, {0,0.25f,0}, {0,-0.25f,0}, {0,0,0.18f}, {0,0,-0.18f}, {2.1f,0.25f,0.18f} };
+        // TILTED long axis ⇒ the two endpoints penetrate asymmetrically ⇒ a genuinely nonzero net torque
+        // (an axial uVec would let the symmetric endpoint torques cancel, hiding the torque-path check).
+        double ti = 1.0 / Math.sqrt(1 + 0.5 * 0.5 + 0.3 * 0.3);
+        float ux = (float) ti, uy = (float) (0.5 * ti), uz = (float) (0.3 * ti);
+        float yx = (float) (-0.5 * ti / 1.0), yy = (float) ti, yz = 0f;   // a perp seed (re-orthonormalized by derive)
+        for (int i = 0; i < n; i++) {
+            float[] p = pos[i % pos.length];
+            bd.segLength.set(i, (float) MiniFilamentStore.BACKBONE_LEN);
+            bd.setCoord(i, p[0], p[1], p[2]); bd.setUVec(i, ux, uy, uz); bd.setYVec(i, yx, yy, yz);
+            int x = bd.planeX(i), y = bd.planeY(i), z = bd.planeZ(i);
+            bd.bTransGam.set(x, (float) g[0]); bd.bTransGam.set(y, (float) g[1]); bd.bTransGam.set(z, (float) g[2]);
+            bd.bRotGam.set(x, (float) g[3]); bd.bRotGam.set(y, (float) g[4]); bd.bRotGam.set(z, (float) g[5]);
+        }
+        return bd;
+    }
+
+    // ============================================================== -drift: matched box ON vs OFF (gate #3 evidence)
+    /** The contractile-assay payoff: the box tightens the free minifilament's residual drift WITHOUT
+     *  regressing the within-SEM tension match. Run the full assay box-OFF then box-ON (CPU, matched scene),
+     *  reporting backbone-endpoint excursion + steady tension + avgBound for each. */
+    static void driftCompare(double dt, int M) {
+        System.out.printf("--- matched box OFF vs ON (CPU, %d steps): drift tightening + tension within-SEM ---%n", M);
+        double[] off = runForStats(dt, M, false);
+        double[] on  = runForStats(dt, M, true);
+        System.out.printf("%n  %-10s %12s %12s%n", "channel", "box OFF", "box ON");
+        System.out.printf("  %-10s %12.4f %12.4f   pN (steady mean; v1 ref 1.84)%n", "tension", off[0], on[0]);
+        System.out.printf("  %-10s %12.4f %12.4f   pN (peak; v1 ref 3.32)%n", "peak", off[1], on[1]);
+        System.out.printf("  %-10s %12.4f %12.4f   heads (avgBound; v1 ref 5.38)%n", "avgBound", off[2], on[2]);
+        System.out.printf("  %-10s %12.4f %12.4f   µm (max |y| endpoint; wall 0.145)%n", "|y|max", off[3], on[3]);
+        System.out.printf("  %-10s %12.4f %12.4f   µm (max |z| endpoint; wall 0.095)%n", "|z|max", off[4], on[4]);
+        System.out.printf("%n  drift tightened: |y| %.4f→%.4f, |z| %.4f→%.4f µm (box ON ⇒ tighter hold)%n", off[3], on[3], off[4], on[4]);
+        System.out.printf("  tension change: %.4f → %.4f pN (within-SEM of v1 1.84 if both ~1.5–2.5)%n", off[0], on[0]);
+    }
+    /** {meanTension, peakTension, avgBound, |y|max, |z|max} over a full run (2nd-half tension/bound). */
+    static double[] runForStats(double dt, int M, boolean box) {
+        Scene sc = buildScene(dt, 8, 8, true); sc.boxOn = box; sc.mot.nucleotideState.init(MotorStore.NUC_NONE);
+        RigidRodBody bb = sc.mini.backbone; int K = sc.segPerFil;
+        Stats st = new Stats(); long warm = M / 2, sn = 0; double tsum = 0, bsum = 0;
+        double yMax = 0, zMax = 0;
+        for (int t = 0; t < M; t++) {
+            cpuStep(sc, t, true);
+            yMax = Math.max(yMax, Math.max(Math.abs(bb.end1Y(0)), Math.abs(bb.end2Y(0))));
+            zMax = Math.max(zMax, Math.max(Math.abs(bb.end1Z(0)), Math.abs(bb.end2Z(0))));
+            int bnd = boundOn(sc, sc.filA0, K) + boundOn(sc, sc.filB0, K);
+            st.accumulate(sc.tA, sc.tB, bnd, t);
+            if (t >= warm) { tsum += 0.5 * (Math.abs(sc.tA) + Math.abs(sc.tB)); bsum += bnd; sn++; }
+        }
+        return new double[]{ tsum / sn, st.peakTension, bsum / sn, yMax, zMax };
     }
 
     // ============================================================== Step-3: tension-read force-coverage audit
