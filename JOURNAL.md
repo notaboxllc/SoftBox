@@ -2,6 +2,42 @@
 
 Last updated: 2026-06-18
 
+## 2026-06-18 — INC 6c STAGE B1: the FilamentStore runtime-birth lifecycle — DONE
+The **first dynamic filament creation in SoftBox** (`FilamentStore` was fully static through inc 6). **All 3
+gates PASS GPU + CPU; every prior harness bit-identical.** Report: `INC6C_NODE_STAGEB1_FINDINGS.md`.
+- **What:** a per-slot birth lifecycle on the foundational entity (recon §2 risk). v2-side infrastructure,
+  INDEPENDENT of v1's churning nucleation specifics, so it proceeds now, validated with a SYNTHETIC birth.
+  B2 later wires the node's real nucleation as the birth SOURCE.
+- **`filState` sentinel** (mirrors crosslinker `linkState`): `>=0` ACTIVE / `<0` FREE. **Default all-ACTIVE
+  (0)** ⇒ every existing harness unaffected (no-op-when-all-active).
+- **Allocator = inc-5 scan-rank free-list reused VERBATIM, one level up** (`FilamentBirthSystem`): the two
+  prefix sums run `CrossBridgeSystem.csrScan` byte-unchanged; `freeFlags`/`freeScatter` are the inc-5
+  companions; `allocate` claims `freeList[rank<nFree]` (overflow-clamped), writes the FIXED-LENGTH seed pose
+  (v1 actinSeed=3 ⇒ ≈10.8 nm; growth deferred), turns on Brownian, flips FREE→ACTIVE. Distinct ranks →
+  distinct slots ⇒ race-free, no atomics ⇒ **bit-identical CPU↔GPU**. A born seed = a free rod (neighbors
+  -1; v1 nucleates one FilSegment born bonded to the NODE, not a segment).
+- **THE LOAD-BEARING DECISION — the active-guard is DATA-DRIVEN, not a per-kernel branch.** A FREE slot is
+  inert by its data (`markFree` zeroes brownTransScale/brownRotScale ⇒ no Brownian; neighbors -1 ⇒ free rod,
+  not a neighbor of anyone; parked inside the box ⇒ containment no-ops; forceSum=0 ⇒ integrator v=0). So
+  **NO shared device kernel is touched** (integrate/Brownian/derive/chain/containment/gather byte-unchanged)
+  ⇒ the no-op-when-all-active guarantee is BY CONSTRUCTION (prior harnesses byte-unchanged). The ONE branch
+  B2 will add — keeping a FREE slot out of the broad-phase (publish-time `filState` guard) — is deferred;
+  B1's synthetic harness parks FREE slots off the candidate set by geometry (gate C proves it).
+- **Gates (`run_filbirth.sh`, both runners):** A allocator — free-list index order, distinct-slot/no-double-
+  alloc, born payload, slot-stability (Design A), overflow clamp, same-step reuse after a synthetic free,
+  CPU≡GPU bit-identical (Δ=0). B born@0 ≡ preplaced bit-identical (Brownian off AND on, max|Δpose|=0) +
+  FREE slot inert (stays exactly parked) + non-J filaments unperturbed (Δ=0) + participates after birth +
+  CPU≡GPU (Δ=0). C a born filament is bound (0 pre-birth → 8 post-birth) + gathers cross-bridge load
+  (|F|>0, gather==brute Δ=0); a parked FREE filament is NOT bound (geometry excludes it).
+- **Regression (no-op-when-all-active):** node, minifil, dimer, dimerglide, miniglide, stroke, xbridge,
+  motor, contractile, xlink all re-run PASS; foundational FDT within 5%. `BoA-v1ref` byte-clean; production
+  untouched.
+- **New files only + 1 additive edit:** `FilamentBirthSystem`, `FilamentBirthHarness`, `run_filbirth.sh`;
+  `FilamentStore` gained the sentinel + allocator scratch + helpers (constructor delegates; callers unchanged).
+- **For the planner (B2):** replace the synthetic driver with the per-node nucleation emitter (rate
+  `kNodeNuc·dt`, pre-bonded, fills the same request arrays; allocator unchanged); re-confirm nucleation
+  specifics vs a fresh `ProteinNode.java` snapshot; add the publish-time `filState` guard. Growth deferred.
+
 ## 2026-06-18 — INC 6c STAGE A: the protein NODE entity (radial motor-bundle, fixed anchor) — DONE
 The protein node built FRESH as a motor-bundle, reusing the SETTLED minifilament machinery. **All 7 gates
 PASS GPU + CPU.** Report: `INC6C_NODE_STAGEA_FINDINGS.md`.

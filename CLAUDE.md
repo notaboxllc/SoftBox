@@ -789,13 +789,42 @@ untouched; node default-off. Report: `INC6C_NODE_STAGEA_FINDINGS.md`; JOURNAL 20
 ./run_node.sh -cpu         # CPU runner only (triage)
 ./run_node.sh -3js threejs_node -n 3   # viewer (radially-splayed nodes)
 ```
-**Increment 6c Stage B — PENDING (the nucleation-function):** runtime filament BIRTH on `FilamentStore`
-(today fully static) — add a `filState` lifecycle sentinel + per-system active guards + reuse the inc-5
-scan-rank allocator + stochastic-formation pipeline, with a per-node nucleation emitter (rate `kNodeNuc·dt`,
-born pre-bonded). **Re-confirm the nucleation specifics (rate, pre-bond geometry, formin release) against a
-fresh `ProteinNode.java` snapshot** at build (the recon settledness gate — that file still has physics churn).
-Growth/polymerization (monomer-vs-segment granularity) is a SECOND new capability, likely deferred; seam #2
-(the actin pool behind one accessor) flagged for then.
+**Increment 6c Stage B1 — the FilamentStore runtime-birth lifecycle — DONE (2026-06-18).** The **first dynamic
+filament creation in SoftBox** (`FilamentStore` was fully static through inc 6; recon §2 risk). v2-side
+infrastructure INDEPENDENT of v1's churning nucleation specifics, validated with a SYNTHETIC birth (B2 wires the
+node's real nucleation as the birth SOURCE). **`filState` sentinel** (mirrors crosslinker `linkState`): `>=0`
+ACTIVE / `<0` FREE, **default all-ACTIVE** ⇒ existing harnesses unaffected. **Allocator = the inc-5 scan-rank
+free-list reused VERBATIM, one level up** (`FilamentBirthSystem`: `freeFlags`/`freeScatter` + `CrossBridge.csrScan`
+×2 byte-unchanged; `allocate` claims `freeList[rank<nFree]`, writes the FIXED-LENGTH seed pose (v1 actinSeed=3 ⇒
+≈10.8 nm; growth deferred), turns on Brownian, flips FREE→ACTIVE; race-free, no atomics ⇒ bit-identical CPU↔GPU).
+A born seed = a free rod (neighbors -1; v1 nucleates one FilSegment born bonded to the NODE). **THE LOAD-BEARING
+DECISION — the active-guard is DATA-DRIVEN, not a per-kernel branch:** a FREE slot is inert by its data
+(`markFree` zeroes brownTransScale/brownRotScale ⇒ no Brownian; neighbors -1 ⇒ free rod; parked inside box ⇒
+containment no-ops; forceSum=0 ⇒ integrator v=0), so **NO shared device kernel is touched**
+(integrate/Brownian/derive/chain/containment/gather byte-unchanged) ⇒ the **no-op-when-all-active guarantee is BY
+CONSTRUCTION** (prior harnesses byte-unchanged). The ONE branch B2 will add — keeping a FREE slot out of the
+broad-phase (a publish-time `filState` guard) — is deferred; B1 parks FREE slots off the candidate set by geometry
+(gate C proves a parked FREE filament is NOT bound). 3 gates PASS GPU+CPU: (A) allocator — free-list index order,
+distinct-slot/no-double-alloc, born payload, slot-stability (Design A), overflow clamp, same-step reuse after a
+synthetic free, CPU≡GPU Δ=0; (B) **born@0 ≡ preplaced bit-identical** (Brownian off AND on, max|Δpose|=0) + FREE
+slot inert (stays exactly parked) + non-J filaments unperturbed (Δ=0) + participates after birth + CPU≡GPU Δ=0;
+(C) a born filament is bound (0→8 motors) + gathers cross-bridge load (gather==brute Δ=0), a parked FREE filament
+is not bound. **Regression (no-op-when-all-active):** node/minifil/dimer/dimerglide/miniglide/stroke/xbridge/
+motor/contractile/xlink all re-run PASS + foundational FDT within 5%. New files only + 1 additive `FilamentStore`
+edit; `BoA-v1ref` byte-clean; production untouched. Report: `INC6C_NODE_STAGEB1_FINDINGS.md`; JOURNAL 2026-06-18.
+```
+./run_filbirth.sh           # GPU + CPU cross-check (allocator, born≡preplaced, inert free slot, binding+gather)
+./run_filbirth.sh -cpu      # CPU runner only (triage)
+```
+**Increment 6c Stage B2 — PENDING (the nucleation-EMITTER):** replace ONLY the synthetic birth driver with the
+node's nucleation — a per-node emitter (rate `kNodeNuc·dt`, born pre-bonded at the node, seed ≈10.8 nm) fills the
+SAME `acceptFlag`/`reqCoord`/`reqUVec`/`reqYVec` request arrays; the B1 scan-rank allocator rides underneath
+UNCHANGED. **Re-confirm the nucleation specifics (rate, pre-bond geometry, formin release) against a fresh
+`ProteinNode.java` snapshot** at build (the recon settledness gate — that file still has physics churn). Add the
+**publish-time `filState` guard** (the one deferred shared-kernel touch; itself no-op-when-all-active) so a FREE
+slot is kept out of the broad-phase in a live binding scene. Growth/polymerization (monomer-vs-segment
+granularity) is a SECOND new capability, likely deferred; seam #2 (the actin pool behind one accessor) flagged
+for then.
 
 Also pending within inc 6: **stronger engagement** for a sharp contractile plateau (down-head filaments /
 multiple minifilaments — a tighter/denser scene would make the chamber box load-bearing) + dynamic
