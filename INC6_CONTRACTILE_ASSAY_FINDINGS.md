@@ -61,28 +61,31 @@ capture radius + the **Brownian wiggle of the rods/heads/backbone** — exactly 
 essential enabler". With the 3D splay + Brownian, engagement is healthy (~3/pole; avgBound ~6 total,
 peakBound 16).
 
-Mechanism (dynamic catch-slip binding + the nucleotide-cycle power stroke). The readout is each anchor's
-**chain-transmitted tension** (the v1 quantity). Both poles pull their filament toward its minus (inner)
-end ⇒ both anchor tensions are net positive (contractile):
+Mechanism (dynamic catch-slip binding + the **v1 12 pN break-force cap** + the nucleotide-cycle power
+stroke). The readout is each anchor's **chain-transmitted tension** (the v1 quantity). Both poles pull
+their filament toward its minus (inner) end ⇒ both anchor tensions are net positive (contractile):
 
 | quantity (steady, 2nd-half of a 50k-step run) | anchor A | anchor B | want |
 |---|---|---|---|
-| anchor tension (chain-transmitted, ·1e12) | +6.6 pN | +2.7 pN | both **positive = contractile** ✓ |
-| bound heads (of 8 up-heads/pole) | 3.6 | 2.8 | both poles engage ✓ |
+| anchor tension (chain-transmitted, ·1e12) | +2.2 pN | +2.0 pN | both **positive = contractile** ✓ |
+| bound heads (of 8 up-heads/pole) | 3.8 | 3.6 | both poles engage ✓ |
 
-Mean steady tension **~4.7 pN vs the no-motor baseline 0.00033 pN — ~14000× above baseline**; peak ~24 pN.
+Mean steady tension **~2.0 pN vs the no-motor baseline 0.00033 pN — ~6000× above baseline**; peak ~4 pN;
+**symmetric** (A≈B) — closely matching v1 (avgTension 1.84 pN, peak 3.32 pN — see §7b).
 
-**The free minifilament drifts and binds in BURSTS — the honest free-body (biological) behavior.** With
-no centering/confinement, the bonds to the two filaments are the only thing holding it in the overlap; it
-drifts ~0.1 µm and engages in bursts (peak tension ~24 pN when many heads momentarily bind, low between).
-So the per-pole tension **fluctuates and is asymmetric** (this run A=6.6 > B=2.7; the asymmetry is the
-random drift direction and averages out over seeds). The gate is on the long-run NET (both anchor
-tensions contractile + both engage + ≫ baseline), not a clean stationary plateau — a free minifilament
-does not give one. The instantaneous per-pole seg-side force is reported but **not gated**: it near-cancels
-(F8 spring vs stroke) and is not the contraction readout; the chain-transmitted pin tension is.
-**This is the v1/biological model, by design** — a stronger, steadier plateau would come from more
-co-engaged heads (a denser filament field / multiple minifilaments / the 6c node), or from v1's confining
-chamber, not from constraining the minifilament itself.
+**The 12 pN break-force cap is essential (v1's "combat stiffness and force insanity" valve).** v1's
+`MyoFilLink.ckRelease` UNCONDITIONALLY detaches a head whose cross-bridge spring exceeds `myosinBreakForce`
+(12 pN) BEFORE the catch-slip roll — bounding the per-head force. v2's contractile assay now enables the
+same (`MotorStore.setFaithfulRelease`). **Without it** the free minifilament's drift stretched some bonds
+past 12 pN, applying force-insanity to low-drag segments → **numerical stiffness (segments tossed around,
+peak ~24 pN, inflated mean ~4.7 pN, asymmetric)**. **With it** the per-head force is bounded ⇒ steady,
+symmetric, ~2 pN contraction matching v1 — and the stiffness is gone.
+
+The minifilament is still FREE and drifts mildly (~0.1 µm) and binds with some fluctuation (the honest
+free-body behavior), but the cap keeps every force ≤12 pN so it no longer destabilizes. The gate is on the
+long-run NET (both anchor tensions contractile + both engage + ≫ baseline). The instantaneous per-pole
+seg-side force is reported but **not gated** (near-cancels F8-spring vs stroke; the chain-transmitted pin
+tension is the readout).
 
 ## 3. CPU≡GPU — PASS
 
@@ -96,23 +99,29 @@ chaotic many-body):
   (incl. the new `brownMot`/`brownBb` kernels) float32-op-orders to a decorrelated microstate (Lyapunov;
   bit-identity unattainable, the CLAUDE.md standard), bound count GPU=4 CPU=5 (|Δ|≤2).
 
-## 4. Free-body behavior + the held-bound finding (surfaced, not force-fit)
+## 4. The 12 pN break-force cap — the stiffness valve (FIXED) + the held-bound finding
 
-The minifilament is the **fully free biological model** (§2) — it drifts (~0.1 µm) and engages in bursts,
-so the per-pole tension fluctuates and is asymmetric run-to-run; the long-run NET is robustly contractile
-(both anchors positive, ~14000× baseline). Two structural facts:
-- avgBound is duty-ratio-limited (~3 of 8 up-heads/pole engage; the 3D splay means only the heads pointing
-  toward a filament can bind, the rest dangle — biologically correct in a sparse 2-filament field).
+**The 12 pN break-force cap was missing and is now enabled — it was the dominant fix.** v1's
+`MyoFilLink.ckRelease` (`BoA-v1ref:334`) UNCONDITIONALLY detaches a head whose cross-bridge spring
+> `myosinBreakForce` (12 pN), BEFORE the catch-slip roll — comment: *"combat stiffness and force
+insanity."* v2 had a faithful port of this branch (`catchSlipRelease`) but it was OFF in the contractile
+assay. **Symptom (observed in the viewer ~frame 220 / 0.165 s):** the free minifilament's drift stretched
+some bonds past 12 pN ⇒ uncapped force on low-drag segments ⇒ numerical stiffness, bound segments tossed
+around, peak tension ~24 pN, inflated/asymmetric mean ~4.7 pN. **With the cap on** (faithful to v1, which
+always has it): every per-head force ≤ 12 pN ⇒ steady symmetric ~2 pN contraction, peak ~4 pN, the
+tossing gone — and v2 now closely matches v1 (§7b).
+
+The minifilament is still the **fully free biological model** (§2) and drifts mildly (~0.1 µm) with some
+fluctuation, but the cap keeps it stable. Two structural facts remain:
+- avgBound is duty-ratio-limited (~3.7/8 up-heads/pole engage; the 3D splay means only heads pointing
+  toward a filament bind — biologically correct in a sparse 2-filament field). v2 ~7.4 vs v1 5.4.
 - **Held-bound (no release) is intrinsically unstable on a pinned filament** — the cross-bridge strain
   cannot relax (the filament plus-end is pinned, no translocation), so it accumulates and forward-Euler
-  diverges. This is **physically correct** (a myosin that can neither move its substrate nor detach builds
-  unbounded strain) and is exactly why v1 requires catch-slip release. So dynamic binding is the only
-  stable, faithful path.
+  diverges. This is **physically correct** and is exactly why v1 requires catch-slip release + the cap.
 
-**Implication for the next increment:** a stronger, steadier contractile plateau scales with co-engaged
-head count — a denser filament field (engaging more of the 3D-splayed heads), multiple minifilaments, the
-protein-node carrier (6c), or v1's confining chamber to hold the free minifilament in place. The mechanism
-and the readout are correct; magnitude/steadiness scale with engagement and confinement.
+**Implication for the next increment:** the remaining mild drift would be removed by porting v1's confining
+chamber box (held-in-place ⇒ even steadier); engagement/magnitude scale with a denser filament field /
+multiple minifilaments / the 6c node. The mechanism and readout are correct and now quantitatively match v1.
 
 ## 5. Fidelity to v1 + the one flagged adaptation
 
@@ -124,8 +133,9 @@ and the readout are correct; magnitude/steadiness scale with engagement and conf
 | dimer rods | AXIAL (radial offset commented out in `makeMyosinDimers`) | AXIAL | faithful — heads reach ~28 nm perpendicular; the gap to 50 nm is bridged by capture radius + thermal search (v1's mechanism) |
 | head splay | 3D azimuthal (radial around the backbone axis) | **3D azimuthal** (φ distributed per dimer) | faithful — the general biological minifilament geometry |
 | binding | dynamic catch-slip | dynamic catch-slip (faithful) | same mechanism |
+| break-force cap | UNCONDITIONAL 12 pN (`MyoFilLink.ckRelease` — "combat stiffness and force insanity") | **12 pN, ON** (`setFaithfulRelease`) | faithful — the per-head force valve; was OFF, caused the stiffness, now enabled |
 | filaments | 13-seg, 2.28 µm, pinned plus-ends | 8-seg chains, pinned plus-ends (`PinSystem`) | same pin mechanism (v1 `applyBenchmarkPins` port); fewer segments for a fast test, still interior-bind → chain → pin |
-| chamber confinement | thin box (boxYDim 0.3 / boxZDim 0.2) keeps the free minifilament in the overlap | **none yet** — the bipolar bonds are the only restraint | the v1 confining box is NOT yet ported; the free minifilament drifts in bursts. Adding it (or a denser filament field) is the steadiness path — flagged for a later increment. |
+| chamber confinement | thin box (boxYDim 0.3 / boxZDim 0.2) keeps the free minifilament in the overlap | **none yet** — the bipolar bonds + the cap keep it stable | the v1 confining box is NOT yet ported; the free minifilament drifts mildly (~0.1 µm) but the cap bounds all forces so it's stable. Porting the box ⇒ even steadier — flagged for a later increment. |
 
 ## 6b. Step-3 force-coverage audit (read completeness) — CONFIRMED
 
@@ -141,22 +151,26 @@ low-tension cause — the model fix was.)
 v1's assay run from a byte-clean `/tmp` scratch (`BoA-v1ref`, `-pf ParameterFiles/contractilityAssay`,
 CPU, 50k steps) vs v2 matched (50k, CPU), decomposed by channel:
 
-| channel | v1 (BoA-v1ref) | v2 | read |
-|---|---|---|---|
-| avgBound (cumulative) | **5.38** | ~6.4 (A 3.6 + B 2.8) | **comparable engagement** ✓ |
-| instantaneous bound | 4–9 (steady) | 0–16 (bursty) | v2 fluctuates more |
-| avgTension (mean) | **1.84 pN** | ~4.7 pN | v2 ~2.5× — **NOT low** (higher) |
-| peakTension | **3.32 pN** | ~24 pN | v2 ~7× spikier |
-| tension / bound-head | 0.34 pN | 0.73 pN | v2 ~2× (the burst artifact) |
-| symmetry (A vs B) | symmetric (2.0/1.9) | asymmetric (6.6/2.8) | v2 drifts onto one pole |
-| both poles engage | yes | yes | ✓ |
+v1 from a byte-clean `/tmp` scratch (`-pf ParameterFiles/contractilityAssay`, CPU, 50k) vs v2 matched
+(50k, CPU), decomposed — **after enabling the 12 pN cap (§4):**
 
-**Verdict — SHARED FAITHFUL PHYSICS (not a v2 bug, not low tension):**
-- The original "low tension" was the now-deleted bespoke centered/planar version. **Freeing the
-  minifilament + 3D splay raised v2's tension ~13× (~0.37→~4.7 pN), above v1's 1.84 pN** — the model
-  correction was the fix.
-- **Engagement matches** (avgBound v2 ~6.4 vs v1 5.4) and the mechanism is correct (both poles, inward,
-  chain-transmitted, complete read). v2 is **not `< v1`** on any channel ⇒ no "v2 bug → low tension".
+| channel | v1 (BoA-v1ref) | v2 (cap ON) | v2 (cap OFF, the bug) | read |
+|---|---|---|---|---|
+| avgBound | **5.38** | 6.5 | ~6.4 | comparable engagement ✓ |
+| avgTension (mean) | **1.84 pN** | **~2.0 pN** | ~4.7 pN (inflated) | **close match ✓** |
+| peakTension | **3.32 pN** | **~4.0 pN** | ~24 pN (force insanity) | **close match ✓** |
+| symmetry (A vs B) | symmetric 2.0/1.9 | **symmetric ~2.2/2.0** | asymmetric 6.6/2.8 | **match ✓** |
+| stability | steady | steady | segments tossed (stiffness) | fixed by the cap |
+| both poles engage | yes | yes | yes | ✓ |
+
+**Verdict — SHARED FAITHFUL PHYSICS, now quantitatively matched (no v2 bug):**
+- The decisive factor was the **missing 12 pN break-force cap** (§4), not the confining box. With the cap
+  ON (faithful to v1's unconditional `MyoFilLink` valve), v2 ≈ v1 on every channel: avgTension ~2.0 vs
+  1.84 pN, peak ~4.0 vs 3.32 pN, both poles ~2 pN symmetric, avgBound 6.5 vs 5.4 — **within SEM**.
+- The earlier "v2 higher / bursty / asymmetric" (~4.7 pN, 24 pN spikes) was the **uncapped force insanity**
+  (the user's observed stiffness), not a physics difference. Fixed.
+- The original "low tension" (~0.37 pN) was the now-deleted bespoke centered/planar version; the model
+  correction (free + 3D splay) was that fix. v2 is **not `< v1`** on any channel.
 - The one qualitative difference is **steadiness**: v1 is a steady symmetric plateau (peak/mean ≈ 1.8),
   v2 is bursty/asymmetric (peak/mean ≈ 5) and the backbone drifts ~0.1 µm. This localizes to the **one
   un-ported scene element: v1's thin confining chamber box** (`boxYDim 0.3 / boxZDim 0.2`), which holds

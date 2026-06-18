@@ -220,6 +220,11 @@ public final class ContractileAssayHarness {
         mini.initBackboneDrag();
         mot.setBodyParams(dt); mot.setJointParams(dt); mot.setKinParams(REACH, ALIGN_TOL, dt); mot.setNucParams(dt);
         mot.kinParams.set(0, (float) KOFF);            // catch-slip base off-rate (duty-ratio knob)
+        // v1's 12 pN break-force cap — UNCONDITIONAL in v1 `MyoFilLink.ckRelease` (first branch, before the
+        // catch-slip roll; comment: "combat stiffness and force insanity"). A bound head whose cross-bridge
+        // spring exceeds 12 pN detaches immediately — the stiffness safety valve. v1 always has it on, so
+        // the contractile assay does too; without it a stretched bond tosses its low-drag segment around.
+        mot.setFaithfulRelease(true, 0.0);             // 0.0 ⇒ keep v1's default 12 pN threshold
         mot.nucleotideState.init(MotorStore.NUC_NONE);
         dim.setDimerParams(dt);
         mini.setMiniParams(dt); mini.setBackboneParams(dt);

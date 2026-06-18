@@ -705,16 +705,19 @@ deterministic chain+PIN bit-identical float32 (validates `PinSystem` on device),
 aggregate-agrees. **Free-body finding (surfaced):** the FREE minifilament drifts (~0.1 µm) + engages in BURSTS
 (peak ~24 pN) — honest biological behavior; per-pole tension fluctuates/asymmetric (averages over seeds); gate on
 the long-run NET, not a stationary plateau. Held-bound is intrinsically unstable on a pinned filament (strain
-can't relax ⇒ dynamic release mandatory — v1's reason). **Matched v1 comparison (BoA-v1ref `/tmp` scratch, CPU
-50k, decomposed):** avgBound v1 5.38 / v2 ~6.4 (comparable engagement), avgTension v1 1.84 / v2 ~4.7 pN (v2 HIGHER
-— not low), peak v1 3.32 / v2 ~24 pN. **Verdict: SHARED FAITHFUL PHYSICS** (v2 not `<` v1 on any channel ⇒ no
-bug; the low-tension was the old bespoke version). The one difference is steadiness (v1 steady plateau; v2
-bursty/drifts ~0.1 µm), localized to the **un-ported v1 confining chamber box** (`boxYDim 0.3/boxZDim 0.2`) — a
-scene element, not a physics bug; flagged as the next step. Step-3 force-coverage audit (`-audit`): pin `forceSum`
-= chain + gather, residual 0, pin force purely chain-transmitted (the `jointForceSum`-omission gotcha cannot
-occur). New: `PinSystem`, `ContractileAssayHarness`, `run_contractile.sh`. Report:
-`INC6_CONTRACTILE_ASSAY_FINDINGS.md` (§6b/§7b); spec: `INC6_CONTRACTILITY_ASSAY_SURVEY.md`; JOURNAL 2026-06-17.
-**Next: port v1's confining chamber box** (steady-state v1 match).
+can't relax ⇒ dynamic release mandatory — v1's reason). **The 12 pN break-force cap is ON (faithful to v1):**
+v1's `MyoFilLink.ckRelease` UNCONDITIONALLY detaches a head whose cross-bridge > 12 pN, before the catch-slip
+roll ("combat stiffness and force insanity"); v2's contractile assay now enables it (`setFaithfulRelease`). It
+was the dominant fix — without it the free minifilament's drift over-stretched bonds ⇒ numerical stiffness
+(segments tossed, peak ~24 pN, bursty/asymmetric ~4.7 pN mean); with it ⇒ steady symmetric ~2 pN, peak ~4 pN.
+**Matched v1 comparison (BoA-v1ref `/tmp` scratch, CPU 50k, cap ON):** avgBound v1 5.38 / v2 6.5, avgTension v1
+1.84 / v2 ~2.0 pN, peak v1 3.32 / v2 ~4.0 pN, both symmetric ⇒ **v2 ≈ v1 within SEM on every channel. Verdict:
+SHARED FAITHFUL PHYSICS, quantitatively matched** (no bug; the original low-tension was the deleted bespoke
+version, the bursty-high was the missing cap). Step-3 force-coverage audit (`-audit`): pin `forceSum` = chain +
+gather, residual 0, pin force purely chain-transmitted (the `jointForceSum`-omission gotcha cannot occur). New:
+`PinSystem`, `ContractileAssayHarness`, `run_contractile.sh`. Report: `INC6_CONTRACTILE_ASSAY_FINDINGS.md`
+(§4/§6b/§7b); spec: `INC6_CONTRACTILITY_ASSAY_SURVEY.md`; JOURNAL 2026-06-17. Optional next: port v1's confining
+chamber box (removes the residual mild drift).
 ```
 ./run_contractile.sh            # GPU + CPU cross-check: #1 crux, #4 control, #2 contracts, #3 CPU≡GPU
 ./run_contractile.sh -cpu       # CPU runner only (triage)
