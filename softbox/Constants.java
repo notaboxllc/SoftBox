@@ -62,4 +62,13 @@ public final class Constants {
     public static double brownianForceMag() {
         return Math.sqrt(2.0 * kT / deltaT);
     }
+
+    // --- inc 6c B2: actin nucleation + the implicit-actin pool (v1 Env / Crucible) ---
+    public static final double AvogadroNum = 6.022e23;            // /mol (v1 Env.AvogadroNum)
+    public static final double kNodeNuc    = 10.0;                // /node-s (Env.kNodeNuc_init:895)
+    public static final int    actinSeed   = 3;                   // monomers to seed a filament (Env.actinSeed_init:539)
+    public static final double nodeTetherDetachRate = 0.001;      // /s  (Env.nodeTetherDetachRate_init:602; v1 default INACTIVE)
+    public static final double actinConcInit = 15.0;              // µM  (Env.actinConc_init:405)
+    public static final double nodeRadius  = 0.05;                // µm  (Env.nodeRadius_init:430)
+    public static final double fracMove    = 0.5;                 // PAIRS move coeff (Env.fracMove_init:134); the node-tether spring coeff
 }

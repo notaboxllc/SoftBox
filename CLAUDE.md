@@ -816,15 +816,49 @@ edit; `BoA-v1ref` byte-clean; production untouched. Report: `INC6C_NODE_STAGEB1_
 ./run_filbirth.sh           # GPU + CPU cross-check (allocator, born≡preplaced, inert free slot, binding+gather)
 ./run_filbirth.sh -cpu      # CPU runner only (triage)
 ```
-**Increment 6c Stage B2 — PENDING (the nucleation-EMITTER):** replace ONLY the synthetic birth driver with the
-node's nucleation — a per-node emitter (rate `kNodeNuc·dt`, born pre-bonded at the node, seed ≈10.8 nm) fills the
-SAME `acceptFlag`/`reqCoord`/`reqUVec`/`reqYVec` request arrays; the B1 scan-rank allocator rides underneath
-UNCHANGED. **Re-confirm the nucleation specifics (rate, pre-bond geometry, formin release) against a fresh
-`ProteinNode.java` snapshot** at build (the recon settledness gate — that file still has physics churn). Add the
-**publish-time `filState` guard** (the one deferred shared-kernel touch; itself no-op-when-all-active) so a FREE
-slot is kept out of the broad-phase in a live binding scene. Growth/polymerization (monomer-vs-segment
-granularity) is a SECOND new capability, likely deferred; seam #2 (the actin pool behind one accessor) flagged
-for then.
+**Increment 6c Stage B2 — the node NUCLEATION-FUNCTION (formin actin nucleation) — DONE (2026-06-18).** The
+node's implicit-formin nucleation (seam #1, additive over Stage A) — **the first dynamic actin CREATION in
+SoftBox; the LAST entity port lands**, completing the node (motor-bundle + nucleation). Built from **jba's
+behavioral spec** (NOT a v1 port; v1 = clean-specifics reference, drift flagged). Per node per step: birth a
+fixed-length seed (B1 allocator, **UNCHANGED**) at `kNodeNuc·dt`; hold it with an ELASTIC fracMove tether
+(node-center ↔ seed-end, the SAME spring as `NodeSystem.tether`/minifilament, attach-at-center); DISSOLVE the
+bond at a **constant rate** → free filament; the born seed is **Brownian-DAMPED**. Deplete the actin pool
+(seam #2). **v1 clean specifics:** kNodeNuc=10/node·s, actinSeed=3 (≈10.8 nm), nodeTetherDetachRate=0.001/s,
+fracMove=0.5. **FLAGGED v1 drift (built jba's spec, did NOT copy):** v1's detach+max-strain are INACTIVE by
+default (B2 enables the rate); the v1 node-tether release is a CONSTANT rate, NOT Bell/log-stretch (recon §2a
+wording imprecise); v1 has an optional nodeTorqSpring align torque (active) NOT in jba's spec — B2 omits it
+(positional tether only; flag for jba); forminsPerNode default 0 = off. **THE DAMPING-AS-dt-COMPENSATION
+PRINCIPLE (jba; generalizes to the membrane nucleation):** a short fixed-length seed flails at full thermal;
+the formin's TIGHT hold is a STIFF constraint inexpressible at the large production dt (the same fracMove
+dt-stiffness family) — so a SOFT elastic tether (positional, dt-compatible) + artificial Brownian damping
+(~30×, **the seed only**) compensating for the tether's softness approximate it. A legitimate dt-compensating
+approximation, deliberately **non-FDT for the seed** (existing filaments keep scale 1.0 — NO Brownian-system
+edit); NOT an FDT bug, NOT node-coupling stiffness (the tether handles coupling). **Architecture:**
+`NodeNucleationSystem` (countBoundFil/emit/tagSeeds/seedTether/dissolve — wang-hash RNG, no atomics,
+dual-runner). Lifecycle: `filState` (B1: slot alive?) ⟂ `seedNode` (B2: tethered to which node? `<0`=free);
+dissolution sets seedNode=-1 but keeps filState ACTIVE ⇒ free filament (slot NOT freed; turnover deferred).
+**The ONE shared-kernel touch (B1-flagged):** a guarded `publishToBodyView` **overload** — a FREE slot →
+`STORE_NONE` (excluded from the narrow-phase, so a motor can't bind a not-yet-born filament); the 8-arg is
+byte-unchanged, the 9-arg ≡ it when all-active. `ActinPool` = **seam #2** (scalar now / field later, behind
+`available()`/`take()`). 8 gates PASS GPU+CPU: rate (1.097e-4 vs 1.0e-4, 9.7%/Poisson); tether (vs v1
+double-ref rel 2.1e-8, relaxes/bounded); dissolution (pre-tethered 4000, empirical pDetach 0.1% vs rate·dt at
+an elevated 2000/s — v1's 0.001/s ⇒ 1e-8 unobservable, validated by formula; freed seeds stay ACTIVE); pool
+(depletes exactly + `available()` gate); no-op-when-off (forminsPerNode=0 ⇒ 0 births, Δcoord=0); CPU≡GPU
+(seedNode/filState **0 mismatches** = bit-identical lifecycle, pose Δ 4.66e-10 µm); damping (wander 4.35e-5 vs
+1.30e-3 undamped); publish-guard (FREE→STORE_NONE, no-op when all-active). Regression:
+filbirth/node/grid/motor/minifil/dimerglide/miniglide/contractile bit-identical. New files + additive edits
+only; `BoA-v1ref` byte-clean; production a no-op (`forminsPerNode=0`). Report:
+`INC6C_NODE_STAGEB2_FINDINGS.md`; JOURNAL 2026-06-18.
+```
+./run_nodenuc.sh           # GPU + CPU cross-check (rate, tether, dissolution, pool, no-op, damping, publish-guard, CPU≡GPU)
+./run_nodenuc.sh -cpu      # CPU runner only (triage)
+```
+**Migration edge (the node is COMPLETE; these wait on v1 / membrane work):** growth/polymerization
+(monomer-vs-segment granularity); filament death/turnover (freed seeds persist — if a long run accumulates too
+many, that bounds run length: flag); the **membrane formin nucleation** (jba's in-development damped-filament
+work — the damping principle generalizes); branched networks; the dynamic cortex; the optional `nodeTorqSpring`
+alignment. **Post-node horizon:** a fixed-anchor minimal contractile RING (a ring of nucleating nodes + the
+contractile-assay tension read — all primitives now exist).
 
 Also pending within inc 6: **stronger engagement** for a sharp contractile plateau (down-head filaments /
 multiple minifilaments — a tighter/denser scene would make the chamber box load-bearing) + dynamic

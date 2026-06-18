@@ -294,6 +294,39 @@ public final class FilamentStore {
         }
     }
 
+    /**
+     * Increment 6c B2 — the LIFECYCLE-AWARE publish (the one deferred shared-kernel touch from B1). Identical
+     * to the 8-arg publishToBodyView, except a FREE slot (filState[i] < 0) is published with ownerStore =
+     * STORE_NONE so the narrow-phase (which filters by ownerStore) never treats a not-yet-born filament as a
+     * binding candidate. When EVERY slot is ACTIVE this writes STORE_FILAMENT for all i — **bit-identical to the
+     * 8-arg version** (the no-op-when-all-active guarantee), so existing all-active scenes are unaffected
+     * whichever overload they call. Only B2's live binding scene (with FREE slots) needs this one; the 8-arg
+     * stays for every existing caller (byte-unchanged).
+     */
+    public static void publishToBodyView(
+            FloatArray coord,
+            FloatArray segLength,
+            FloatArray center,
+            FloatArray boundingRadius,
+            IntArray   ownerStore,
+            IntArray   ownerSlot,
+            FloatArray viewParams,
+            IntArray   counts,
+            IntArray   filState) {
+        int n   = coord.getSize() / 3;
+        int cap = center.getSize() / 3;
+        float actinRadius = viewParams.get(0);
+        for (@Parallel int i = 0; i < n; i++) {
+            center.set(i,           coord.get(i));
+            center.set(cap + i,     coord.get(n + i));
+            center.set(2 * cap + i, coord.get(2 * n + i));
+            boundingRadius.set(i, 0.5f * segLength.get(i) + actinRadius);
+            // FREE slot ⇒ STORE_NONE (excluded from the narrow-phase); ACTIVE ⇒ STORE_FILAMENT (as the 8-arg).
+            ownerStore.set(i, filState.get(i) < 0 ? SpatialBodyView.STORE_NONE : SpatialBodyView.STORE_FILAMENT);
+            ownerSlot.set(i, i);
+        }
+    }
+
     public void setParams(double dt, double brownianForceMag) {
         params.set(0, (float) dt);
         params.set(1, (float) brownianForceMag);

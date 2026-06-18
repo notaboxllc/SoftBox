@@ -2,6 +2,52 @@
 
 Last updated: 2026-06-18
 
+## 2026-06-18 — INC 6c STAGE B2: the node NUCLEATION-FUNCTION (formin actin nucleation) — DONE
+The node's implicit-formin actin nucleation (seam #1, additive over Stage A) — **the first dynamic actin
+CREATION in SoftBox**, completing the node (motor-bundle + nucleation). **All 8 gates PASS GPU + CPU; all
+prior harnesses bit-identical.** Built from jba's behavioral spec (NOT a v1 port). Report:
+`INC6C_NODE_STAGEB2_FINDINGS.md`.
+- **Behavior (jba's spec):** per node per step — birth a fixed-length seed (B1 allocator, UNCHANGED) at
+  `kNodeNuc·dt`; hold it with an ELASTIC fracMove tether (node-center ↔ seed-end); DISSOLVE the bond at a
+  constant rate → free filament; the born seed is Brownian-DAMPED. Deplete the actin pool (seam #2).
+- **v1 clean specifics reproduced:** kNodeNuc=10/node·s, actinSeed=3 (≈10.8 nm), tether =
+  `fracMove·1e-6·strain/(dt·(1/fil.bTransGam.x+1/node.bTransGam.x))` fracMove=0.5 attach-at-node-center
+  (the SAME spring as NodeSystem.tether / minifilament), nodeTetherDetachRate=0.001/s.
+- **FLAGGED v1 drift (built jba's spec, did NOT copy):** (1) v1's detach + max-strain triggers are INACTIVE
+  by default (Parameter `false`) — B2 enables the rate; (2) the v1 node-tether release is a CONSTANT rate,
+  NOT Bell/log-stretch (recon §2a wording imprecise); (3) v1 has an optional nodeTorqSpring align torque
+  (1e-18, active) NOT in jba's spec — B2 omits it (positional tether only; flag for jba); (4) forminsPerNode
+  default 0 = off (production no-op).
+- **THE DAMPING PRINCIPLE (jba, generalizes to the membrane nucleation):** a short fixed-length seed flails
+  at full thermal; the formin's TIGHT hold is a STIFF constraint inexpressible at the large production dt
+  (the same fracMove dt-stiffness family). The fix = a SOFT elastic tether (positional, dt-compatible) +
+  artificial Brownian damping (~30×, the seed only) compensating for the tether's softness — a legitimate
+  dt-compensating approximation, deliberately non-FDT for the seed (existing filaments keep scale 1.0). NOT
+  an FDT bug; NOT node-coupling stiffness (the tether handles coupling).
+- **Architecture:** `NodeNucleationSystem` (countBoundFil/emit/tagSeeds/seedTether/dissolve — wang-hash RNG,
+  no atomics, dual-runner). Lifecycle: `filState` (B1, slot alive?) ⟂ `seedNode` (B2, tethered to which
+  node? `<0`=free). Dissolution sets seedNode=-1 but keeps filState ACTIVE ⇒ free filament (slot NOT freed;
+  turnover deferred). Born seed damping = B1 birthParams (NO Brownian-system edit). **The ONE shared-kernel
+  touch (B1-flagged):** a guarded `publishToBodyView` OVERLOAD — FREE slot → STORE_NONE (excluded from the
+  narrow-phase); the 8-arg is byte-unchanged, the 9-arg ≡ it when all-active. `ActinPool` = seam #2 (scalar
+  now / field later, behind available()/take()).
+- **Gates (`run_nodenuc.sh`, both runners):** 1 rate (1.097e-4 vs 1.0e-4, 9.7% / Poisson); 2 tether (force
+  vs v1 double-ref rel 2.1e-8, relaxes/bounded); 3 dissolution (pre-tethered 4000, empirical pDetach 2.0015e-2
+  vs 2.0e-2 = **0.1%**; freed seeds stay ACTIVE — elevated 2000/s test, v1's 0.001/s validated by formula);
+  4 pool (depletes exactly + available() gate stops emission, pool dry); 5 no-op-when-off (forminsPerNode=0 ⇒
+  0 births, Δcoord=0); 6 CPU≡GPU (seedNode/filState 0 mismatches = bit-identical lifecycle; pose Δ 4.66e-10
+  µm); 8 damping (wander 4.35e-5 damped vs 1.30e-3 undamped); P publish-guard (FREE→STORE_NONE, no-op when
+  all-active).
+- **Regression:** filbirth/node/grid/motor/minifil/dimerglide/miniglide/contractile all PASS (bit-identical).
+  `BoA-v1ref` byte-clean; production untouched.
+- **New files + additive edits only:** `ActinPool`, `NodeNucleationStore`, `NodeNucleationSystem`,
+  `NodeNucleationHarness`, `run_nodenuc.sh`; +`SpatialBodyView.STORE_NONE`, +`FilamentStore.publishToBodyView`
+  9-arg overload, +`Constants` nucleation/pool consts.
+- **THE LAST ENTITY PORT LANDS** — the node is complete. Migration edge (waiting on v1/membrane): growth/
+  polymerization, filament death/turnover, the membrane formin nucleation (damping principle generalizes),
+  branched networks, dynamic cortex, the optional nodeTorqSpring. Horizon: a fixed-anchor minimal contractile
+  ring (nucleating nodes + the contractile-assay tension read — all primitives now exist).
+
 ## 2026-06-18 — INC 6c STAGE B1: the FilamentStore runtime-birth lifecycle — DONE
 The **first dynamic filament creation in SoftBox** (`FilamentStore` was fully static through inc 6). **All 3
 gates PASS GPU + CPU; every prior harness bit-identical.** Report: `INC6C_NODE_STAGEB1_FINDINGS.md`.
