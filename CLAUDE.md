@@ -949,11 +949,28 @@ only). Report: `INC6C_TESTB_SCPR_FINDINGS.md`; JOURNAL 2026-06-18.
 ./run_testb.sh -cpu -3js threejs_testb   # viewer (two nodes nucleating/growing/capturing)
 ```
 
+**Increment 6c — Test B′: clean AIMED SCPR (sparse, separated, SPECIFIED placement) — SUCCESS (2026-06-18).**
+The clean SCPR test (jba's design): two well-separated nodes, each growing ONE actin AIMED at the partner,
+capture one another's filaments and **measurably approach over a gap**. Extends `TestBScprHarness` (`-aimed`
+preset) — no new harness, no shared-kernel edit, no existing value changed ⇒ prior assays + production
+byte-unchanged. **Realizes seam #3's SPECIFIED placement** (aim-at-partner). **HEADLINE:** inter-node distance
+0.600 → **MIN 0.424 µm @ step 11812 (initial approach Δ=0.176 µm), EXCEEDS Brownian noise** (≈60×) ⇒ `STAGE 1
+demonstrates SCPR capture-and-pull`; CPU≡GPU agree. The aimed filament is **pre-grown to OVERSHOOT** the partner
+(the `rodDotFil≥0` gate needs the foreign filament to reach the captor's far hemisphere; then the barbed-end
+stroke pulls the captor toward the partner). **jba's "self-capture negligible by LAYOUT" thesis — refuted in
+magnitude, NON-BLOCKING in effect:** the aimed layout reduces self-capture (~30 random→~5 aimed) but doesn't
+preclude it (the filament exits through its own node's partner-facing hemisphere; capture-phase self/cross force
+20/14.5 pN) — yet the approach succeeds because self-capture is **internal to a node** (no net motion) while
+cross-capture carries the net pull (jba's intuition holds operationally). **Post-min OVERRUN (OUT OF SCOPE):**
+monotonic growth + no depoly ⇒ the filament overruns the closed gap and the nodes drift back apart — this is the
+INITIAL-approach test; sustained contraction needs turnover (deferred; harness flags the overrun). Report:
+`INC6C_TESTB_AIMED_SCPR_FINDINGS.md`; JOURNAL 2026-06-18. `./run_testb.sh -aimed` (`-cpu`, `-3js threejs_testb_aimed`).
+
 **Seams registry (parameterized extension points kept OPEN):** **#1 motor/nucleation** (the node's
 motor-function is separable from its nucleation-function — Stage A); **#2 the actin pool** (`ActinPool`, scalar
-now / a depletable field later, behind `available()`/`take()`/`conc()`); **#3 formin-site placement** (Test B —
-`TestBScprHarness.forminSiteDir(node,site)` + the `Placement` enum: RANDOM-radial default, a SPECIFIED inter-site
-arrangement plugs in without a refactor; specified NOT built — jba's call).
+now / a depletable field later, behind `available()`/`take()`/`conc()`); **#3 formin-site placement**
+(`TestBScprHarness.forminSiteDir(node,site)` + the `Placement` enum: RANDOM-radial default (Test B); **SPECIFIED
+realized (Test B′, aim-at-partner)** — a general specifiable aim/target per site; specified-beyond-aim NOT built).
 
 **Migration edge (the node + GROWTH are COMPLETE; these wait on v1 / membrane work):** depolymerization /
 treadmilling (the next layer — pointed-end shrink + `ActinPool.put`/restore, tied to filament death/turnover);

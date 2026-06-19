@@ -69,6 +69,7 @@ public final class TestBScprHarness {
                 case "-nodebrown" -> NODE_BROWN = Double.parseDouble(args[++i]);
                 case "-3js" -> vizDir = args[++i];
                 case "-gate0" -> gate0Only = true;
+                case "-aimed" -> applyAimedPreset();
                 default -> {}
             }
         }
@@ -303,19 +304,60 @@ public final class TestBScprHarness {
         seed *= 0x27d4eb2d; seed = seed ^ (seed >>> 15); return seed;
     }
 
+    static boolean AIMED = false;
+    /** Test B′ — the CLEAN aimed scene (jba's design): SPECIFIED placement, ONE aimed filament per node, well
+     *  SEPARATED start, over a real gap. Sparse + aimed + separated makes the SCPR signal legible, and the layout
+     *  (a single filament aimed AWAY from its own shell toward the partner) precludes self-capture by GEOMETRY —
+     *  no rule. Put -aimed FIRST; later flags override. */
+    static void applyAimedPreset() {
+        AIMED = true;
+        PLACEMENT = Placement.SPECIFIED;
+        FORMINS = 1;                 // sparse: one aimed filament per node
+        GAP = 0.6;                   // well-separated (surface gap ~0.5 µm; shells do NOT overlap — not contact)
+        SEED_MON = 64;               // warm-start near one segment-length; growth bridges the gap
+        STEPS = 30000;               // long enough for a clear, legible approach (the pre-grown chain captures early)
+        NODE_BROWN = 0.02;           // legible directed approach over the long aimed run (node = large/slow complex)
+        BOX = 3.0;
+    }
+
     // ----------------------------------------------------------------- SEAM #3: formin-site placement
     // A node carries multiple formin sites (forminsPerNode); each site's RADIAL DIRECTION sets whether its
     // filament searches toward the partner. Test B is the first scene where placement matters behaviorally.
     // The placement is a PLUGGABLE function: RANDOM-radial today (biology TBD), a SPECIFIED arrangement later
     // (e.g. a defined inter-site geometry) plugs in here without a refactor. Test B stays on RANDOM (the default,
     // the same wang-hash draw the runtime nucleation emit uses) — specified placement is NOT built (jba's call).
-    enum Placement { RANDOM /* , SPECIFIED — future: a defined inter-site arrangement */ }
+    enum Placement { RANDOM, SPECIFIED }
     static Placement PLACEMENT = Placement.RANDOM;
-    /** Unit radial direction for formin site `site` on node `nodeK`. The seam: swap this body for a specified
-     *  arrangement to aim filaments; RANDOM (wang-hash, isotropic) is the faithful SCPR stochastic-search default. */
+    // SPECIFIED placement state (set at scene build): per-node center + per-node TARGET (the site's aim point).
+    // General seam: a specifiable aim/target per node. This test = aim-at-partner (NODE_TARGET[k] = the other node).
+    static double[][] NODE_CENTERS;     // [node][xyz] world centers
+    static int[] NODE_TARGET;           // [node] = target node index the site aims at
+    /** Unit radial direction for formin site `site` on node `nodeK`. The SEAM: RANDOM (wang-hash, isotropic) is
+     *  the faithful SCPR stochastic-search default; SPECIFIED aims the seed from the node toward its TARGET (here
+     *  the partner node) — a real, general specifiable-aim body (multi-site spreads a small cone around the aim). */
     static double[] forminSiteDir(int nodeK, int site) {
         switch (PLACEMENT) {
-            case RANDOM -> {
+            case SPECIFIED -> {
+                int tgt = NODE_TARGET[nodeK];
+                double dx = NODE_CENTERS[tgt][0] - NODE_CENTERS[nodeK][0];
+                double dy = NODE_CENTERS[tgt][1] - NODE_CENTERS[nodeK][1];
+                double dz = NODE_CENTERS[tgt][2] - NODE_CENTERS[nodeK][2];
+                double m2 = dx*dx + dy*dy + dz*dz; if (m2 < 1e-12) { dx = 1; dy = 0; dz = 0; m2 = 1; }
+                double inv = 1.0 / Math.sqrt(m2); dx *= inv; dy *= inv; dz *= inv;
+                if (FORMINS > 1) {   // >1 aimed site ⇒ a small deterministic cone around the aim (stays a real seam)
+                    double spread = 0.25;   // rad
+                    double ang = (site - 0.5 * (FORMINS - 1)) * spread;
+                    // rotate dir about an arbitrary perpendicular by `ang`
+                    double ex = (Math.abs(dx) < 0.9) ? 1 : 0, ey = (Math.abs(dx) < 0.9) ? 0 : 1, ez = 0;
+                    double px = dy*ez - dz*ey, py = dz*ex - dx*ez, pz = dx*ey - dy*ex;
+                    double pm = 1.0 / Math.sqrt(px*px + py*py + pz*pz); px *= pm; py *= pm; pz *= pm;
+                    double c = Math.cos(ang), sgn = Math.sin(ang);
+                    dx = c*dx + sgn*px; dy = c*dy + sgn*py; dz = c*dz + sgn*pz;
+                    double mm = 1.0 / Math.sqrt(dx*dx + dy*dy + dz*dz); dx *= mm; dy *= mm; dz *= mm;
+                }
+                return new double[]{ dx, dy, dz };
+            }
+            default -> {   // RANDOM (isotropic wang-hash — the Test B default)
                 int base = ((nodeK * FORMINS + site) * 1000003) ^ (nodeK * 999983) ^ 0x53434252;   // "SCBR"
                 double dx = ((wangHash(base ^ 0x9e3779b9) >>> 1) / 2147483647.0) * 2 - 1;
                 double dy = ((wangHash(base ^ 0x85ebca6b) >>> 1) / 2147483647.0) * 2 - 1;
@@ -324,7 +366,36 @@ public final class TestBScprHarness {
                 double inv = 1.0 / Math.sqrt(m2);
                 return new double[]{ dx * inv, dy * inv, dz * inv };
             }
-            default -> { return new double[]{ 1, 0, 0 }; }
+        }
+    }
+
+    static int AIMED_CHAIN = 0;          // pre-grown aimed-filament segment count (computed in buildStage1)
+
+    /** Pre-grow ONE aimed filament for node k as a linear chain of nChain stdSegLength segments along (dx,dy,dz),
+     *  the tip (node-bonded, seedNode=k, the growing barbed end) at the node center, children extending OUTWARD
+     *  toward the partner. Chain-wired in the growth convention (end2.side=0 ↔ end1.side=1), so growth's splitWire
+     *  + the chain F3/F4 + filNodeOf all operate on it unchanged. Slots [base, base+nChain). */
+    static void placeAimedChain(FilamentStore f, NodeNucleationStore nuc, NodeStore nd, int k,
+                                double dx, double dy, double dz, int nChain, int base, double bornScale) {
+        double cx = nd.node.coord.get(k), cy = nd.node.coord.get(nd.node.n + k), cz = nd.node.coord.get(2 * nd.node.n + k);
+        double ex = (Math.abs(dx) < 0.9) ? 1 : 0, ey = (Math.abs(dx) < 0.9) ? 0 : 1, ez = 0;
+        double yx = dy*ez - dz*ey, yy = dz*ex - dx*ez, yz = dx*ey - dy*ex;
+        double ym = 1.0 / Math.sqrt(yx*yx + yy*yy + yz*yz); yx *= ym; yy *= ym; yz *= ym;
+        double Lc = (Constants.stdSegLength + 1) * Constants.actinMonoRadius;
+        double e1x = cx, e1y = cy, e1z = cz;                           // tip end1 at the node center (barbed)
+        for (int i = 0; i < nChain; i++) {
+            int sl = base + i;
+            double ccx = e1x + 0.5 * Lc * dx, ccy = e1y + 0.5 * Lc * dy, ccz = e1z + 0.5 * Lc * dz;
+            f.monomerCount.set(sl, Constants.stdSegLength);
+            f.setCoord(sl, (float) ccx, (float) ccy, (float) ccz);
+            f.setUVec(sl, (float) dx, (float) dy, (float) dz);
+            f.setYVec(sl, (float) yx, (float) yy, (float) yz);
+            f.filState.set(sl, FilamentStore.FIL_ACTIVE);
+            f.brownTransScale.set(sl, (float) bornScale); f.brownRotScale.set(sl, (float) bornScale);
+            nuc.seedNode.set(sl, i == 0 ? k : -1);                     // the tip (node side) carries the node bond
+            if (i > 0) { f.end1NbrSlot.set(sl, sl - 1); f.end1NbrSide.set(sl, 1); }     // end1 ↔ prev.end2
+            if (i < nChain - 1) { f.end2NbrSlot.set(sl, sl + 1); f.end2NbrSide.set(sl, 0); }  // end2 ↔ next.end1
+            e1x += Lc * dx; e1y += Lc * dy; e1z += Lc * dz;            // advance to this segment's end2
         }
     }
 
@@ -343,7 +414,9 @@ public final class TestBScprHarness {
     static S1 buildStage1(double dt) {
         double h = 0.5 * GAP;
         S1 s = new S1();
-        s.sh = buildShells(dt, new double[]{ -h, 0, 0 }, new double[]{ h, 0, 0 }, false);   // FREE nodes
+        NODE_CENTERS = new double[][]{ { -h, 0, 0 }, { h, 0, 0 } };   // SEAM #3 SPECIFIED: aim points
+        NODE_TARGET = new int[]{ 1, 0 };                              // each node aims at the partner
+        s.sh = buildShells(dt, NODE_CENTERS[0], NODE_CENTERS[1], false);   // FREE nodes
         NodeStore nd = s.sh.node; MotorStore mot = s.sh.mot;
         int cap = FIL_CAP;
 
@@ -367,23 +440,39 @@ public final class TestBScprHarness {
         // directions (the seam-#3 default; same wang-hash draw the nucleation emit uses) at SEED_MON monomers,
         // tethered to their node (seedNode bond). kNodeNuc=10/node·s ⇒ ~80k steps to populate stochastically,
         // so the run starts already-searching (nucleation stays ON to top up). Slots [k·FORMINS,(k+1)·FORMINS).
-        double halfSeed = 0.5 * (SEED_MON + 1) * Constants.actinMonoRadius;
-        for (int k = 0; k < 2; k++) {
-            double ncx = nd.node.coord.get(k), ncy = nd.node.coord.get(nd.node.n + k), ncz = nd.node.coord.get(2 * nd.node.n + k);
-            for (int j = 0; j < FORMINS && (k * FORMINS + j) < cap; j++) {
-                int sl = k * FORMINS + j;
-                double[] d = forminSiteDir(k, j);              // SEAM #3: pluggable formin-site placement
-                double dx = d[0], dy = d[1], dz = d[2];
-                double ex = (Math.abs(dx) < 0.9) ? 1 : 0, ey = (Math.abs(dx) < 0.9) ? 0 : 1, ez = 0;
-                double yx = dy*ez - dz*ey, yy = dz*ex - dx*ez, yz = dx*ey - dy*ex;
-                double ym = 1.0 / Math.sqrt(yx*yx + yy*yy + yz*yz); yx *= ym; yy *= ym; yz *= ym;
-                f.monomerCount.set(sl, SEED_MON);
-                f.setCoord(sl, (float) (ncx + halfSeed * dx), (float) (ncy + halfSeed * dy), (float) (ncz + halfSeed * dz));
-                f.setUVec(sl, (float) dx, (float) dy, (float) dz);
-                f.setYVec(sl, (float) yx, (float) yy, (float) yz);
-                f.filState.set(sl, FilamentStore.FIL_ACTIVE);
-                f.brownTransScale.set(sl, (float) bornScale); f.brownRotScale.set(sl, (float) bornScale);
-                nuc.seedNode.set(sl, k);
+        if (AIMED) {
+            // Test B′: one AIMED filament per node, PRE-GROWN as a multi-segment chain that OVERSHOOTS the
+            // partner (so the partner's rodDotFil≥0 / far-hemisphere heads capture it early — the polarity gate
+            // requires the foreign filament to reach the captor's far side; INC6C_TESTB_SCPR_FINDINGS §capture
+            // cone). Growth stays ON (the tip keeps extending). Node k's chain: slots [k·CHAIN,(k+1)·CHAIN).
+            double Lc = (Constants.stdSegLength + 1) * Constants.actinMonoRadius;     // ~0.089 µm/segment
+            AIMED_CHAIN = Math.max(2, (int) Math.round(1.30 * GAP / Lc));             // reach ≈ 1.3·gap (overshoot)
+            for (int k = 0; k < 2; k++) {
+                double[] d = forminSiteDir(k, 0);              // SEAM #3 SPECIFIED: aim at the partner
+                placeAimedChain(f, nuc, nd, k, d[0], d[1], d[2], AIMED_CHAIN, k * AIMED_CHAIN, bornScale);
+            }
+        } else {
+            // WARM-START (scene IC): pre-place FORMINS seeds/node in RANDOM-radial directions (seam-#3 default)
+            // at SEED_MON monomers, tethered. kNodeNuc=10/node·s ⇒ ~80k steps to populate stochastically, so the
+            // run starts already-searching (nucleation stays ON). Slots [k·FORMINS,(k+1)·FORMINS).
+            double halfSeed = 0.5 * (SEED_MON + 1) * Constants.actinMonoRadius;
+            for (int k = 0; k < 2; k++) {
+                double ncx = nd.node.coord.get(k), ncy = nd.node.coord.get(nd.node.n + k), ncz = nd.node.coord.get(2 * nd.node.n + k);
+                for (int j = 0; j < FORMINS && (k * FORMINS + j) < cap; j++) {
+                    int sl = k * FORMINS + j;
+                    double[] d = forminSiteDir(k, j);          // SEAM #3: pluggable formin-site placement
+                    double dx = d[0], dy = d[1], dz = d[2];
+                    double ex = (Math.abs(dx) < 0.9) ? 1 : 0, ey = (Math.abs(dx) < 0.9) ? 0 : 1, ez = 0;
+                    double yx = dy*ez - dz*ey, yy = dz*ex - dx*ez, yz = dx*ey - dy*ex;
+                    double ym = 1.0 / Math.sqrt(yx*yx + yy*yy + yz*yz); yx *= ym; yy *= ym; yz *= ym;
+                    f.monomerCount.set(sl, SEED_MON);
+                    f.setCoord(sl, (float) (ncx + halfSeed * dx), (float) (ncy + halfSeed * dy), (float) (ncz + halfSeed * dz));
+                    f.setUVec(sl, (float) dx, (float) dy, (float) dz);
+                    f.setYVec(sl, (float) yx, (float) yy, (float) yz);
+                    f.filState.set(sl, FilamentStore.FIL_ACTIVE);
+                    f.brownTransScale.set(sl, (float) bornScale); f.brownRotScale.set(sl, (float) bornScale);
+                    nuc.seedNode.set(sl, k);
+                }
             }
         }
         DragTensorSystem.run(f);
@@ -548,6 +637,22 @@ public final class TestBScprHarness {
         }
         return c;
     }
+    /** Transmitted cross-bridge force magnitude (pN, summed) over CROSS- (cross=true) or SELF- (cross=false)
+     *  captured bonds — bondData head-force [d..d+2], the force that reaches the node body via the tether.
+     *  jba's thesis: with the aimed layout, self-capture transmitted force ≈ 0 (precluded by geometry, no rule). */
+    static double captureForcePN(S1 s, boolean cross) {
+        MotorStore m = s.sh.mot; double sum = 0;
+        for (int i = 0; i < m.nMotors; i++) {
+            int seg = m.boundSeg.get(i); if (seg < 0) continue;
+            int fn = filNodeOf(s, seg); if (fn < 0) continue;
+            boolean isCross = (fn != s.sh.motorNode[i]);
+            if (isCross != cross) continue;
+            int d = i * CrossBridgeSystem.STRIDE;
+            double fx = s.sh.bondData.get(d), fy = s.sh.bondData.get(d + 1), fz = s.sh.bondData.get(d + 2);
+            sum += Math.sqrt(fx * fx + fy * fy + fz * fz);
+        }
+        return sum * 1e12;
+    }
     static int activeFilaments(FilamentStore f) { int c = 0; for (int s = 0; s < f.n; s++) if (f.filState.get(s) >= 0) c++; return c; }
     static double contour(FilamentStore f) { double c = 0; for (int s = 0; s < f.n; s++) if (f.filState.get(s) >= 0) c += f.segLength.get(s); return c; }
 
@@ -568,10 +673,9 @@ public final class TestBScprHarness {
         double d0 = nodeDist(nd);
         int M = STEPS;
         int firstCapture = -1, peakCross = 0;
-        long crossStepSum = 0; long crossSteps = 0;
-        double dMin = d0, dMax = d0;
-        // approach detection: mean distance over the last 10% vs the first 10% (beyond Brownian noise)
-        double earlySum = 0, lateSum = 0; long earlyN = 0, lateN = 0;
+        double dMin = d0; int stepMin = 0;
+        // capture-PHASE accumulators (steps where cross-capture is active — the approach, before any overrun)
+        long capSteps = 0, crossCntSum = 0, selfCntSum = 0; double crossForceSum = 0, selfForceSum = 0;
         System.out.printf("  %-8s %-9s %-7s %-7s %-7s %-7s %-8s%n", "step", "dist(µm)", "cross", "self", "bound", "active", "contour");
         for (int t = 0; t < M; t++) {
             cpuStepStage1(s, t);
@@ -579,32 +683,38 @@ public final class TestBScprHarness {
             int cross = crossNodeCaptures(s), self = selfCaptures(s), bound = boundTotal(mot);
             if (cross > 0 && firstCapture < 0) firstCapture = t;
             if (cross > peakCross) peakCross = cross;
-            dMin = Math.min(dMin, d); dMax = Math.max(dMax, d);
-            if (t >= M - M / 10) { lateSum += d; lateN++; crossStepSum += cross; crossSteps++; }
-            if (t < M / 10) { earlySum += d; earlyN++; }
+            if (d < dMin) { dMin = d; stepMin = t; }
+            if (cross > 0) { capSteps++; crossCntSum += cross; selfCntSum += self;
+                             crossForceSum += captureForcePN(s, true); selfForceSum += captureForcePN(s, false); }
             if (t % Math.max(1, M / 20) == 0 || t == M - 1)
                 System.out.printf("  %-8d %-9.4f %-7d %-7d %-7d %-7d %-8.4f%n",
                         t, d, cross, self, bound, activeFilaments(s.fil), contour(s.fil));
         }
-        double dEarly = earlyN > 0 ? earlySum / earlyN : d0;
-        double dLate = lateN > 0 ? lateSum / lateN : nodeDist(nd);
-        double approach = dEarly - dLate;
-        double avgCross = crossSteps > 0 ? crossStepSum / (double) crossSteps : 0;
         boolean captured = firstCapture >= 0;
-        // approach "beyond Brownian noise": compare to the node-body diffusive wander over the run.
-        // Free node D_t = kT/bTransGam; RMS COM wander of the 2-node difference over time T ~ sqrt(4 D_t T).
+        double dEnd = nodeDist(nd);
+        // HEADLINE = the INITIAL approach signal: start → min (the capture-and-pull phase). Post-min drift
+        // (the aimed filament OVERRUNS the closing gap — monotonic growth, no depoly) is OUT OF SCOPE (turnover).
+        double approachToMin = d0 - dMin;
+        // beyond Brownian noise: the node-body diffusive wander to the min-step (rel. coord ⇒ 4·D·T).
         double Dt = NODE_BROWN * NODE_BROWN * Constants.kT / nd.node.bTransGam.get(0);   // m²/s (brownScale² scales D)
-        double Tsec = M * dt;
-        double rmsWander = Math.sqrt(4.0 * Dt * Tsec) * 1.0e6;  // µm (relative coordinate ⇒ 2× single-node var)
-        boolean approached = approach > rmsWander && approach > 0.0;
+        double Tmin = (stepMin + 1) * dt;
+        double rmsWander = Math.sqrt(4.0 * Dt * Tmin) * 1.0e6;  // µm
+        boolean approached = approachToMin > rmsWander && approachToMin > 0.02;   // beyond noise AND ≥20 nm
 
-        System.out.printf("%n  inter-node distance: start=%.4f µm, early-mean=%.4f, late-mean=%.4f µm (Δapproach=%.4f µm; min=%.4f)%n",
-                d0, dEarly, dLate, approach, dMin);
-        System.out.printf("  Brownian wander scale over %d steps (%.3f s): rms≈%.4f µm => approach %s noise%n",
-                M, Tsec, rmsWander, approached ? "EXCEEDS" : "within");
-        System.out.printf("  cross-node captures: first @ step %s, peak=%d, steady-avg(last 10%%)=%.2f; self-captures observed too%n",
+        System.out.printf("%n  inter-node distance: start=%.4f µm → MIN=%.4f µm @ step %d (initial approach Δ=%.4f µm); end=%.4f%n",
+                d0, dMin, stepMin, approachToMin, dEnd);
+        System.out.printf("  Brownian wander to min (%.3f s): rms≈%.4f µm => initial approach %s noise%n",
+                Tmin, rmsWander, approached ? "EXCEEDS" : "within");
+        if (dEnd > dMin + rmsWander)
+            System.out.printf("  [post-min OVERRUN, OUT OF SCOPE] end %.4f > min %.4f: the aimed filament OVERRUNS the closed gap%n"
+                    + "    (monotonic growth + no depoly ⇒ capture geometry breaks; needs turnover/treadmilling — deferred).%n", dEnd, dMin);
+        double avgCross = capSteps > 0 ? crossCntSum / (double) capSteps : 0, avgSelf = capSteps > 0 ? selfCntSum / (double) capSteps : 0;
+        double crossF = capSteps > 0 ? crossForceSum / capSteps : 0, selfF = capSteps > 0 ? selfForceSum / capSteps : 0;
+        System.out.printf("  cross-node captures: first @ step %s, peak=%d, capture-phase avg=%.2f%n",
                 captured ? String.valueOf(firstCapture) : "NEVER", peakCross, avgCross);
-        System.out.printf("  final: active filaments=%d, contour=%.4f µm (max per-fil ≈ contour/active)%n", activeFilaments(s.fil), contour(s.fil));
+        System.out.printf("  self-capture (jba's layout thesis): capture-phase avg count=%.2f; transmitted force self=%.3f pN vs cross=%.3f pN (self/cross=%.2f)%n",
+                avgSelf, selfF, crossF, crossF > 1e-9 ? selfF / crossF : 0);
+        System.out.printf("  final: active filaments=%d, contour=%.4f µm%n", activeFilaments(s.fil), contour(s.fil));
         if (!captured) {
             // ETA estimate: per-tip growth rate (mono/cadence) → contour velocity → time to bridge the surface gap.
             double Pgrow = Constants.kATPOn2WithFormin * Constants.actinConcInit * Constants.biochemDeltaT;

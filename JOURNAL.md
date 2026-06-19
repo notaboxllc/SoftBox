@@ -2,6 +2,34 @@
 
 Last updated: 2026-06-18
 
+## 2026-06-18 — INC 6c: Test B′ — clean AIMED SCPR (sparse, separated, SPECIFIED placement) — SUCCESS
+The clean SCPR test (jba's design) — **the capture-and-pull primitive demonstrated CLEANLY over a gap.** Extends
+`TestBScprHarness` (no new harness, no shared-kernel edit, no existing value changed) ⇒ prior assays + production
+byte-unchanged, `BoA-v1ref` byte-clean. Report: `INC6C_TESTB_AIMED_SCPR_FINDINGS.md`.
+- **Built:** seam #3's **SPECIFIED placement body** (realizing the stubbed hook) — `forminSiteDir` under
+  `Placement.SPECIFIED` aims the seed from a node toward its `NODE_TARGET` (the partner); general
+  (specifiable-aim per site), this test = aim-at-partner. The **`-aimed` preset:** two FREE box-confined nodes,
+  `forminsPerNode=1`, SPECIFIED, gap 0.6 µm (well-separated — shells don't overlap), shell + 12 pN cap + faithful
+  release + containment unchanged, nucleation + growth ON. The aimed filament is **pre-grown as a multi-segment
+  chain that OVERSHOOTS the partner** (`placeAimedChain`) so capture happens early + the pull is legible.
+- **HEADLINE — the nodes measurably approach:** start 0.600 µm → **MIN 0.424 µm @ step 11812 (initial approach
+  Δ=0.176 µm)**, **EXCEEDS Brownian noise** (rms ~0.003 µm, ≈60×). Cross-captures first @ step 311, peak 8.
+  `STAGE 1 demonstrates SCPR capture-and-pull (nodes approach beyond noise)`. **CPU≡GPU agree** (avgBound 2.50,
+  active-fil 18). Viewer `threejs_testb_aimed`.
+- **The overshoot/capture-cone finding:** the `rodDotFil≥0` gate makes cross-capture require the foreign filament
+  to reach the captor's **far hemisphere** (overshoot past the partner) — then the stroke (toward the barbed end,
+  at the originating node) pulls the captor toward the partner. Hence pre-grow-to-overshoot.
+- **jba's "self-capture negligible by LAYOUT" thesis — REFUTED in magnitude, NON-BLOCKING in effect (honest
+  finding, reported per the discovery boundary):** the aimed layout REDUCES self-capture (~30 random → ~5 aimed)
+  but does NOT preclude it — the aimed filament **exits through its own node's partner-facing hemisphere** where
+  same-direction heads capture it (capture-phase self/cross force 20.0 vs 14.5 pN, ratio 1.38). **But the approach
+  still succeeds** because self-capture is **internal to a node** (no net node displacement) while cross-capture
+  is the only mode producing net inter-node motion ⇒ jba's intuition holds OPERATIONALLY (legible, clean
+  approach); literal "negligible" is refuted + reported.
+- **Post-min OVERRUN (OUT OF SCOPE, expected):** after the min the nodes drift apart (0.42→0.81) — monotonic
+  growth + no depoly ⇒ the aimed filament overruns the closed gap, capture geometry breaks. **This test is the
+  INITIAL approach signal only**; sustained contraction needs turnover/treadmilling (deferred). Harness flags it.
+
 ## 2026-06-18 — INC 6c: Test B — the SCPR primitive (two nodes capture-and-pull) — Gate 0 PASS; Stage 1 assembled
 The first **emergent** test (inflection from porting to emergence). **Pure composition** — NO new force law /
 gather / shared-kernel edit; new files only (`TestBScprHarness.java`, `run_testb.sh`) ⇒ prior assays +
