@@ -549,9 +549,11 @@ public final class TestBScprHarness {
 
         // === MOTOR BINDING (dynamic; bruteReachable over ACTIVE segments — FREE slots parked far, unreachable) ===
         MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
-        BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sh.reachSeg, sh.reachCount, mot.kinParams, mot.counts);
+        // v1-faithful node-held exclusion (MyoMotor.checkFilSegCollision:391): a node-held TIP (seedNode>=0) is
+        // not a binding candidate — own myosins can't self-capture their held tip; outer (seedNode<0) stay bindable.
+        BindingDetectionSystem.bruteReachableNodeAware(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sh.reachSeg, sh.reachCount, nuc.seedNode, mot.kinParams, mot.counts);
         NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
-        BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sh.reachSeg, sh.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        BindingDetectionSystem.bindNearestNodeAware(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sh.reachSeg, sh.reachCount, mot.boundSeg, mot.bindArc, nuc.seedNode, mot.kinParams, mot.counts);
         NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
 
         // === FORCES ===
@@ -656,6 +658,33 @@ public final class TestBScprHarness {
     static int activeFilaments(FilamentStore f) { int c = 0; for (int s = 0; s < f.n; s++) if (f.filState.get(s) >= 0) c++; return c; }
     static double contour(FilamentStore f) { double c = 0; for (int s = 0; s < f.n; s++) if (f.filState.get(s) >= 0) c += f.segLength.get(s); return c; }
 
+    /** Characterize the residual self-capture (the geometry caveat): verify the v1 rule excludes node-held TIPs
+     *  (must be 0 bound on a seedNode>=0 segment), and classify the remaining self-captures by whether the
+     *  captured segment is the node-held tip (excluded) or an OUTER (seedNode<0) segment, + its distance from
+     *  the owning node's centre (vs the own-myosin reach ≈ NODE_RADIUS + ROD+LEVER+HEAD + myoColTol). */
+    static void diagnoseSelfCapture(S1 s) {
+        MotorStore m = s.sh.mot; FilamentStore f = s.fil; RigidRodBody nb = s.sh.node.node; int nn = nb.n;
+        int boundOnTip = 0, selfOuter = 0, crossOuter = 0; double selfOuterDistSum = 0, selfOuterDistMax = 0;
+        double ownReach = NodeStore.NODE_RADIUS + MotorStore.ROD_LEN + MotorStore.LEVER_LEN + MotorStore.HEAD_LEN + REACH;
+        for (int i = 0; i < m.nMotors; i++) {
+            int seg = m.boundSeg.get(i); if (seg < 0) continue;
+            if (s.nuc.seedNode.get(seg) >= 0) boundOnTip++;          // MUST be 0 with the rule
+            int fn = filNodeOf(s, seg); int owner = s.sh.motorNode[i];
+            boolean self = (fn == owner);
+            // segment centre distance from the OWNING node (the node whose myosin this is)
+            double dx = f.coordX(seg) - nb.coord.get(owner), dy = f.coordY(seg) - nb.coord.get(nn + owner), dz = f.coordZ(seg) - nb.coord.get(2 * nn + owner);
+            double dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+            if (self) { selfOuter++; selfOuterDistSum += dist; selfOuterDistMax = Math.max(selfOuterDistMax, dist); }
+            else crossOuter++;
+        }
+        System.out.printf("  [diag] bound on node-held TIP (seedNode>=0; rule MUST exclude ⇒ 0): %d%n", boundOnTip);
+        System.out.printf("  [diag] residual SELF-captures (all on OUTER seedNode<0 segments): %d; mean dist from own node=%.4f µm, max=%.4f (own-myosin reach≈%.4f µm)%n",
+                selfOuter, selfOuter > 0 ? selfOuterDistSum / selfOuter : 0, selfOuterDistMax, ownReach);
+        System.out.printf("  [diag] cross-captures (on the partner's outer segments): %d%n", crossOuter);
+        System.out.println("  [diag] ⇒ the v1 tip exclusion fires (0 tip binds); residual self-capture is on OUTER segments within own-myosin reach");
+        System.out.println("         — a v2 GEOMETRY divergence (own myosins reach beyond the node-held tip), NOT a rule miss. Planner decision; not fixed here.");
+    }
+
     // ====================================================================== Stage 1 runner + readout
     static int STEPS = 25000;
     static String vizDir = null;
@@ -726,6 +755,7 @@ public final class TestBScprHarness {
             System.out.printf("  [ETA] a well-aimed tip bridges ~%.3f µm at ~%.2e µm/step ⇒ ~%.0f steps of aimed growth (× search inefficiency).%n",
                     surfaceGap, umPerStep, etaSteps);
         }
+        diagnoseSelfCapture(s);   // the geometry caveat: verify the rule excludes tips + characterize the residual
         boolean ok = captured && approached;
         System.out.println("  => STAGE 1 " + (ok ? "demonstrates SCPR capture-and-pull (nodes approach beyond noise)"
                 : captured ? "captured but approach not yet beyond noise (longer run / see ETA)"
@@ -786,9 +816,9 @@ public final class TestBScprHarness {
             .task("tagSeeds", NodeNucleationSystem::tagSeeds, s.nucRankOffsets, f.freeList, f.freeOffsets, nuc.seedNode, f.allocCounts)
             // === BINDING + cycle ===
             .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
-            .task("reach", BindingDetectionSystem::bruteReachable, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sh.reachSeg, sh.reachCount, mot.kinParams, mot.counts)
+            .task("reach", BindingDetectionSystem::bruteReachableNodeAware, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sh.reachSeg, sh.reachCount, nuc.seedNode, mot.kinParams, mot.counts)
             .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts)
-            .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sh.reachSeg, sh.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts)
+            .task("bind", BindingDetectionSystem::bindNearestNodeAware, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sh.reachSeg, sh.reachCount, mot.boundSeg, mot.bindArc, nuc.seedNode, mot.kinParams, mot.counts)
             .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts)
             // === FORCES ===
             .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)

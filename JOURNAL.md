@@ -2,6 +2,31 @@
 
 Last updated: 2026-06-18
 
+## 2026-06-18 — INC 6c: faithfulness fix — port v1's node-held binding exclusion (the audit's rule) — DONE
+Restored the dropped v1 rule the audit found. **Additive** (new `BindingDetectionSystem` overloads) — existing
+bind methods + all other assays + production byte-unchanged; `BoA-v1ref` byte-clean. Report:
+`INC6C_SELFCAPTURE_RULE_FINDINGS.md`.
+- **The guard (port, tip-only):** `bruteReachableNodeAware`/`bindNearestNodeAware` add one line in the candidate
+  loop — `if (seedNode.get(s) >= 0) continue;` — faithful to `MyoMotor.checkFilSegCollision:391` (`if
+  soaNodeAtEnd2 return`). v2's `seedNode≥0` sits on EXACTLY the node-held tip (verified: `placeAimedChain` tags
+  only i==0, warm-start/nucleation tag the tip, `splitWire` sets children −1), so the excluded set = node-held
+  tips, exactly as v1 excludes only the barbed segment; OUTER/released (`seedNode<0`) stay bindable ⇒
+  cross-capture survives. Data-driven, no new kernel; no-op for `seedNode<0` ⇒ gliding/contractile/Test A
+  byte-unchanged (they call the ORIGINAL overloads). Test B Stage 1 (CPU step + GPU plan) wired to the node-aware ones.
+- **Validation (Test B′ `-aimed`, before→after):** self-capture force **20.0→12.4 pN**, self/cross ratio
+  **1.38→1.07**, count 4.63→2.88; **0 motors bound on a node-held tip** (rule fires); **cross-capture + the
+  beyond-noise approach SURVIVE** (Δ=0.174 µm, ≈60× noise; `STAGE 1 demonstrates SCPR capture-and-pull`);
+  **CPU≡GPU agree** (avgBound 1.90=1.90). Regression: contractile + node Stage A re-ran PASS.
+- **GEOMETRY CAVEAT (flagged, NOT fixed):** self-capture REDUCED but did not collapse — the diagnostic shows the
+  residual is **entirely on OUTER (`seedNode<0`) segments ~0.124 µm from the own node**, within the own-myosin
+  reach (~0.183 µm = NODE_RADIUS+ROD+LEVER+HEAD+myoColTol). The node's own myosins reach the 2nd–3rd own
+  segments (not tips). A v2 GEOMETRY divergence (v1's exclusion is ALSO tip-only; v1 likely keeps own myosins off
+  outer segments via the rapid formin RELEASE clearing the filament off the node, and/or reach/placement). Per
+  the discovery boundary: reported, no geometry hack / whole-filament exclusion. **Most likely closed by the
+  force-dependent formin release** (the flagged next piece — Test B set `detachRate=0`).
+- **`seedNode`'s THIRD role recorded** (nucleation bond + tether + **binding exclusion**) — role 3 is the one the
+  node recon missed (`INC6_NODE_RECON.md:128,136`), which is how the port slip survived.
+
 ## 2026-06-18 — INC 6c: v1 reference audit — does v1 prevent node-myosin self-capture? — READ-ONLY (verdict: YES; v2 unfaithful)
 jba (watching the Test B′ viewer) didn't recall node-myosin self-capture in v1 and suspected a missing rule.
 Settled at the oracle (`BoA-v1ref`, frozen, nothing edited; no v1 run needed). Report:

@@ -966,6 +966,23 @@ monotonic growth + no depoly ⇒ the filament overruns the closed gap and the no
 INITIAL-approach test; sustained contraction needs turnover (deferred; harness flags the overrun). Report:
 `INC6C_TESTB_AIMED_SCPR_FINDINGS.md`; JOURNAL 2026-06-18. `./run_testb.sh -aimed` (`-cpu`, `-3js threejs_testb_aimed`).
 
+**Increment 6c — faithfulness fix: v1's node-held binding exclusion restored (2026-06-18).** The v1 audit
+(`INC6C_V1_SELFCAPTURE_AUDIT_FINDINGS.md`) found v2 unfaithful: v1 excludes any node-held filament segment from
+myosin binding (`BoA-v1ref/boxOfActin/MyoMotor.java:391-392`, `if (soaNodeAtEnd2) return;`) and v2's
+`reachTestDistSq` dropped it in inc 4a (no nodes then) and never restored it. **Restored** as additive
+`BindingDetectionSystem.bruteReachableNodeAware`/`bindNearestNodeAware` — one data-driven line `if
+(seedNode.get(s) >= 0) continue;`, **TIP-ONLY** (v2's `seedNode≥0` sits on exactly the node-held tip = v1's
+barbed `nodeAtEnd2`; outer/released `seedNode<0` stay bindable ⇒ cross-capture survives). The ORIGINAL bind
+methods are byte-unchanged; gliding/contractile/Test A/motor/stroke call them ⇒ unaffected (re-ran PASS). Test B′
+re-run: self-capture force **20.0→12.4 pN** (self/cross 1.38→1.07), **0 binds on a node-held tip**, cross-capture
++ the beyond-noise approach SURVIVE, CPU≡GPU agree. **GEOMETRY CAVEAT (flagged, NOT fixed):** the residual
+self-capture is entirely on OUTER (`seedNode<0`) segments ~0.124 µm from the own node, within own-myosin reach
+(~0.183 µm) — a v2 geometry divergence (v1's exclusion is also tip-only; the gap is likely closed by the
+**force-dependent formin RELEASE**, the flagged next piece — Test B set `detachRate=0`). So `seedNode`/v1
+`nodeAtEnd2` now has **THREE roles**: (1) nucleation bond, (2) the elastic tether, (3) **binding exclusion** —
+role 3 is the one the node recon missed (`INC6_NODE_RECON.md:128,136`). Report:
+`INC6C_SELFCAPTURE_RULE_FINDINGS.md`; JOURNAL 2026-06-18.
+
 **Seams registry (parameterized extension points kept OPEN):** **#1 motor/nucleation** (the node's
 motor-function is separable from its nucleation-function — Stage A); **#2 the actin pool** (`ActinPool`, scalar
 now / a depletable field later, behind `available()`/`take()`/`conc()`); **#3 formin-site placement**

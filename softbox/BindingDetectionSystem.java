@@ -287,4 +287,89 @@ public final class BindingDetectionSystem {
             if (bestSeg >= 0) { boundSeg.set(m, bestSeg); bindArc.set(m, bestArc); }
         }
     }
+
+    /**
+     * Increment 6c (faithfulness fix): the v1 NODE-HELD binding exclusion, ported from
+     * MyoMotor.checkFilSegCollision (BoA-v1ref boxOfActin/MyoMotor.java:391-392):
+     *
+     *     if (FilSegment.soaNodeAtEnd2[filId]) { return; }    // formin/node-held filament excluded
+     *
+     * A filament segment whose barbed end is held by a node's formin is excluded from ALL myosin binding. The
+     * v2 analog of v1's per-segment barbed `nodeAtEnd2` is the node-held TIP: seedNode[s] >= 0 (the segment is
+     * tethered to a node; split children / released / non-node filaments carry -1). This is the rule jba
+     * remembered (v1's comment names an original own-node `&& myNode` form, superseded to exclude every
+     * node-held filament). The skip is TIP-ONLY — v1 excludes only the barbed segment, leaving OUTER segments
+     * bindable, so cross-capture survives on a held filament's overshoot/outer (seedNode<0) segments.
+     *
+     * Data-driven, no new kernel: a one-line skip in the candidate loop. For seedNode[s] < 0 (gliding /
+     * contractile / Test A / any non-node-held filament) it never fires — those scenes call the original
+     * (byte-unchanged) overloads and are unaffected. These node-aware overloads are used only by node-bearing
+     * binding scenes (Test B). The reach overload is the candidate FILTER (the excluded tip never enters the
+     * reach set); bindNearestNodeAware re-applies the skip defensively (faithful to v1's single shared predicate).
+     */
+    public static void bruteReachableNodeAware(
+            FloatArray head, FloatArray uVec, FloatArray rodUVec,
+            FloatArray segEnd1, FloatArray segEnd2,
+            IntArray bruteReachSeg, IntArray bruteReachCount,
+            IntArray seedNode,
+            FloatArray kinParams, IntArray counts) {
+        int nM = counts.get(0);
+        int nSeg = segEnd1.getSize() / 3;
+        int MAXC = SpatialGrid.MAX_CAND;
+        float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        for (@Parallel int m = 0; m < nM; m++) {
+            float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
+            float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
+            float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
+            int out = 0;
+            for (int s = 0; s < nSeg; s++) {
+                if (seedNode.get(s) >= 0) continue;          // v1 nodeAtEnd2 exclusion — node-held tip, not bindable
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float d = reachTestDistSq(mx, my, mz, mux, muy, muz, rux, ruy, ruz,
+                        e1x, e1y, e1z, e2x, e2y, e2z, myoColTol, alignTol);
+                if (d >= 0f) { if (out < MAXC) bruteReachSeg.set(m * MAXC + out, s); out++; }
+            }
+            bruteReachCount.set(m, out);
+        }
+    }
+
+    /** bindNearest with the same v1 node-held (seedNode>=0) exclusion — defensive (the node-aware reach already
+     *  filters the candidate set; this keeps the bind faithful to v1's single shared predicate). */
+    public static void bindNearestNodeAware(
+            FloatArray head, FloatArray uVec, FloatArray rodUVec,
+            FloatArray segEnd1, FloatArray segEnd2,
+            IntArray motorCandSeg, IntArray motorCandCount,
+            IntArray boundSeg, FloatArray bindArc,
+            IntArray seedNode,
+            FloatArray kinParams, IntArray counts) {
+        int nM = counts.get(0);
+        int nSeg = segEnd1.getSize() / 3;
+        int MAXC = SpatialGrid.MAX_CAND;
+        float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        for (@Parallel int m = 0; m < nM; m++) {
+            if (boundSeg.get(m) != MotorStore.FREE_BINDABLE) continue;
+            float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
+            float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
+            float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
+            int cnt = motorCandCount.get(m); if (cnt > MAXC) cnt = MAXC;
+            int bestSeg = -1; float bestD = 1.0e30f; float bestArc = 0f;
+            for (int k = 0; k < cnt; k++) {
+                int s = motorCandSeg.get(m * MAXC + k);
+                if (seedNode.get(s) >= 0) continue;          // v1 nodeAtEnd2 exclusion — node-held tip, not bindable
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float d = reachTestDistSq(mx, my, mz, mux, muy, muz, rux, ruy, ruz,
+                        e1x, e1y, e1z, e2x, e2y, e2z, myoColTol, alignTol);
+                if (d >= 0f && d < bestD) {
+                    bestD = d; bestSeg = s;
+                    float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                    float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                    float numer = (mx - e1x) * r1x + (my - e1y) * r1y + (mz - e1z) * r1z;
+                    bestArc = numer / (float) Math.sqrt(denom);
+                }
+            }
+            if (bestSeg >= 0) { boundSeg.set(m, bestSeg); bindArc.set(m, bestArc); }
+        }
+    }
 }
