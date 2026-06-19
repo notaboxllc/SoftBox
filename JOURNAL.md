@@ -2,6 +2,31 @@
 
 Last updated: 2026-06-18
 
+## 2026-06-18 — INC 6c: v1 reference audit — does v1 prevent node-myosin self-capture? — READ-ONLY (verdict: YES; v2 unfaithful)
+jba (watching the Test B′ viewer) didn't recall node-myosin self-capture in v1 and suspected a missing rule.
+Settled at the oracle (`BoA-v1ref`, frozen, nothing edited; no v1 run needed). Report:
+`INC6C_V1_SELFCAPTURE_AUDIT_FINDINGS.md`.
+- **VERDICT — Category 1, an explicit EXCLUSION RULE (`nodeAtEnd2`).** `MyoMotor.checkFilSegCollision`
+  (`BoA-v1ref/boxOfActin/MyoMotor.java:391-392`): `if (FilSegment.soaNodeAtEnd2[filId]) { return; }` — a filament
+  whose barbed end (end2) is held by a node's formin is **excluded from ALL myosin binding**. The comment names
+  the rule jba remembers: an original own-node form `&& myNode` ("dead branch from prior code not ported"),
+  superseded to exclude *every* node-held filament. Lifecycle: set `FilSegment.checkForminBinding():2367-2384`
+  (barbed end within node radius), released by the force-dependent Bell `forminCanHold():2619-2633`, transferred
+  on split `:334`. Candidate set is GLOBAL (`MotorBindGrid3D:260`→`checkFilSegCollision`) ⇒ the rule is the SOLE
+  filter; `Myosin.ownerNode` exists but is used only for the cohesion tether, NOT the bind decision (so NOT
+  category 2/3/4 — a single node both nucleates AND captures, the gates pass own-node geometry).
+- **v2 is UNFAITHFUL — missing it.** `BindingDetectionSystem.reachTestDistSq` ported the align/rod/alpha/conDist
+  gates but DROPPED the `nodeAtEnd2` line (correct in inc 4a — predates nodes; never restored in inc 6c). v2 has
+  the exact analog (`seedNode≥0` ⇔ node-held) but the bind path ignores it. Compounding: Test B kept filaments
+  permanently tethered (`detachRate=0`) AND bindable; v1 = held⇒unbindable until the formin releases. The
+  internal-vs-net argument (Test B′) was a v2-only patch for a missing v1 rule, NOT a v1 behavior.
+- **Faithful port (scoped for the planner, NOT executed):** a 1-line data-driven guard in the bind predicate —
+  skip a node-held segment (tip `seedNode≥0`; outer segments resolved via the chain `filNodeOf`, matching v1
+  where only the barbed segment carries `nodeAtEnd2`); + make the hold RELEASABLE (port `forminCanHold`
+  force-dependent release so `seedNode→-1`), so SCPR is nucleate→hold(unbindable)→release→capture. Load-bearing
+  before the ring. The recon captured `nodeAtEnd2` for nucleation/tether (`INC6_NODE_RECON.md:128,136`) but missed
+  its binding-exclusion role. **No code changed (read-only); `BoA-v1ref` byte-clean; v2 untouched.**
+
 ## 2026-06-18 — INC 6c: Test B′ — clean AIMED SCPR (sparse, separated, SPECIFIED placement) — SUCCESS
 The clean SCPR test (jba's design) — **the capture-and-pull primitive demonstrated CLEANLY over a gap.** Extends
 `TestBScprHarness` (no new harness, no shared-kernel edit, no existing value changed) ⇒ prior assays + production
