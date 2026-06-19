@@ -1,6 +1,85 @@
 # Soft Box Project Journal
 
-Last updated: 2026-06-18
+Last updated: 2026-06-19
+
+## 2026-06-19 — INC 6c: CONVENTION SWAP — node/growth/nucleation realigned to barbed=end2 — DONE (committed on green)
+Executed the atomic §B swap from `INC6C_CONVENTION_SWAP_SURVEY.md`. v2 is now **uniformly barbed=end2** (= v1);
+the node self-grab is **fixed at the root** — rejected by v2's OWN UNMODIFIED bind gate via the corrected INWARD
+node-filament polarity (NO gate edit). Report: `INC6C_CONVENTION_SWAP_FINDINGS.md`.
+- **Changed (§B only, atomic):** `NodeNucleationSystem` (emit `reqUVec=−dir`; seedTether→end2, torque arm +);
+  `GrowthSystem` (grow/markSplits/splitWire: coord-shift signs negated, parent keeps end2 fixed, 3-slot rewire
+  mirrored `G.end1↔C.end2`/`C.end1→Mold`); `TestBScprHarness` (placeAimedChain + warm-start uVec inward + wiring
+  swap; filNodeOf walks end2Nbr; [orient]/[diag] logs); harness gates in `GrowthHarness`/`NodeNucleationHarness`.
+  **No §A shared system / bind gate touched.** node-filament uVec now INWARD; barbed end2 at node.
+- **Coord-bit-identical by design:** each coord-moving op's sign flips WITH the uVec flip ⇒ cancels ⇒ physical
+  coords unchanged, only uVec negated + end labels swapped. Verified: growth split CPU≡GPU bit-identical
+  Δcoord 1.4e-9; no-op-off Δcoord 0.0; tether double-ref rel 2.06e-8 (physically identical force).
+- **Regression (3 tiers, all green):** §A bit-identical leak detector — gliding/contractile/dimer/minifil/motor/
+  xlink/dimerglide/miniglide/xbridge/stroke all PASS (byte-unchanged paths; git scope = 5 node/growth files +
+  docs). §B gates re-pass — growth/nodenuc/filbirth/node, incl. the split@64 3-slot rewire (valid linear chain,
+  64→32+32 conserved, CPU≡GPU bit-identical lifecycle) and the seed-damping gate (after pointing its wander
+  metric at end2). Test B′ — self-grab GONE (count 0.00, force 0.000 pN, was 12.4; self/cross 1.07→0.00),
+  cross-capture survives (peak 10, avg 4.71), nodes approach 0.600→0.483 µm (~27× noise), CPU≡GPU agree —
+  reproduces v1's clean-coalescing twoNodeFormin with no gate edit.
+- **Flags:** `[orient]` CROSS "would-admit 1/6" = stale-pose artifact (gate recomputed at final step; bonds
+  persist past the align threshold), conventions now identical so v1≡v2. Post-min overrun unchanged
+  (monotonic-growth/no-depoly, out of scope). Cross-capture geometry now v1-like (near-side, no overshoot).
+
+## 2026-06-19 — INC 6c: SURVEY — barbed-end convention footprint for a v1-matching swap — DONE (READ-ONLY)
+Mapped every v2 site encoding the end1/end2 (barbed) convention, to scope an atomic swap to v1's nomenclature
+(barbed=end2). No code change; `BoA-v1ref` untouched. Report: `INC6C_CONVENTION_SWAP_SURVEY.md`.
+- **HEADLINE reframe (pause+document):** v2 is NOT globally barbed=end1 — it is **INCONSISTENT**. Every SHARED
+  system (`DerivedGeometry`, `Binding`, `CrossBridge`, `Chain`, `FrameWriter`) + every NON-NODE assay
+  (gliding/contractile/node-contractile/dimer/minifil/glide/stroke/xbridge/motor/xlink) **already use barbed=end2
+  (= v1 = target)** — explicit in `PinSystem:20-21`, the harness "plus-end (end2)" comments. **ONLY the
+  node/growth/nucleation subsystem uses barbed=end1** (uVec OUTWARD): `GrowthSystem:16`,
+  `NodeNucleationSystem.emit:78`/`seedTether:124`, `placeAimedChain:385`, warm-start, `GrowthHarness:101`. ⇒ the
+  swap is **"fix the node/growth subsystem to match the rest"**, NOT a global flip — far lower scope/risk.
+- **Convention is DISTRIBUTED (no central constant):** encoded per-site by placement + growth direction +
+  nucleation attach-end + chain wiring; the systems are convention-AGNOSTIC. ⇒ a PARTIAL swap is a fresh polarity
+  bug; must be ATOMIC. The fix is entirely upstream (set node-filament uVec INWARD) ⇒ **NO gate edit** (the
+  `rodDotFil≥0` gate + the `seedNode≥0` tip-exclusion are unchanged; the tip rule is keyed by seedNode not end).
+- **§A PURE RELABEL / UNCHANGED (bit-identical by not touching):** all shared systems + non-node assays.
+  **§B BEHAVIOR-CHANGING (the swap, ~11 sites):** nucleation emit/seedTether (end1→end2 at node, uVec inward);
+  GrowthSystem grow (flip `+½mono·uVec`→`−½mono·uVec`)/markSplits/splitWire (mirror the 3-slot rewire, keep end2
+  fixed); placeAimedChain + warm-start + GrowthHarness placement; filNodeOf walk (end1Nbr→end2Nbr); comments.
+- **Regression plan:** BIT-IDENTICAL = the 11 non-node `run_*` (consistency check — any diff ⇒ leak, bail);
+  BEHAVIOR-EQUIVALENT (gates pass, poses mirror, NOT bit-identical) = growth/nodenuc/filbirth/node; BEHAVIORAL
+  TARGET = `run_testb -aimed` self-capture `rodDotFil<0` (rejected, v1-consistent), cross-capture+approach
+  survive, match v1's clean-coalescing twoNodeFormin.
+- **Risk sites:** `splitWire` 3-slot chain rewire (A1-trap, geometric); `grow` sign (shared kernel — gated by
+  seedNode≥0, only node tips grow, so safe IF that invariant holds); markSplits child side; endNbr wiring;
+  filNodeOf direction; atomicity (distributed convention).
+
+## 2026-06-19 — INC 6c: DIAGNOSIS — why v2 admits wrong-orientation node-myosin bindings v1 rejects — DONE
+**Diagnostic only.** Pinned the exact cause of v2's residual node self-grab (the `INC6C_SELFCAPTURE_RULE` "geometry
+caveat"). Read-only `BoA-v1ref` (byte-clean); v2 change = **diagnostic logging only** (`TestBScprHarness`
+`[orient]` log in `diagnoseSelfCapture` — no gate/force/head-placement change). jba's decisive datum: v1
+twoNodeFormin with HELD filaments **coalesces cleanly, no self-grab** ⇒ refuted the release/dwell hypothesis;
+hypothesis = v2 binds the WRONG orientation. Report: `INC6C_BINDING_ORIENTATION_DIAGNOSIS_FINDINGS.md`.
+- **VERDICT = (i) the GATE, specifically the barbed-end CONVENTION flip (a sign inversion), NOT (ii) head
+  orientation.** Gate formula + thresholds byte-identical (`alignTol=−0.4`, polarity `≥0`; v1
+  `MyoMotor.java:388` ≡ v2 `BindingDetectionSystem.java:82-83`). The discrepancy: v1 attaches the formin to the
+  **barbed end2** (`FilSegment.checkForminBinding:2367`; uVec=(e2−e1) points **INWARD toward node**); v2 attaches
+  **barbed end1** (`placeAimedChain:385-391`, polymerization convention) ⇒ uVec points **OUTWARD**. For a
+  node-nucleated filament the polarities are exact negatives ⇒ `rodDotFil`/`motDotFil` invert. Own radial myosins
+  point outward ⇒ v2: own-outward-rod · own-OUTWARD-fil ⇒ `rodDotFil>0` ⇒ ADMIT; v1: own-outward-rod ·
+  own-INWARD-fil ⇒ `rodDotFil<0` ⇒ REJECT.
+- **EMPIRICAL (`./run_testb.sh -cpu -aimed`):** SELF captures `rodDotFil=+0.701` (v2 admits) → v1's flipped-convention
+  gate would admit **0/2**; CROSS `rodDotFil=+0.139` → **0/1**. The `rodDotFil≥0` polarity gate is the discriminator
+  (the lenient `−0.4` align tol passes either way). v2's cross-capture-needs-overshoot (aimed doc) is itself a
+  symptom of the flip (v1 uses near-side heads, no overshoot).
+- **Why prior assays passed:** the gate references only `uVec=(e2−e1)`; gliding/contractile/node-contractile
+  filaments are NOT node-coupled (free/surface/pinned) ⇒ the convention is a free relabeling (gate+stroke share
+  `uVec`, self-consistent). It first bites when a filament's polarity is fixed by node attachment AND the same
+  node's own outward myosins bind it — first in inc 6c Test B. Latent gate inversion, not a formula bug.
+- **(ii) ruled out:** v2 heads point outward (Fibonacci splay) but that alone doesn't cause it — under v1's inward
+  polarity those same heads fail BOTH `rodDotFil≥0` and reach (inward tip retracts from the outward filament).
+  Filament polarity is the discriminating variable. v1 heads = random/hemisphere (`ProteinNode:348`/`:103-110`);
+  exact v1 constructor not statically verifiable but not load-bearing.
+- **Fix = separate regression-heavy task** (flip v2 node-attach to the pointed end, or negate the gate's filament
+  axis for node-nucleated filaments; must keep gliding/contractile/dimer/minifil/growth byte-unchanged and
+  reproduce v1's clean coalescence).
 
 ## 2026-06-18 — INC 6c: faithfulness fix — port v1's node-held binding exclusion (the audit's rule) — DONE
 Restored the dropped v1 rule the audit found. **Additive** (new `BindingDetectionSystem` overloads) — existing

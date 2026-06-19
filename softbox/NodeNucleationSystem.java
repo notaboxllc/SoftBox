@@ -16,7 +16,7 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
  *   tagSeeds      : per accepted request r, seedNode[freeList[rank]] = r (request r ↔ node r) — the node bond.
  *   seedTether    : per tethered seed, the ELASTIC fracMove spring node-center ↔ seed tethered-end (the SAME
  *                   damping-limited law as NodeSystem.tether / the minifilament tether — node-specific
- *                   placement: filament end1 ↔ node CENTER). Force + torque on the seed; node is a fixed
+ *                   placement: filament barbed end2 ↔ node CENTER, uVec inward). Force + torque on the seed; node is a fixed
  *                   anchor (Stage A) ⇒ no node reaction applied.
  *   dissolve      : per tethered seed, a CONSTANT-rate wang-hash detach (nodeTetherDetachRate·dt) → seedNode=-1
  *                   ⇒ the seed becomes a FREE filament (filState stays ACTIVE; B1 lifecycle — bindable, drifts).
@@ -75,15 +75,16 @@ public final class NodeNucleationSystem {
             float m2 = dx * dx + dy * dy + dz * dz;
             if (m2 < 1.0e-12f) { dx = 1f; dy = 0f; dz = 0f; m2 = 1f; }
             float inv = 1.0f / (float) Math.sqrt(m2); dx *= inv; dy *= inv; dz *= inv;
-            // seed pose: tethered end (end1) at the node CENTER; coord = node.coord + halfLen·dir, uVec = dir
+            // seed pose (barbed=end2): tethered barbed end2 at the node CENTER; coord = node.coord + halfLen·dir
+            // (the seed extends OUTWARD along dir), uVec = −dir (INWARD) ⇒ end2 = coord + halfLen·uVec = node.
             float ncx = nodeCoord.get(k), ncy = nodeCoord.get(nN + k), ncz = nodeCoord.get(2 * nN + k);
-            // a perp for yVec (any unit ⟂ dir)
+            // a perp for yVec (any unit ⟂ dir == ⟂ uVec)
             float ex, ey, ez;
             if (dx < 0.9f && dx > -0.9f) { ex = 1f; ey = 0f; ez = 0f; } else { ex = 0f; ey = 1f; ez = 0f; }
             float yx = dy * ez - dz * ey, yy = dz * ex - dx * ez, yz = dx * ey - dy * ex;
             float ym = 1.0f / (float) Math.sqrt(yx * yx + yy * yy + yz * yz); yx *= ym; yy *= ym; yz *= ym;
             reqCoord.set(k, ncx + halfLen * dx); reqCoord.set(RC + k, ncy + halfLen * dy); reqCoord.set(2 * RC + k, ncz + halfLen * dz);
-            reqUVec.set(k, dx); reqUVec.set(RC + k, dy); reqUVec.set(2 * RC + k, dz);
+            reqUVec.set(k, -dx); reqUVec.set(RC + k, -dy); reqUVec.set(2 * RC + k, -dz);
             reqYVec.set(k, yx); reqYVec.set(RC + k, yy); reqYVec.set(2 * RC + k, yz);
             acceptFlag.set(k, 1);
         }
@@ -104,9 +105,9 @@ public final class NodeNucleationSystem {
         }
     }
 
-    /** Per tethered seed: the elastic fracMove spring, node CENTER ↔ seed tethered-end (end1). Faithful to v1
-     *  addNodeForces (the attach-at-center variant): forceMag = fracMove·1e-6·strain /
-     *  (dt·(1/fil.bTransGam.x + 1/node.bTransGam.x)); F toward the node center, applied at end1 (+R×F torque).
+    /** Per tethered seed: the elastic fracMove spring, node CENTER ↔ seed tethered barbed end2 (barbed=end2
+     *  convention). Faithful to v1 addNodeForces (the attach-at-center variant): forceMag = fracMove·1e-6·strain /
+     *  (dt·(1/fil.bTransGam.x + 1/node.bTransGam.x)); F toward the node center, applied at end2 (+R×F torque).
      *  Node is a fixed anchor (Stage A) ⇒ the −F node reaction is not applied. */
     public static void seedTether(
             FloatArray filCoord, FloatArray filUVec, FloatArray filSegLength,
@@ -121,9 +122,9 @@ public final class NodeNucleationSystem {
             double cx = filCoord.get(s), cy = filCoord.get(C + s), cz = filCoord.get(2 * C + s);
             double ux = filUVec.get(s), uy = filUVec.get(C + s), uz = filUVec.get(2 * C + s);
             double half = 0.5 * filSegLength.get(s);
-            double e1x = cx - half * ux, e1y = cy - half * uy, e1z = cz - half * uz;   // tethered (node-attached) end
+            double e2x = cx + half * ux, e2y = cy + half * uy, e2z = cz + half * uz;   // tethered (node-attached) barbed end2
             double ncx = nodeCoord.get(k), ncy = nodeCoord.get(nN + k), ncz = nodeCoord.get(2 * nN + k);
-            double dx = ncx - e1x, dy = ncy - e1y, dz = ncz - e1z;
+            double dx = ncx - e2x, dy = ncy - e2y, dz = ncz - e2z;
             double strain = Math.sqrt(dx * dx + dy * dy + dz * dz);
             if (strain > 0.0) {
                 double inv = 1.0 / strain;
@@ -134,8 +135,8 @@ public final class NodeNucleationSystem {
                 filForceSum.set(s,         (float) (filForceSum.get(s)         + Fx));
                 filForceSum.set(C + s,     (float) (filForceSum.get(C + s)     + Fy));
                 filForceSum.set(2 * C + s, (float) (filForceSum.get(2 * C + s) + Fz));
-                // torque from applying F at end1: R = (end1 − center)·1e-6 = −half·uVec·1e-6
-                double Rx = -half * ux * 1.0e-6, Ry = -half * uy * 1.0e-6, Rz = -half * uz * 1.0e-6;
+                // torque from applying F at end2 (barbed, node-attached): R = (end2 − center)·1e-6 = +half·uVec·1e-6
+                double Rx = half * ux * 1.0e-6, Ry = half * uy * 1.0e-6, Rz = half * uz * 1.0e-6;
                 filTorqueSum.set(s,         (float) (filTorqueSum.get(s)         + (Ry * Fz - Rz * Fy)));
                 filTorqueSum.set(C + s,     (float) (filTorqueSum.get(C + s)     + (Rz * Fx - Rx * Fz)));
                 filTorqueSum.set(2 * C + s, (float) (filTorqueSum.get(2 * C + s) + (Rx * Fy - Ry * Fx)));

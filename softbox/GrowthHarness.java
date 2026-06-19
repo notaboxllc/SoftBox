@@ -98,8 +98,8 @@ public final class GrowthHarness {
         double half = 0.5 * seedLen;
         for (int k = 0; k < nNodes; k++) {
             f.filState.set(k, FilamentStore.FIL_ACTIVE);
-            f.setCoord(k, (float) (0.5 * k + half), 0f, 0f);   // end1 at the node (0.5k,0,0); +x outward
-            f.setUVec(k, 1f, 0f, 0f); f.setYVec(k, 0f, 1f, 0f);
+            f.setCoord(k, (float) (0.5 * k + half), 0f, 0f);   // barbed end2 at the node (0.5k,0,0); +x outward
+            f.setUVec(k, -1f, 0f, 0f); f.setYVec(k, 0f, 1f, 0f);  // uVec INWARD (barbed=end2 at node)
             f.brownTransScale.set(k, (float) bornScale); f.brownRotScale.set(k, (float) bornScale);
             nuc.seedNode.set(k, k);                            // tip k tethered to node k
         }
@@ -286,23 +286,23 @@ public final class GrowthHarness {
             Scene sc = build(1, 8, dt, 3, 1.0e30, false);
             FilamentStore f = sc.fil;
             f.monomerCount.set(0, 64); DragTensorSystem.run(f);
-            float e1x0 = f.coordX(0) - 0.5f * f.segLength.get(0);   // tip end1 (node side) before split
+            float nodeEnd0 = f.coordX(0) - 0.5f * f.segLength.get(0);   // node-side end (−x = barbed end2) before split
             runGrowthOnly(sc, 1, true, false);
-            int G = 0, C = f.end2NbrSlot.get(0);
+            int G = 0, C = f.end1NbrSlot.get(0);                        // child C on the OUTWARD (end1) side now
             boolean alloc = (C >= 1 && f.filState.get(C) >= 0);
             boolean cons = (f.monomerCount.get(G) == 32) && (C >= 0 && f.monomerCount.get(C) == 32);
-            boolean links = f.end2NbrSlot.get(G) == C && f.end2NbrSide.get(G) == 0
-                    && f.end1NbrSlot.get(C) == G && f.end1NbrSide.get(C) == 1
-                    && f.end2NbrSlot.get(C) == -1;
-            float e1x1 = f.coordX(G) - 0.5f * f.segLength.get(G);   // G end1 must be unchanged (node side fixed)
-            boolean end1Fixed = Math.abs(e1x1 - e1x0) < 1e-5;
-            // geometry: C outward (+x) of G; C.end1 ≈ G.end2 (within ~1 monomer overlap)
-            float gE2 = f.coordX(G) + 0.5f * f.segLength.get(G);
-            float cE1 = f.coordX(C) - 0.5f * f.segLength.get(C);
-            boolean geom = f.coordX(C) > f.coordX(G) && Math.abs(cE1 - gE2) < 1.5 * Constants.actinMonoRadius;
-            boolean caseA = alloc && cons && links && end1Fixed && geom;
-            System.out.printf("  A (lone): child=%d alloc=%s conserved(32+32)=%s links=%s end1Fixed=%s geom(outward)=%s => %s%n",
-                    C, alloc, cons, links, end1Fixed, geom, caseA ? "ok" : "*FAIL*");
+            boolean links = f.end1NbrSlot.get(G) == C && f.end1NbrSide.get(G) == 1     // G.end1 ↔ C.end2
+                    && f.end2NbrSlot.get(C) == G && f.end2NbrSide.get(C) == 0
+                    && f.end1NbrSlot.get(C) == -1;                                      // C outward end free
+            float nodeEnd1 = f.coordX(G) - 0.5f * f.segLength.get(G);   // G node-side end must be unchanged
+            boolean nodeFixed = Math.abs(nodeEnd1 - nodeEnd0) < 1e-5;
+            // geometry: C outward (+x) of G; C nodeward end ≈ G outward end (within ~1 monomer overlap)
+            float gOut = f.coordX(G) + 0.5f * f.segLength.get(G);   // G outward end (+x = end1)
+            float cNode = f.coordX(C) - 0.5f * f.segLength.get(C);  // C nodeward end (−x = end2)
+            boolean geom = f.coordX(C) > f.coordX(G) && Math.abs(cNode - gOut) < 1.5 * Constants.actinMonoRadius;
+            boolean caseA = alloc && cons && links && nodeFixed && geom;
+            System.out.printf("  A (lone): child=%d alloc=%s conserved(32+32)=%s links=%s nodeEnd2Fixed=%s geom(outward)=%s => %s%n",
+                    C, alloc, cons, links, nodeFixed, geom, caseA ? "ok" : "*FAIL*");
             ok &= caseA;
         }
         // Case B: a 2-segment filament G(tip,64)—Mold(32). Split inserts C between ⇒ G(32)—C(32)—Mold(32).
@@ -315,19 +315,19 @@ public final class GrowthHarness {
             f.filState.set(Mold, FilamentStore.FIL_ACTIVE);
             DragTensorSystem.run(f);
             float gHalf = 0.5f * f.segLength.get(G), mHalf = 0.5f * f.segLength.get(Mold);
-            // place Mold outward of G; G.end2 ↔ Mold.end1
-            f.setCoord(Mold, f.coordX(G) + gHalf + mHalf, 0f, 0f); f.setUVec(Mold, 1f, 0f, 0f); f.setYVec(Mold, 0f, 1f, 0f);
-            f.end2NbrSlot.set(G, Mold); f.end2NbrSide.set(G, 0);
-            f.end1NbrSlot.set(Mold, G); f.end1NbrSide.set(Mold, 1);
+            // place Mold outward (+x) of G (uVec inward, barbed=end2); G.end1(outward) ↔ Mold.end2(nodeward)
+            f.setCoord(Mold, f.coordX(G) + gHalf + mHalf, 0f, 0f); f.setUVec(Mold, -1f, 0f, 0f); f.setYVec(Mold, 0f, 1f, 0f);
+            f.end1NbrSlot.set(G, Mold); f.end1NbrSide.set(G, 1);
+            f.end2NbrSlot.set(Mold, G); f.end2NbrSide.set(Mold, 0);
             DragTensorSystem.run(f);
             runGrowthOnly(sc, 1, true, false);
-            int C = f.end2NbrSlot.get(G);
-            boolean chainGC = (C >= 0 && C != Mold) && f.end1NbrSlot.get(C) == G && f.end1NbrSide.get(C) == 1;
-            boolean chainCM = f.end2NbrSlot.get(C) == Mold && f.end2NbrSide.get(C) == 0
-                    && f.end1NbrSlot.get(Mold) == C && f.end1NbrSide.get(Mold) == 1;
+            int C = f.end1NbrSlot.get(G);
+            boolean chainGC = (C >= 0 && C != Mold) && f.end2NbrSlot.get(C) == G && f.end2NbrSide.get(C) == 0;
+            boolean chainCM = f.end1NbrSlot.get(C) == Mold && f.end1NbrSide.get(C) == 1
+                    && f.end2NbrSlot.get(Mold) == C && f.end2NbrSide.get(Mold) == 0;
             boolean cons = f.monomerCount.get(G) == 32 && f.monomerCount.get(C) == 32 && f.monomerCount.get(Mold) == 32;
             boolean caseB = chainGC && chainCM && cons;
-            System.out.printf("  B (Mold): inserted child=%d  G.end2→C=%s  C.end2→Mold + Mold.end1→C=%s  conserved=%s => %s%n",
+            System.out.printf("  B (Mold): inserted child=%d  G.end1→C=%s  C.end1→Mold + Mold.end2→C=%s  conserved=%s => %s%n",
                     C, chainGC, chainCM, cons, caseB ? "ok" : "*FAIL*");
             ok &= caseB;
         }
@@ -396,7 +396,7 @@ public final class GrowthHarness {
 
     // ============================================================== 4. growing-end extends outward
     static boolean checkGrowingEnd(double dt) {
-        System.out.println("--- 4. growing-end (node-side grows; filament extends OUTWARD; tip end1 held at node) ---");
+        System.out.println("--- 4. growing-end (node-side fixed; filament extends OUTWARD; tip end2 held at node) ---");
         int N = 8, M = 60000, filCap = 256;
         Scene sc = build(N, filCap, dt, 3, Constants.actinConcInit, false);
         double contour0 = contour(sc.fil);
@@ -408,9 +408,10 @@ public final class GrowthHarness {
             int s = -1; for (int i = 0; i < filCap; i++) if (sc.nuc.seedNode.get(i) == k) s = i;
             if (s < 0) continue;
             double half = 0.5 * sc.fil.segLength.get(s);
-            double e1x = sc.fil.coordX(s) - half * sc.fil.uVecX(s), e1y = sc.fil.coordY(s) - half * sc.fil.uVecY(s), e1z = sc.fil.coordZ(s) - half * sc.fil.uVecZ(s);
+            // barbed=end2: the node-held end is end2 = coord + half·uVec
+            double e2x = sc.fil.coordX(s) + half * sc.fil.uVecX(s), e2y = sc.fil.coordY(s) + half * sc.fil.uVecY(s), e2z = sc.fil.coordZ(s) + half * sc.fil.uVecZ(s);
             double nx = sc.nodeStore.node.coord.get(k), ny = sc.nodeStore.node.coord.get(N + k), nz = sc.nodeStore.node.coord.get(2 * N + k);
-            maxTipGap = Math.max(maxTipGap, Math.sqrt((e1x - nx) * (e1x - nx) + (e1y - ny) * (e1y - ny) + (e1z - nz) * (e1z - nz)));
+            maxTipGap = Math.max(maxTipGap, Math.sqrt((e2x - nx) * (e2x - nx) + (e2y - ny) * (e2y - ny) + (e2z - nz) * (e2z - nz)));
         }
         boolean grewOut = contour1 > contour0 * 1.5;
         boolean held = maxTipGap < 0.02;                   // tip end1 within 20 nm of its node

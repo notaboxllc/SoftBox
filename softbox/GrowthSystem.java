@@ -13,12 +13,13 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
  * (DragTensorSystem) present — so growth is "lengthen the terminal segment, then split," turning on a dormant,
  * shape-compatible path.
  *
- * GROWING-END CONVENTION (recon flag a, resolved). The growing/barbed/formin end = end1, consistent with B2's
- * seedTether (which tethers end1 to the node). A growing TIP = a node-bonded segment (seedNode[s] >= 0). Growth
- * keeps end1 anchored at the node and extends end2 OUTWARD: coord += ½·actinMonoRadius·uVec per monomer (end1
- * fixed, end2 +actinMonoRadius). v1 does the same via incCoord(halfmono/2, uVec) (FilSegment.end2BiochemSim).
- * This perturbs only the soft node tether / the chain link at end2 (absorbed by the chain spring) — the
- * dt-stable choice. The success criterion ("grows at its node-side barbed end, extends outward") is met.
+ * GROWING-END CONVENTION (barbed=end2, uniform with v1 + the rest of v2 — the 2026-06-19 convention swap). The
+ * barbed/formin end = end2, tethered to the node by B2's seedTether; uVec points INWARD (toward the node). A
+ * growing TIP = a node-bonded segment (seedNode[s] >= 0). Growth keeps end2 anchored at the node and extends
+ * end1 (pointed) OUTWARD: coord −= ½·actinMonoRadius·uVec per monomer (end2 fixed, end1 extends). The −sign
+ * cancels the inward uVec ⇒ the PHYSICAL growth direction (outward from the node) is unchanged from the prior
+ * barbed=end1 form; only the end-label + uVec representation flipped (coord-bit-identical). See
+ * INC6C_CONVENTION_SWAP_FINDINGS.md.
  *
  * SPLIT @ 64 (the correctness headline). When a tip reaches monomerCount >= 2·stdSegLength (64), it splits into
  * two stdSegLength (32) halves: the node-side half stays on the existing slot (KEEPS the node bond, keeps
@@ -85,9 +86,12 @@ public final class GrowthSystem {
             if (u >= P) continue;
             monomerCount.set(s, monomerCount.get(s) + 1);
             float ux = uVec.get(s), uy = uVec.get(C + s), uz = uVec.get(2 * C + s);
-            coord.set(s,         coord.get(s)         + 0.5f * halfmono * ux);
-            coord.set(C + s,     coord.get(C + s)     + 0.5f * halfmono * uy);
-            coord.set(2 * C + s, coord.get(2 * C + s) + 0.5f * halfmono * uz);
+            // barbed=end2 convention: uVec points INWARD (toward the node), end2 (barbed) is the node-fixed end,
+            // end1 (pointed) extends OUTWARD. coord shifts by −½·mono·uVec — the sign flip cancels the uVec flip
+            // so the PHYSICAL growth direction (outward from the node) is unchanged vs the old barbed=end1 form.
+            coord.set(s,         coord.get(s)         - 0.5f * halfmono * ux);
+            coord.set(C + s,     coord.get(C + s)     - 0.5f * halfmono * uy);
+            coord.set(2 * C + s, coord.get(2 * C + s) - 0.5f * halfmono * uz);
             grewFlag.set(s, 1);
         }
     }
@@ -119,8 +123,10 @@ public final class GrowthSystem {
             double Lpar = (parentNewMon + 1) * halfmono;
             double Lchild = (childMon + 1) * halfmono;
             double ux = uVec.get(s), uy = uVec.get(C + s), uz = uVec.get(2 * C + s);
-            // coord_C = coord_G + (−½·Lold + Lpar + ½·Lchild − actinMonoRadius)·uVec  (outer-half center)
-            double shift = -0.5 * Lold + Lpar + 0.5 * Lchild - halfmono;
+            // barbed=end2: uVec inward, end1 (pointed) is the OUTWARD/growing end ⇒ the child (outer half) sits on
+            // the −uVec side. shift = +½·Lold − Lpar − ½·Lchild + actinMonoRadius (negated from the barbed=end1
+            // form); with uVec flipped this lands the child at the IDENTICAL world position (coord-bit-identical).
+            double shift = 0.5 * Lold - Lpar - 0.5 * Lchild + halfmono;
             reqCoord.set(s,           (float) (coord.get(s)         + shift * ux));
             reqCoord.set(RC + s,      (float) (coord.get(C + s)     + shift * uy));
             reqCoord.set(2 * RC + s,  (float) (coord.get(2 * C + s) + shift * uz));
@@ -155,12 +161,13 @@ public final class GrowthSystem {
             int Cs = freeList.get(rank);                      // child slot (allocate wrote its pose, filState ACTIVE)
             int M = monomerCount.get(Gs);
             int parentNewMon = M - childMon;
-            // read G's OLD end2 neighbor (Mold) before overwriting
-            int Mold = end2NbrSlot.get(Gs), MoldSide = end2NbrSide.get(Gs);
-            // parent shrink: keep end1 fixed (end1_G = coord_G − ½·Lold·uVec; coord_G' = end1_G + ½·Lpar·uVec)
+            // barbed=end2: the node-fixed end is end2; G's OUTWARD neighbor (Mold) is on the end1 side now.
+            // Read G's OLD end1 neighbor (Mold) before overwriting.
+            int Mold = end1NbrSlot.get(Gs), MoldSide = end1NbrSide.get(Gs);
+            // parent shrink: keep end2 (node) fixed (end2_G = coord_G + ½·Lold·uVec; coord_G' = end2_G − ½·Lpar·uVec)
             double Lold = (M + 1) * halfmono, Lpar = (parentNewMon + 1) * halfmono;
             double ux = uVec.get(Gs), uy = uVec.get(C + Gs), uz = uVec.get(2 * C + Gs);
-            double shift = -0.5 * Lold + 0.5 * Lpar;          // coord_G' − coord_G
+            double shift = 0.5 * Lold - 0.5 * Lpar;            // coord_G' − coord_G (negated form; same world shift)
             coord.set(Gs,         (float) (coord.get(Gs)         + shift * ux));
             coord.set(C + Gs,     (float) (coord.get(C + Gs)     + shift * uy));
             coord.set(2 * C + Gs, (float) (coord.get(2 * C + Gs) + shift * uz));
@@ -168,12 +175,12 @@ public final class GrowthSystem {
             // child: count + not a tip (pose from allocate)
             monomerCount.set(Cs, childMon);
             seedNode.set(Cs, -1);
-            // rewire: G.end2 ↔ C.end1
-            end2NbrSlot.set(Gs, Cs); end2NbrSide.set(Gs, 0);   // G.end2 glued to C.end1
-            end1NbrSlot.set(Cs, Gs); end1NbrSide.set(Cs, 1);   // C.end1 glued to G.end2
-            // C.end2 → Mold (G's old outward neighbor); repoint Mold's pointer G→C (its side stays — still glued to an end2)
-            end2NbrSlot.set(Cs, Mold);
-            end2NbrSide.set(Cs, Mold >= 0 ? MoldSide : -1);
+            // rewire: G.end1 ↔ C.end2 (child is outward of G, on G's end1 side)
+            end1NbrSlot.set(Gs, Cs); end1NbrSide.set(Gs, 1);   // G.end1 glued to C.end2
+            end2NbrSlot.set(Cs, Gs); end2NbrSide.set(Cs, 0);   // C.end2 glued to G.end1
+            // C.end1 → Mold (G's old outward neighbor); repoint Mold's pointer G→C (its side stays unchanged)
+            end1NbrSlot.set(Cs, Mold);
+            end1NbrSide.set(Cs, Mold >= 0 ? MoldSide : -1);
             if (Mold >= 0) {
                 if (MoldSide == 0) { end1NbrSlot.set(Mold, Cs); }   // Mold.end1 pointed to G ⇒ now to C
                 else               { end2NbrSlot.set(Mold, Cs); }   // Mold.end2 pointed to G ⇒ now to C

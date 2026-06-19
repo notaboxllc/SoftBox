@@ -983,6 +983,25 @@ self-capture is entirely on OUTER (`seedNode<0`) segments ~0.124 µm from the ow
 role 3 is the one the node recon missed (`INC6_NODE_RECON.md:128,136`). Report:
 `INC6C_SELFCAPTURE_RULE_FINDINGS.md`; JOURNAL 2026-06-18.
 
+**Increment 6c — BARBED-END CONVENTION SWAP: v2 now uniformly barbed=end2 (= v1) (2026-06-19).** The
+self-grab's ROOT CAUSE (`INC6C_BINDING_ORIENTATION_DIAGNOSIS_FINDINGS.md`): v2 was internally **inconsistent** —
+all shared systems + non-node assays used **barbed=end2** (uVec→plus, = v1), but the inc-6c node/growth/nucleation
+subsystem used **barbed=end1** (node-filament uVec OUTWARD), which **inverted the `rodDotFil≥0` gate** for a node's
+own filament ⇒ self-grab. **FIXED at the root** by realigning ONLY the node subsystem to barbed=end2 (the survey
+`INC6C_CONVENTION_SWAP_SURVEY.md`): the node-attached filament's `uVec` now points **INWARD** (barbed end2 at the
+node), so v2's **UNMODIFIED** bind gate computes `rodDotFil<0` for own outward myosins and rejects self-grab as v1
+does — **NO gate / §A shared-system edit.** Atomic §B swap (`NodeNucleationSystem` emit/seedTether; `GrowthSystem`
+grow/markSplits/splitWire — coord-shift signs negated, parent keeps end2 fixed, 3-slot rewire mirrored;
+`TestBScprHarness` placeAimedChain/warm-start/filNodeOf; harness gates). **Coord-bit-identical** (each coord op's
+sign flips WITH the uVec flip ⇒ cancels; only uVec negated + end labels swapped). Regression (3 tiers green): §A
+**bit-identical** (gliding/contractile/dimer/minifil/motor/xlink/dimerglide/miniglide/xbridge/stroke — byte-unchanged
+paths); §B gates re-pass (growth/nodenuc/filbirth/node; split@64 rewire valid + conserved + CPU≡GPU bit-identical
+lifecycle); **Test B′ self-grab GONE** (self-capture 0.00 / 0.000 pN, was 12.4; cross-capture survives peak 10;
+nodes approach 0.600→0.483 µm ~27× noise) — reproduces v1's clean-coalescing twoNodeFormin. The §6c
+SELFCAPTURE_RULE "geometry caveat" (residual outer-segment self-grab) is **resolved by this swap** (not the deferred
+formin release). Report: `INC6C_CONVENTION_SWAP_FINDINGS.md`; JOURNAL 2026-06-19. **The convention is now settled
+codebase-wide before the contractile ring builds on it.**
+
 **Seams registry (parameterized extension points kept OPEN):** **#1 motor/nucleation** (the node's
 motor-function is separable from its nucleation-function — Stage A); **#2 the actin pool** (`ActinPool`, scalar
 now / a depletable field later, behind `available()`/`take()`/`conc()`); **#3 formin-site placement**

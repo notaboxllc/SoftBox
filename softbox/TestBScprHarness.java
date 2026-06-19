@@ -372,8 +372,8 @@ public final class TestBScprHarness {
     static int AIMED_CHAIN = 0;          // pre-grown aimed-filament segment count (computed in buildStage1)
 
     /** Pre-grow ONE aimed filament for node k as a linear chain of nChain stdSegLength segments along (dx,dy,dz),
-     *  the tip (node-bonded, seedNode=k, the growing barbed end) at the node center, children extending OUTWARD
-     *  toward the partner. Chain-wired in the growth convention (end2.side=0 ↔ end1.side=1), so growth's splitWire
+     *  the tip (node-bonded, seedNode=k, the barbed end2) at the node center, uVec INWARD, children extending OUTWARD
+     *  toward the partner (barbed=end2 convention). Chain-wired nodeward=end2 / outward=end1, so growth's splitWire
      *  + the chain F3/F4 + filNodeOf all operate on it unchanged. Slots [base, base+nChain). */
     static void placeAimedChain(FilamentStore f, NodeNucleationStore nuc, NodeStore nd, int k,
                                 double dx, double dy, double dz, int nChain, int base, double bornScale) {
@@ -382,20 +382,20 @@ public final class TestBScprHarness {
         double yx = dy*ez - dz*ey, yy = dz*ex - dx*ez, yz = dx*ey - dy*ex;
         double ym = 1.0 / Math.sqrt(yx*yx + yy*yy + yz*yz); yx *= ym; yy *= ym; yz *= ym;
         double Lc = (Constants.stdSegLength + 1) * Constants.actinMonoRadius;
-        double e1x = cx, e1y = cy, e1z = cz;                           // tip end1 at the node center (barbed)
+        double e1x = cx, e1y = cy, e1z = cz;                           // marching node-side point (each seg's end2)
         for (int i = 0; i < nChain; i++) {
             int sl = base + i;
             double ccx = e1x + 0.5 * Lc * dx, ccy = e1y + 0.5 * Lc * dy, ccz = e1z + 0.5 * Lc * dz;
             f.monomerCount.set(sl, Constants.stdSegLength);
-            f.setCoord(sl, (float) ccx, (float) ccy, (float) ccz);
-            f.setUVec(sl, (float) dx, (float) dy, (float) dz);
+            f.setCoord(sl, (float) ccx, (float) ccy, (float) ccz);     // coord UNCHANGED (centers along +dir)
+            f.setUVec(sl, (float) -dx, (float) -dy, (float) -dz);      // barbed=end2: uVec INWARD (toward node)
             f.setYVec(sl, (float) yx, (float) yy, (float) yz);
             f.filState.set(sl, FilamentStore.FIL_ACTIVE);
             f.brownTransScale.set(sl, (float) bornScale); f.brownRotScale.set(sl, (float) bornScale);
-            nuc.seedNode.set(sl, i == 0 ? k : -1);                     // the tip (node side) carries the node bond
-            if (i > 0) { f.end1NbrSlot.set(sl, sl - 1); f.end1NbrSide.set(sl, 1); }     // end1 ↔ prev.end2
-            if (i < nChain - 1) { f.end2NbrSlot.set(sl, sl + 1); f.end2NbrSide.set(sl, 0); }  // end2 ↔ next.end1
-            e1x += Lc * dx; e1y += Lc * dy; e1z += Lc * dz;            // advance to this segment's end2
+            nuc.seedNode.set(sl, i == 0 ? k : -1);                     // the tip (node side, barbed end2) carries the node bond
+            if (i > 0) { f.end2NbrSlot.set(sl, sl - 1); f.end2NbrSide.set(sl, 0); }     // end2(nodeward) ↔ prev.end1(outward)
+            if (i < nChain - 1) { f.end1NbrSlot.set(sl, sl + 1); f.end1NbrSide.set(sl, 1); }  // end1(outward) ↔ next.end2(nodeward)
+            e1x += Lc * dx; e1y += Lc * dy; e1z += Lc * dz;            // advance outward by one segment
         }
     }
 
@@ -467,7 +467,7 @@ public final class TestBScprHarness {
                     double ym = 1.0 / Math.sqrt(yx*yx + yy*yy + yz*yz); yx *= ym; yy *= ym; yz *= ym;
                     f.monomerCount.set(sl, SEED_MON);
                     f.setCoord(sl, (float) (ncx + halfSeed * dx), (float) (ncy + halfSeed * dy), (float) (ncz + halfSeed * dz));
-                    f.setUVec(sl, (float) dx, (float) dy, (float) dz);
+                    f.setUVec(sl, (float) -dx, (float) -dy, (float) -dz);   // barbed=end2: uVec inward (end2 at node)
                     f.setYVec(sl, (float) yx, (float) yy, (float) yz);
                     f.filState.set(sl, FilamentStore.FIL_ACTIVE);
                     f.brownTransScale.set(sl, (float) bornScale); f.brownRotScale.set(sl, (float) bornScale);
@@ -605,15 +605,15 @@ public final class TestBScprHarness {
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
     static int boundTotal(MotorStore m) { int c = 0; for (int i = 0; i < m.nMotors; i++) if (m.boundSeg.get(i) >= 0) c++; return c; }
-    /** A segment's owning node: walk the chain toward the barbed/node end (end1NbrSlot) until the node-bonded
-     *  TIP (seedNode>=0) is reached. CRITICAL: a split sets the child's seedNode=-1, so only the tip carries the
-     *  tag — the OUTER segments (which actually reach the partner) must be resolved via the chain. */
+    /** A segment's owning node: walk the chain toward the barbed/node end (end2NbrSlot, barbed=end2 convention)
+     *  until the node-bonded TIP (seedNode>=0) is reached. CRITICAL: a split sets the child's seedNode=-1, so only
+     *  the tip carries the tag — the OUTER segments (which actually reach the partner) resolve via the chain. */
     static int filNodeOf(S1 s, int seg) {
         int cur = seg, guard = 0, cap = s.fil.n;
         while (cur >= 0 && guard < cap) {
             int tag = s.nuc.seedNode.get(cur);
             if (tag >= 0) return tag;
-            int nxt = s.fil.end1NbrSlot.get(cur);
+            int nxt = s.fil.end2NbrSlot.get(cur);
             if (nxt == cur || nxt < 0) return -1;     // reached a free end with no tag (a dissolved/free filament)
             cur = nxt; guard++;
         }
@@ -681,8 +681,36 @@ public final class TestBScprHarness {
         System.out.printf("  [diag] residual SELF-captures (all on OUTER seedNode<0 segments): %d; mean dist from own node=%.4f µm, max=%.4f (own-myosin reach≈%.4f µm)%n",
                 selfOuter, selfOuter > 0 ? selfOuterDistSum / selfOuter : 0, selfOuterDistMax, ownReach);
         System.out.printf("  [diag] cross-captures (on the partner's outer segments): %d%n", crossOuter);
-        System.out.println("  [diag] ⇒ the v1 tip exclusion fires (0 tip binds); residual self-capture is on OUTER segments within own-myosin reach");
-        System.out.println("         — a v2 GEOMETRY divergence (own myosins reach beyond the node-held tip), NOT a rule miss. Planner decision; not fixed here.");
+        System.out.println("  [diag] ⇒ POST convention-swap (barbed=end2 uniform): node-filament uVec points INWARD, so the gate's");
+        System.out.println("         rodDotFil<0 rejects a node's own outward myosins ⇒ self-capture (tip AND outer) is eliminated at the root.");
+
+        // ---- BIND-ORIENTATION LOG (inc 6c): the EMPIRICAL gate measurement. POST-SWAP (barbed=end2 uniform):
+        // v2's node-filament uVec now points INWARD (toward the node) — the SAME convention as v1. So v1's gate
+        // and v2's gate AGREE (no flip): both admit iff (motDot ≥ ALIGN_TOL) && (rodDot ≥ 0). A node's own outward
+        // myosin · its own INWARD filament ⇒ rodDot < 0 ⇒ REJECTED ⇒ self-grab should be gone (selfN ≈ 0).
+        MotorStore.publishHeadFromBody(m.body.coord, m.body.uVec, m.body.segLength, m.head, m.uVec, m.rodUVec, m.counts);
+        int nM = m.nMotors;
+        int selfN = 0, crossN = 0, selfV1Admit = 0, crossV1Admit = 0;
+        double selfMotSum = 0, selfRodSum = 0, crossMotSum = 0, crossRodSum = 0;
+        for (int i = 0; i < nM; i++) {
+            int seg = m.boundSeg.get(i); if (seg < 0) continue;
+            double hux = m.uVec.get(i), huy = m.uVec.get(nM + i), huz = m.uVec.get(2 * nM + i);
+            double rux = m.rodUVec.get(i), ruy = m.rodUVec.get(nM + i), ruz = m.rodUVec.get(2 * nM + i);
+            double fux = f.uVecX(seg), fuy = f.uVecY(seg), fuz = f.uVecZ(seg);
+            double motDot = hux * fux + huy * fuy + huz * fuz;   // v2's gate value (uVec now inward = v1's convention)
+            double rodDot = rux * fux + ruy * fuy + ruz * fuz;
+            boolean v1Admit = (motDot >= ALIGN_TOL) && (rodDot >= 0.0);   // conventions AGREE now ⇒ v1 ≡ v2
+            boolean self = (filNodeOf(s, seg) == s.sh.motorNode[i]);
+            if (self) { selfN++; selfMotSum += motDot; selfRodSum += rodDot; if (v1Admit) selfV1Admit++; }
+            else       { crossN++; crossMotSum += motDot; crossRodSum += rodDot; if (v1Admit) crossV1Admit++; }
+        }
+        System.out.printf("  [orient] gate thresholds: motDotFil >= ALIGN_TOL(%.2f), rodDotFil >= 0 (v1==v2 formula AND convention)%n", ALIGN_TOL);
+        System.out.printf("  [orient] SELF  captures n=%d: mean motDotFil=%+.3f rodDotFil=%+.3f | would-v1-admit %d/%d ≡ would-v2-admit (post-swap, conventions agree)%n",
+                selfN, selfN > 0 ? selfMotSum / selfN : 0, selfN > 0 ? selfRodSum / selfN : 0, selfV1Admit, selfN);
+        System.out.printf("  [orient] CROSS captures n=%d: mean motDotFil=%+.3f rodDotFil=%+.3f | would-v1-admit %d/%d ≡ would-v2-admit%n",
+                crossN, crossN > 0 ? crossMotSum / crossN : 0, crossN > 0 ? crossRodSum / crossN : 0, crossV1Admit, crossN);
+        System.out.println("  [orient] ⇒ POST-SWAP: node-filament uVec is INWARD (= v1); a node's own outward myosin gives rodDotFil<0 on its own");
+        System.out.println("           filament ⇒ v2's own (unmodified) gate REJECTS self-grab, as v1 does. Self-capture should be ≈0; cross-capture survives.");
     }
 
     // ====================================================================== Stage 1 runner + readout

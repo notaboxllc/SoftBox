@@ -207,8 +207,8 @@ public final class NodeNucleationHarness {
         // force ONE birth deterministically: stage a request along +x and run the allocator
         f.acceptFlag.init(0); f.acceptFlag.set(0, 1);
         float halfLen = (float) (0.5 * sc.seedLen);
-        // seed pose: tethered end (end1) at node center (0,0,0); coord = +halfLen·x̂
-        f.setBirthRequest(0, halfLen, 0f, 0f, 1f, 0f, 0f, 0f, 1f, 0f);
+        // seed pose (barbed=end2): tethered barbed end2 at node center (0,0,0); coord = +halfLen·x̂, uVec = −x̂ (inward)
+        f.setBirthRequest(0, halfLen, 0f, 0f, -1f, 0f, 0f, 0f, 1f, 0f);
         allocateCpu(f);
         NodeNucleationSystem.tagSeeds(f.rankOffsets, f.freeList, f.freeOffsets, nuc.seedNode, f.allocCounts);
         int s = -1; for (int i = 0; i < f.n; i++) if (nuc.seedNode.get(i) >= 0) s = i;
@@ -226,14 +226,14 @@ public final class NodeNucleationHarness {
         refMag = Math.sqrt(refMag); gotMag = Math.sqrt(gotMag);
         for (int i = 0; i < 3; i++) rel = Math.max(rel, Math.abs(got[i] - ref[i]) / Math.max(refMag, 1e-30));
         boolean arithOk = rel < 1e-3 && refMag > 0;
-        // restoring direction: force points from the seed end1 toward the node center
-        double e1x = f.coordX(s) - halfLen * f.uVecX(s);   // uVec=+x
-        boolean towardNode = (got[0] * (0.0 - e1x)) > 0;    // node center x=0; force.x same sign as (0−e1x)
+        // restoring direction: force points from the seed barbed end2 toward the node center
+        double e2x = f.coordX(s) + halfLen * f.uVecX(s);   // uVec=−x ⇒ end2 = node-attached barbed end
+        boolean towardNode = (got[0] * (0.0 - e2x)) > 0;    // node center x=0; force.x same sign as (0−e2x)
         // bounded: run with Brownian off ⇒ the seed relaxes toward the node (strain shrinks), stays bounded
-        double strain0 = Math.abs(f.coordX(s) - halfLen * f.uVecX(s));
+        double strain0 = Math.abs(f.coordX(s) + halfLen * f.uVecX(s));
         runCpu(sc, 2000, false, false);   // (no new births since cap small + the slot taken; tether relaxes)
-        int s2 = s; double e1xR = f.coordX(s2) - 0.5 * f.segLength.get(s2) * f.uVecX(s2);
-        double strain1 = Math.sqrt(e1xR * e1xR + Math.pow(f.coordY(s2) - 0.5 * f.segLength.get(s2) * f.uVecY(s2), 2) + Math.pow(f.coordZ(s2) - 0.5 * f.segLength.get(s2) * f.uVecZ(s2), 2));
+        int s2 = s; double e2xR = f.coordX(s2) + 0.5 * f.segLength.get(s2) * f.uVecX(s2);
+        double strain1 = Math.sqrt(e2xR * e2xR + Math.pow(f.coordY(s2) + 0.5 * f.segLength.get(s2) * f.uVecY(s2), 2) + Math.pow(f.coordZ(s2) + 0.5 * f.segLength.get(s2) * f.uVecZ(s2), 2));
         boolean relaxes = strain1 < strain0 && strain1 < 0.01;
         boolean ok = born && arithOk && towardNode && relaxes;
         System.out.printf("  born=%s; tether force vs v1 double-ref: |F|=%.3e N (ref %.3e, rel %.2e); toward-node=%s%n",
@@ -242,15 +242,15 @@ public final class NodeNucleationHarness {
         System.out.println("  => " + (ok ? "PASS" : "*FAIL*") + "\n");
         return ok;
     }
-    /** v1 double-precision reference for the seed tether (addNodeForces attach-at-center): F on the seed end1. */
+    /** v1 double-precision reference for the seed tether (addNodeForces attach-at-center): F on the barbed end2. */
     static double[] refTether(Scene sc, int s) {
         FilamentStore f = sc.fil; RigidRodBody node = sc.nodeStore.node;
         int C = f.n; double dt = sc.nuc.tetherParams.get(1), fracMove = sc.nuc.tetherParams.get(0);
         int k = sc.nuc.seedNode.get(s);
         double half = 0.5 * f.segLength.get(s);
-        double e1x = f.coord.get(s) - half * f.uVec.get(s), e1y = f.coord.get(C + s) - half * f.uVec.get(C + s), e1z = f.coord.get(2 * C + s) - half * f.uVec.get(2 * C + s);
+        double e2x = f.coord.get(s) + half * f.uVec.get(s), e2y = f.coord.get(C + s) + half * f.uVec.get(C + s), e2z = f.coord.get(2 * C + s) + half * f.uVec.get(2 * C + s);
         double ncx = node.coord.get(k), ncy = node.coord.get(node.n + k), ncz = node.coord.get(2 * node.n + k);
-        double dx = ncx - e1x, dy = ncy - e1y, dz = ncz - e1z, strain = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        double dx = ncx - e2x, dy = ncy - e2y, dz = ncz - e2z, strain = Math.sqrt(dx * dx + dy * dy + dz * dz);
         double[] out = new double[3];
         if (strain > 0) {
             double lx = dx / strain, ly = dy / strain, lz = dz / strain;
@@ -358,7 +358,7 @@ public final class NodeNucleationHarness {
         System.out.println("  => " + (stabilizes ? "PASS" : "*FAIL*") + "\n");
         return stabilizes;
     }
-    /** Mean RMS distance of each tethered seed's end1 from its node, after M Brownian steps. */
+    /** Mean RMS distance of each tethered seed's barbed end2 (node-attached, barbed=end2) from its node, after M Brownian steps. */
     static double seedWander(Scene sc, int M) {
         runCpu(sc, M, true, false);
         FilamentStore f = sc.fil; NodeNucleationStore nuc = sc.nuc; RigidRodBody node = sc.nodeStore.node;
@@ -366,8 +366,8 @@ public final class NodeNucleationHarness {
         for (int s = 0; s < C; s++) {
             int k = nuc.seedNode.get(s); if (k < 0) continue;
             double half = 0.5 * f.segLength.get(s);
-            double e1x = f.coordX(s) - half * f.uVecX(s), e1y = f.coordY(s) - half * f.uVecY(s), e1z = f.coordZ(s) - half * f.uVecZ(s);
-            double dx = e1x - node.coord.get(k), dy = e1y - node.coord.get(node.n + k), dz = e1z - node.coord.get(2 * node.n + k);
+            double e2x = f.coordX(s) + half * f.uVecX(s), e2y = f.coordY(s) + half * f.uVecY(s), e2z = f.coordZ(s) + half * f.uVecZ(s);
+            double dx = e2x - node.coord.get(k), dy = e2y - node.coord.get(node.n + k), dz = e2z - node.coord.get(2 * node.n + k);
             sum += dx * dx + dy * dy + dz * dz; n++;
         }
         return n > 0 ? Math.sqrt(sum / n) : 0;
