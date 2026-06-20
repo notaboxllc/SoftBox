@@ -2,6 +2,64 @@
 
 Last updated: 2026-06-19
 
+## 2026-06-19 — INC 7 Stage 0+1 BUILD: pool-return + conservation + pointed-end depoly + filament death + slot-recycle
+The reverse-of-growth turnover foundation (recon `INC7_TURNOVER_RECON.md` Stages 0+1). Filaments now **shrink at
+the pointed end (end1) and DIE** — slot freed, monomers conserved exactly back to the pool. **7 gates PASS GPU +
+CPU; default-OFF; growth/nodenuc regressions bit-identical.** Report: `INC7_STAGE1_FINDINGS.md`. Run:
+`./run_depoly.sh [-cpu]`. **No default flip.**
+- **Stage 0:** `ActinPool.put(int)` (reverse of `take`; v1 `putMonomer`) + an exact integer conservation ledger
+  (`totalTaken`/`totalReturned`) ⇒ `pool + Σ monomerCount = const` checkable in exact integer monomer units. Seam
+  unchanged (rate still reads `conc()`).
+- **Stage 1 (`DepolySystem`, 2 kernels):** `depoly` — per ACTIVE pointed tip (`end1NbrSlot<0`) at FIXED
+  `P=offRate·biochemDeltaT` (default `kATPOff1=0.8/s`): `monomerCount−−` + `coord += ½·mono·uVec` (the **exact
+  reverse of growth's lengthen** — end2/barbed fixed, end1/pointed retracts; segLength/drag **reuse
+  `GrowthSystem.recomputeDrag`**); at `monomerCount<actinSeed(3)` → `deathFlag` (returns all monomers en masse).
+  `applyDeath` — `markFree` (Design A, **no swap-compaction** ⇒ avoids v1's `packRange` desync) + break BOTH
+  neighbor links (valid sub-chains) + clear `seedNode`. **Node bound-count needs NO atomic decrement** —
+  `countBoundFil` recomputes it each cadence (recon §3c, cleaner than v1's `filamentOff`).
+- **Slot recycle = `markFree` (self-write of the FREE sentinel)**; a freed slot re-enters the scan-rank free-list
+  the SAME cadence ⇒ reclaimed same-step by a split (gate 2: death→free-list→allocate, the 5c-i order).
+- **Race-free, no atomics/KernelContext:** `depoly` self-writes; `applyDeath`'s neighbor link-break is a scatter
+  to DISJOINT slots (one death per filament per cadence ⇒ distinct neighbors). **CPU≡GPU bit-identical** lifecycle.
+- **Gates:** (0) shrink+die 64→0; (1) conservation EXACT — depoly-only `Fnow+returned==F0` AND grow+depoly
+  `Fnow==F0+taken−returned` (both directions); (2) slot reclaimed same-step; (3) link-break — pointed-tip
+  shortens chain + **interior death ⇒ two valid sub-chains** (the Stage 2 dissolve hook); (4) CPU≡GPU 0
+  mismatches, Δcoord 0.00; (5) no-op-when-off bit-identical; (6) rate-wiring `P_emp 0.00082` vs `0.00080`
+  (derived-probability/cadence lock-step).
+- **Additive-only touch:** `Constants` (+`kATPOff1`/`kADPOff1`), `ActinPool` (+`put`+ledger; `take` conc math
+  unchanged). New: `DepolySystem`/`DepolyStore`/`DepolyHarness`/`run_depoly.sh`. `BoA-v1ref` byte-clean.
+- **FLAG (planner):** B2 nucleation's `allocate` does NOT set `monomerCount` (assumes the seed pre-init); a
+  dead slot is set `monomerCount=0`, so turnover + nucleation together (the ring) must (re)set a born seed's
+  `monomerCount=actinSeed` — a one-line integration fix. **Next:** Stage 2 (en-masse ADP-segment dissolve + the
+  per-segment ADP proxy), Stage 3 (nucleotide rates + treadmilling).
+
+## 2026-06-19 — INC 7 RECON: actin turnover (hydrolysis + cofilin sever + depoly + filament death) — READ-ONLY
+Mapped v1's turnover layer for the planner (`INC7_TURNOVER_RECON.md`). **Read-only; `BoA-v1ref` byte-clean; no
+code/runs.** Five headline findings:
+- **Representation fork RESOLVED — no per-monomer SoA needed.** v1 DOES have a per-monomer `Monomer` (ATP→ADP-Pi
+  →ADP `nucleotideState`; the polymerization recon's "no per-monomer object" was the `noMonomersSimd` bypass),
+  but turnover **consumes it only coarsely**: depoly rate reads the **single terminal monomer's** `isADP()`
+  (`FilSegment.java:1016,1029`); the dissolve reads a **per-segment ratio** `cofilinCt/monomerCt` (`:3742`);
+  every inc-6 assay ran `noMonomersSimd=true`. ⇒ **one per-segment ADP-fraction/age scalar** reproduces every
+  load-bearing decision (jba's hint confirmed by `notADPFraction()` `:3730`). Full per-monomer = optional Stage 4.
+- **Severing needs NO mid-segment cut, NO new slot.** `checkCofilinDissolve` (`:3741`) **dissolves a WHOLE
+  segment en masse** (pool-returns all monomers, removes it). A filament is already a chain of ≤64-mono segments
+  ⇒ an interior dissolve leaves the two neighbor sub-chains as valid separate filaments; the only rewire is
+  breaking two end-links — **simpler than split@64**. This is jba's §3b lighter disposal; threshold
+  `cofilinRatio` (default 1.0 = off) is the tunable seam.
+- **Slot recycling mostly built.** `FilamentStore.markFree()` + the scan-rank free-list already reclaim
+  `filState<0`; death = `markFree` + pool `put`, a race-free sentinel self-write, **no swap-compaction** (v2
+  slot-stability structurally avoids v1's `packRange` ClassCast desync, `JOURNAL` v1ref:791). Genuinely-new =
+  `ActinPool.put()`/conservation gate + the ADP proxy + pointed-end (end1) shrink (reverse of growth).
+- **Settled, not churning** (v1's 2026-06-11 GPU turnover-residency campaign closed it); the membrane formin
+  nucleation is the churning one and is OUT.
+- **Staged minimal cut:** Stage 0 pool-return+conservation; **Stage 1 (foundation) = pointed-end depoly +
+  filament death + slot-recycle (reverse-of-growth)**; Stage 2 en-masse ADP-segment dissolve + per-segment ADP
+  proxy; Stage 3 nucleotide-dependent rates + treadmilling (adjudicated vs physics, §8); Stage 4 optional
+  per-monomer. Per-step order: age→dissolve→pointed-depoly(+death)→barbed-grow→recompute→split→death-sweep
+  (markFree+put)→free-list rebuild→allocate, biochem-cadence step-gated. Highest-risk bookkeeping per stage
+  flagged (Stage 1: same-step death-free→realloc ordering + race-free link-break). Report: `INC7_TURNOVER_RECON.md`.
+
 ## 2026-06-19 — INC 6c: NODE COALESCENCE ASSAY (Test B SCPR) — v2 matches v1 once parameters are matched
 The two-node SCPR coalescence assay (`TestBScprHarness`, two formin nodes growing/holding aimed actin mothers
 that capture each other and pull together) now **coalesces to near-contact and quantitatively matches v1's

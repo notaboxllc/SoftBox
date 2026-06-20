@@ -76,4 +76,10 @@ public final class Constants {
     public static final double biochemDeltaT      = 1.0e-3;       // s   (Env.biochemDeltaT_init:111) — the biochem clock
     public static final double kATPOn2WithFormin  = 11.6;         // µM⁻¹s⁻¹ barbed-end on-rate at a formin/node (Env.java:718)
     public static final int    minMonomerCt       = 30;           // interior min-length clamp (FilSegment.java:411)
+
+    // --- inc 7 Stage 1: actin TURNOVER — pointed-end (end1) depolymerization (v1 FilSegment / Env) ---
+    // Stage 1 uses a FIXED depoly rate (nucleotide-dependent rates are Stage 3). Default = the pointed-end
+    // ATP-off rate kATPOff1 (the gentlest, most-stable baseline, faithful to a fresh ATP filament's pointed-off).
+    public static final double kATPOff1 = 0.8;                    // /s pointed-end (end1) ATP-off rate (Env.kATPOff1_init:688)
+    public static final double kADPOff1 = 2.7;                    // /s pointed-end (end1) ADP-off rate (Env.kADPOff1_init:690; Stage 3)
 }
