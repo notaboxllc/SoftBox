@@ -2,6 +2,102 @@
 
 Last updated: 2026-06-19
 
+## 2026-06-19 — INC 6c: NODE COALESCENCE ASSAY (Test B SCPR) — v2 matches v1 once parameters are matched
+The two-node SCPR coalescence assay (`TestBScprHarness`, two formin nodes growing/holding aimed actin mothers
+that capture each other and pull together) now **coalesces to near-contact and quantitatively matches v1's
+`twoNodeFormin` run** — the earlier impression that "v1 coalesces fast, v2 stalls" was an **apples-to-oranges
+artifact**, not a model difference. Parameter-matched (dt 1e-5, aeta 0.1, 64-mono segments, PAIRS fracMove 0.0573
+/ fracR 1.0 / fracMoveTorq 0.01, 60 singlet/0 dimer, gap 1.0, static mothers, nodeTorqSpring on, faithful
+soft-tether coupling): **v2 1.00→0.193 µm vs v1 1.00→0.231 µm over 1.0 s.** Viewer: `threejs_testb_parity`.
+Standing parity discipline recorded in `V1_V2_PARITY.md` (+ memory) — match EVERYTHING controllable before any
+v1/v2 comparison.
+
+What the arc surfaced (details in the two entries below + the findings docs):
+- **The "v1 vs v2 vastly different" was duration + parameter mismatch:** a 0.4 s v2 viewer dump (0.84 µm) vs a
+  1.0 s v1 run (0.23 µm); plus segment length (32 vs 64 mono), PAIRS coeffs (v2 default vs v1's overrides),
+  myosin composition (40+40 vs 60/0), gap (1.2 vs 1.0), nodeTorqSpring. Matched ⇒ they agree.
+- **Two-sided seed tether (`NodeNucleationSystem.seedTetherNodeReact`) — DEFAULT-ON faithful fix.** The
+  formin–node bond was one-sided (Stage-A fixed-anchor leftover); the free node was never dragged by its own
+  captured filament (barbed end behaved as if pinned). Restored the Newton reaction (−F at node center, fracMove)
+  — exactly v1 `addNodeForces`; parallel-over-nodes, race-free; wired into CPU + GPU paths.
+- **Test-B chain-dt BUG found (flag-gated fix `-chaindtfix`, NOT yet default — FLAG for promotion):**
+  `setChainParams()` leaves `chainParams[0]=Constants.deltaT (1e-4)` while the harness steps at 1e-5, and the
+  chain force ∝ 1/dt ⇒ the filament chain is **10× too soft** (effective fracMove ~0.05). `ContractileAssayHarness`
+  does it right (`chainParams.set(0, dt)`). This is a real correctness bug in Test B's filament; promote to
+  default in a consolidation pass (re-baselines Test B).
+- **Node force-coupling audit (`INC6C_NODE_FORCE_AUDIT_FINDINGS.md`):** v2's node couplings are FAITHFUL to v1
+  coefficient-for-coefficient (singlet `attnForce/numNodeMyos` cohesion, dimer `attnForce·myoDimerFracMove` load,
+  formin `fracMove`). The soft/budget-capped contraction is v1's model, not a v2 mis-port.
+- **Load-transmission EXPERIMENT (`INC6C_NODE_LOAD_TRANSMISSION_FINDINGS.md`, authorized v1 deviation, all
+  FLAG-GATED default-off):** scheme 1 direct-inject conserves the captured cross-bridge force to the node
+  (NET≈RAW vs ~10× loss) and is dt-stable with no global stiffness; scheme 3 global-stiffen hits a stiffness wall
+  (NaN at coeff 0.3); scheme 2 bound-stiff doesn't help. NOT adopted — the faithful soft tether already coalesces.
+- **Aim-holding torque (`-aimtorque`, v1 `nodeTorqSpring` analog, flag-gated):** eliminates the transient
+  "filament-loss" drop-outs (0.6%→0.0%) but over-constrains the filament and reduces coalescence — a tradeoff,
+  not adopted as-is; the faithful port is a follow-on.
+- **New CLI on `TestBScprHarness` (all default-off no-op except the two-sided tether):** `-scheme`, `-boundcoeff`,
+  `-chaindtfix`, `-v1pairs`, `-segmono`, `-aimtorque`, `-nodediag`, `-nogrow`, `-polyrate`, `-nonuc` + a
+  filament-loss drop-out counter. Prior assays + production byte-unchanged; `BoA-v1ref` clean.
+- **Open consolidation (next):** promote the chain-dt fix + the two-sided tether to a clean default, faithfully
+  port `nodeTorqSpring`, decide on the load-transmission scheme, then the contractile RING builds on it.
+
+## 2026-06-19 — INC 6c: EXPERIMENT — conserve the myosin→node load without numerical stiffness (BUILD+MEASURE) — DONE
+Implemented 3 load-transmission schemes (flagged `-scheme N`, default OFF=0 ⇒ no-op, scheme-0 Test B CPU≡GPU agree
++ contractile PASS), measured on the matched assay (120 myo, gap 1.2, growth off, 40k steps, `-nodediag`).
+Authorized physics DEVIATION from v1. No default flip / commit — jba+planner choose. Report:
+`INC6C_NODE_LOAD_TRANSMISSION_FINDINGS.md`.
+- **Problem (from the audit):** captured cross-bridge ~10–40 pN → NET node ~1–3 pN (~10× loss); the soft `1/N`
+  surface tether lets a bound myosin CREEP (relax ~100 steps ≈ ~124-step bound life) instead of dragging the node.
+- **Schemes:** (1) DIRECT INJECTION — route the cross-captured head force onto the node at the surface point
+  (force not spring ⇒ no stiffness; only the ~few captured; `applyHeadForce` skipped, conserved once: node+seg);
+  (2) BOUND-STIFF tether (stiffen coeff only while bound); (3) GLOBAL STIFFEN all singlets (instructive baseline).
+- **Results (MIN dist from 1.200 / conservation NET÷RAW / stable? / retention):** scheme 0 = 0.9054 / ~0.1 / yes /
+  0.040; **scheme 1 = 0.8353 / ~1.0 / yes / 0.040 (BEST: conserves + best coalescence + no stiffness)**; scheme 2
+  = 0.9078 / ~0.1–0.3 / yes / 0.040 (NO help — surface-tether creep persists; 0.07 even softens the dimers); scheme
+  3 = 0.8377 / ~0.5 / **stable ONLY @0.07** / 0.019. **Stiffness wall LOCATED: global stiffen BLOWS UP (NaN) at
+  coeff 0.3** (and the safe coeff shrinks with count ⇒ scheme 3 fragile for a variable-count ring).
+- **Recommendation = scheme 1:** only scheme that conserves (NET≈RAW vs 10× loss), best coalescence (Δ0.365),
+  dt-stable, AND adds no global stiffness ⇒ robust to myosin count (immune to the wall). Caveats (deviation):
+  rigid-lever idealization (head force off the motor → node; motor strokes unloaded via joints), and coalescence
+  still range-limited without turnover (no scheme accelerates-to-contact with growth off). GPU-graph wiring of the
+  chosen scheme (bond-before-gather + xbInject + drop applyHead) + CPU≡GPU is the scoped follow-on.
+- New code (flagged, default off): `NodeSystem.xbridgeInject`/`tetherBoundStiffen`, `TestBScprHarness`
+  `-scheme`/`-boundcoeff` + branched force section + `-nodediag` conservation/retention readout. Prior assays +
+  scheme-0 byte-unchanged; `BoA-v1ref` clean.
+
+## 2026-06-19 — INC 6c: AUDIT — node force-coupling model vs v1 (READ + MEASURE, no edits) — DONE
+Audited every force path on the free node body before more node/ring building. No code edits; `BoA-v1ref`
+read-only. Report: `INC6C_NODE_FORCE_AUDIT_FINDINGS.md`.
+- **VERDICT: v2's node force coefficients/roles are FAITHFUL to v1, coefficient-for-coefficient.** The
+  budget-capped/soft node contraction (RAW xbridge 10–40 pN → NET node 1–3 pN; force doesn't scale with myosin
+  count) is **v1's model, NOT a v2 mis-port.**
+- **v1 model (BoA-v1ref):** `myoCt=Env.numNodeMyos`/`myoDimerCt=Env.numNodeMyoDimers` (both default 0). Singlet
+  tether `keepMyosinsOnSurface` = `attnForce/numNodeMyos` (=/live count ⇒ budget-capped **cohesion**, two-sided,
+  no torque, center). Dimer tether `keepMyosinDimersOnSurface` = `attnForce·myoDimerFracMove`=0.08 (fixed/dimer ⇒
+  **scales** = the **LOAD** path, two-sided WITH torque, rod-end1/node-surface). Formin bond `addNodeForces` =
+  `fracMove` two-sided (`incForceSum(F,end2Pt)` + node `incForceSum(-F)` center, no torque) + optional
+  `nodeTorqSpring`. Node is movable (`extends Thing`, `incCoord`; `fixedNode` default false). Cross-bridge reaches
+  the node ONLY via the surface tether — same mediation as v2.
+- **v2 matches all four** (NodeSystem.tether singlet=center/no-torque, dimer=end1/surface-with-torque;
+  backboneGather reduces force+torque). The minifilament "inconsistency" is RESOLVED: node dimer LOAD coeff
+  (0.08) is the same KIND as minifil `myoMiniFilFracMove` (0.07, fixed); the `1/N` only governs the singlet
+  COHESION path (which minifilaments lack). Load paths consistent; no mis-served coefficient.
+- **Load-transmission verdict: FAITHFUL-soft.** The cap is (a) geometry-limited captures (~2–5 reach the partner
+  regardless of total count — the v1 reach gate) + (b) soft fracMove tether relaxation (~100 steps) ≈ catch-slip
+  bound time (~124 steps) ⇒ detach before transmitting — both v1-faithful. Singlets dilute (capped); load is
+  dimer-carried. Faster contraction = a deliberate v1-DEVIATION (dedicated stiffer xbridge→node path), not a fix.
+- **`seedTetherNodeReact` (uncommitted) placed in the model:** −F at node center, no torque, fracMove ⇒ **exactly
+  v1 addNodeForces's node reaction.** Faithful; ships AS PART of the consolidated model, not alone.
+- **Inconsistencies (structural, not numeric):** (1) seedTether was one-sided (fixed, faithfully); (2) TWO
+  reduction impls for the same "reduce onto node" job (surface tether = CSR backboneGather; seedReact =
+  parallel-over-nodes brute) — cosmetic + the brute is O(nNode·nFil); (3) role-conflation faithful but
+  undocumented (singlets = capped cohesion, not scaling load); (4) nodeTorqSpring unported (optional alignment).
+- **Proposed consolidated model (no coeff changes):** every coupling two-sided; ONE accumulation pattern (route
+  seedReact through the same nodeData+CSR backboneGather, keyed by seedNode, retiring the brute); v1-frozen
+  coefficients with documented cohesion-vs-load roles; don't separate cohesion/load (v1 doesn't); flag
+  nodeTorqSpring. **Blast radius: none on validated assays** (no coeff change; only free-node scenes see the
+  faithful two-sided formin bond). Consolidation is the scoped follow-on.
+
 ## 2026-06-19 — INC 6c: CONVENTION SWAP — node/growth/nucleation realigned to barbed=end2 — DONE (committed on green)
 Executed the atomic §B swap from `INC6C_CONVENTION_SWAP_SURVEY.md`. v2 is now **uniformly barbed=end2** (= v1);
 the node self-grab is **fixed at the root** — rejected by v2's OWN UNMODIFIED bind gate via the corrected INWARD

@@ -144,6 +144,71 @@ public final class NodeNucleationSystem {
         }
     }
 
+    /** The Newton's-3rd-law NODE reaction for the seed tether (FREE-node SCPR). Stage A omitted it (the node was
+     *  a fixed anchor ⇒ the −F reaction did nothing); for a free node it is REAL — without it the node is never
+     *  dragged by its own nucleated filament when a partner captures + pulls it, and the filament's barbed end
+     *  behaves as if PINNED to the (unreactive) node. Faithful to v1's two-sided formin–node bond. Recomputes the
+     *  SAME F as seedTether (KEEP IN LOCK-STEP) and adds −F at the node CENTER (attach-at-center ⇒ no node torque).
+     *  PARALLEL OVER NODES: each node accumulates the seed-tether forces acting on it into its own forceSum (one
+     *  writer per node ⇒ race-free, no atomics, bit-identical CPU↔GPU) — the standard "a rigid body sums all
+     *  forces on it, integrated once per step" pattern, the same accumulation backboneGather does for the node's
+     *  myosin tethers. (The many-to-one seeds→node reduction is why it can't be a write from seedTether's
+     *  per-filament loop.) */
+    public static void seedTetherNodeReact(
+            FloatArray filCoord, FloatArray filUVec, FloatArray filSegLength, FloatArray filBTransGam,
+            FloatArray nodeForceSum, FloatArray nodeCoord, FloatArray nodeInvTransX,
+            IntArray seedNode, FloatArray tetherParams) {
+        int C = filCoord.getSize() / 3;
+        int nN = nodeCoord.getSize() / 3;
+        double fracMove = tetherParams.get(0), dt = tetherParams.get(1);
+        for (@Parallel int k = 0; k < nN; k++) {
+            double ncx = nodeCoord.get(k), ncy = nodeCoord.get(nN + k), ncz = nodeCoord.get(2 * nN + k);
+            double rx = 0.0, ry = 0.0, rz = 0.0;
+            for (int s = 0; s < C; s++) {
+                if (seedNode.get(s) != k) continue;
+                double cx = filCoord.get(s), cy = filCoord.get(C + s), cz = filCoord.get(2 * C + s);
+                double ux = filUVec.get(s), uy = filUVec.get(C + s), uz = filUVec.get(2 * C + s);
+                double half = 0.5 * filSegLength.get(s);
+                double e2x = cx + half * ux, e2y = cy + half * uy, e2z = cz + half * uz;   // tethered barbed end2
+                double dx = ncx - e2x, dy = ncy - e2y, dz = ncz - e2z;
+                double strain = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                if (strain > 0.0) {
+                    double inv = 1.0 / strain;
+                    double denom = dt * (1.0 / filBTransGam.get(s) + nodeInvTransX.get(k));
+                    double fm = (denom > 0.0) ? (fracMove * 1.0e-6 * strain / denom) : 0.0;
+                    // reaction = −F (seedTether applied +F toward the node center; the node feels the opposite)
+                    rx -= fm * dx * inv; ry -= fm * dy * inv; rz -= fm * dz * inv;
+                }
+            }
+            nodeForceSum.set(k,          (float) (nodeForceSum.get(k)          + rx));
+            nodeForceSum.set(nN + k,     (float) (nodeForceSum.get(nN + k)     + ry));
+            nodeForceSum.set(2 * nN + k, (float) (nodeForceSum.get(2 * nN + k) + rz));
+        }
+    }
+
+    /** EXPERIMENT — AIM-HOLDING TORQUE (v1 ProteinNode/addNodeForces nodeTorqSpring analog; default OFF).
+     *  A restoring torque that holds each aimed-filament segment's axis at its stored aim direction (set at
+     *  placement = the node→partner aim). T = aimCoeff·(bRotGam.y/dt)·(uVec × aim) — a fracMove-style rotation
+     *  of aimCoeff·sin(angle) toward the aim per step (no acos; dt-stable for aimCoeff<~1). Counters the floppy/
+     *  Brownian swing that drops the filament out of the partner's capture cone. Filament-side (the node reaction
+     *  torque is small; not applied — flagged as a simplification vs v1's two-sided nodeTorqSpring). Segments with
+     *  no aim (|aim|≈0) are skipped ⇒ no-op when AIM_DIR unset. Per-slot self-write ⇒ race-free. */
+    public static void seedAimTorque(FloatArray filUVec, FloatArray filBRotGam, FloatArray filTorqueSum,
+                                     FloatArray aimDir, FloatArray aimParams) {
+        int C = filUVec.getSize() / 3;
+        double aimCoeff = aimParams.get(0), dt = aimParams.get(1);
+        for (@Parallel int s = 0; s < C; s++) {
+            double ax = aimDir.get(s), ay = aimDir.get(C + s), az = aimDir.get(2 * C + s);
+            if (ax * ax + ay * ay + az * az < 0.25) continue;   // no aim target for this segment
+            double ux = filUVec.get(s), uy = filUVec.get(C + s), uz = filUVec.get(2 * C + s);
+            double cx = uy * az - uz * ay, cy = uz * ax - ux * az, cz = ux * ay - uy * ax;   // uVec × aim (= sin·axis)
+            double k = aimCoeff * filBRotGam.get(C + s) / dt;    // fracMove-style: rotate aimCoeff·sin(angle)/step
+            filTorqueSum.set(s,           (float) (filTorqueSum.get(s)           + k * cx));
+            filTorqueSum.set(C + s,       (float) (filTorqueSum.get(C + s)       + k * cy));
+            filTorqueSum.set(2 * C + s,   (float) (filTorqueSum.get(2 * C + s)   + k * cz));
+        }
+    }
+
     /** Per tethered seed: a CONSTANT-rate wang-hash detach → seedNode = -1 (bond dissolves; the seed stays an
      *  ACTIVE free filament). Per-slot self-write ⇒ race-free, bit-identical CPU↔GPU. */
     public static void dissolve(IntArray seedNode, FloatArray dissolveParams, IntArray nucCounts) {

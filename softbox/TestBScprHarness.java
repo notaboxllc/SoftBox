@@ -49,6 +49,17 @@ public final class TestBScprHarness {
     static double NODE_BROWN = 0.05;    // node-body Brownian scale (a node is a large/slow complex in vivo;
                                         // damping the tiny-sphere thermal wander resolves the directed pull) — tunable -nodebrown
     static int N_SING = 6, N_DIM = 6;                         // radial singlets + dimers PER node (seam #3 default = random radial)
+    static double POLY_RATE = 1.0;                            // polymerization-rate scale (1.0 = default; -polyrate dials elongation)
+    // ---- load-transmission EXPERIMENT (physics deviation from v1, authorized; default OFF=0) ----
+    static int SCHEME = 0;            // 0=current(soft tether) 1=direct inject 2=bound-stiff tether 3=global stiffen(baseline)
+    static double BOUND_COEFF = 0.07; // scheme 2/3 stiff load coeff (≈ the minifilament fixed 0.07)
+    static FloatArray node2Params;    // scheme-2 tether params [0]=dt [1]=BOUND_COEFF
+    static boolean CHAIN_DT_FIX = false;   // fix Test B's chain-dt bug (chainParams[0]=dt, not the 1e-4 default)
+    static boolean V1_PAIRS = false;       // match the v1 twoNodeFormin PAIRS coeffs (fracMove 0.0573, fracR 1.0, fracMoveTorq 0.01) + dt-fix
+    static int SEG_MONO = Constants.stdSegLength;   // monomers per aimed-filament segment (v1 twoNodeFormin used 64; v2 default 32)
+    static double AIM_TORQUE = 0.0;        // aim-holding torque coeff (v1 nodeTorqSpring analog); 0 = off
+    static FloatArray AIM_DIR;             // 3*filCap planar: per-segment aim target uVec (set at aimed placement)
+    static FloatArray AIM_PARAMS;          // [0]=AIM_TORQUE coeff [1]=dt
     static final double SIN80 = Math.sin(Math.toRadians(80.0)), COS80 = Math.cos(Math.toRadians(80.0));
     static final int FIL_MONO = 64;
 
@@ -67,6 +78,16 @@ public final class TestBScprHarness {
                 case "-steps" -> STEPS = Integer.parseInt(args[++i]);
                 case "-seedmon" -> SEED_MON = Integer.parseInt(args[++i]);
                 case "-nodebrown" -> NODE_BROWN = Double.parseDouble(args[++i]);
+                case "-polyrate" -> POLY_RATE = Double.parseDouble(args[++i]);
+                case "-nodediag" -> NODE_DIAG = true;    // per-node force-balance sanity print
+                case "-scheme" -> SCHEME = Integer.parseInt(args[++i]);     // load-transmission experiment scheme
+                case "-boundcoeff" -> BOUND_COEFF = Double.parseDouble(args[++i]);
+                case "-chaindtfix" -> CHAIN_DT_FIX = true;                  // fix the chain-dt 10× softness bug
+                case "-v1pairs" -> V1_PAIRS = true;                         // match v1 twoNodeFormin PAIRS coeffs + dt-fix
+                case "-segmono" -> SEG_MONO = Integer.parseInt(args[++i]);  // monomers/segment (v1=64, v2 default=32)
+                case "-aimtorque" -> AIM_TORQUE = Double.parseDouble(args[++i]);  // aim-holding torque (nodeTorqSpring analog)
+                case "-nogrow" -> GROWTH_ON = false;     // polymerization OFF (pre-grown filaments stay fixed length)
+                case "-nonuc" -> NUC_ON = false;         // nucleation of new filaments OFF
                 case "-3js" -> vizDir = args[++i];
                 case "-gate0" -> gate0Only = true;
                 case "-aimed" -> applyAimedPreset();
@@ -85,7 +106,7 @@ public final class TestBScprHarness {
         }
         System.out.println("\n=== GATE 0 PASS — cross-node capture works; Stage 1 is unblocked. ===");
         if (gate0Only) return;
-        boolean cg = (vizDir == null) ? checkCpuGpu(dt) : true;
+        boolean cg = (vizDir == null && SCHEME == 0) ? checkCpuGpu(dt) : true;   // schemes measured on CPU first; GPU parity for the chosen one
         boolean s1 = runStage1(dt);
         System.out.println("\n=== TEST B SUMMARY: Gate0 PASS; CPU≡GPU " + (cg ? "agree" : "FAIL")
                 + "; Stage 1 " + (s1 ? "SCPR capture-and-pull demonstrated" : "ran (capture an observation — see report)") + " ===");
@@ -140,7 +161,8 @@ public final class TestBScprHarness {
                     mot.assembleArticulated(m, (float) sx, (float) sy, (float) sz, (float) ux, (float) uy, (float) uz, (float) BROWN_TRANS);
                     int rod = mot.rodIdx(m), head = mot.headIdx(m);
                     mot.body.brownRotScale.set(rod, (float) BROWN_ROT); mot.body.brownRotScale.set(head, (float) BROWN_ROT);
-                    double coeff = NodeStore.ATTN_FORCE / nSing;
+                    // scheme 3 (instructive baseline): stiffen ALL singlets to the fixed load coeff (expect the 120-myosin stiffness wall)
+                    double coeff = (SCHEME == 3) ? BOUND_COEFF : NodeStore.ATTN_FORCE / nSing;
                     node.attach(att, k, m, R * ux, R * uy, R * uz, coeff, false);
                     sh.motorNode[m] = k;
                 } else {
@@ -164,6 +186,7 @@ public final class TestBScprHarness {
         mot.nucleotideState.init(MotorStore.NUC_NONE);
         dim.setDimerParams(dt);
         node.setNodeParams(dt); node.setNodeBodyParams(dt);
+        node2Params = FloatArray.fromElements((float) dt, (float) BOUND_COEFF);   // scheme-2 tether [dt, boundCoeff]
         DerivedGeometrySystem.derive(node.node.coord, node.node.uVec, node.node.yVec, node.node.zVec,
                 node.node.end1, node.node.end2, node.node.segLength, node.nodeBodyCounts);
 
@@ -381,14 +404,15 @@ public final class TestBScprHarness {
         double ex = (Math.abs(dx) < 0.9) ? 1 : 0, ey = (Math.abs(dx) < 0.9) ? 0 : 1, ez = 0;
         double yx = dy*ez - dz*ey, yy = dz*ex - dx*ez, yz = dx*ey - dy*ex;
         double ym = 1.0 / Math.sqrt(yx*yx + yy*yy + yz*yz); yx *= ym; yy *= ym; yz *= ym;
-        double Lc = (Constants.stdSegLength + 1) * Constants.actinMonoRadius;
+        double Lc = (SEG_MONO + 1) * Constants.actinMonoRadius;
         double e1x = cx, e1y = cy, e1z = cz;                           // marching node-side point (each seg's end2)
         for (int i = 0; i < nChain; i++) {
             int sl = base + i;
             double ccx = e1x + 0.5 * Lc * dx, ccy = e1y + 0.5 * Lc * dy, ccz = e1z + 0.5 * Lc * dz;
-            f.monomerCount.set(sl, Constants.stdSegLength);
+            f.monomerCount.set(sl, SEG_MONO);
             f.setCoord(sl, (float) ccx, (float) ccy, (float) ccz);     // coord UNCHANGED (centers along +dir)
             f.setUVec(sl, (float) -dx, (float) -dy, (float) -dz);      // barbed=end2: uVec INWARD (toward node)
+            if (AIM_DIR != null) { int C = f.n; AIM_DIR.set(sl, (float) -dx); AIM_DIR.set(C + sl, (float) -dy); AIM_DIR.set(2 * C + sl, (float) -dz); }  // aim-torque target
             f.setYVec(sl, (float) yx, (float) yy, (float) yz);
             f.filState.set(sl, FilamentStore.FIL_ACTIVE);
             f.brownTransScale.set(sl, (float) bornScale); f.brownRotScale.set(sl, (float) bornScale);
@@ -425,6 +449,17 @@ public final class TestBScprHarness {
         DragTensorSystem.run(f);
         f.setParams(dt, Constants.brownianForceMag());
         f.setChainParams();
+        // BUG: setChainParams() leaves chainParams[0]=Constants.deltaT (1e-4) while the harness steps at dt (1e-5)
+        // ⇒ the chain force (∝ 1/dt) is 10× too soft (effective fracMove ~0.05). ContractileAssayHarness sets
+        // chainParams[0]=dt correctly. -chaindtfix applies that fix (stiffer, properly-tuned filament chain).
+        if (CHAIN_DT_FIX || V1_PAIRS) f.chainParams.set(0, (float) dt);   // dt-fix (required for the coeffs to apply correctly)
+        if (V1_PAIRS) {                                                // match the v1 twoNodeFormin chain PAIRS coefficients
+            f.chainParams.set(1, 0.0573f);   // fracMove
+            f.chainParams.set(2, 1.0f);      // fracR
+            f.chainParams.set(3, 0.01f);     // fracMoveTorq
+        }
+        AIM_DIR = new FloatArray(3 * cap); AIM_DIR.init(0f);           // aim-torque targets (set in placeAimedChain)
+        AIM_PARAMS = FloatArray.fromElements((float) AIM_TORQUE, (float) dt);
         double bornScale = Constants.BTransCoeff / 30.0;               // damped seed (B2 dt-compensation; held near the node)
         f.setBirthParams(bornScale, bornScale);
         f.setBirthRequestCount(cap);
@@ -445,7 +480,7 @@ public final class TestBScprHarness {
             // partner (so the partner's rodDotFil≥0 / far-hemisphere heads capture it early — the polarity gate
             // requires the foreign filament to reach the captor's far side; INC6C_TESTB_SCPR_FINDINGS §capture
             // cone). Growth stays ON (the tip keeps extending). Node k's chain: slots [k·CHAIN,(k+1)·CHAIN).
-            double Lc = (Constants.stdSegLength + 1) * Constants.actinMonoRadius;     // ~0.089 µm/segment
+            double Lc = (SEG_MONO + 1) * Constants.actinMonoRadius;                   // segment length (SEG_MONO mono)
             AIMED_CHAIN = Math.max(2, (int) Math.round(1.30 * GAP / Lc));             // reach ≈ 1.3·gap (overshoot)
             for (int k = 0; k < 2; k++) {
                 double[] d = forminSiteDir(k, 0);              // SEAM #3 SPECIFIED: aim at the partner
@@ -529,6 +564,7 @@ public final class TestBScprHarness {
         // === GROWTH (cadence-gated; FilamentStore's own request arrays; markSplits clears all acceptFlag) ===
         boolean fires = GROWTH_ON && grow.firesAt(t);
         grow.setCounts(t, SEED, fires); grow.refreshRate(GROWTH_ON);
+        if (POLY_RATE != 1.0) grow.growParams.set(0, (float) (Math.min(grow.growParams.get(0), 1.0) * POLY_RATE));  // -polyrate scale (cap then dial)
         GrowthSystem.grow(nuc.seedNode, f.monomerCount, f.coord, f.uVec, grow.grewFlag, grow.growParams, grow.growCounts);
         CrossBridgeSystem.csrScan(grow.grewScanCounts, grow.grewFlag, grow.grewOffsets);
         grow.depletePoolForGrows();
@@ -565,26 +601,55 @@ public final class TestBScprHarness {
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
         MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
         DimerCouplingSystem.couple(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg);
-        // node radial surface tether + the single-ended backbone-side CSR gather (motor reaction → node body)
-        NodeSystem.tether(b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum,
-                nb.coord, nb.uVec, nb.yVec, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams);
-        CrossBridgeSystem.csrHistogram(nd.attachNode, nd.nodeCounts4, nd.nodeAttachCount);
-        CrossBridgeSystem.csrScan(nd.nodeCounts4, nd.nodeAttachCount, nd.nodeAttachOffsets);
-        CrossBridgeSystem.csrScatter(nd.attachNode, nd.nodeCounts4, nd.nodeAttachOffsets, nd.nodeAttachCount, nd.nodeAttachList);
-        MiniFilamentSystem.backboneGather(nd.nodeAttachOffsets, nd.nodeAttachList, nd.nodeData, nb.forceSum, nb.torqueSum, nd.nodeCounts4);
-        // cross-bridge: head self-force + the seg-side reaction stored in bondData
-        CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
-                mot.boundSeg, mot.bindArc, mot.nucleotideState, sh.bondData, sh.xbParams);
-        CrossBridgeSystem.applyHeadForce(sh.bondData, b.forceSum, b.torqueSum, mot.counts);
+        // node radial surface tether + the single-ended backbone-side CSR gather (motor reaction → node body).
+        // load-transmission EXPERIMENT (default SCHEME=0 ⇒ the exact original order/kernels, bit-identical):
+        if (SCHEME == 1) {
+            // scheme 1 — DIRECT INJECTION: compute cross-bridge first; tether (soft, retention) writes nodeData;
+            // inject the bound heads' force onto the node (rigid lever); gather; SKIP applyHeadForce (head force
+            // went to the node, not the motor ⇒ counted once). The filament still gets −F via segGather below.
+            CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                    mot.boundSeg, mot.bindArc, mot.nucleotideState, sh.bondData, sh.xbParams);
+            NodeSystem.tether(b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum,
+                    nb.coord, nb.uVec, nb.yVec, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams);
+            NodeSystem.xbridgeInject(sh.bondData, nb.coord, nb.uVec, nb.yVec, nd.attachKey, nd.radial, nd.attachCoeffK, mot.boundSeg, nd.nodeData, nd.nodeParams);
+            CrossBridgeSystem.csrHistogram(nd.attachNode, nd.nodeCounts4, nd.nodeAttachCount);
+            CrossBridgeSystem.csrScan(nd.nodeCounts4, nd.nodeAttachCount, nd.nodeAttachOffsets);
+            CrossBridgeSystem.csrScatter(nd.attachNode, nd.nodeCounts4, nd.nodeAttachOffsets, nd.nodeAttachCount, nd.nodeAttachList);
+            MiniFilamentSystem.backboneGather(nd.nodeAttachOffsets, nd.nodeAttachList, nd.nodeData, nb.forceSum, nb.torqueSum, nd.nodeCounts4);
+        } else {
+            if (SCHEME == 2)   // scheme 2 — STATE-DEPENDENT STIFF tether (bound myosins only)
+                NodeSystem.tetherBoundStiffen(b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum,
+                        nb.coord, nb.uVec, nb.yVec, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, mot.boundSeg, nd.nodeData, node2Params);
+            else               // SCHEME 0 (current) and 3 (global stiffen via the build-time coeff) — original tether
+                NodeSystem.tether(b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum,
+                        nb.coord, nb.uVec, nb.yVec, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams);
+            CrossBridgeSystem.csrHistogram(nd.attachNode, nd.nodeCounts4, nd.nodeAttachCount);
+            CrossBridgeSystem.csrScan(nd.nodeCounts4, nd.nodeAttachCount, nd.nodeAttachOffsets);
+            CrossBridgeSystem.csrScatter(nd.attachNode, nd.nodeCounts4, nd.nodeAttachOffsets, nd.nodeAttachCount, nd.nodeAttachList);
+            MiniFilamentSystem.backboneGather(nd.nodeAttachOffsets, nd.nodeAttachList, nd.nodeData, nb.forceSum, nb.torqueSum, nd.nodeCounts4);
+            // cross-bridge: head self-force + the seg-side reaction stored in bondData
+            CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                    mot.boundSeg, mot.bindArc, mot.nucleotideState, sh.bondData, sh.xbParams);
+            CrossBridgeSystem.applyHeadForce(sh.bondData, b.forceSum, b.torqueSum, mot.counts);
+        }
         // filament: chain (F3/F4) + the seedNode pull bond (node-center↔tip) + the gathered cross-bridge reaction
         ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
         NodeNucleationSystem.seedTether(f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum,
                 nb.coord, nd.nodeInvTransY, nuc.seedNode, nuc.tetherParams);
+        // two-sided bond: the Newton reaction of the seed tether on the FREE node (un-pins the barbed end; without
+        // it the node is never dragged by its own captured filament — the missing SCPR coalescence force)
+        NodeNucleationSystem.seedTetherNodeReact(f.coord, f.uVec, f.segLength, f.bTransGam,
+                nb.forceSum, nb.coord, nd.nodeInvTransY, nuc.seedNode, nuc.tetherParams);
         CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sh.segMotorCount);
         CrossBridgeSystem.csrScan(mot.counts, sh.segMotorCount, sh.segMotorOffsets);
         CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sh.segMotorOffsets, sh.segMotorCount, sh.segMotorMyo);
         CrossBridgeSystem.segGather(sh.segMotorOffsets, sh.segMotorMyo, sh.bondData, f.forceSum, f.torqueSum, mot.counts);
         CrossBridgeSystem.registerForceDot(sh.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts);
+        // EXPERIMENT: aim-holding torque (v1 nodeTorqSpring analog) — holds the aimed filaments pointed at the partner
+        if (AIM_TORQUE > 0.0) NodeNucleationSystem.seedAimTorque(f.uVec, f.bRotGam, f.torqueSum, AIM_DIR, AIM_PARAMS);
+
+        // node force-balance sanity check (read forceSum AFTER all accumulation, BEFORE confine/integrate)
+        if (NODE_DIAG && (t % NODE_DIAG_EVERY == 0)) nodeForceDiag(s, t);
 
         // === INTEGRATE (node body confined+integrated; motor body; filament) ===
         ContainmentSystem.confine(nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, s.boxParams, nd.nodeBodyCounts);
@@ -594,6 +659,53 @@ public final class TestBScprHarness {
         DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+    }
+
+    static boolean NODE_DIAG = false;
+    static int NODE_DIAG_EVERY = 5000;
+    /** Force-balance sanity check: per node, compare the RAW cross-bridge head-force on its captured myosins (the
+     *  big "stretch" force) vs the NET force actually in the node's forceSum (what the integrator moves it by),
+     *  plus the implied per-step displacement. Reveals whether the cross-bridge force reaches the node body. */
+    static void nodeForceDiag(S1 s, int t) {
+        RigidRodBody nb = s.sh.node.node; int nN = nb.n;
+        MotorStore mot = s.sh.mot; int nMot = mot.nMotors; int ST = CrossBridgeSystem.STRIDE;
+        double dt = 1.0e-5;
+        double[] rawx = new double[nN], rawmag = new double[nN]; int[] cap = new int[nN];
+        for (int m = 0; m < nMot; m++) {
+            if (mot.boundSeg.get(m) < 0) continue;
+            int k = s.sh.motorNode[m];
+            double hx = s.sh.bondData.get(m * ST), hy = s.sh.bondData.get(m * ST + 1), hz = s.sh.bondData.get(m * ST + 2);
+            rawx[k] += hx; rawmag[k] += Math.sqrt(hx * hx + hy * hy + hz * hz); cap[k]++;
+        }
+        // retention: max tether strain (rod end1 ↔ its node surface point) — myosins drifting off the surface
+        NodeStore nd = s.sh.node; int nA = nd.nAttach; int nMB = mot.body.coord.getSize() / 3;
+        double maxStrain = 0;
+        for (int a = 0; a < nA; a++) {
+            int kk = nd.attachKey.get(a), rod = 3 * nd.attachKey.get(nA + a);
+            double ncx = nb.coord.get(kk), ncy = nb.coord.get(nN + kk), ncz = nb.coord.get(2 * nN + kk);
+            double nux = nb.uVec.get(kk), nuy = nb.uVec.get(nN + kk), nuz = nb.uVec.get(2 * nN + kk);
+            double nyx = nb.yVec.get(kk), nyy = nb.yVec.get(nN + kk), nyz = nb.yVec.get(2 * nN + kk);
+            double nzx = nuy*nyz - nuz*nyy, nzy = nuz*nyx - nux*nyz, nzz = nux*nyy - nuy*nyx;
+            double ru = nd.radial.get(a), ry = nd.radial.get(nA + a), rz = nd.radial.get(2 * nA + a);
+            double pax = ncx + ru*nux + ry*nyx + rz*nzx, pay = ncy + ru*nuy + ry*nyy + rz*nzy, paz = ncz + ru*nuz + ry*nyz + rz*nzz;
+            double rlen = mot.body.segLength.get(rod);
+            double e1x = mot.body.coord.get(rod) - 0.5*rlen*mot.body.uVec.get(rod);
+            double e1y = mot.body.coord.get(nMB + rod) - 0.5*rlen*mot.body.uVec.get(nMB + rod);
+            double e1z = mot.body.coord.get(2*nMB + rod) - 0.5*rlen*mot.body.uVec.get(2*nMB + rod);
+            double sdx = pax-e1x, sdy = pay-e1y, sdz = paz-e1z;
+            maxStrain = Math.max(maxStrain, Math.sqrt(sdx*sdx + sdy*sdy + sdz*sdz));
+        }
+        System.out.printf("  [nodeF t=%d scheme=%d] dist=%.4f  maxTetherStrain=%.4f µm (retention; rod≈%.3f µm off-surface ⇒ creep/fly-off)%n",
+                t, SCHEME, nodeDist(s.sh.node), maxStrain, maxStrain);
+        for (int k = 0; k < nN; k++) {
+            double fx = nb.forceSum.get(k), fy = nb.forceSum.get(nN + k), fz = nb.forceSum.get(2 * nN + k);
+            double fmag = Math.sqrt(fx * fx + fy * fy + fz * fz);
+            double gam = nb.bTransGam.get(k);
+            double dxStep = fx * dt / gam * 1e6;   // µm/step (x) the integrator applies
+            double consv = Math.abs(rawx[k]) > 1e-30 ? fx / rawx[k] : 0;   // directed conservation NET/RAW (target ≈ 1)
+            System.out.printf("    node %d @x=%+.4f: captured=%d  RAW xbridge |Σ|=%.3f pN (Σx=%+.3f pN)  ||  NET node |F|=%.4f pN (Fx=%+.4f pN)  CONSV(Fx/Σx)=%+.3f  ⇒ Δx≈%+.2e µm/step%n",
+                    k, nb.coord.get(k), cap[k], rawmag[k] * 1e12, rawx[k] * 1e12, fmag * 1e12, fx * 1e12, consv, dxStep);
+        }
     }
 
     // ---- readout helpers ----
@@ -733,11 +845,13 @@ public final class TestBScprHarness {
         double dMin = d0; int stepMin = 0;
         // capture-PHASE accumulators (steps where cross-capture is active — the approach, before any overrun)
         long capSteps = 0, crossCntSum = 0, selfCntSum = 0; double crossForceSum = 0, selfForceSum = 0;
+        long dropoutSteps = 0;   // steps where a node has lost the partner filament (cross-capture <= 1)
         System.out.printf("  %-8s %-9s %-7s %-7s %-7s %-7s %-8s%n", "step", "dist(µm)", "cross", "self", "bound", "active", "contour");
         for (int t = 0; t < M; t++) {
             cpuStepStage1(s, t);
             double d = nodeDist(nd);
             int cross = crossNodeCaptures(s), self = selfCaptures(s), bound = boundTotal(mot);
+            if (cross <= 1) dropoutSteps++;
             if (cross > 0 && firstCapture < 0) firstCapture = t;
             if (cross > peakCross) peakCross = cross;
             if (d < dMin) { dMin = d; stepMin = t; }
@@ -769,6 +883,8 @@ public final class TestBScprHarness {
         double crossF = capSteps > 0 ? crossForceSum / capSteps : 0, selfF = capSteps > 0 ? selfForceSum / capSteps : 0;
         System.out.printf("  cross-node captures: first @ step %s, peak=%d, capture-phase avg=%.2f%n",
                 captured ? String.valueOf(firstCapture) : "NEVER", peakCross, avgCross);
+        System.out.printf("  FILAMENT-LOSS drop-outs (cross-capture<=1): %d of %d steps (%.1f%%)  [scheme=%d chaindtfix=%b aimtorque=%.2f]%n",
+                dropoutSteps, M, 100.0 * dropoutSteps / M, SCHEME, CHAIN_DT_FIX, AIM_TORQUE);
         System.out.printf("  self-capture (jba's layout thesis): capture-phase avg count=%.2f; transmitted force self=%.3f pN vs cross=%.3f pN (self/cross=%.2f)%n",
                 avgSelf, selfF, crossF, crossF > 1e-9 ? selfF / crossF : 0);
         System.out.printf("  final: active filaments=%d, contour=%.4f µm%n", activeFilaments(s.fil), contour(s.fil));
@@ -866,6 +982,7 @@ public final class TestBScprHarness {
             .task("applyHead", CrossBridgeSystem::applyHeadForce, sh.bondData, b.forceSum, b.torqueSum, mot.counts)
             .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
             .task("seedTether", NodeNucleationSystem::seedTether, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, nb.coord, nd.nodeInvTransY, nuc.seedNode, nuc.tetherParams)
+            .task("seedReact", NodeNucleationSystem::seedTetherNodeReact, f.coord, f.uVec, f.segLength, f.bTransGam, nb.forceSum, nb.coord, nd.nodeInvTransY, nuc.seedNode, nuc.tetherParams)
             .task("filHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, sh.segMotorCount)
             .task("filScan", CrossBridgeSystem::csrScan, mot.counts, sh.segMotorCount, sh.segMotorOffsets)
             .task("filScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, sh.segMotorOffsets, sh.segMotorCount, sh.segMotorMyo)
@@ -885,7 +1002,7 @@ public final class TestBScprHarness {
         sched = new GridScheduler();
         for (String t : new String[]{ "publishHead","reach","release","bind","cycle","bond","applyHead","register" }) addW("scpr." + t, pad(nM));
         for (String t : new String[]{ "zeroMot","brownMot","joints","integM","deriveM" }) addW("scpr." + t, pad(nMB));
-        for (String t : new String[]{ "zeroNode","brownNode","ndGather","confineNode","integNode","deriveNode" }) addW("scpr." + t, pad(nN));
+        for (String t : new String[]{ "zeroNode","brownNode","ndGather","seedReact","confineNode","integNode","deriveNode" }) addW("scpr." + t, pad(nN));
         addW("scpr.dimer", pad(nD));
         addW("scpr.tether", pad(nA));
         addW("scpr.emit", pad(nN));
@@ -912,6 +1029,7 @@ public final class TestBScprHarness {
             g.nuc.setCounts(t, SEED); g.nuc.refreshPoolGate();
             boolean fires = GROWTH_ON && g.grow.firesAt(t);
             g.grow.setCounts(t, SEED, fires); g.grow.refreshRate(GROWTH_ON);
+            if (POLY_RATE != 1.0) g.grow.growParams.set(0, (float) (Math.min(g.grow.growParams.get(0), 1.0) * POLY_RATE));  // -polyrate scale
             TornadoExecutionResult res = plan.withGridScheduler(sched).execute();
             if (t % sampleEvery == sampleEvery - 1) { res.transferToHost(g.sh.mot.boundSeg); gBound += boundTotal(g.sh.mot); }
             if (t == M - 1) res.transferToHost(g.fil.filState);   // pull the lifecycle back for the active-fil count
