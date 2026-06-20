@@ -82,4 +82,20 @@ public final class Constants {
     // ATP-off rate kATPOff1 (the gentlest, most-stable baseline, faithful to a fresh ATP filament's pointed-off).
     public static final double kATPOff1 = 0.8;                    // /s pointed-end (end1) ATP-off rate (Env.kATPOff1_init:688)
     public static final double kADPOff1 = 2.7;                    // /s pointed-end (end1) ADP-off rate (Env.kADPOff1_init:690; Stage 3)
+
+    // --- inc 7 Aging build (A): nucleotide hydrolysis cascade (per-segment proxy). v1 Monomer.hydrolize:182 /
+    // dissociate:189 — the ATP→ADP-Pi→ADP aging that, in aggregate, makes the pointed end mostly ADP at steady
+    // state (⇒ the nucleotide-asymmetric off-rate kADPOff1). Rates from Env.java (recon §1c).
+    public static final double kHydrolysis   = 0.3;              // /s ATP → ADP-Pi   (Env.kHydrolysis_init)
+    public static final double kDissociation = 1.0;              // /s ADP-Pi → ADP   (Env.kDissociation_init)
+
+    // --- inc 7 Severing build (B): cofilin en-masse whole-segment dissolve (v1 FilSegment.checkCofilinDissolve:3741
+    // + Monomer.cofilinBinding:243; recon §1e/§3b). Cofilin decorates ADP monomers at cofilinConc·cofilinRate·dt
+    // (resisted by bundling /(bundleStableFactor·linkCt)); a segment with cofilinCt/monomerCt > cofilinRatio
+    // dissolves en masse. The per-segment proxy tracks a cofilin FRACTION f_cof (the aggregate of the per-monomer
+    // Bernoulli over ADP-non-cofilin monomers). Default cofilinRatio = 1.0 ⇒ dissolve OFF (a ratio can't exceed 1).
+    public static final double cofilinRate        = 0.1;        // µM⁻¹s⁻¹ cofilin binding rate (Env.cofilinRate_init:748)
+    public static final double cofilinConc        = 3.0;        // µM     cofilin concentration  (Env.cofilinConc_init:751)
+    public static final double bundleStableFactor = 2.0;        // bundled fils resist cofilin /(factor·linkCt) (Env:628)
+    public static final double cofilinRatio       = 1.0;        // dissolve threshold; 1.0 = OFF (Env.cofilinRatio_init:754)
 }

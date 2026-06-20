@@ -89,6 +89,52 @@ public final class FrameWriter {
         frameNumber++;
     }
 
+    /**
+     * Increment 7 Aging build (A) viewer hook — write a frame coloured by the nucleotide-composition proxy. The
+     * verbatim v1 viewer renders ONE channel, seg.notADPRatio (ageColor: 0=red/old/ADP ↔ 1=young/ATP), so we emit
+     * notADPRatio = f_ATP + f_ADPPi (= 1 − f_ADP) ⇒ the ATP→ADP-Pi→ADP aging shows as a red gradient barbed→pointed
+     * along the filament. We ALSO emit the raw composition (fATP/fADPPi/fADP) as extra JSON fields the current
+     * viewer ignores — so a future band-aware viewer / external analysis can render the distinct ADP-Pi band. The
+     * geometry path is identical to writeFrame(FilamentStore,double); this overload only changes the colour field.
+     */
+    public void writeFrame(FilamentStore s, AgingStore aging, double t) {
+        StringBuilder sb = new StringBuilder(64 + 128 * s.n);
+        sb.append(String.format(Locale.US, "{\"frame\":%d", frameNumber));
+        sb.append(String.format(Locale.US, ",\"t\":%.6g", t));
+        sb.append(String.format(Locale.US,
+                ",\"bounds\":{\"xDim\":%.5g,\"yDim\":%.5g,\"zDim\":%.5g}", xDim, yDim, zDim));
+        sb.append(",\"segments\":[");
+        boolean first = true;
+        for (int i = 0; i < s.n; i++) {
+            if (s.filState.get(i) < 0) continue;          // skip FREE slots
+            if (!first) sb.append(',');
+            appendSegment(sb, s, aging, i);
+            first = false;
+        }
+        sb.append("]}");
+        Path path = Path.of(outDir, String.format(Locale.US, "frame_%06d.json", frameNumber));
+        try {
+            Files.writeString(path, sb.toString());
+        } catch (IOException e) {
+            throw new UncheckedIOException("FrameWriter: failed writing " + path, e);
+        }
+        frameNumber++;
+    }
+
+    private void appendSegment(StringBuilder sb, FilamentStore s, AgingStore aging, int i) {
+        double cx = s.coordX(i), cy = s.coordY(i), cz = s.coordZ(i);
+        double ux = s.uVecX(i),  uy = s.uVecY(i),  uz = s.uVecZ(i);
+        double half = s.segLength.get(i) * 0.5;
+        double e1x = cx - half * ux, e1y = cy - half * uy, e1z = cz - half * uz;
+        double e2x = cx + half * ux, e2y = cy + half * uy, e2z = cz + half * uz;
+        double fATP = aging.fATP(i), fADPPi = aging.fADPPi(i), fADP = aging.fADP(i);
+        double notADP = fATP + fADPPi;                     // 1 − f_ADP (the viewer's age channel)
+        sb.append(String.format(Locale.US,
+                "{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,"
+                + "\"notADPRatio\":%.3g,\"cofilinCount\":%d,\"fATP\":%.3g,\"fADPPi\":%.3g,\"fADP\":%.3g}",
+                i, e1x, e1y, e1z, e2x, e2y, e2z, radius, notADP, 0, fATP, fADPPi, fADP));
+    }
+
     private void appendSegment(StringBuilder sb, FilamentStore s, int i) {
         double cx = s.coordX(i), cy = s.coordY(i), cz = s.coordZ(i);
         double ux = s.uVecX(i),  uy = s.uVecY(i),  uz = s.uVecZ(i);

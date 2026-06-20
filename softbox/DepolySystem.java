@@ -102,6 +102,52 @@ public final class DepolySystem {
     }
 
     /**
+     * Increment 7 Aging build (A) — NUCLEOTIDE-DEPENDENT pointed-end depoly (the proxy-driven variant of depoly).
+     * IDENTICAL to depoly() except the per-event probability is computed PER SEGMENT from the pointed tip's
+     * ADP-fraction (the nucleotide-asymmetric off-rate) instead of the single FIXED depolyParams[0]:
+     *   adp = nucFrac[2*C+s] ;  P = pATP·(1 − adp) + pADP·adp   (pATP=kATPOff1·bcΔt, pADP=kADPOff1·bcΔt).
+     * At steady state the pointed segment is ≈100% ADP ⇒ P ≈ pADP ⇒ the off-rate ≈ kADPOff1 (the asymmetric
+     * treadmilling C_c). Everything else (wang-hash draw, monomerCount−−, the coord retract, the en-masse death
+     * at monomerCount < floor) is the SAME as depoly() — the rate is the only difference. depolyParams[1]=halfmono,
+     * [2]=floor (depolyParams[0], the fixed P, is UNUSED here). depolyRateParams=[pATP,pADP] from AgingStore.
+     * depoly() stays byte-unchanged ⇒ the Stage-1 fixed-rate baseline is preserved bit-identical.
+     */
+    public static void depolyProxy(IntArray filState, IntArray monomerCount, FloatArray coord, FloatArray uVec,
+                                   IntArray end1NbrSlot, FloatArray nucFrac, IntArray returnedMon, IntArray deathFlag,
+                                   FloatArray depolyParams, FloatArray depolyRateParams, IntArray depolyCounts) {
+        int C = filState.getSize();
+        int fires = depolyCounts.get(3), step = depolyCounts.get(1), seed = depolyCounts.get(2);
+        float halfmono = depolyParams.get(1);
+        int floor = (int) depolyParams.get(2);   // actinSeed
+        float pATP = depolyRateParams.get(0), pADP = depolyRateParams.get(1);
+        for (@Parallel int s = 0; s < C; s++) {
+            returnedMon.set(s, 0);
+            deathFlag.set(s, 0);
+            if (fires == 0) continue;
+            if (filState.get(s) < 0) continue;            // FREE slot
+            if (end1NbrSlot.get(s) >= 0) continue;        // not a pointed tip (end1 bonded) ⇒ no end1 depoly
+            int M = monomerCount.get(s);
+            // nucleotide-dependent rate: interpolate ATP-off ↔ ADP-off by the pointed segment's ADP-fraction
+            float adp = nucFrac.get(2 * C + s);
+            float P = pATP * (1f - adp) + pADP * adp;
+            if (M >= floor) {
+                int base = (s * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4445504F; // "DEPO" (same salt as depoly)
+                float u = (wangHash(base) >>> 1) / 2147483647.0f;
+                if (u >= P) continue;
+                monomerCount.set(s, M - 1);
+                float ux = uVec.get(s), uy = uVec.get(C + s), uz = uVec.get(2 * C + s);
+                coord.set(s,         coord.get(s)         + 0.5f * halfmono * ux);
+                coord.set(C + s,     coord.get(C + s)     + 0.5f * halfmono * uy);
+                coord.set(2 * C + s, coord.get(2 * C + s) + 0.5f * halfmono * uz);
+                returnedMon.set(s, 1);
+            } else {
+                deathFlag.set(s, 1);
+                returnedMon.set(s, M);
+            }
+        }
+    }
+
+    /**
      * Apply death (post-depoly): per slot flagged dead, markFree (filState FREE + Brownian scale 0 + monomerCount
      * 0), break BOTH neighbor links (set each neighbor's back-pointer to −1, leaving valid sub-chains), and clear
      * the node tether (seedNode −1). The dying slot is a self-write; the neighbor back-pointer writes are a

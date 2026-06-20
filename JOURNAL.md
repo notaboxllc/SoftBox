@@ -1,6 +1,67 @@
 # Soft Box Project Journal
 
-Last updated: 2026-06-19
+Last updated: 2026-06-20
+
+## 2026-06-20 — INC 7 SEVERING build (B): cofilin en-masse dissolve + the combined watchable turnover system
+Filaments now **SEVER** — a segment crosses the cofilin/ADP threshold and dissolves EN MASSE, the filament
+fragments into two valid sub-chains, monomers conserved — and the **full simplified turnover machinery (growth +
+depoly + aging + severing) runs together in one watchable sim**. **6 gates PASS GPU+CPU; default-OFF; no default
+flip.** Report: `INC7_SEVERING_FINDINGS.md`; log: `RUN_LOGS/2026-06-20_severing_validation.txt`. Run:
+`./run_severing.sh [-cpu] [-3js <dir>]`. **The dissolve REUSES the validated Stage-1 death path — not re-derived.**
+- **All ADDITIVE** — no existing kernel touched (Constants +16 lines, else new files). `SeveringSystem` (2 kernels:
+  `cofilinAccumulate` `f_cof += (f_ADP−f_cof)·p_cof` — the aggregate of v1's per-monomer Bernoulli, `f_cof ≤ f_ADP`;
+  `cofilinDissolve` flags when `f_cof > cofilinRatio`) + `SeverStore` (`cofFrac` + derived `p_cof` + SEPARATE death
+  scratch from depoly) + `Constants.cofilinRate=0.1`/`cofilinConc=3.0`/`bundleStableFactor=2.0`/`cofilinRatio=1.0`.
+  The dissolve REUSES `DepolySystem.applyDeath` byte-unchanged (markFree + en-masse pool.put + break BOTH links →
+  two valid sub-chains + clear seedNode). The viewer hook is build-A's `FrameWriter(.,AgingStore,.)` (skips FREE
+  slots ⇒ a dissolved segment vanishes + the filament fragments — directly watchable).
+- **Faithful aggregate port of v1 `checkCofilinDissolve`** (recon §1e/§3b): cofilin decorates ADP monomers; a
+  segment with `cofilinCt/monomerCt > cofilinRatio` dissolves. The proxy's per-segment `f_ADP` (build A) is the input.
+- **Gates:** 1 trigger — `f_cof` vs analytic `1−(1−p_cof)^n` **Δ 1.25e-7** + dissolve fires bit-for-decision at the
+  threshold crossing (n*=2311, en-masse returns 32); 2 cofilin-DRIVEN interior dissolve → **two valid reciprocal
+  sub-chains** (gate-3b machinery, cofilin-driven); 3 conservation EXACT through grow/depoly/death/DISSOLVE (200k
+  cadences, integer ledger); 4 **CPU≡GPU bit-identical** (19-task combined graph, 40k cadences, 0 mismatches);
+  5 no-op-off ≡ aging baseline bit-identical (ratio=1.0 ⇒ never crosses); 6 the COMBINED render (all systems on,
+  dissolves fire, conservation exact; `-3js` shows polymerization → ADP gradient → dissolve+fragment).
+- **PAUSE + REPORT (discovery boundary, NOT silently added):** (a) faithful FREE-FRAGMENT barbed-end dynamics need
+  **end2 depoly** — a Stage-1 deferral (pointed-only); the build is correct+conserved without it, flagged as the
+  next layer; (b) **tropomyosin protection not modeled** (no tropo state in v2; v1 tropo competes with cofilin —
+  recon §4 vestigial); (c) bundling-resistance `/(bundleStableFactor·linkCt)` is the faithful formula but
+  unexercised (no crosslinkers ⇒ linkCt=0).
+- **Flags:** the combined render winds down without nucleation (single tip grows, multi-fragment removal outpaces
+  it — expected; the SUSTAINED lifecycle needs node nucleation, the ring-ward next step). **FOLLOW-ON (flagged, not
+  done): the v1 AGGREGATE length-distribution comparison** vs the turnover-stress fixture (parity contract, §8) —
+  where tropo/bundling/fragment dynamics are felt. `BoA-v1ref` byte-clean; aging/depoly/growth regressions PASS.
+
+## 2026-06-20 — INC 7 AGING build (A): per-segment nucleotide proxy + nucleotide-dependent depoly rates
+Filaments now **age** (per-segment ATP→ADP-Pi→ADP, watchable as a cascade along the filament) and the aging
+**drives the pointed-end depoly rate** (nucleotide-asymmetric treadmilling). **5 gates PASS GPU+CPU; default-OFF;
+no default flip.** Report: `INC7_AGING_FINDINGS.md`; log: `RUN_LOGS/2026-06-20_aging_proxy_validation.txt`. Run:
+`./run_aging.sh [-cpu]`. **A NEW v2 representation, faithful to v1's per-monomer aging in AGGREGATE (§8) — flagged.**
+- **jba's confirmed decision:** the **3-component proxy** `(f_ATP, f_ADPPi, f_ADP)` (sum=1; physics reads only
+  `f_ADP`; the intermediate is carried for the visible cascade). **Viewer constraint surfaced:** the verbatim v1
+  viewer renders ONE channel (`notADPRatio`, `ageColor` red↔young) ⇒ today shows the ADP *gradient*; a distinct
+  ADP-Pi band needs a (forbidden) viewer change. The frame hook emits `notADPRatio=f_ATP+f_ADPPi` + the raw
+  composition (extra fields the viewer ignores) for a future band-aware viewer.
+- **All ADDITIVE** — no existing kernel touched. `AgingSystem` (3 kernels: `age` cascade / `growthAtp` reweight
+  grown tip toward ATP / `splitInheritNuc` child inherits parent, mirroring `splitWire` over the SAME rank/free
+  arrays ⇒ no GrowthSystem edit) + `AgingStore` (`nucFrac[3C]`, derived cascade + rate params) +
+  `DepolySystem.depolyProxy` (rate `P=pATP·(1−f_ADP)+pADP·f_ADP`; `depoly()` byte-unchanged) +
+  `FrameWriter.writeFrame(.,AgingStore,.)` overload + `Constants.kHydrolysis=0.3`/`kDissociation=1.0`.
+- **PREDICTION (computed first, §8):** transit ≫ aging time (4.3 s) ⇒ the pointed segment is ≈100% ADP ⇒ off-rate
+  ≈ kADPOff1 ⇒ **C_c = kADPOff1/k_on = 0.232759 µM** (≈3.4× the Stage-1 fixed kATPOff1/k_on); granularity-corrected
+  **C_c_eff = (32/30)·C_c = 0.248276 µM**. **MEASURED 0.250314 µM (0.8%)**, invariant across totals (spread 1.4%),
+  clearly the ADP rate — matched to first principles, NOT tuned.
+- **Gates:** A aging-kinetics vs analytic ODE **max 6.6e-5** + sum=1.0000000 + CPU≡GPU aging **5.96e-8**; B the
+  asymmetric C_c (above); C conservation EXACT (200k aged cadences, integer ledger); D CPU≡GPU full 15-task proxy
+  pipeline (40k cadences **bit-identical** at this horizon / §8 aggregate-within-SEM standard); E fixed-rate
+  baseline **bit-identical** (aging writes only `nucFrac`, the fixed `depoly()` never reads it).
+- **float32 sum-anchoring (principled):** `f_ADP = 1 − f_ATP' − f_ADPPi'` (≡ the forward-Euler `+f_ADPPi·pD` in real
+  arithmetic) pins the per-segment sum to 1 each cadence (the naive two-place form drifted to 1.0000181/5000 cad).
+- **Flags:** the per-segment proxy averages the within-segment gradient (the 6.6e-5 aggregate match confirms it
+  doesn't matter at this granularity — the optional per-monomer path is Stage 4); same +6.7% death-floor
+  granularity offset as Stage 1; `BoA-v1ref` byte-clean; depoly/growth regressions re-run PASS. **Next (Prompt B):
+  cofilin severing** (en-masse whole-segment dissolve off the `f_ADP` ratio) — the proxy's `f_ADP` is its input.
 
 ## 2026-06-19 — INC 7 Stage 1 VALIDATION: treadmilling steady state vs first-principles C_c (MEASUREMENT)
 Validated the growth+depoly **COUPLING** (the actual new capability) against **first principles** (§8), not v1
