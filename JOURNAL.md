@@ -2,6 +2,29 @@
 
 Last updated: 2026-06-19
 
+## 2026-06-19 — INC 7 Stage 1 VALIDATION: treadmilling steady state vs first-principles C_c (MEASUREMENT)
+Validated the growth+depoly **COUPLING** (the actual new capability) against **first principles** (§8), not v1
+numbers. ONE formin filament, growth (barbed, rate=k_on·[actin]) + depoly (pointed, fixed k_off1), closed pool.
+**VALIDATION PASS (CPU+GPU).** Report: `INC7_TREADMILL_FINDINGS.md`; log:
+`RUN_LOGS/2026-06-19_treadmill_steadystate.txt`. Run: `./run_treadmill.sh [-cpu]`. **No physics change, no default flip.**
+- **Prediction (computed first):** [actin]_ss = C_c = k_off1/k_on = 0.8/11.6 = **0.068966 µM** (ideal). The
+  discrete model has a **computed granularity correction**: a pointed segment born at stdSegLength(32)
+  depolymerizes via 30 rate-events to monomerCount=2 then DIES returning the last 2 en masse ⇒ effective off-rate
+  ×32/30 ⇒ **C_c_eff = (32/30)·C_c = 0.073563 µM** (first-principles, NOT a fit).
+- **Measured:** both directions (short 10-mono grows / long 341-mono shrinks, same total) converge to the **SAME**
+  steady [actin] (0.0737/0.0741, agree 0.6%) + same L_ss (0.1%) ≈ **C_c_eff (<1%)** — initial-condition
+  independent. **C_c INVARIANT** across total actin (200/350/500 mono → 0.0751/0.0751/0.0717, spread 3.1%, mean
+  0.0739 vs C_c_eff 0.0736 = **0.5%**); **L_ss scales linearly** with total (≤0.6%) by conservation.
+- **Conservation EXACT** throughout the dynamic grow/split/depoly/death churn (integer ledger). **CPU≡GPU
+  bit-identical** lifecycle (20000 cadences: monomer/state/link mismatches 0, [actin] bit-identical) — stronger
+  than §8 aggregate-within-SEM (deterministic wang-hash).
+- **VERDICT:** the coupling is **physically correct** — [actin] treadmills to the critical concentration set by
+  the rate balance (matched to 0.5% at C_c_eff; +6.7% above ideal C_c, the death-floor granularity, reported NOT
+  tuned), independent of initial conditions + total actin; **turnover BOUNDS filament length** (the overrun fix).
+- **Approach dynamics:** a damped overshoot oscillation (barbed growth is [actin]-instant, pointed depoly is
+  [actin]-independent ⇒ length overshoots then trims); τ≈52000 cadences; single-filament ±√p_ss(~15%) scatter ⇒
+  long windows (≥12τ) + 8 seeds for clean means. New: `TreadmillHarness`, `run_treadmill.sh` (no physics edit).
+
 ## 2026-06-19 — INC 7 Stage 0+1 BUILD: pool-return + conservation + pointed-end depoly + filament death + slot-recycle
 The reverse-of-growth turnover foundation (recon `INC7_TURNOVER_RECON.md` Stages 0+1). Filaments now **shrink at
 the pointed end (end1) and DIE** — slot freed, monomers conserved exactly back to the pool. **7 gates PASS GPU +
