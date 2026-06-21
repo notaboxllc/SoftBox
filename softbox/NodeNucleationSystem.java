@@ -209,6 +209,39 @@ public final class NodeNucleationSystem {
         }
     }
 
+    /**
+     * Increment 7 DEAD-SLOT-REUSE FIX (lifecycle side). Nucleation FULLY initializes the newborn seed, never
+     * inheriting a recycled corpse's stale fields. Post-allocate, per accepted nucleation request (the SAME
+     * rank→slot iteration as tagSeeds, one writer per born slot ⇒ race-free, no atomics), set the two
+     * geometry/lifecycle fields a dead slot leaves stale:
+     *   monomerCount = actinSeed  — death (DepolySystem.applyDeath) wiped it to 0; the STATIC-B1 invariant
+     *                               (every slot pre-init to actinSeed) no longer holds once turnover recycles a slot.
+     *   segLength    = (actinSeed+1)·actinMonoRadius  — depoly shrank the corpse's segLength; seedTether (which runs
+     *                               this same cadence, BEFORE recomputeDrag) reads it for the tethered-end position,
+     *                               so set it explicitly rather than wait a cadence for recomputeDrag.
+     * DRAG is NOT set here: GrowthSystem.recomputeDrag re-derives bTransGam/… from monomerCount every cadence and
+     * clamps an at-end segment to stdSegLength, so a born seed (at-end) and the corpse it reused both clamp to the
+     * SAME std drag ⇒ the pre-recompute transient is already std-correct (mirrors splitWire, which also leaves drag
+     * to recomputeDrag). nucFrac (fresh ATP) is reset by the aging-side analog AgingSystem.nucleateFreshAtp.
+     * seedParams: [0]=actinSeedMon  [1]=seedLenUm.
+     */
+    public static void initNewborn(IntArray rankOffsets, IntArray freeList, IntArray freeOffsets,
+                                   IntArray monomerCount, FloatArray filSegLength,
+                                   FloatArray seedParams, IntArray allocCounts) {
+        int C = allocCounts.get(0), K = allocCounts.get(1);
+        int nFree = freeOffsets.get(C);
+        int actinSeedMon = (int) seedParams.get(0);
+        float seedLen = seedParams.get(1);
+        for (@Parallel int r = 0; r < K; r++) {
+            int rank = rankOffsets.get(r);
+            if (!(rankOffsets.get(r + 1) > rank)) continue;   // not an accepted nucleation
+            if (rank >= nFree) continue;                      // over-clamp ⇒ no birth
+            int slot = freeList.get(rank);
+            monomerCount.set(slot, actinSeedMon);
+            filSegLength.set(slot, seedLen);
+        }
+    }
+
     /** Per tethered seed: a CONSTANT-rate wang-hash detach → seedNode = -1 (bond dissolves; the seed stays an
      *  ACTIVE free filament). Per-slot self-write ⇒ race-free, bit-identical CPU↔GPU. */
     public static void dissolve(IntArray seedNode, FloatArray dissolveParams, IntArray nucCounts) {

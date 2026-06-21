@@ -100,4 +100,27 @@ public final class AgingSystem {
             nucFrac.set(2 * C + Cs, nucFrac.get(2 * C + Gs));
         }
     }
+
+    /**
+     * Increment 7 DEAD-SLOT-REUSE FIX (aging side). A freshly NUCLEATED seed is unhydrolyzed ⇒ pure ATP
+     * (f_ATP=1, f_ADPPi=0, f_ADP=0, v1 Monomer:62) — NOT the recycled corpse's aged (mostly-ADP) composition that
+     * a dead slot leaves stale in nucFrac. This is the aging-side analog of NodeNucleationSystem.initNewborn,
+     * mirroring how splitInheritNuc is the aging-side analog of GrowthSystem.splitWire: it runs the SAME rank→slot
+     * iteration over the SAME rankOffsets/freeList arrays as initNewborn (post-allocate, per accepted nucleation
+     * request), so NodeNucleationSystem needs no nucFrac coupling (aging stays additive — it touches only nucFrac).
+     * One writer per born slot ⇒ race-free, no atomics. (Contrast splitInheritNuc, which COPIES the parent's
+     * composition — a split child inherits; a nucleated seed is born fresh.)
+     */
+    public static void nucleateFreshAtp(IntArray rankOffsets, IntArray freeList, IntArray freeOffsets,
+                                        FloatArray nucFrac, IntArray allocCounts) {
+        int C = allocCounts.get(0), K = allocCounts.get(1);
+        int nFree = freeOffsets.get(C);
+        for (@Parallel int r = 0; r < K; r++) {
+            int rank = rankOffsets.get(r);
+            if (!(rankOffsets.get(r + 1) > rank)) continue;   // not an accepted nucleation
+            if (rank >= nFree) continue;                      // over-clamp ⇒ no birth
+            int slot = freeList.get(rank);
+            nucFrac.set(slot, 1f); nucFrac.set(C + slot, 0f); nucFrac.set(2 * C + slot, 0f);
+        }
+    }
 }

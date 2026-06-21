@@ -1023,3 +1023,19 @@ ensemble/aimed-placement confirmation.
 Also pending within inc 6: **stronger engagement** for a sharp contractile plateau (down-head filaments /
 multiple minifilaments — a tighter/denser scene would make the chamber box load-bearing) + dynamic
 minifilament assembly/`myoMiniLifetime`.
+
+**Increment 7 (actin turnover) — Stage 0/1 depoly+death, AGING proxy, cofilin SEVERING, viewer — DONE (see JOURNAL
+2026-06-19/06-20). DEAD-SLOT REUSE FIX — DONE (2026-06-21).** The flagged hazard (a nucleation-reused dead slot
+born `monomerCount=0` + stale-ADP `nucFrac`, INC7_STAGE1_FINDINGS.md §"Reused-slot monomerCount") is closed:
+nucleation now FULLY initializes the newborn via `NodeNucleationSystem.initNewborn` (`monomerCount=actinSeed`,
+`segLength=seedLen`) + `AgingSystem.nucleateFreshAtp` (`nucFrac=(1,0,0)`) — additive, mirroring the split
+`splitWire`+`splitInheritNuc` precedent (the `tagSeeds` rank→slot iteration, race-free); drag via `recomputeDrag`.
+Audit found EXACTLY those two stale fields (+ geometry `segLength`), not a broad newborn-init. Validated by the
+**FIRST turnover + nucleation coexistence** (the ring precondition, `DeadSlotReuseHarness`/`run_deadslot.sh`): 2250
+dead-slot reuses all correct, **conservation EXACT** through the recycle, **CPU≡GPU bit-identical**, a fix-OFF
+control reproducing the exact `actinSeed·#reuse` deficit, turnover-only/nucleation-only regressions unchanged.
+`BoA-v1ref` byte-clean; production untouched; default-off. Report: `INC7_DEADSLOT_FIX_FINDINGS.md`.
+```
+./run_deadslot.sh        # GPU + CPU (newborn correctness, conservation, fix-off control, regression, CPU≡GPU)
+./run_deadslot.sh -cpu   # CPU runner only (triage)
+```

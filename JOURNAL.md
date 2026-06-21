@@ -1,6 +1,34 @@
 # Soft Box Project Journal
 
-Last updated: 2026-06-20
+Last updated: 2026-06-21
+
+## 2026-06-21 — INC 7 DEAD-SLOT REUSE FIX: nucleation fully initializes a recycled slot (turnover+nucleation coexist)
+Closes the flagged dead-slot reuse hazard (INC7_STAGE1_FINDINGS.md §"Reused-slot monomerCount") + validates the
+FIRST turnover + nucleation **coexistence** (the contractile-ring precondition). A correctness fix — committed.
+Report: `INC7_DEADSLOT_FIX_FINDINGS.md`. Run: `./run_deadslot.sh [-cpu]`. **5 gates PASS GPU+CPU.**
+- **The bug.** The STATIC-B1 invariant (every slot pre-init to a fixed seed ⇒ nucleation `allocate` writes only
+  pose+Brownian+state) broke once turnover recycles a slot: `applyDeath` wipes `monomerCount→0` + depoly shrank
+  `segLength` + aging froze the corpse's `nucFrac` at mostly-ADP. A nucleation-reused dead slot ⇒ a zero-length,
+  conservation-violating phantom with a stale-ADP composition. Split-reuse was always fine (`splitWire`); only
+  nucleation assumed the pre-init.
+- **Audit ⇒ exactly TWO stale-inherited newborn fields:** `monomerCount` + `nucFrac` (plus geometry-derived
+  `segLength`). NOT broader ⇒ no unified newborn-init; two scattered sets (the split precedent) suffice. Drag is
+  left to `recomputeDrag` (at-end seed and at-end corpse both std-clamp ⇒ transient is std-correct, like
+  `splitWire`); `segLength` IS set explicitly because `seedTether` reads it the same cadence (a consumer split
+  children lack).
+- **The fix (additive; mirrors `splitWire`+`splitInheritNuc`):** `NodeNucleationSystem.initNewborn`
+  (`monomerCount=actinSeed`, `segLength=seedLen`) + `AgingSystem.nucleateFreshAtp` (`nucFrac=(1,0,0)`), each the
+  `tagSeeds` rank→slot iteration (one writer/slot, race-free, no atomics). No existing kernel signature changed;
+  `NodeNucleationStore` gains one additive `seedParams` field. The two kernels fire ONLY on a nucleation birth ⇒
+  inert in nucleation-only (correct on pre-init) and turnover-only (no nucleation) paths.
+- **Gates (GPU+CPU):** (1) newborn — 2250 dead-slot reuses, 0 bad, 0 ACTIVE-monomerCount-0; (2) conservation EXACT
+  through the recycle (ledger held every sample + finally 23==6774−6751); (3) fix-OFF control — bug exposed:
+  conservation BROKEN by exactly 17988=actinSeed·5996 + zero-length/stale-ADP newborns; (4) CPU≡GPU lifecycle
+  bit-identical (state/mon/seedNode 0/0/0; max|ΔnucFrac| 8.94e-8; reuse/active/Σmon/pool all equal); (5)
+  regression — turnover-only fix-on≡fix-off bit-identical, nucleation-only 0 reuses/0 bad/exact.
+- **Regressions re-run PASS:** nodenuc (GPU+CPU), aging (GPU+CPU), depoly, growth, treadmill, severing.
+- New files only: `DeadSlotReuseHarness`, `run_deadslot.sh` + 2 kernels + 1 additive store field. `BoA-v1ref`
+  byte-clean; production untouched; default-off.
 
 ## 2026-06-20 — INC 7 viewer: persistent treadmill render + barbed-end "+" fix
 Follow-on to the severing build (viewer/demo only; gates 1–6 unchanged, PASS GPU+CPU). Report addendum:

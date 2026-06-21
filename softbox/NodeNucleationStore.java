@@ -45,6 +45,10 @@ public final class NodeNucleationStore {
     public final FloatArray tetherParams;
     // dissolveParams: [0]=P_detach (= nodeTetherDetachRate·dt)
     public final FloatArray dissolveParams;
+    // seedParams (inc 7 dead-slot-reuse fix): [0]=actinSeedMon [1]=seedLenUm — the newborn's monomerCount/segLength
+    // that NodeNucleationSystem.initNewborn sets explicitly so a recycled (dead) slot never inherits a corpse's
+    // stale monomerCount(0)/segLength. Set in setNucParams.
+    public final FloatArray seedParams;
     // nucCounts: [0]=nNodes [1]=stepCount [2]=runSeed [3]=poolOK (1 if the actin pool can cover one more seed)
     public final IntArray   nucCounts;
 
@@ -65,6 +69,8 @@ public final class NodeNucleationStore {
         nucParams = new FloatArray(3);
         tetherParams = new FloatArray(2);
         dissolveParams = new FloatArray(1);
+        seedParams = new FloatArray(2);
+        seedParams.set(0, actinSeedMon);   // [1] (seedLenUm) set in setNucParams
         nucCounts = new IntArray(4);
         nucCounts.set(0, nNodes);
         pool = new ActinPool(pool0, boxVolUm3);
@@ -76,6 +82,7 @@ public final class NodeNucleationStore {
         nucParams.set(0, (float) (kNodeNuc * dt));
         nucParams.set(1, (float) (0.5 * seedLenUm));
         nucParams.set(2, (float) forminsPerNode);
+        seedParams.set(1, (float) seedLenUm);   // newborn segLength (initNewborn)
     }
     public void setTetherParams(double fracMove, double dt) {
         tetherParams.set(0, (float) fracMove);
