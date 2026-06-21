@@ -101,6 +101,32 @@ one-tip-per-filament guarantee). No atomics / KernelContext.
   This is where tropomyosin protection + bundling + the full fragment dynamics would be felt; it is the proper
   emergent-behavior comparison (§8) and is the next validation, not part of this build.
 
+## Addendum (2026-06-20) — persistent treadmill render + barbed-end "+" fix
+- **Barbed-end "+" restored in the viewer.** The verbatim v1 viewer places its "+" sprite at `end2` of any segment
+  with `"isBarbedEnd":true` in the frame JSON (viewer `updateBarbedEnds`). SoftBox's `FrameWriter` had **never**
+  emitted that field (only v1's `ThreeJSWriter` did) ⇒ no "+" on any SoftBox render. Fixed additively: both
+  `appendSegment` overloads now emit `"isBarbedEnd": (end2NbrSlot[i] < 0)` — the barbed terminal (barbed=end2,
+  settled). All SoftBox renders now show the "+" at the growing barbed tip.
+- **Free-treadmilling render (`renderTreadmill`, run via `-3js`).** The closed-pool combined render winds down
+  (no nucleation; §Notes). The watchable render instead is an **UNANCHORED, TRANSLATING** treadmilling filament:
+  - **Persistence** — a **BUFFERED pool** (`cadenceCpu`'s new `bufferedPool` flag skips the pool take/put ⇒
+    `[actin]` held constant ~4 µM ⇒ `P_grow` stays high — the "adjust polymerization to keep up" lever) + a
+    **formin-capped barbed tip** (the `seedNode≥0` tip kept ATP-fresh each cadence — modeling formin's processive
+    ATP-actin incorporation + cofilin protection — so it never ages/dissolves and always regrows).
+  - **TRANSLATION (the "barbed end never moves" fix).** `GrowthSystem.grow` keeps the barbed end (end2) FIXED and
+    only extends the pointed end — the formin-AT-A-NODE geometry (barbed clamped, no translation). The render
+    converts this to a FREE PROCESSIVE-formin filament by rigidly translating the whole filament `+δ·uVec` per
+    barbed monomer added (`δ=actinMonoRadius`, `translateMainFilament`): the barbed tip ADVANCES, pointed depoly
+    makes the pointed tip FOLLOW ⇒ the filament treadmills *through space* at constant length. A render geometry
+    choice (monomer bookkeeping/rates unchanged).
+  - **Unanchored mechanics** — full Brownian + chain integration, **no node tether / no containment** ⇒ the
+    filament moves, wiggles, diffuses (positional constraints unlocked).
+  - Result: the filament **PERSISTS + TRANSLATES** (active ~24–26 segments over 60 000 cadences; barbed tip
+    advances a net **≈14 µm**, monotonic 9.0 → −4.9 µm; leading barbed "+" tip young/green `fATP=1.0` → trailing
+    pointed end old/red `fADP=0.99`; occasional severing + fragmentation). A demo render (buffered pool +
+    formin-fresh tip + the translation are viewer modeling choices, flagged — NOT the closed-pool conservation
+    gate). Run: `./run_severing.sh -cpu -3js threejs_treadmill`. Gates 1–6 unchanged (PASS GPU+CPU).
+
 ## TL;DR
 Filaments **SEVER** — a per-segment cofilin fraction accumulates off the proxy's `f_ADP` (faithful aggregate of
 v1's per-monomer binding, analytic Δ 1.25e-7), and a segment crossing `cofilinRatio` **dissolves en masse**

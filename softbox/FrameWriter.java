@@ -129,10 +129,11 @@ public final class FrameWriter {
         double e2x = cx + half * ux, e2y = cy + half * uy, e2z = cz + half * uz;
         double fATP = aging.fATP(i), fADPPi = aging.fADPPi(i), fADP = aging.fADP(i);
         double notADP = fATP + fADPPi;                     // 1 − f_ADP (the viewer's age channel)
+        boolean barbed = s.end2NbrSlot.get(i) < 0;         // barbed=end2 (settled) ⇒ a barbed terminal has no end2 neighbor
         sb.append(String.format(Locale.US,
                 "{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,"
-                + "\"notADPRatio\":%.3g,\"cofilinCount\":%d,\"fATP\":%.3g,\"fADPPi\":%.3g,\"fADP\":%.3g}",
-                i, e1x, e1y, e1z, e2x, e2y, e2z, radius, notADP, 0, fATP, fADPPi, fADP));
+                + "\"notADPRatio\":%.3g,\"cofilinCount\":%d,\"isBarbedEnd\":%b,\"fATP\":%.3g,\"fADPPi\":%.3g,\"fADP\":%.3g}",
+                i, e1x, e1y, e1z, e2x, e2y, e2z, radius, notADP, 0, barbed, fATP, fADPPi, fADP));
     }
 
     private void appendSegment(StringBuilder sb, FilamentStore s, int i) {
@@ -141,9 +142,10 @@ public final class FrameWriter {
         double half = s.segLength.get(i) * 0.5;
         double e1x = cx - half * ux, e1y = cy - half * uy, e1z = cz - half * uz;
         double e2x = cx + half * ux, e2y = cy + half * uy, e2z = cz + half * uz;
+        boolean barbed = s.end2NbrSlot.get(i) < 0;         // barbed=end2 (settled) ⇒ a barbed terminal has no end2 neighbor
         sb.append(String.format(Locale.US,
                 "{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,"
-                + "\"notADPRatio\":%.3g,\"cofilinCount\":%d}",
-                i, e1x, e1y, e1z, e2x, e2y, e2z, radius, 1.0, 0));
+                + "\"notADPRatio\":%.3g,\"cofilinCount\":%d,\"isBarbedEnd\":%b}",
+                i, e1x, e1y, e1z, e2x, e2y, e2z, radius, 1.0, 0, barbed));
     }
 }

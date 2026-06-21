@@ -77,6 +77,8 @@ public final class SeveringHarness {
         System.out.println();
         System.out.println("=== SEVERING (build B: cofilin dissolve + combined turnover) VALIDATION " + (ok ? "PASS" : "FAIL") + " ===");
         if (!ok) { System.out.println("BAIL-OUT: a gate failed. Commit nothing; report the gap."); System.exit(1); }
+
+        if (jsDir != null) { System.out.println(); renderTreadmill(dt); }
     }
 
     // ============================================================== scene
@@ -132,7 +134,13 @@ public final class SeveringHarness {
     static int countActive(FilamentStore f) { int c = 0; for (int s = 0; s < f.n; s++) if (f.filState.get(s) >= 0) c++; return c; }
 
     // ============================================================== one biochem cadence (CPU)
-    static void cadenceCpu(Scene sc, int cadence, boolean severOn) {
+    static void cadenceCpu(Scene sc, int cadence, boolean severOn) { cadenceCpu(sc, cadence, severOn, false); }
+
+    /** bufferedPool=true ⇒ skip the pool take/put (step 7) so [actin] stays CONSTANT (an in-vitro-style replenished
+     *  reservoir) — the "adjust polymerization to keep up" lever: P_grow stays high ⇒ the barbed tip never stalls ⇒
+     *  the filament PERSISTS against aging/severing removal. NOT a closed-pool steady state (that is the validated
+     *  gate); a viewer/demo choice for the persistent treadmill render. */
+    static void cadenceCpu(Scene sc, int cadence, boolean severOn, boolean bufferedPool) {
         FilamentStore f = sc.fil; GrowthStore g = sc.grow; DepolyStore d = sc.depoly; AgingStore ag = sc.aging; SeverStore sv = sc.sever;
         g.refreshRate(true); d.refreshRate(true); ag.refresh(true); sv.refresh(severOn);
         g.setCounts(cadence, sc.runSeed, true); d.setCounts(cadence, sc.runSeed, true); ag.setFires(true); sv.setFires(true);
@@ -165,9 +173,12 @@ public final class SeveringHarness {
         GrowthSystem.splitWire(f.rankOffsets, f.freeList, f.freeOffsets, f.monomerCount, f.coord, f.uVec,
                 f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide, sc.nuc.seedNode, g.splitParams, f.allocCounts);
         AgingSystem.splitInheritNuc(f.rankOffsets, f.freeList, f.freeOffsets, ag.nucFrac, f.allocCounts);
-        // 6. pool update from the integer counts (conservation: depoly + dissolve both return)
-        g.pool.take(g.grewOffsets.get(FILCAP));
-        g.pool.put(d.returnedOffsets.get(FILCAP) + sv.severReturnedOffsets.get(FILCAP));
+        // 6. pool update from the integer counts (conservation: depoly + dissolve both return). Skipped for a
+        //    buffered (constant-[actin]) reservoir ⇒ polymerization keeps up ⇒ the filament persists.
+        if (!bufferedPool) {
+            g.pool.take(g.grewOffsets.get(FILCAP));
+            g.pool.put(d.returnedOffsets.get(FILCAP) + sv.severReturnedOffsets.get(FILCAP));
+        }
     }
 
     static boolean conservationOk(Scene sc) {
@@ -335,29 +346,130 @@ public final class SeveringHarness {
         // POLYMERIZES (barbed tip extends + splits, young/green), the trailing segments AGE (the red ADP gradient
         // develops barbed→pointed), and the oldest eventually cross the cofilin threshold and DISSOLVE + fragment.
         // The growth phase extends the watchable span before the no-nucleation wind-down (flagged limitation).
+        // Closed-pool validation: a single filament with severing winds down (no nucleation), but the systems run
+        // together + dissolves fire + conservation holds. The PERSISTENT watchable render is renderTreadmill (-3js).
         int nSeg = 3;
         double total = 1400 * uMper;                          // < FILCAP·stdSeg=2048 ⇒ no slot overflow
         Scene sc = buildChain(nSeg, 32, total - nSeg * 32 * uMper, dt, 0.7, SEED);
         int nCad = 45000;
         long dissolveEvents = 0;
-        FrameWriter fw = (jsDir != null) ? new FrameWriter(jsDir, 4.0, 1.0, 1.0) : null;
         boolean consAll = true;
         for (int t = 0; t < nCad; t++) {
             cadenceCpu(sc, t, true);
             if (sc.sever.severReturnedOffsets.get(FILCAP) > 0) dissolveEvents++;
             if ((t % 20000) == 0 && !conservationOk(sc)) consAll = false;
-            if (fw != null && (t % 150) == 0) fw.writeFrame(sc.fil, sc.aging, t * Constants.biochemDeltaT);
         }
         boolean cons = conservationOk(sc) && consAll;
-        boolean stable = countActive(sc.fil) >= 0 && sumMonomers(sc.fil) >= 0;   // no NaN/crash; finished
+        boolean stable = sumMonomers(sc.fil) >= 0;            // no NaN/crash; finished
         boolean dissolved = dissolveEvents > 0;
         boolean ok = cons && stable && dissolved;
-        System.out.printf("  ran %d cadences: dissolve events=%d; active fil=%d, Σmono=%d, [actin]=%.4f µM; conservation EXACT=%s%n",
+        System.out.printf("  ran %d cadences (closed pool): dissolve events=%d; active fil=%d, Σmono=%d, [actin]=%.4f µM; conservation EXACT=%s%n",
                 nCad, dissolveEvents, countActive(sc.fil), sumMonomers(sc.fil), sc.grow.pool.conc(), cons);
-        if (fw != null) System.out.println("  viewer: " + fw.framesWritten() + " frames in " + fw.dir() + " (segments coloured by the ADP cascade; dissolving segments vanish + fragment).");
-        else System.out.println("  (re-run with -3js <dir> to dump the watchable render: polymerization + depoly + aging gradient + severing.)");
+        System.out.println("  (closed-pool single filament winds down without nucleation; the PERSISTENT render is renderTreadmill via -3js.)");
         System.out.println("  => " + (ok ? "PASS (growth + depoly + aging + severing run together; dissolves fire; conservation exact)" : "*FAIL*") + "\n");
         return ok;
+    }
+
+    // ============================================================== PERSISTENT treadmill render (-3js)
+    /**
+     * The watchable FREE-TREADMILLING filament: the full turnover (growth + depoly + aging + severing) on a single
+     * filament that PERSISTS and TRANSLATES — monomers add at the barbed end (which ADVANCES), age behind it (the
+     * ADP gradient rides barbed→pointed), depolymerize at the pointed end (which FOLLOWS), and the oldest segments
+     * occasionally sever + fragment. The filament is UNANCHORED (no node tether, full Brownian + chain mechanics —
+     * positional constraints unlocked) and moves freely.
+     *
+     * THE TREADMILL TRANSLATION (the fix). The growth geometry (GrowthSystem.grow) keeps the barbed end (end2)
+     * FIXED and extends the pointed end — the formin-AT-A-NODE picture, where the barbed end is clamped and does
+     * NOT move. A FREE filament with a PROCESSIVE formin instead has its barbed end ADVANCE as it polymerizes. We
+     * convert one to the other by rigidly translating the whole filament by +δ·uVec per barbed monomer added
+     * (δ=actinMonoRadius): this cancels the pointed-extension and makes the barbed tip advance (+δ) with the
+     * pointed tip stationary; pointed depoly then advances the pointed tip (+δ) too ⇒ over a grow+depoly cycle the
+     * filament translates +δ toward the barbed end at the treadmill velocity. (A render geometry choice — the
+     * monomer bookkeeping / rates are unchanged.)
+     *
+     * Persistence: a BUFFERED pool holds [actin] high (growth keeps up with removal) + a FORMIN-CAPPED barbed tip
+     * (kept ATP-fresh each cadence — the processive formin adds ATP-actin + protects from cofilin) so the barbed
+     * tip never ages/dissolves. NOT a closed-pool conservation run (that is gate 3); a demo render.
+     */
+    static void renderTreadmill(double dt) {
+        System.out.println("--- FREE-TREADMILLING render (unanchored; barbed advances, pointed follows; Brownian+chain mechanics) ---");
+        double targetConc = 4.0;                              // µM (buffered reservoir; growth keeps up)
+        int nSeg = 8;
+        Scene sc = buildChain(nSeg, 32, targetConc, dt, 0.95, SEED);   // gentle severing (ratio 0.95)
+        FilamentStore f = sc.fil; int C = f.n;
+        // staggered initial age gradient (barbed young → pointed old) + Brownian on for the active segments
+        for (int i = 0; i < nSeg; i++) {
+            float adp = (float) i / (float) (nSeg - 1);
+            sc.aging.set(i, 1f - adp, 0f, adp);
+            sc.sever.cofFrac.set(i, 0.5f * adp);
+            f.brownTransScale.set(i, (float) Constants.BTransCoeff);
+            f.brownRotScale.set(i, (float) Constants.BRotCoeff);
+        }
+        f.setBirthParams(Constants.BTransCoeff, Constants.BRotCoeff);   // split/born segments get Brownian too
+        // start the barbed end on the +x side so it treadmills across the view toward −x (barbed direction)
+        for (int s = 0; s < nSeg; s++) f.coord.set(s, f.coord.get(s) + 9.0f);
+        double amr = Constants.actinMonoRadius;
+        int nCad = 60000, stride = 300;
+        FrameWriter fw = new FrameWriter(jsDir, 24.0, 2.0, 2.0);
+        long dissolveEvents = 0; int minActive = Integer.MAX_VALUE, maxActive = 0;
+        double startX = barbedTipX(sc);
+        for (int t = 0; t < nCad; t++) {
+            // 1. biochem (buffered pool ⇒ growth keeps up; severing on)
+            cadenceCpu(sc, t, true, true);
+            // 2. formin-capped barbed tip: keep the node-bonded tip ATP-fresh ⇒ it never ages/dissolves ⇒ persists
+            for (int s = 0; s < FILCAP; s++) if (sc.nuc.seedNode.get(s) >= 0) { sc.aging.setATP(s); sc.sever.cofFrac.set(s, 0f); }
+            // 3. recompute segLength/drag from monomerCount (mechanics needs them consistent)
+            GrowthSystem.recomputeDrag(f.monomerCount, f.segLength, f.end1NbrSlot, f.end2NbrSlot,
+                    f.bTransGam, f.bRotGam, f.bTransDiff, f.bRotDiff, sc.grow.dragParams, sc.grow.growCounts);
+            // 4. TREADMILL TRANSLATION: advance the barbed end by the monomers added this cadence (rigid shift of
+            //    the node-bonded filament along its barbed direction). This unpins the barbed end ⇒ it translates.
+            int nGrew = sc.grow.grewOffsets.get(FILCAP);
+            if (nGrew > 0) translateMainFilament(sc, nGrew * amr);
+            // 5. MECHANICS (unanchored: NO tether/containment) ⇒ the filament moves/wiggles/diffuses freely
+            f.setCounts(t, SEED);
+            ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+            BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+            ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide,
+                    f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+            RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum,
+                    f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+            DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+            if (sc.sever.severReturnedOffsets.get(FILCAP) > 0) dissolveEvents++;
+            int act = countActive(f); minActive = Math.min(minActive, act); maxActive = Math.max(maxActive, act);
+            if ((t % stride) == 0) fw.writeFrame(f, sc.aging, t * Constants.biochemDeltaT);
+        }
+        boolean persisted = minActive > 0;
+        double netTranslation = barbedTipX(sc) - startX;
+        System.out.printf("  ran %d cadences (buffered [actin]=%.2f µM): active fil min=%d max=%d (persisted=%s); dissolve events=%d; barbed-tip net Δx=%.3f µm; %d frames%n",
+                nCad, targetConc, minActive, maxActive, persisted, dissolveEvents, netTranslation, fw.framesWritten());
+        System.out.println("  viewer: " + fw.dir() + " — UNANCHORED filament treadmills + wiggles; barbed \"+\" tip ADVANCES (young/green); ADP gradient → red toward pointed; dissolving segments vanish + fragment.");
+        System.out.println("  => " + (persisted ? "PERSISTENT + TRANSLATING (the filament treadmills through space, no longer pinned)" : "*winds down — retune*"));
+    }
+
+    /** X of the node-bonded (barbed) tip's end2 — to measure net treadmill translation. */
+    static double barbedTipX(Scene sc) {
+        FilamentStore f = sc.fil; int C = f.n;
+        for (int s = 0; s < FILCAP; s++) if (sc.nuc.seedNode.get(s) >= 0) {
+            return f.coord.get(s) + 0.5 * f.segLength.get(s) * f.uVec.get(s);   // end2 = coord + (L/2)uVec
+        }
+        return 0;
+    }
+
+    /** Rigidly translate the node-bonded filament (barbed tip → … → pointed tip via end1 links) by amount·uVec(tip).
+     *  Converts the formin-anchored growth (barbed fixed) into free treadmilling (barbed advances). */
+    static void translateMainFilament(Scene sc, double amount) {
+        FilamentStore f = sc.fil; int C = f.n;
+        int tip = -1; for (int s = 0; s < FILCAP; s++) if (sc.nuc.seedNode.get(s) >= 0) { tip = s; break; }
+        if (tip < 0) return;
+        float dx = (float) (amount * f.uVec.get(tip)), dy = (float) (amount * f.uVec.get(C + tip)), dz = (float) (amount * f.uVec.get(2 * C + tip));
+        int cur = tip, guard = 0;
+        while (cur >= 0 && guard < FILCAP) {
+            f.coord.set(cur, f.coord.get(cur) + dx);
+            f.coord.set(C + cur, f.coord.get(C + cur) + dy);
+            f.coord.set(2 * C + cur, f.coord.get(2 * C + cur) + dz);
+            cur = f.end1NbrSlot.get(cur);
+            guard++;
+        }
     }
 
     // ---- GPU: full combined biochem cadence plan (gate 4) ----

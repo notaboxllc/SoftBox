@@ -2,6 +2,26 @@
 
 Last updated: 2026-06-20
 
+## 2026-06-20 — INC 7 viewer: persistent treadmill render + barbed-end "+" fix
+Follow-on to the severing build (viewer/demo only; gates 1–6 unchanged, PASS GPU+CPU). Report addendum:
+`INC7_SEVERING_FINDINGS.md`. Run: `./run_severing.sh -cpu -3js threejs_treadmill`.
+- **Barbed-end "+" restored.** The verbatim viewer draws "+" at `end2` of segments with `"isBarbedEnd":true`;
+  SoftBox's `FrameWriter` never emitted it (only v1's `ThreeJSWriter` did). Fixed additively — both `appendSegment`
+  overloads emit `"isBarbedEnd":(end2NbrSlot[i]<0)` (barbed=end2 settled). All SoftBox renders now show the "+".
+- **Free-treadmilling render** (`SeveringHarness.renderTreadmill`, `-3js`). The closed-pool combined render winds
+  down (no nucleation). The watchable render is an UNANCHORED, TRANSLATING treadmill: (1) PERSISTENCE — BUFFERED
+  pool (new `cadenceCpu` `bufferedPool` flag skips pool take/put ⇒ [actin] held ~4 µM ⇒ P_grow stays high) +
+  FORMIN-CAPPED barbed tip (node-bonded tip kept ATP-fresh each cadence — formin's processive ATP-actin
+  incorporation + cofilin protection); (2) TRANSLATION (the "barbed end never moves" fix) — `grow` keeps end2
+  (barbed) FIXED (formin-at-a-node geometry), so the render rigidly translates the filament +δ·uVec per barbed
+  monomer (`translateMainFilament`) ⇒ barbed tip ADVANCES, pointed depoly makes pointed FOLLOW ⇒ treadmills through
+  space at constant length; (3) UNANCHORED mechanics — Brownian + chain, no tether/containment ⇒ moves/wiggles
+  freely. Result: PERSISTS + TRANSLATES (≈24–26 segments over 60 s, barbed tip nets ≈14 µm 9.0→−4.9; green/young
+  "+" tip → red/old pointed; occasional severing). Demo modeling choices (flagged), not a conservation gate.
+- **Barbed-end "+" fix:** `FrameWriter` never emitted `isBarbedEnd` (only v1's ThreeJSWriter did); both
+  `appendSegment` overloads now emit `isBarbedEnd=(end2NbrSlot<0)` (barbed=end2 settled) ⇒ the "+" shows on all
+  SoftBox renders.
+
 ## 2026-06-20 — INC 7 SEVERING build (B): cofilin en-masse dissolve + the combined watchable turnover system
 Filaments now **SEVER** — a segment crosses the cofilin/ADP threshold and dissolves EN MASSE, the filament
 fragments into two valid sub-chains, monomers conserved — and the **full simplified turnover machinery (growth +
