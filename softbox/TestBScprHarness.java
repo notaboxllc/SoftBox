@@ -54,8 +54,7 @@ public final class TestBScprHarness {
     static int SCHEME = 0;            // 0=current(soft tether) 1=direct inject 2=bound-stiff tether 3=global stiffen(baseline)
     static double BOUND_COEFF = 0.07; // scheme 2/3 stiff load coeff (≈ the minifilament fixed 0.07)
     static FloatArray node2Params;    // scheme-2 tether params [0]=dt [1]=BOUND_COEFF
-    static boolean CHAIN_DT_FIX = false;   // fix Test B's chain-dt bug (chainParams[0]=dt, not the 1e-4 default)
-    static boolean V1_PAIRS = false;       // match the v1 twoNodeFormin PAIRS coeffs (fracMove 0.0573, fracR 1.0, fracMoveTorq 0.01) + dt-fix
+    static boolean V1_PAIRS = false;       // match the v1 twoNodeFormin PAIRS coeffs (fracMove 0.0573, fracR 1.0, fracMoveTorq 0.01)
     static int SEG_MONO = Constants.stdSegLength;   // monomers per aimed-filament segment (v1 twoNodeFormin used 64; v2 default 32)
     static double AIM_TORQUE = 0.0;        // aim-holding torque coeff (v1 nodeTorqSpring analog); 0 = off
     static FloatArray AIM_DIR;             // 3*filCap planar: per-segment aim target uVec (set at aimed placement)
@@ -82,8 +81,7 @@ public final class TestBScprHarness {
                 case "-nodediag" -> NODE_DIAG = true;    // per-node force-balance sanity print
                 case "-scheme" -> SCHEME = Integer.parseInt(args[++i]);     // load-transmission experiment scheme
                 case "-boundcoeff" -> BOUND_COEFF = Double.parseDouble(args[++i]);
-                case "-chaindtfix" -> CHAIN_DT_FIX = true;                  // fix the chain-dt 10× softness bug
-                case "-v1pairs" -> V1_PAIRS = true;                         // match v1 twoNodeFormin PAIRS coeffs + dt-fix
+                case "-v1pairs" -> V1_PAIRS = true;                         // match v1 twoNodeFormin PAIRS coeffs
                 case "-segmono" -> SEG_MONO = Integer.parseInt(args[++i]);  // monomers/segment (v1=64, v2 default=32)
                 case "-aimtorque" -> AIM_TORQUE = Double.parseDouble(args[++i]);  // aim-holding torque (nodeTorqSpring analog)
                 case "-nogrow" -> GROWTH_ON = false;     // polymerization OFF (pre-grown filaments stay fixed length)
@@ -448,7 +446,7 @@ public final class TestBScprHarness {
         for (int sl = 0; sl < cap; sl++) f.monomerCount.set(sl, Constants.actinSeed);
         DragTensorSystem.run(f);
         f.setParams(dt, Constants.brownianForceMag(dt));
-        f.setChainParams(dt);   // chainParams[0]=dt by construction now (chain-dt class fix); CHAIN_DT_FIX vestigial
+        f.setChainParams(dt);   // chainParams[0]=dt by construction (chain-dt class fix)
         if (V1_PAIRS) {                                                // match the v1 twoNodeFormin chain PAIRS coefficients
             f.chainParams.set(1, 0.0573f);   // fracMove
             f.chainParams.set(2, 1.0f);      // fracR
@@ -882,8 +880,8 @@ public final class TestBScprHarness {
         double crossF = capSteps > 0 ? crossForceSum / capSteps : 0, selfF = capSteps > 0 ? selfForceSum / capSteps : 0;
         System.out.printf("  cross-node captures: first @ step %s, peak=%d, capture-phase avg=%.2f%n",
                 captured ? String.valueOf(firstCapture) : "NEVER", peakCross, avgCross);
-        System.out.printf("  FILAMENT-LOSS drop-outs (cross-capture<=1): %d of %d steps (%.1f%%)  [scheme=%d chaindtfix=%b aimtorque=%.2f]%n",
-                dropoutSteps, M, 100.0 * dropoutSteps / M, SCHEME, CHAIN_DT_FIX, AIM_TORQUE);
+        System.out.printf("  FILAMENT-LOSS drop-outs (cross-capture<=1): %d of %d steps (%.1f%%)  [scheme=%d aimtorque=%.2f]%n",
+                dropoutSteps, M, 100.0 * dropoutSteps / M, SCHEME, AIM_TORQUE);
         System.out.printf("  self-capture (jba's layout thesis): capture-phase avg count=%.2f; transmitted force self=%.3f pN vs cross=%.3f pN (self/cross=%.2f)%n",
                 avgSelf, selfF, crossF, crossF > 1e-9 ? selfF / crossF : 0);
         System.out.printf("  final: active filaments=%d, contour=%.4f µm%n", activeFilaments(s.fil), contour(s.fil));
