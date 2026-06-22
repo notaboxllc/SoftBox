@@ -157,19 +157,28 @@ public final class CrossBridgeSystem {
     }
 
     /** Track forceDotFil: instantaneous (catch-slip) + a 10-window ring (the ADP→NONE gate average,
-     *  v1 ValueTracker(10)). Free motors reset the tracker (v1 release().zero()). */
+     *  v1 ValueTracker(10)). Free motors reset the tracker (v1 release().zero()).
+     *  §6.10: also publish forceMag = |F8| (the cross-bridge spring MAGNITUDE, v1 MyoFilLink.forceMag)
+     *  — the head-side force bondData[d..d+2] already has magnitude myoSpring·dist, so this is a sqrt
+     *  of stored values, NOT a re-derivation of the force law. Kept in lockstep with forceDotFil (same
+     *  vintage in stepOrig last-step / stepFresh this-step) so the cap reads the same force the
+     *  catch-slip draw does, exactly as v1's single addForces writes both. */
     public static void registerForceDot(FloatArray bondData, IntArray boundSeg,
-                                        FloatArray forceDotFil, FloatArray forceDotHist, IntArray forceDotPlace, IntArray counts) {
+                                        FloatArray forceDotFil, FloatArray forceMag, FloatArray forceDotHist, IntArray forceDotPlace, IntArray counts) {
         int nM = boundSeg.getSize();
         for (@Parallel int m = 0; m < nM; m++) {
             if (boundSeg.get(m) >= 0) {
-                float fd = bondData.get(m * STRIDE + 12);
+                int d = m * STRIDE;
+                float fd = bondData.get(d + 12);
                 forceDotFil.set(m, fd);
+                float fx = bondData.get(d), fy = bondData.get(d + 1), fz = bondData.get(d + 2);
+                forceMag.set(m, (float) Math.sqrt(fx * fx + fy * fy + fz * fz));
                 int p = forceDotPlace.get(m);
                 forceDotHist.set(m * 10 + p, fd);
                 forceDotPlace.set(m, (p + 1) % 10);
             } else {
                 forceDotFil.set(m, 0f);
+                forceMag.set(m, 0f);
                 forceDotPlace.set(m, 0);
                 int b = m * 10;
                 for (int k = 0; k < 10; k++) forceDotHist.set(b + k, 0f);
@@ -203,6 +212,87 @@ public final class CrossBridgeSystem {
                 int pos = segMotorOffsets.get(s) + segMotorCount.get(s);
                 segMotorMyo.set(pos, m);
                 segMotorCount.set(s, segMotorCount.get(s) + 1);
+            }
+        }
+    }
+
+    // ===================== PARALLEL CSR-inverse (atomic-free counting sort) ==========================
+    // Retires the single-threaded csrHistogram + csrScatter above (the O(nMotors) serial passes that
+    // dominate the dense-gliding step once the binding bottleneck is parallelized). Same body-chunked
+    // counting-sort as SpatialGrid.gridChunk* but keyed by boundSeg over motors (key space = nSeg).
+    // Produces a CSR BIT-IDENTICAL to the serial csrHistogram+csrScatter (motors in index order within
+    // each segment), so segGather is unaffected. ADDITIVE — the serial csr* are byte-unchanged for the
+    // ~10 other harnesses that reuse them VERBATIM; only DenseGliding wires these. The csrScan (over
+    // nSeg, single-thread) is REUSED between count and scatter as before.
+    //
+    // csrChunkParams (int): [0]=motorChunkSize  [1]=numMotorChunks
+    // csrMatrix (int):      numMotorChunks × nSeg  (per-chunk private seg-count rows / scatter cursor)
+
+    /** Zero the segmented per-(chunk,seg) count matrix (parallel over all entries). */
+    public static void csrChunkZero(IntArray csrChunkParams, IntArray counts, IntArray csrMatrix) {
+        int nSeg = counts.get(3);
+        int numChunks = csrChunkParams.get(1);
+        int total = numChunks * nSeg;
+        for (@Parallel int e = 0; e < total; e++) csrMatrix.set(e, 0);
+    }
+
+    /** Segmented histogram: each motor-chunk counts its bound motors' boundSeg into its OWN row. */
+    public static void csrChunkHistogram(IntArray boundSeg, IntArray counts,
+                                         IntArray csrChunkParams, IntArray csrMatrix) {
+        int nSeg = counts.get(3);
+        int nM   = counts.get(0);
+        int chunkSize = csrChunkParams.get(0);
+        int numChunks = csrChunkParams.get(1);
+        for (@Parallel int mc = 0; mc < numChunks; mc++) {
+            int start = mc * chunkSize;
+            int end   = start + chunkSize;
+            if (end > nM) end = nM;
+            int rowBase = mc * nSeg;
+            for (int m = start; m < end; m++) {
+                int s = boundSeg.get(m);
+                if (s >= 0) { int idx = rowBase + s; csrMatrix.set(idx, csrMatrix.get(idx) + 1); }
+            }
+        }
+    }
+
+    /** Per-seg merge: segMotorCount[s] = Σ chunks row[s]; overwrite each row[s] with its exclusive
+     *  column-prefix (the chunk's base within seg s). Parallel over segs (disjoint columns). */
+    public static void csrChunkReduce(IntArray counts, IntArray csrChunkParams,
+                                      IntArray csrMatrix, IntArray segMotorCount) {
+        int nSeg = counts.get(3);
+        int numChunks = csrChunkParams.get(1);
+        for (@Parallel int s = 0; s < nSeg; s++) {
+            int acc = 0;
+            for (int mc = 0; mc < numChunks; mc++) {
+                int idx = mc * nSeg + s;
+                int v = csrMatrix.get(idx);
+                csrMatrix.set(idx, acc);
+                acc += v;
+            }
+            segMotorCount.set(s, acc);
+        }
+    }
+
+    /** Counting-sort scatter: each motor-chunk places its motors (index order) at
+     *  segMotorOffsets[s] + row[s]++ (private per-(chunk,seg) cursor). Stable ⇒ bit-identical to serial. */
+    public static void csrChunkScatter(IntArray boundSeg, IntArray counts, IntArray csrChunkParams,
+                                       IntArray segMotorOffsets, IntArray segMotorMyo, IntArray csrMatrix) {
+        int nSeg = counts.get(3);
+        int nM   = counts.get(0);
+        int chunkSize = csrChunkParams.get(0);
+        int numChunks = csrChunkParams.get(1);
+        for (@Parallel int mc = 0; mc < numChunks; mc++) {
+            int start = mc * chunkSize;
+            int end   = start + chunkSize;
+            if (end > nM) end = nM;
+            int rowBase = mc * nSeg;
+            for (int m = start; m < end; m++) {
+                int s = boundSeg.get(m);
+                if (s < 0) continue;
+                int idx = rowBase + s;
+                int pos = segMotorOffsets.get(s) + csrMatrix.get(idx);
+                segMotorMyo.set(pos, m);
+                csrMatrix.set(idx, csrMatrix.get(idx) + 1);
             }
         }
     }

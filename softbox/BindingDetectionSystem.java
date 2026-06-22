@@ -127,6 +127,106 @@ public final class BindingDetectionSystem {
         }
     }
 
+    /**
+     * FUSED per-motor grid query (replaces broadPhase + invertCandidates + computeReachable for
+     * the binding path). Parallel over MOTORS — each motor computes its center cell (from its head,
+     * the SAME center+binning the body view publishes, so identical to bodyCell[motorSlot]), scans
+     * the 27-cell neighborhood of the device-resident grid, and applies the EXACT reach predicate to
+     * every SEGMENT body found, writing its own reachSeg/reachCount slice. No inversion, no atomics
+     * (each motor owns its output slice) ⇒ great occupancy (nMotors threads) and the single-threaded
+     * invertCandidates bottleneck is gone. Faithful to v1 GPUMotorBinding.bindKernel (the fused
+     * broad+narrow per-motor grid walk). The reachable set is IDENTICAL to broadPhase→invert→
+     * computeReachable (same 27 cells, same predicate) — gated grid==brute.
+     *
+     * Reuses the body view's publish convention: motor center = head; segments are STORE_FILAMENT.
+     */
+    public static void gridReachable(
+            FloatArray head, FloatArray uVec, FloatArray rodUVec,
+            FloatArray segEnd1, FloatArray segEnd2,
+            FloatArray gridParams, IntArray gridDims,
+            IntArray gridCellOffsets, IntArray gridCellContents,
+            IntArray ownerStore, IntArray ownerSlot,
+            IntArray motorReachSeg, IntArray motorReachCount,
+            FloatArray kinParams, IntArray counts) {
+
+        int nM   = counts.get(0);
+        int nSeg = segEnd1.getSize() / 3;
+        int MAXC = SpatialGrid.MAX_CAND;
+        float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        float xMin = gridParams.get(0), yMin = gridParams.get(1), zMin = gridParams.get(2);
+        float invCell = gridParams.get(4);
+        int nX = gridDims.get(0), nY = gridDims.get(1), nZ = gridDims.get(2);
+        int nXY = nX * nY;
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
+            float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
+            float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
+
+            // motor center cell (identical math to SpatialGrid.bodyCell over the published center=head)
+            int cx = (int) ((mx - xMin) * invCell);
+            int cy = (int) ((my - yMin) * invCell);
+            int cz = (int) ((mz - zMin) * invCell);
+            if (cx < 0) cx = 0; if (cx >= nX) cx = nX - 1;
+            if (cy < 0) cy = 0; if (cy >= nY) cy = nY - 1;
+            if (cz < 0) cz = 0; if (cz >= nZ) cz = nZ - 1;
+
+            int x0 = cx - 1; if (x0 < 0) x0 = 0;
+            int x1 = cx + 1; if (x1 >= nX) x1 = nX - 1;
+            int y0 = cy - 1; if (y0 < 0) y0 = 0;
+            int y1 = cy + 1; if (y1 >= nY) y1 = nY - 1;
+            int z0 = cz - 1; if (z0 < 0) z0 = 0;
+            int z1 = cz + 1; if (z1 >= nZ) z1 = nZ - 1;
+
+            int out = 0;
+            for (int zz = z0; zz <= z1; zz++) {
+                int zOff = zz * nXY;
+                for (int yy = y0; yy <= y1; yy++) {
+                    int yOff = yy * nX;
+                    for (int xx = x0; xx <= x1; xx++) {
+                        int cc = xx + yOff + zOff;
+                        int start = gridCellOffsets.get(cc);
+                        int end   = gridCellOffsets.get(cc + 1);
+                        for (int idx = start; idx < end; idx++) {
+                            int j = gridCellContents.get(idx);
+                            if (ownerStore.get(j) == SpatialBodyView.STORE_FILAMENT) {
+                                int s = ownerSlot.get(j);
+                                // inlined reachTestDistSq (no helper call / early-return inside the deep
+                                // nest — that triggers TornadoVM's "invalid variable" PTX lowering bug;
+                                // broadPhase inlines for the same reason)
+                                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                                float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                                float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                                boolean reach = false;
+                                if (denom > 0f) {
+                                    float r2x = mx - e1x, r2y = my - e1y, r2z = mz - e1z;
+                                    float alpha = (r2x * r1x + r2y * r1y + r2z * r1z) / denom;
+                                    if (alpha >= 0f && alpha <= 1f) {
+                                        float cpx = e1x + alpha * r1x, cpy = e1y + alpha * r1y, cpz = e1z + alpha * r1z;
+                                        float dx = cpx - mx, dy = cpy - my, dz = cpz - mz;
+                                        float conDistSq = dx * dx + dy * dy + dz * dz;
+                                        if (conDistSq < myoColTol * myoColTol) {
+                                            float inv = 1.0f / (float) Math.sqrt(denom);
+                                            float fux = r1x * inv, fuy = r1y * inv, fuz = r1z * inv;
+                                            float motDotFil = mux * fux + muy * fuy + muz * fuz;
+                                            if (motDotFil >= alignTol) {
+                                                float rodDotFil = rux * fux + ruy * fuy + ruz * fuz;
+                                                if (rodDotFil >= 0f) reach = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                if (reach) { if (out < MAXC) motorReachSeg.set(m * MAXC + out, s); out++; }
+                            }
+                        }
+                    }
+                }
+            }
+            motorReachCount.set(m, out);
+        }
+    }
+
     /** Grid path: per motor, the exact predicate over its broad-phase candidate segments. */
     public static void computeReachable(
             FloatArray head, FloatArray uVec, FloatArray rodUVec,
@@ -272,6 +372,91 @@ public final class BindingDetectionSystem {
             int bestSeg = -1; float bestD = 1.0e30f; float bestArc = 0f;
             for (int k = 0; k < cnt; k++) {
                 int s = motorCandSeg.get(m * MAXC + k);
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float d = reachTestDistSq(mx, my, mz, mux, muy, muz, rux, ruy, ruz,
+                        e1x, e1y, e1z, e2x, e2y, e2z, myoColTol, alignTol);
+                if (d >= 0f && d < bestD) {
+                    bestD = d; bestSeg = s;
+                    float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                    float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                    float numer = (mx - e1x) * r1x + (my - e1y) * r1y + (mz - e1z) * r1z;
+                    bestArc = numer / (float) Math.sqrt(denom);
+                }
+            }
+            if (bestSeg >= 0) { boundSeg.set(m, bestSeg); bindArc.set(m, bestArc); }
+        }
+    }
+
+    /**
+     * Increment 6c (faithfulness fix): the v1 NODE-HELD binding exclusion, ported from
+     * MyoMotor.checkFilSegCollision (BoA-v1ref boxOfActin/MyoMotor.java:391-392):
+     *
+     *     if (FilSegment.soaNodeAtEnd2[filId]) { return; }    // formin/node-held filament excluded
+     *
+     * A filament segment whose barbed end is held by a node's formin is excluded from ALL myosin binding. The
+     * v2 analog of v1's per-segment barbed `nodeAtEnd2` is the node-held TIP: seedNode[s] >= 0 (the segment is
+     * tethered to a node; split children / released / non-node filaments carry -1). This is the rule jba
+     * remembered (v1's comment names an original own-node `&& myNode` form, superseded to exclude every
+     * node-held filament). The skip is TIP-ONLY — v1 excludes only the barbed segment, leaving OUTER segments
+     * bindable, so cross-capture survives on a held filament's overshoot/outer (seedNode<0) segments.
+     *
+     * Data-driven, no new kernel: a one-line skip in the candidate loop. For seedNode[s] < 0 (gliding /
+     * contractile / Test A / any non-node-held filament) it never fires — those scenes call the original
+     * (byte-unchanged) overloads and are unaffected. These node-aware overloads are used only by node-bearing
+     * binding scenes (Test B). The reach overload is the candidate FILTER (the excluded tip never enters the
+     * reach set); bindNearestNodeAware re-applies the skip defensively (faithful to v1's single shared predicate).
+     */
+    public static void bruteReachableNodeAware(
+            FloatArray head, FloatArray uVec, FloatArray rodUVec,
+            FloatArray segEnd1, FloatArray segEnd2,
+            IntArray bruteReachSeg, IntArray bruteReachCount,
+            IntArray seedNode,
+            FloatArray kinParams, IntArray counts) {
+        int nM = counts.get(0);
+        int nSeg = segEnd1.getSize() / 3;
+        int MAXC = SpatialGrid.MAX_CAND;
+        float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        for (@Parallel int m = 0; m < nM; m++) {
+            float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
+            float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
+            float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
+            int out = 0;
+            for (int s = 0; s < nSeg; s++) {
+                if (seedNode.get(s) >= 0) continue;          // v1 nodeAtEnd2 exclusion — node-held tip, not bindable
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float d = reachTestDistSq(mx, my, mz, mux, muy, muz, rux, ruy, ruz,
+                        e1x, e1y, e1z, e2x, e2y, e2z, myoColTol, alignTol);
+                if (d >= 0f) { if (out < MAXC) bruteReachSeg.set(m * MAXC + out, s); out++; }
+            }
+            bruteReachCount.set(m, out);
+        }
+    }
+
+    /** bindNearest with the same v1 node-held (seedNode>=0) exclusion — defensive (the node-aware reach already
+     *  filters the candidate set; this keeps the bind faithful to v1's single shared predicate). */
+    public static void bindNearestNodeAware(
+            FloatArray head, FloatArray uVec, FloatArray rodUVec,
+            FloatArray segEnd1, FloatArray segEnd2,
+            IntArray motorCandSeg, IntArray motorCandCount,
+            IntArray boundSeg, FloatArray bindArc,
+            IntArray seedNode,
+            FloatArray kinParams, IntArray counts) {
+        int nM = counts.get(0);
+        int nSeg = segEnd1.getSize() / 3;
+        int MAXC = SpatialGrid.MAX_CAND;
+        float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        for (@Parallel int m = 0; m < nM; m++) {
+            if (boundSeg.get(m) != MotorStore.FREE_BINDABLE) continue;
+            float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
+            float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
+            float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
+            int cnt = motorCandCount.get(m); if (cnt > MAXC) cnt = MAXC;
+            int bestSeg = -1; float bestD = 1.0e30f; float bestArc = 0f;
+            for (int k = 0; k < cnt; k++) {
+                int s = motorCandSeg.get(m * MAXC + k);
+                if (seedNode.get(s) >= 0) continue;          // v1 nodeAtEnd2 exclusion — node-held tip, not bindable
                 float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
                 float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
                 float d = reachTestDistSq(mx, my, mz, mux, muy, muz, rux, ruy, ruz,

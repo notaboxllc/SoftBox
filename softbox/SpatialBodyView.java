@@ -28,8 +28,12 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
  */
 public final class SpatialBodyView {
 
-    public static final int STORE_FILAMENT = 0;
-    public static final int STORE_MOTOR    = 1;
+    public static final int STORE_FILAMENT    = 0;
+    public static final int STORE_MOTOR       = 1;
+    public static final int STORE_CROSSLINKER = 2;   // inc 5 (recon §2); broad-phase publisher arrives with formation (5c)
+    public static final int STORE_NONE        = -1;  // inc 6c-B2: a slot excluded from the broad-phase (a FREE / not-yet-born
+                                                     //   filament slot). The narrow-phase filters by ownerStore, so STORE_NONE
+                                                     //   is matched by no consumer ⇒ the slot is never a binding candidate.
 
     public final int capacity;
     public int count;                       // active bodies [0,count)

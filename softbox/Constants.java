@@ -59,7 +59,46 @@ public final class Constants {
 
     // Brownian force magnitude prefactor used by the device kernel: sqrt(2 kT / dt).
     // (v1 GPUMoveThing.java:6786-6789; randForce = brownianForceMag * sqrt(gamma) * g.)
-    public static double brownianForceMag() {
-        return Math.sqrt(2.0 * kT / deltaT);
+    // dt is the CALLER'S stepping dt — REQUIRED, never the hardcoded deltaT (the FDT amplitude
+    // must match the integration step or the temperature is wrong; v1 uses sqrt(2kT/Env.deltaT)
+    // where Env.deltaT IS the stepping dt — see DELTAT_AUDIT_FINDINGS.md §3.A / CHAIN_DT_FIX).
+    public static double brownianForceMag(double dt) {
+        return Math.sqrt(2.0 * kT / dt);
     }
+
+    // --- inc 6c B2: actin nucleation + the implicit-actin pool (v1 Env / Crucible) ---
+    public static final double AvogadroNum = 6.022e23;            // /mol (v1 Env.AvogadroNum)
+    public static final double kNodeNuc    = 10.0;                // /node-s (Env.kNodeNuc_init:895)
+    public static final int    actinSeed   = 3;                   // monomers to seed a filament (Env.actinSeed_init:539)
+    public static final double nodeTetherDetachRate = 0.001;      // /s  (Env.nodeTetherDetachRate_init:602; v1 default INACTIVE)
+    public static final double actinConcInit = 15.0;              // µM  (Env.actinConc_init:405)
+    public static final double nodeRadius  = 0.05;                // µm  (Env.nodeRadius_init:430)
+    public static final double fracMove    = 0.5;                 // PAIRS move coeff (Env.fracMove_init:134); the node-tether spring coeff
+
+    // --- inc 6c: actin POLYMERIZATION (barbed-end elongation; v1 FilSegment / Env) ---
+    public static final double biochemDeltaT      = 1.0e-3;       // s   (Env.biochemDeltaT_init:111) — the biochem clock
+    public static final double kATPOn2WithFormin  = 11.6;         // µM⁻¹s⁻¹ barbed-end on-rate at a formin/node (Env.java:718)
+    public static final int    minMonomerCt       = 30;           // interior min-length clamp (FilSegment.java:411)
+
+    // --- inc 7 Stage 1: actin TURNOVER — pointed-end (end1) depolymerization (v1 FilSegment / Env) ---
+    // Stage 1 uses a FIXED depoly rate (nucleotide-dependent rates are Stage 3). Default = the pointed-end
+    // ATP-off rate kATPOff1 (the gentlest, most-stable baseline, faithful to a fresh ATP filament's pointed-off).
+    public static final double kATPOff1 = 0.8;                    // /s pointed-end (end1) ATP-off rate (Env.kATPOff1_init:688)
+    public static final double kADPOff1 = 2.7;                    // /s pointed-end (end1) ADP-off rate (Env.kADPOff1_init:690; Stage 3)
+
+    // --- inc 7 Aging build (A): nucleotide hydrolysis cascade (per-segment proxy). v1 Monomer.hydrolize:182 /
+    // dissociate:189 — the ATP→ADP-Pi→ADP aging that, in aggregate, makes the pointed end mostly ADP at steady
+    // state (⇒ the nucleotide-asymmetric off-rate kADPOff1). Rates from Env.java (recon §1c).
+    public static final double kHydrolysis   = 0.3;              // /s ATP → ADP-Pi   (Env.kHydrolysis_init)
+    public static final double kDissociation = 1.0;              // /s ADP-Pi → ADP   (Env.kDissociation_init)
+
+    // --- inc 7 Severing build (B): cofilin en-masse whole-segment dissolve (v1 FilSegment.checkCofilinDissolve:3741
+    // + Monomer.cofilinBinding:243; recon §1e/§3b). Cofilin decorates ADP monomers at cofilinConc·cofilinRate·dt
+    // (resisted by bundling /(bundleStableFactor·linkCt)); a segment with cofilinCt/monomerCt > cofilinRatio
+    // dissolves en masse. The per-segment proxy tracks a cofilin FRACTION f_cof (the aggregate of the per-monomer
+    // Bernoulli over ADP-non-cofilin monomers). Default cofilinRatio = 1.0 ⇒ dissolve OFF (a ratio can't exceed 1).
+    public static final double cofilinRate        = 0.1;        // µM⁻¹s⁻¹ cofilin binding rate (Env.cofilinRate_init:748)
+    public static final double cofilinConc        = 3.0;        // µM     cofilin concentration  (Env.cofilinConc_init:751)
+    public static final double bundleStableFactor = 2.0;        // bundled fils resist cofilin /(factor·linkCt) (Env:628)
+    public static final double cofilinRatio       = 1.0;        // dissolve threshold; 1.0 = OFF (Env.cofilinRatio_init:754)
 }

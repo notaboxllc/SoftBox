@@ -1,0 +1,568 @@
+# Increment 5a — passive crosslinker static spring + double-ended fil↔fil gather (findings)
+
+> **Increment 5b (Bell-model unbinding + link-lifecycle death half) is appended at the bottom of this
+> file** — chose to §-extend the inc-5 findings rather than spawn `INC5B_*`.
+
+**Status: DONE / green.** The crosslinker store + static translational spring force law + the new
+double-ended filament↔filament gather are built, wired into both runners (CPU sequential + GPU
+TaskGraph), and validated by the two static port-equivalence checks. `BoA-v1ref` byte-clean; production
+(`GlidingHarness`) byte-unchanged. Builds on the inc-4 CSR-inverse gather template and the inc-1
+integrator, both reused verbatim.
+
+Scope is **5a only**: links are pre-placed and static. OUT (later sub-increments): formation /
+`checkToLink` / broad-phase segment↔segment (5c); Bell unbinding / `ckLinkBreak` (5b); torsional spring
+`applyTorsionForce` (deferred); Arp2/3 (5d).
+
+---
+
+## 1. What was built
+
+- **`CrosslinkerStore.java`** — SoA store. Topology by INTEGER FILAMENT SLOTS (never class identity):
+  `linkFilA[k]`/`linkFilB[k]` + arcs `loc1[k]`/`loc2[k]`; static per-filament link count `filLinkCt`
+  (v1 `getLinkCt`, for `fracMove`); per-link reaction scratch `xlinkData` (stride 12: A-force[0..2],
+  A-torque[3..5], B-force[6..8], B-torque[9..11]); `xlParams` = {restLength, fracMoveBase, dt}.
+- **`CrosslinkerSystem.java`** — `linkForces` (the spring, faithful FilLink port), `segGatherA` /
+  `segGatherB` (the two gather passes), `bruteGather` (the exactness reference).
+- **`CrosslinkerHarness.java` + `run_xlink.sh`** — the two checks, CPU≡GPU, all-OFF≡HEAD.
+- **`SpatialBodyView.STORE_CROSSLINKER = 2`** (recon §2; additive — the broad-phase publisher arrives
+  with formation in 5c).
+
+`GlidingHarness` is left **byte-unchanged** (strongest "production path untouched"). "Wire into
+GlidingHarness buildScene/CPU-step/GPU-buildPlan" was honoured as the three-point wiring PATTERN,
+applied in a dedicated harness — exactly as every prior increment (`run_motor`/`motorbody`/`xbridge`/
+`stroke`). The 5a checks need a 2-parallel-filament micro-scene the gliding bed can't host, and the
+gliding 23-kernel single TaskGraph is near its bytecode limit. ("check harness wiring" = recon
+silent-in-scope.)
+
+---
+
+## 2. The gather design (planner's decision — implemented as specified)
+
+**Two-pass single-ended CSR-inverse gather**, reusing the validated `CrossBridgeSystem` CSR template
+(`csrHistogram → csrScan → csrScatter`) **verbatim**, run twice with two key arrays:
+
+1. Each crosslinker computes its spring reaction **once** in `linkForces` and **self-writes** both side
+   reactions into its own `xlinkData` row — `{+forceVec, +torque}` tagged to `linkFilA[k]`,
+   `{−forceVec, −torque}` tagged to `linkFilB[k]` (self-write ⇒ race-free, exactly like motor `bondData`).
+2. **Pass A:** CSR-inverse keyed by `linkFilA` → `segGatherA` sums each filament's A-side reactions into
+   `forceSum`/`torqueSum`.
+3. **Pass B:** CSR-inverse keyed by `linkFilB` → `segGatherB` sums each filament's B-side reactions into
+   the **same** `forceSum`/`torqueSum` (additive `+=`).
+
+Each pass is structurally identical to the proven motor→segment gather (different key + payload source),
+so **race-free / no-atomics / no-KernelContext / bit-identical-CPU↔GPU** carry over by construction. The
+single-pass unified-2N-CSR alternative was not needed — two-pass hit no wall. **No scope expansion, no
+bail.**
+
+Result: the two-pass gather == an O(nLinks·nSeg) brute per-link sum, **bit-identical** (same value, same
+order) on both runners.
+
+---
+
+## 3. The force law — faithful FilLink.applyTransForce port + the porting subtlety (RESOLVED)
+
+Port of v1 `FilLink.applyTransForce` (`BoA-v1ref/boxOfActin/FilLink.java:198-217`), minus the strain
+track + `ckLinkBreak` (5b) and torsion (deferred):
+
+```
+pt1 = end1(filA) + loc1·uVec(filA);   pt2 = end1(filB) + loc2·uVec(filB)
+linkVec = pt2 − pt1;   linkLength = |linkVec|
+stretch = max(linkLength − restLength, 0)                 restLength = 0.0125 µm (FilLink.java:28)
+fracMove = 0.4 / max(linkCt(A), linkCt(B), 1)             (0.4 = FilLink.java:208)
+curForceMag = fracMove·1e-6·stretch / ( dt · (1/γ1 + 1/γ2) )   γ = bTransGam.x (PARALLEL drag of each fil)
+forceVec = curForceMag · linkVec                          ← linkVec NOT normalized (v1 quirk; ported verbatim)
+A-side: +forceVec at pt1 (force + positional torque about filA COM, R in metres)
+B-side: −forceVec at pt2 (force + positional torque about filB COM)
+```
+
+**The bail-critical porting subtlety — RESOLVED, no distortion, commit.** v1's force is "damping-limited":
+the `/dt` and `1/(1/γ1+1/γ2)` encode "relax toward rest by `fracMove` per step" expressed as a force. The
+force→position path was traced end-to-end:
+
+- v1 `FilLink.incForceSum(F, pt)` → adds `F` to `forceSum` + positional torque `r×F` (r in metres). →
+- v1 `FilSegment.moveThing` (`FilSegment.java:609-685`): `bVeloc = 1e6·bForceSum/bTransGam` (µm/s);
+  `incCoord(dt, veloc)` ⇒ `pos += dt·v`.
+- v2 `RigidRodLangevinIntegrationSystem.integrate` is the **line-for-line port** of that `moveThing`
+  (`v = 1e6·F/γ; pos += dt·v`), already FDT/deflection/chain-validated since inc 1.
+
+So the `/dt` in the force law **cancels** the `·dt` in integration ⇒ the per-step relaxation is
+**dt-INDEPENDENT**. Drag appears in **both** the force-law denominator (`1/Σγ⁻¹`) and the integrator
+(`÷γ`) — this is v1's **design**, not a double-count. v2 reproduces v1's effective relaxation exactly
+because it ports **both** unchanged. The `forceSum → RigidRodLangevinIntegration` path **can** represent
+v1's damping-limited form faithfully — verified by check #2 below (analytic match + perfect
+dt-invariance). **No bail.**
+
+### Force-coverage audit (one path each — never zero, never doubled)
+| force | head/A-side | other/B-side | path |
+|---|---|---|---|
+| F (translational spring) | +forceVec on filA (gatherA, once) | −forceVec on filB (gatherB, once) | equal-and-opposite by construction (`nF = −F` in float, exact) |
+| positional torque | r_A × (+forceVec) on filA | r_B × (−forceVec) on filB | once each (gather == brute, bit-identical) |
+
+(Torsional spring `applyTorsionForce` is OUT of 5a scope — deferred.)
+
+---
+
+## 4. Validation results (numbers for the planner) — `./run_xlink.sh`, dt=1e-5, M=4000
+
+All gates **PASS** on the GPU TaskGraph + CPU cross-check, and on `-cpu` alone.
+
+**CHECK #1 — rest hold (equal-and-opposite reactions land; no spurious force at rest).**
+- (a) Exact rest (sep = restLength, Brownian off): **max|Δcoord| = 0.00 µm over 4000 steps** — zero force
+  at zero stretch ⇒ zero velocity, zero motion. No spurious rest force.
+- (b) Stretched release (sep 0.0250 → 0.0125 µm, Brownian off): **max COM-z drift = 1.8e-7 µm =
+  0.0014 % of the relaxation** — equal-and-opposite reactions keep the pair's COM stationary while the
+  separation relaxes toward restLength. (The 0.0014 % is sub-ULP geometry: `loc=0.5·L` lands the attach
+  point at the COM to within a float ULP, leaving a sub-fm torque — float32, ≪ 0.1 % logic floor.)
+
+**CHECK #2 (DECISIVE) — perpendicular-stretch relaxation: decay constant + dt-independence.**
+Decay rate from v1's exact arithmetic: `Δε = −k(L)·ε`, `k(L) = fracMove·(γ_par/γ_perp)·L`
+(γ_par via the force-law denominator; γ_perp via the perpendicular integration; the extra `L` = v1's
+non-normalized linkVec). For the std 32-monomer segment: γ_par = 2.3885e-8, γ_perp = 3.3088e-8 N·s/m.
+- **measured per-step decay rate k = 0.00365176** vs **analytic (v1 arithmetic, L-matched) = 0.00365172**
+  → **match = 0.0012 % of the decay rate** (≪ 0.1 % ⇒ float32, faithful port).
+- **decay constant τ = 273.84 steps = 2.738 ms** (at dt = 1e-5).
+- **dt-independence: k(dt/10) = 0.00365176, Δ = 0.0000 %** — the damping-limited `/dt·dt` cancellation is
+  faithfully reproduced (the sharpest probe of the porting subtlety; a double-counted or omitted drag
+  would scale with dt).
+
+**GATHER EXACT** — two-pass CSR gather == brute per-link sum: **max|gather−brute| = 0.00** (force and
+torque), bit-identical, all sampled steps, both runners.
+
+**CPU≡GPU** — the crosslinker **force+gather is BIT-IDENTICAL** CPU↔GPU (forceSum diff = 0.00 exactly at
+steps 1/10/100 — the bail-critical "two-pass CSR can't be made bit-identical CPU↔GPU" is **disproven**).
+The pose diverges only by integration **float32 last-bit accumulation** over the (non-chaotic) 4000-step
+relaxation, saturating at **9.31e-10 µm ≈ 0.5 ULP at the 0.0125-µm coord scale** (worst relative
+6.5e-8 ≪ 0.1 % logic floor) — the standing CPU≡GPU standard ("bit-identical to printed precision").
+
+**all-OFF≡HEAD** — the crosslinker pipeline run over nLinks=0 (tasks present, empty link set) is
+**bit-identical** (max|Δcoord| = 0.00, max|ΔuVec| = 0.00, Brownian on, 1500 steps) to the bare filament
+path, on **both** GPU and CPU. The crosslinker code is a true no-op when no links are placed. Production
+(`GlidingHarness`) is additionally byte-unchanged.
+
+---
+
+## 5. v1 oracle posture for the decay constant (deferral, documented)
+
+The decay constant is **fully determined** by the force law + integrator, both confirmed faithful:
+- the per-step **force value** was numerically matched to v1's `applyTransForce` formula bit-exactly
+  (one step: 3.91865e-15 N = `curForceMag·linkLength`, the value v1 would compute);
+- the **integrator** is the inc-1 line-for-line port of v1 `FilSegment.moveThing`, FDT/deflection/
+  chain-validated;
+- the running v2 **matches the analytic-from-v1-code decay to 0.0012 %** and is **dt-invariant**.
+
+A full v1-`FilSegment` standalone run (constructing v1's object graph — Crucible/`theBox`, `WorkerScratch`
+pool, monomer bookkeeping, Env parameter system — for a 2-segment scene) was **assessed as
+disproportionately invasive for 5a and deferred** — the same judgment the project applied to the §6.8
+fp64 standalone ("wildly invasive … bail per the prompt"). Under the porting-equivalence oracle posture
+(CLAUDE.md "Oracle posture", inc-5-onward), the captured-and-reproduced v1 micro-behavior is the
+damping-limited relaxation whose τ is set by the force law + drag — established analytically from v1's
+exact code and reproduced by v2 to float precision. The broader v1 machinery becomes natural in 5b/5c
+(formation/unbinding need it anyway); a direct v1-`FilSegment` decay capture can be added there if the
+planner wants an independent run-time number.
+
+---
+
+## 6. Carry-forward / open
+
+- The two-pass gather (keyed by integer filament slots, race-free, bit-identical CPU↔GPU) is **proven
+  before any formation/unbinding dynamics get built on top of it** — the 5a goal.
+- v1's `getLinkCt` accumulates per-step as links are processed (order/thread-dependent for
+  multi-link-per-segment); 5a uses the **total static count** (= 1 here ⇒ fracMove = 0.4 exactly, the
+  intended single-link value). Multi-link-per-segment `fracMove` faithfulness is a **5c (formation)**
+  concern, flagged.
+- `restLength` is commented "nm" in v1 (`FilLink.java:28`) but the value 0.0125 is **µm** (12.5 nm) —
+  consistent with `linkLength` in µm. Ported as 0.0125 µm.
+- Next: 5b (Bell strain unbinding `ckLinkBreak`), 5c (formation + broad-phase segment↔segment +
+  `STORE_CROSSLINKER` publisher), torsion (`applyTorsionForce`), 5d (Arp2/3).
+
+---
+
+# Increment 5b — Bell-model crosslinker unbinding + link-lifecycle (death half)
+
+**Status: DONE / green.** On 5a's pre-placed-link scene: the EWMA(boxcar) strain track + the Bell
+off-rate + per-step stochastic break (wang-hash) + the lifecycle DEATH half (sentinel self-write) + the
+one `if(active)` gather guard. Wired into both runners. `BoA-v1ref` byte-clean; production
+(`GlidingHarness`) byte-unchanged. (Same harness/script as 5a — `run_xlink.sh` now runs 5a **and** 5b.)
+
+Scope is **death only**. OUT (→ 5c): formation / `checkToLink` / broad-phase FIL×FIL candidates /
+free-slot allocation / stream-compaction. Links remain pre-placed; 5b only lets them *die*.
+
+## 1. The lifecycle contract (items 1–4 implemented; item 5 = 5c)
+- **Pool = fixed-capacity SoA** — `CrosslinkerStore(capacity C, nSeg)`. The SoA arrays + the CSR loop
+  bound are `counts[0]=C`. (For the 5b scenes C = #pre-placed; the field is shaped so 5c's
+  formation/allocation extends it with no rework.)
+- **One authoritative sentinel-encoded lifecycle field** — `IntArray linkState`, mirroring motor
+  `boundSeg`: `>=0` = `LINK_ACTIVE`, `<0` = `LINK_FREE` (free/dead, inert, allocatable in 5c). Single
+  source of lifecycle truth (no scattered booleans). Unused capacity slots start `LINK_FREE` with a
+  negative key (`linkFilA=-1`) so the CSR skips them (key<0) AND the gather guard skips them.
+- **Exactly one `if(active)` gather guard** — `segGatherA`/`segGatherB` each gained one branch
+  (`if (linkState[li] < 0) continue;`); `bruteGather` gained the matching guard (it is the reference).
+  The CSR template (`CrossBridgeSystem.csrHistogram/Scan/Scatter`) stays **reused verbatim** — dead
+  links keep their key ≥0 so they remain in the CSR index; the gather guard is what drops their payload.
+  This was the **only** change to the proven 5a gather (no pause/report needed).
+- **Death = self-write** — a link breaking this step self-writes `LINK_FREE` into its own `linkState[k]`
+  (race-free, no allocation, no compaction; the data stays in place, just inert).
+
+## 2. The strain track is a BOXCAR, not an exponential EWMA (a discovery)
+v1's `strainTrack` is `ValueTracker(Env.filLinkStrainToAve=10)` — a **10-slot sliding-window (boxcar)
+circular buffer**, `averageVal() = sum(all 10)/10` **always** (initial zeros included until filled), NOT
+an exponential EWMA (the recon's "EWMA" label is loose). Ported faithfully as `strainHist[k*10+p]` +
+`strainPlace[k]` (the proven `forceDotHist`/`forceDotPlace` ring; the circular write sequence is
+bit-identical to v1's `registerValue` pre-check-wrap). `STRAIN_WIN=10`.
+
+## 3. Force law (faithful FilLink port) — `CrosslinkerSystem.unbind`
+Per ACTIVE link, mirroring v1's per-step order (`applyTransForce` register → `ckLinkBreak`):
+strain = max(linkLength−restLength,0)/restLength → push into the boxcar → aveStrain = sum/10 →
+`k_off = linkOffConst + linkOffCoeff·exp(aveStrain·linkOffExp)` → `P_break = k_off·dt` →
+wang-hash draw `u<P_break` ⇒ death self-write. v1 calls `ckLinkBreak` **before** applying force (returns
+on break), so `unbind` runs **before** `linkForces` in the step: a link breaking this step is FREE before
+the gather ⇒ contributes no force this step (matches v1). A dead link is skipped entirely — no strain
+update, no break draw, no force (inert).
+
+**RNG:** the reused v1 wang-hash, keyed per `(link, step, seed)` with salt **`0x584C4B42` ("XLKB")**,
+distinct from the motor salts (NUC `0x4E55` / refractory `0x52465241` / release `0x4D54`). `u =
+(h>>>1)/2147483647f`. Integer mixer ⇒ bit-identical CPU↔GPU, race-free (no atomics, no KernelContext).
+One draw/link/step ⇒ the break kernel uses a `WorkerGrid1D localWork=64` (CLAUDE.md RNG gotcha; absent in
+5a which had no RNG).
+
+**Note — k_off at strain 0 is 2 /s, not 1.** With Env defaults (const=1, coeff=1, exp=2),
+`k_off(0) = 1 + 1·exp(0) = 2 /s`. The prompt's "rate ≈ linkOffConst" at strain 0 is approximate; the
+faithful v1 formula gives const+coeff at zero strain. Validated against the actual formula (2 /s).
+
+## 4. Validation (numbers for the planner) — `./run_xlink.sh`, all gates PASS (GPU + CPU)
+**CHECK #1 (GATE) — P_break + EWMA arithmetic vs v1.** (a) `k_off`/`P_break` at aveStrain
+{0, 0.25, 0.5, 1, 2} vs v1's literal `ckLinkBreak` formula: **max Δ = 0.000 %** (constants/formula
+faithful). (b) EWMA step-for-step (40-step ramp+hold, 10-slot boxcar) v2 (float32 storage) vs v1
+`ValueTracker` (double): **max k_off Δ = 2.6e-6 %** (float32 storage floor, ≪ 0.1 %).
+
+**CHECK #3 — empirical off-rate vs k_off·dt** (frozen pose, 20 000 links/strain, dt=1e-4, warmup 30,
+3000 steps):
+| strain | k_off (/s) | P_emp/step | k_off·dt | Δ% | deaths |
+|---|---|---|---|---|---|
+| 0.0 | 2.0000 | 2.0274e-4 | 2.0000e-4 | 1.37 % | 9 039 |
+| 0.5 | 3.7183 | 3.7172e-4 | 3.7183e-4 | 0.030 % | 13 317 |
+| 1.0 | 8.3891 | 8.3886e-4 | 8.3891e-4 | 0.0054 % | 17 989 |
+
+The empirical break fraction/step matches `k_off·dt` across the Bell exp. The strain-0 1.37 % is sampling
+noise (~1.3σ; fewest deaths ⇒ largest relative CI ≈ 1/√9039 = 1.05 %) — exactly the expected statistical
+behavior (Δ shrinks monotonically as deaths grow). Spans strain 0 (k_off=2) + two nonzero strains.
+
+**DEATH→INERT (contract items 3–4, full force pipeline).** A loaded link (|force| 1.49e-13 N while
+active) breaks (step 35), self-writes `LINK_FREE`, and thereafter the gathered force is **exactly 0**
+(`|gathered|=0`, `|brute|=0`, `gather−brute=0`) — the one guard makes it inert end-to-end.
+
+**CPU≡GPU (break path).** The wang-hash break draw is **bit-identical** on both runners: after 400 steps,
+GPU dead = CPU dead = 854, **0 mismatched links**. (No KernelContext; integer RNG.)
+
+**all-OFF≡HEAD.** (a) 5b with unbinding OFF ≡ the 5a path, **bit-identical** (Δcoord/ΔuVec = 0, Brownian
+on, GPU + CPU) — the lifecycle field + gather guard are no-ops when no link dies. (b) 5a's own
+all-OFF≡HEAD (crosslinker pipeline over nLinks=0 ≡ bare filament) **still holds**, and all 5a gates
+(rest hold, decay constant 0.0012 %, gather bit-exact, CPU≡GPU) reproduce unchanged.
+
+## 5. v1 oracle posture (running-v1 oracle DEFERRED to 5c — carried forward)
+No formation yet ⇒ no running-v1 bundle needed. 5b is validated against v1's **formula/arithmetic**
+(`ckLinkBreak` + `ValueTracker`), the analytic-oracle posture (same as 5a). The k_off/P_break/EWMA are
+bit-exact to v1's expression (0.000 % / float32 floor), and the empirical rate matches `k_off·dt` through
+the actual kernel. **The running-v1-oracle remains deferred to 5c**, where formation steady-state
+(formation ≈ dissolution, link-count plateau vs `xLinkConc`) genuinely needs a running v1 bundle — carry
+this flag forward.
+
+## 6. Carry-forward / open
+- **fracMove on death (deferred to 5c).** v1's `getLinkCt` is recomputed each step, so a death changes
+  surviving links' `fracMove = 0.4/max(ct)`. 5b keeps `filLinkCt` static (deaths don't recompute it) —
+  the decisive 5b gates don't depend on it (off-rate is force-free; death-inert has no survivors). The
+  dynamic link-count → fracMove recompute pairs naturally with formation (counts change a lot) in 5c.
+- **Lifecycle field shaped for 5c.** `linkState >= 0 = ACTIVE`, `<0 = FREE/DEAD`. 5c formation allocates
+  FREE→ACTIVE on the same field and may subdivide the negative space (like `boundSeg`'s `FREE_COOLDOWN`)
+  with no change to the `>=0`=ACTIVE contract or the gather guard.
+- Next: 5c (formation + broad-phase FIL×FIL + free-slot allocation + the `STORE_CROSSLINKER` publisher +
+  the running-v1 steady-state oracle), torsion (`applyTorsionForce`), 5d (Arp2/3).
+
+---
+
+# Increment 5c-i — link allocator in isolation (Design A: scan-rank free-list, no compaction)
+
+**Status: DONE / green.** The Design-A allocator (free-list build + request rank + allocate + overflow
+clamp) + a synthetic deterministic driver, wired into both runners with the death→free-list→allocate
+phase order. Validated by the 7 self-consistency checks (no v1 oracle — the driver is synthetic).
+`BoA-v1ref` byte-clean; production/`GlidingHarness` byte-unchanged; default-off (K=0).
+**Design A is CONFIRMED — existing links never move; no kick-back to Design B.**
+
+Scope: **allocator bookkeeping only** (a formed link need not produce a correct force yet). OUT (→
+5c-ii/iii): real broad-phase FIL×FIL candidates / `checkToLink` gates / stochastic `P_form` RNG; the
+formation force law / `fracMove`-on-changing-count; the running-v1 steady-state bundle.
+
+## 1. The allocator (Design A, implemented as specified — no redesign)
+Per formation phase, reusing the validated single-threaded **`CrossBridgeSystem.csrScan` prefix-sum
+VERBATIM** for BOTH prefix sums:
+1. **Free-list build** — `freeFlags` (`freeCount[s] = linkState[s]<0 ? 1 : 0`) → `csrScan` (exclusive
+   prefix sum → `freeOffsets`, `freeOffsets[C]=nFree`) → `freeScatter` (stream-compaction: `freeList[
+   freeOffsets[s]] = s` for each FREE s, index order). The two companions (flag + compaction scatter)
+   are the standard prefix-sum-compaction idiom — single-threaded / index-ordered ⇒ bit-identical
+   CPU↔GPU like `csrScatter`. (No new SCAN invented; the bit-identical-critical prefix sum is reused.)
+2. **Rank** — `csrScan` over `acceptFlag` → `rankOffsets`; request `r` gets dense `rank=rankOffsets[r]`,
+   accepted iff `rankOffsets[r+1]>rankOffsets[r]`; `rankOffsets[K]=nAccepted`.
+3. **Allocate** — request rank `r` claims `freeList[r]`, writes its payload, inits a FRESH strain ring
+   (all-zero + place 0), flips `linkState` FREE→ACTIVE. Distinct ranks → distinct free slots ⇒ **one
+   writer per slot, race-free, no atomics, no KernelContext.**
+4. **Overflow clamp** — `if (rank >= nFree) continue;` ⇒ exactly the lowest `nFree` ranks form.
+
+**Determinism:** index-ordered free-list + index-ordered ranks give a fully deterministic assignment
+(request with the smallest index among accepted → smallest free slot) — **no sort needed** (the
+"scan-rank needs a sort" pause condition did not trigger).
+
+## 2. Design-A invariants (the point of 5c-i) — all hold
+- **Existing links never move.** Allocation only writes FREE slots (`freeList` entries are FREE by
+  construction); the per-step slot-stability check (allocate never overwrites a slot ACTIVE before it,
+  over a 300-step churn) **passed**. No compaction was ever needed ⇒ **Design A confirmed**, not Design B.
+- **Gather loop bound → pool capacity `C`** with the §5b `if(active)` guard skipping holes — the gather's
+  link loops already iterate `counts[0]=C` (= capacity), so no change was needed there; the only added
+  guard is the one §5b `if(active)` branch. One necessary companion: **`linkForces` gained a one-line
+  hole-skip** (`if (linkFilA<0) continue`) — Design A introduces never-used FREE slots with key `-1`, and
+  `linkForces` indexes `filEnd1[key]`, so without the skip it would index `[-1]` (OOB). This is a separate
+  OOB-safety guard on the force-compute kernel, NOT a gather change; it is bit-identical to 5b on
+  all-active / dead-but-keyed scenes (dead-but-keyed links are still computed then dropped by the gather
+  guard, exactly as in 5b). *(silent + journal per the recon boundary.)*
+- **Determinism:** bit-identical CPU↔GPU within v2.
+
+## 3. Phase order (death → free-list → allocate) + the v1 comparison
+The step runs **unbind/death (5b) → build free-list → rank → allocate (5c-i)**, so a slot freed by a
+same-step 5b death is immediately reusable by the same-step formation (check #3). **v1 comparison:** v1
+forms during the collision phase (start of step) and frees at cleanup (end of step) via
+`setInactiveFilLinks`, so a v1 link freed in step N is reusable in step **N+1**; v2-5c-i does
+**same-step** reuse (die-then-form within one step). This is the planner-specified ordering for the
+single-pass SoA step — it shifts *when* a freed slot becomes reusable by ≤1 step but does not change
+lifecycle correctness (a dead slot is never double-counted, an active slot is never reallocated). Noted
+as the deliberate v2 ordering.
+
+## 4. Validation (numbers for the planner) — `./run_xlink.sh`, all 7 PASS (GPU + CPU)
+- **#1 distinct-slot / no double-alloc + #2 free-list correctness** (empty pool, K=8 accepted):
+  free-list = FREE slots in index order (nFree=64); 8 accepted ⇒ 8 distinct slots flip ACTIVE; payloads
+  land in the assigned slots; fresh strain rings. ✓
+- **#3 death→same-step reuse + #5 slot-stability** (churn: C=16 all-ACTIVE, strain 2, 300 steps):
+  slot-stability holds every step (allocate never overwrites an ACTIVE slot); same-step death→reuse
+  observed (first @ slot 14, step 11) with a fresh strain ring + this-step payload. ✓
+- **#4 overflow clamp** (nFree=2, nAccepted=5): exactly 2 form (lowest ranks 0,1 → slots 6,7 with their
+  fingerprints), the 3 over-clamp requests are not-formed (their fingerprints absent), no OOB. ✓
+- **#6 CPU≡GPU bit-identical** (C=32, K=6, 400 churn steps): **0 field mismatches** across slot
+  assignments + payloads + strain rings + free-list + ranks. ✓
+- **#7 all-OFF≡HEAD** (K=0 ⇒ allocator no-op): linkState evolves **bit-identically** to the 5b
+  unbind-only path (0 mismatches, 300 steps); all 5a/5b gates reproduce unchanged. ✓
+
+## 5. Carry-forward / open
+- The synthetic driver (`fillRequests`) is the only piece 5c-ii replaces: the broad-phase FIL×FIL
+  candidate generator + `checkToLink` gates + `P_form` RNG fill `reqFilA/reqFilB/reqLoc1/reqLoc2/
+  acceptFlag` instead of the scripted fingerprints. The allocator (free-list/rank/allocate/clamp) rides
+  underneath unchanged. (If formation adds RNG, the WorkerGrid localWork=64 gotcha applies to that
+  kernel — 5c-i's allocator kernels have no RNG.)
+- `reqLoc2` carried a synthetic fingerprint (step·1000+r) to verify exact landing; 5c-ii replaces it with
+  the real attachment arc.
+- Running-v1 oracle still **DEFERRED to 5c-iii** (steady-state plateau / formation≈dissolution).
+  `fracMove`-on-changing-count still deferred to 5c-iii.
+- Next: 5c-ii (broad-phase + gates + `P_form` + the `STORE_CROSSLINKER` publisher), 5c-iii (formation
+  force law + running-v1 steady-state), torsion, 5d (Arp2/3).
+
+---
+
+# Increment 5c-ii — crosslinker formation (broad-phase FIL×FIL + checkToLink gates + P_form)
+
+**Status: DONE / green.** Real formation that fills the 5c-i request arrays; the 5c-i scan-rank allocator
+underneath is **unchanged**. Pipeline per step: broad-phase FIL×FIL candidates → per-candidate-local gates
++ `P_form` RNG → one-per-segment min-reduction admission → fill request arrays → 5c-i allocator. Wired into
+both runners. Validated on the analytic oracle (gate-by-gate arithmetic vs v1; running-v1 bundle stays
+deferred to 5c-iii). `BoA-v1ref` byte-clean; production/`GlidingHarness` byte-unchanged; default-off (pForm=0).
+
+OUT (→ 5c-iii / 5d): the formation **force law** + `fracMove`-on-changing-count; the **running-v1 bundle**
+/ steady-state plateau / halve-`xLinkConc`; Arp2/3.
+
+## 1. What was built (CrosslinkerSystem)
+- `filFilCandidates` — broad-phase FIL×FIL branch: distinct unordered cross-filament segment pairs
+  (`i<j`, `filID[i]≠filID[j]`) within a coarse capsule bound → `reqFilA/reqFilB` (unused slots key −1).
+  Single-threaded ⇒ deterministic index order; complete superset of the fine-gate passers.
+- `formGates` — per-candidate-LOCAL (each writes its own slot ⇒ race-free): v1 `checkToLink` alignment
+  (mode 0/1/−1, **`fastAcos` ported**), the v1 `lineSegmentIntersectTest` closest-approach vs
+  `crossLinkGrabDist²`, `orientSame` (dot sign, v1 `FilLink.set`), `loc1/loc2` (+v1 jitter), and the
+  `P_form = 1−exp(−xLinkOnRate·xLinkConc·dtCheck)` wang-hash draw.
+- `formAdmitReduce` — per-segment min gate-passing candidate index (single-threaded reduction).
+- `countActiveLinks` — start-of-step ACTIVE links per segment (saturation count).
+- `formAdmit` — the admission decision (below) → `acceptFlag` (the 5c-i request accept-flag).
+- `placeOrient` — persists `orientSame` into the formed link's slot via the same rank→freeList mapping
+  (keeps the 5c-i `allocate` unchanged / ≤15 args).
+- Store: `linkOrientSame`, `reqOrient`, `gatePass`, `minCand`, `activeLinkCount`, `formParams`, `formCounts`.
+
+## 2. The admission decision (planner — implemented as specified)
+Geometry/RNG gates are per-candidate-local (race-free). Saturation + spacing are cross-candidate. Resolved
+by **cap admission at one new link per segment per step** via a deterministic min-candidate-index
+reduction: candidate `c` is admitted iff it is the **minimum candidate index** among gate-passing
+candidates targeting `segA` **AND** among those targeting `segB`, **and** both segments pass **saturation**
+(`activeLinkCount[seg] < maxXLinksOnSeg`) **and** **spacing** (`c`'s loc ≥ `minSepBetweenXLinks` from every
+existing ACTIVE link on that segment) — **all vs start-of-step state** (after the 5b death, before this
+step's formation). Because ≤1 new link lands per segment per step, saturation + spacing are exact with **no
+same-step cross-candidate dependency** (no parallel-greedy machine). Implemented as a single-threaded
+per-segment min-reduction (`formAdmitReduce`) feeding a parallel read-only admission test (`formAdmit`) —
+the CSR-by-segment min, without materializing the CSR; deterministic, race-free, bit-identical CPU↔GPU.
+
+This is a **deliberate non-binding divergence** from v1 (which admits all that pass, in scan order),
+self-checked below (item 4).
+
+## 3. Faithfulness notes / discoveries
+- **`Math.acos` does NOT lower on the PTX backend** (`emitReinterpret unimplemented`). `fastAcos`'s middle
+  branch (`|dot|≤0.95`) was swapped to the PTX-proven `accurateAcos` polynomial (same as `CrossBridgeSystem`).
+  The default `maxXLinkBondAngle = π/12` lands the alignment threshold in the `|dot|>0.95` **sqrt** branch
+  (ported verbatim ⇒ that decision is bit-exact); the middle only decides far-misaligned pairs (angle ≥
+  acos(0.95) ≈ 18.2° > the π/12 = 15° threshold ⇒ fail either way), so `accurateAcos` there is
+  decision-bit-exact for the default. *(silent + journal.)*
+- **Firing cadence (ported):** `crosslinkFiresThisStep` fires every `crosslinkCheckInt` steps;
+  `dtCheck = deltaT·crosslinkCheckInt`; default `crosslinkCheckInt = biochemDeltaT/deltaT = 1e-3/1e-4 = 10`.
+  Not ambiguous (no pause). `P_form(v1 default) = 1−exp(−10·1·1e-3) = 9.995e-4`.
+- **v1's `lineSegmentIntersectTest` is degenerate for exactly-parallel segments** (`ray1×ray2≈0` → its
+  "parallel" guard returns no-collision) and ill-conditioned for nearly-parallel — so v1 forms links at
+  near-parallel **crossings** (interior closest approach), not stacked-parallel pairs. The test scene is a
+  crossing bundle (filaments tilted in xy, stacked in z) accordingly. Ported verbatim incl. the parallel
+  guard's component-wise `< 1e-20` quirk (consistently matched by the v1 host reference).
+- **RNG salts** (reused wang-hash, distinct from break `XLKB` + the motor salts): `P_form` `0x584C4650`
+  ("XLFP"), loc jitter `0x584C4A31`/`0x584C4A32` ("XLJ1"/"XLJ2"). The loc jitter MAGNITUDE is faithful
+  (±`minFilLinkSep`) but the specific value differs from v1's MersenneTwister draw (the established
+  RNG-divergence posture; the spacing LOGIC is what's validated).
+- `orientSame` is computed + validated at formation and persisted into the link slot (`linkOrientSame`),
+  forward-compatible with the torsional spring (deferred); the 5c-i `allocate` stays unchanged.
+
+## 4. Validation (numbers for the planner) — `./run_xlink.sh`, all 6 PASS (GPU + CPU)
+- **#1 broad-phase candidate-set** (8 fil × 2 seg): nCand=112; emitted set == host enumeration; unordered/
+  distinct (i<j, no dup); **same-filament pairs excluded**; complete superset of the fine-gate passers. ✓
+- **#2 gate arithmetic bit-exact vs v1 `checkToLink`** (modes 0/1/−1, 828 candidates spanning the alignment
+  AND distance boundaries): **0 decision mismatches** vs the v1 formula (alignment `fastAcos`, lineSeg
+  `crossLinkGrabDist²` distance, `orientSame`). ✓
+- **#3 P_form formula + cadence + empirical:** formula vs v1 literal **Δ=0.000%**; `dtCheck = 1e-4 s`,
+  `P_form=9.995e-4`; empirical per-candidate fire fraction at `pForm=0.30` = **0.29970 (Δ=0.101%)** over
+  4000 steps (108 geometry-passers) — matches within sampling. ✓
+- **#4 one-per-segment cap contention self-check (THE flagged decision)** — 36-filament dense focal bundle,
+  default params, 20000 steps: **gate-passers = 3657; same-step same-segment contention = 34 seg-steps
+  (0.0017/step); cap-dropped = 34 = 0.93% of would-be formations** ⇒ cap **NON-BINDING**. Contention scales
+  as N²·P_form² (N = gate-passing neighbors/segment); this bundle (all filaments crossing near one focal
+  point) is a near-worst-case density, so 0.93% is an **upper bound** — realistic distributed crossings
+  (fewer neighbors/segment) give ≪ this. No PAUSE (≪ the heavier-admission threshold).
+- **#5 CPU≡GPU bit-identical** (20-fil bundle, 400 churn steps, full pipeline): formed-link sets (state +
+  payload + orientSame) — **0 field mismatches**. ✓
+- **#6 all-OFF≡HEAD** (pForm=0 ⇒ no candidate fires): bit-identical to the no-formation 5b/5c-i path
+  (0 mismatches, 300 steps); all 5a/5b/5c-i gates reproduce unchanged. ✓
+
+## 5. Carry-forward / open
+- **Running-v1 oracle still DEFERRED to 5c-iii** (steady-state plateau, formation≈dissolution,
+  halve-`xLinkConc` — needs a running v1 bundle). `fracMove`-on-changing-count also 5c-iii.
+- The one-per-segment-per-step cap is confirmed non-binding (0.93% upper bound); 5c-iii's steady-state
+  should re-confirm at production density. If a denser regime ever drives contention up, the planner's
+  heavier exact-admission path is the documented escalation.
+- Next: 5c-iii (formation force law + `fracMove`-on-count + running-v1 steady-state), torsion
+  (`applyTorsionForce`, consumes `linkOrientSame`), 5d (Arp2/3).
+
+---
+
+# Increment 5c-iii — formation force law (dynamic fracMove) + torsion + the running-v1 plateau
+
+## Phase 1 — force law + per-step fracMove + torsion (DONE / green; the analytic gate)
+
+**Status: DONE / green.** The full v1 `FilLink` force is now live with per-step `fracMove` and the
+default-ON torsional alignment spring. Analytic-oracle (vs v1 arithmetic). `BoA-v1ref` byte-clean;
+production byte-unchanged; crosslinkers default-off.
+
+### What was added
+- **Dynamic `fracMove = 0.4 / max(getLinkCt(segA), getLinkCt(segB), 1)`, recomputed per step.** v1's
+  count-keying read exactly (`FilLink.applyTransForce:206-208`): the **max of the two segments' link
+  counts** — unambiguous, not double-ended-summed, **no pause**. 5a's `linkForces` already computed
+  `0.4/max(ctA,ctB,1)`; 5c-iii feeds it the per-step **`activeLinkCount`** (from the existing
+  `countActiveLinks`, the per-segment histogram of ACTIVE links) instead of the static count. This
+  covers the count going **up** (formation) and **down** (death) — **absorbing 5b's deferred
+  fracMove-on-death**. No new mechanism.
+- **Near-parallel robustness:** the translational force is `forceVec = curForceMag · linkVec` with
+  `linkVec` NOT normalized (no division by `linkLength`) — so a near-zero-length link vector gives a
+  near-zero force, never a blow-up. This is v1's behaviour verbatim (v1 has no special-case); reproduced,
+  not "fixed".
+- **Torsion (`CrosslinkerSystem.linkTorsion`) — ported because it is ON by default.** v1 `Parameter`
+  defaults `active=true` and `filLinkTorqSpring` (Env.java:634, 1e-19 N/rad) is constructed active ⇒
+  `applyForces` runs `applyTorsionForce`. Faithful port: axis = `unit(uA×uB)` (parallel) / `unit(uA×(−uB))`
+  (antiparallel); `angTween = fastAcos(dot)` / `|fastAcos(dot)−π|`; magnitude `filLinkTorqSpring·angTween`
+  averaged over a **5-slot ring** (v1 `ValueTracker(filLinkForcesToAve=5)`); `+T` on segA / `−T` on segB,
+  ADDED to the seg-side torque payload (gathered with the translational positional torque). v1's
+  `checkPt3D()` guard (skip when the axis is non-finite — exactly-parallel `uA∥uB` ⇒ `|cross|=0`) ported,
+  which is also the §5c-ii near-parallel degenerate-geometry guard. Uses the PTX-safe `fastAcos`
+  (`accurateAcos` middle, per the §5c-ii note). New store fields: `torqueMagHist`/`torqueMagPlace`
+  (the ring, reset on formation in `placeOrient`), `torsionParams`, `linkOrientSame` (already persisted
+  in 5c-ii) is the parallel/antiparallel selector. `linkTorsion` runs after `linkForces`, before the gather.
+
+### Phase 1 validation (numbers; `./run_xlink.sh`, all PASS GPU + CPU)
+- **Dynamic fracMove vs v1 `applyTransForce`:** a central filament with **3 links** (count=3 ⇒
+  `fracMove=0.4/3`) then a link killed (count→**2** ⇒ `0.4/2`); the translational force matches v1's
+  formula (with the per-step count) to **max rel 5.26e-8** — float32 floor — for both the count-up and
+  count-down states.
+- **Torsion arithmetic vs v1 `applyTorsionForce`:** parallel (`orientSame=1`) and antiparallel
+  (`orientSame=0`) crosslinked pairs, step-for-step over the 5-slot ring (20 steps): **max rel 5.45e-8**.
+- **CPU≡GPU bit-identical:** force + torsion + gather (off-centre links ⇒ positional torque too, frozen
+  pose, 50 steps): **max|ΔforceSum| = 0, max|ΔtorqueSum| = 0**.
+- **all-OFF≡HEAD:** torsion OFF is bit-identical to the translational-only path (the torsion machinery is
+  a true no-op when disabled); torsion ON measurably contributes (|ΔT| ≠ 0); all 5a/5b/5c-i/5c-ii gates
+  reproduce unchanged.
+
+### Multi-link fracMove — the de-racing divergence (documented)
+v1's `getLinkCt` accumulates *within a step* as links register (`registerWithFilSegments` before
+`applyForces`), so for a multi-link segment v1's per-link `fracMove` is **order/thread-dependent** (an
+early-processed link sees fewer links than a late one; the converged value is the total). v2 uses the
+**deterministic total** active count per segment (order-independent) — the intended steady value, a
+**de-racing divergence** in the §6.12 family (v2 not inheriting a v1 race). Single-link-per-segment
+(`ct=1 ⇒ fracMove=0.4`) is bit-exact to v1; the multi-link Phase-1 check validates the formula with the
+deterministic count.
+
+## Phase 1.5 — v1-bundle setup cost gate: v1 oracle CHEAP & captured; v2 matched bundle is the large piece → PAUSE for the planner
+
+**v1 oracle — cheap, runnable, CAPTURED.** v1 ships an existing crosslinked-bundle config
+`ParameterFiles/boa-xlink-dense-nomotor` (200 short filaments in a 0.7×0.7×0.3 µm box, no motors, static
+turnover, formation+unbinding+force live; `sideBonds`=mode 0, `maxXLinkBondAngle`=0.6 rad ≈34°,
+`maxLinksOnSeg`=10, `filLinkTorqSpring`=1e-19 active; on/off rates at Java defaults). `FilLink.filLinkCt`
+is the live active-link count. A `/tmp/v1xlink` scratch (BoA-v1ref **byte-clean**) with a one-line
+periodic `filLinkCt` log (after `updateCounters()`), run on the CPU path (`@tornado-argfile`, no `-gpu`),
+gives a **clean steady-state plateau**:
+
+```
+t(s)   0.1  0.2  0.3  0.4  0.5  0.6 … 1.0 … 2.0
+links   19   36   41   46   48   49     49     50      (200 filaments; plateau ≈ 49, stable from ~0.6 s)
+```
+
+So **the deferred running-v1 oracle is in hand: plateau ≈ 49 links / 200 filaments**, ~few min per seed.
+**Cadence note:** this config has `biochemDeltaT`=0.01, `deltaT`=1e-4 ⇒ `crosslinkCheckInt`=100 ⇒
+`dtCheck`=0.01 s ⇒ `P_form = 1−exp(−10·1·0.01) ≈ 0.0952` (formation attempted every 100 steps at ~9.5%/
+candidate — much higher than the 5c-ii default-cadence checks' 0.001).
+
+**v2 matched bundle — the large remaining piece (PAUSE).** v2 has **no moving many-filament crosslinked
+bundle** (the 5a–5c-iii harness scenes are controlled micro-scenes / frozen-pose formation). Standing up a
+matched v2 bundle for an aggregate-within-SEM plateau comparison requires, beyond assembly:
+1. **Box confinement — a force v2 does NOT have.** v1 keeps the 200 filaments dense via `Chamber.makeABox`
+   boundary forces (F1). v2's crosslinker path has no walls; unconfined filaments diffuse out → density
+   drops → the plateau is not comparable. Matching v1's plateau *quantitatively* depends on the
+   confinement model, so a divergence could be a confinement-model artifact rather than logic — exactly
+   the confound the >0.1 %-is-logic rule warns against. Porting v1's boundary (or choosing a wall model) is
+   a real decision, not silent wiring.
+2. **The combined moving loop, never assembled:** zero → Brownian → box → (chain) → unbind → formation
+   (cadence-gated every `crosslinkCheckInt`) → linkForces (dynamic fracMove) → linkTorsion → gather →
+   integrate → derive, over many filaments. The dynamic force↔formation↔unbinding coupling on MOVING
+   filaments is **unvalidated** (Phase 1 validated the force arithmetic on frozen/controlled scenes) —
+   a stability risk to manage.
+3. **Matched random IC + density** (v1 places 200 clustered short filaments via its own RNG).
+
+**Recommendation (planner decides how to source the oracle).** The v1 oracle is cheap and captured
+(plateau ≈ 49). The v2 matched bundle is a substantial sub-increment whose crux is the **box-confinement
+model** (without it the density→plateau comparison is confounded). Options:
+- (A) Authorize building the v2 moving bundle, scoping the confinement model explicitly (port v1's F1, or
+  a defined wall — accepting the comparison is then confinement-model-dependent).
+- (B) Accept Phase 1's analytic closure of the force law + a **v2-only self-consistency** plateau
+  (formation≈dissolution balance + the halve-`xLinkConc`→~halve-plateau scaling — neither needs v1's
+  absolute count nor a matched confinement), comparing the *shape* (not absolute count) to v1's plateau.
+- (C) Another oracle sourcing.
+
+Per the prompt's Phase-1.5 gate ("don't improvise a big harness; the planner decides how to source the
+oracle"), **Phase 2 is paused here.** Phase 1 (force law + fracMove + torsion) is committed and green;
+the v1 oracle is captured for whichever path is chosen.
+
+**Carry-forward:** the analytic-oracle deferral is now *narrowed* — the force-law/gate/rate arithmetic is
+fully analytic-validated through Phase 1 + 5a–5c-ii; only the **running-bundle steady-state plateau**
+remains, and its v1 target (≈49) is captured. The §6.12-style same-step-reuse timing divergence (5c-i)
+would bear on the plateau only at the ≤1-step level (negligible vs the ~0.6 s equilibration).
