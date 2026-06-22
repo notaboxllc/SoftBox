@@ -2,6 +2,47 @@
 
 Last updated: 2026-06-22
 
+## 2026-06-22 — PARALLEL GPU GRID BUILD + the REAL dense-gliding bottleneck — v2 NOW BEATS BoA's GPU 9–14× AT EVERY SCALE.
+Report: `GRID_PARALLEL_FINDINGS.md`. Branch `grid-parallel-build`. New/added code only on shared kernels (additive
+methods); `BroadPhaseHarness` + `DenseGlidingHarness` rewired; `BoA-v1ref` byte-clean; all other harnesses
+structurally unaffected (they call only the UNCHANGED serial kernels). **`avgBound` identical to the serial baseline
+at every scale (805/1689/3327/4659/6663) ⇒ bit-identical no-regression.**
+**The named task — parallelize `SpatialGrid.gridHistogram`+`gridScatter` — was DONE and validated, but the 2026-06-18
+"grid-build-bound" diagnosis was WRONG** (the `-brute` probe that would have caught it was broken, so it was an
+unconfirmed inference). The profiler (`-prof` + `-Dtornado.profiler=True`, added) showed the grid hist/scatter were
+**<0.2 %** of the step. THREE single-threaded `@Parallel(gid<1)` passes were hiding in the pipeline; the named one was
+the smallest:
+| single-threaded pass | share @1× | fix |
+|---|---|---|
+| `BindingDetectionSystem.invertCandidates` | **94 %** (195 ms) | → `gridReachable` (fused per-motor grid query) |
+| `CrossBridge.csrHistogram`+`csrScatter` | 80 % once invert gone | → `csrChunk*` (parallel CSR-inverse) |
+| `SpatialGrid.gridHistogram`+`gridScatter` | **<0.2 %** (the named target) | → `gridChunk*` (parallel counting sort) |
+All three: the SAME atomic-free, no-KernelContext, CPU≡GPU-bit-identical body-chunked counting sort (private per-chunk
+counter rows → per-key column reduce → REUSED two-level scan → stable counting-sort scatter; within-key order = serial
+order ⇒ CSR bit-identical, not just multiset-equal). **The DECISIVE fix = `gridReachable`** (parallel over MOTORS,
+scans the 27-cell grid neighborhood + applies the reach predicate directly — NO inversion; faithful to v1
+`GPUMotorBinding.bindKernel`): **205 → 14 ms/step @1× (15×)**. The reach predicate is INLINED — a helper call with
+early-returns nested 4-deep triggers TornadoVM's `failed guarantee: invalid variable` PTX lowering bug (the same error
+the 2026-06-18 `-brute` probe hit; `broadPhase` inlines for this reason); a 2nd instance came from `transferToHost` of
+a task-untouched buffer (`candCount`) — pruned. Then `csrChunk*` (additive; serial `csr*` byte-unchanged for the ~10
+harnesses reusing them VERBATIM): **14 → ~6–7 ms/step @1× (2.3×)**.
+**Faithful dense-gliding sweep (RTX 5070, warmup-windowed ms/step) — v2 vs BoA GPU:**
+| scale | motors | v2 BEFORE | v2 AFTER | BoA GPU | v2 vs BoA |
+|---|---|---|---|---|---|
+| 0.5× | 49k | 113.6 | **5.80** | 53.4 | **9.2× faster** |
+| 1× | 98k | 259.3 | **7.40** | 89.7 | **12.1× faster** |
+| 2× | 196k | 539.1 | **11.91** | 168.7 | **14.2× faster** |
+| 4× | 392k | 1171 | **27.92** | 343.7 | **12.3× faster** |
+| 8× | 784k | 2515 | **53.99** | 659.1 | **12.2× faster** |
+Was 2.1–3.8× SLOWER; now 9–14× FASTER (a 20–47× swing in v2's own per-step time). **Per-step is now ~linear in motor
+count — the earlier super-linear ∝N^1.1 term (the single-threaded passes on one GPU core) is GONE.**
+**Validation:** GRID==BRUTE (`-gridcheck`: `gridReachable` == `bruteReachable`, bit-exact) PASS; `run_grid.sh`
+(parallel build == brute GPU+CPU, CSR CPU↔GPU bit-identical, **parallel build == serial build bit-identical**) PASS;
+`run_motor.sh` (unchanged invert + serial grid) PASS; no-regression = identical `avgBound` at every scale + the
+`-oldbind`/`-serialcsr`/`-serialgrid` A/B toggles (all reproduce the serial kernels' `avgBound`). New A/B/diagnostic
+flags on `DenseGlidingHarness`: `-oldbind`, `-serialcsr`, `-serialgrid`, `-prof`. **The ECS/device-resident
+architecture's expected speed advantage over v1's GPU path is now MEASURED, not masked by serial passes.**
+
 ## NAMED SCENE — "the 3×3 contractile mesh" (quick rerun)
 The 9-node (3×3) protein-node net with full actin turnover + sphere-rendered nodes. Harness `softbox.Ring3x3Harness`,
 script `./run_ring3x3.sh`. Reports: `INC7_RING_3x3_FINDINGS.md` (coalescence) + `INC7_RING_3x3_TURNOVER_FINDINGS.md`

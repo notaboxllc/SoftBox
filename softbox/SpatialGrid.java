@@ -181,6 +181,155 @@ public final class SpatialGrid {
         }
     }
 
+    // =========================================================================
+    // PARALLEL grid build (atomic-free counting sort) — retires the single-threaded
+    // gridHistogram + gridScatter above (which are @Parallel(gid<1) O(N) serial
+    // passes, fine at inc-3's N=512 but the dominant bottleneck at 50k–800k bodies,
+    // 2026-06-18 dense-gliding benchmark). The two-level prefix-sum (gridScanLocal/
+    // gridScanChunks/gridScanAdd) is ALREADY parallel and is reused VERBATIM between
+    // the histogram and the scatter; only the two ends are parallelized here.
+    //
+    // BoA's parallel grid build (GPUMotorBinding.gridHistogramKernel/gridScatterChunk)
+    // can use atomics because its segments span an AABB of several cells; SoftBox uses
+    // CENTER binning (each body in exactly ONE cell), and atomics/KernelContext are
+    // forbidden (they break the -cpu runner). So the bodies are partitioned into
+    // numBodyChunks contiguous chunks and each chunk gets a PRIVATE per-cell counter
+    // row in chunkCellCount[numBodyChunks × totalCells] — a segmented histogram with
+    // no shared writes. The per-cell column sum (over chunks) gives the cell totals;
+    // the in-place exclusive column-prefix gives each chunk its base offset within the
+    // cell, which (after the cell scan) becomes a private write cursor for a stable
+    // counting-sort scatter. Bodies are visited in increasing index order within each
+    // chunk and chunks are laid out in index order, so the within-cell order is the
+    // SAME body-index order the serial gridScatter produces ⇒ the CSR is BIT-IDENTICAL
+    // to the serial build (and CPU↔GPU), not merely multiset-equal.
+    //
+    //   gridChunkZero       — parallel over the flat matrix: chunkCellCount[*] = 0
+    //   gridChunkHistogram  — parallel over body-chunks: each chunk counts its bodies
+    //                         into its OWN row (private, race-free, no atomics)
+    //   gridChunkReduce     — parallel over cells: cellCount[c] = Σ_chunks row[c];
+    //                         overwrite each row[c] with its exclusive column-prefix
+    //                         (the chunk's base within the cell)
+    //   [gridScanLocal → gridScanChunks → gridScanAdd]  — REUSED: cellCount → CSR offsets
+    //   gridChunkScatter    — parallel over body-chunks: writePos = offsets[c] +
+    //                         row[c]++ (private cursor per (chunk,cell)) — stable sort
+    //
+    // chunkParams (int): [0]=bodyChunkSize  [1]=numBodyChunks
+    // -------------------------------------------------------------------------
+
+    /** Build-time sizing: bodies-per-chunk balancing the histogram/scatter wall-clock
+     *  (∝ bodyChunkSize) against the reduce wall-clock (∝ numBodyChunks) at ~√bodyCount,
+     *  while capping the chunkCellCount matrix to MATRIX_BUDGET_INTS. */
+    public static final long MATRIX_BUDGET_INTS = 64L << 20;   // 64M ints = 256 MB
+
+    public static int bodyChunkSize(int bodyCount, int totalCells) {
+        if (bodyCount <= 0 || totalCells <= 0) return 1;
+        int sqrtN  = (int) Math.round(Math.sqrt((double) bodyCount));
+        long memMin = (long) Math.ceil((double) bodyCount * (double) totalCells / (double) MATRIX_BUDGET_INTS);
+        int bcs = (int) Math.max((long) sqrtN, memMin);
+        return Math.max(1, bcs);
+    }
+
+    public static int numBodyChunks(int bodyCount, int bodyChunkSize) {
+        return (bodyCount + bodyChunkSize - 1) / bodyChunkSize;
+    }
+
+    /** Zero the segmented-histogram matrix (parallel over all numBodyChunks×totalCells entries). */
+    public static void gridChunkZero(IntArray chunkParams, IntArray gridDims, IntArray chunkCellCount) {
+        int totalCells = gridDims.get(3);
+        int numChunks  = chunkParams.get(1);
+        int total = numChunks * totalCells;
+        for (@Parallel int e = 0; e < total; e++) {
+            chunkCellCount.set(e, 0);
+        }
+    }
+
+    /** Segmented histogram: each body-chunk counts its bodies into its OWN private cell row.
+     *  No shared writes (chunk bc owns row [bc*totalCells, (bc+1)*totalCells)) ⇒ race-free, no atomics. */
+    public static void gridChunkHistogram(
+            IntArray bodyCell,
+            IntArray counts,
+            IntArray chunkParams,
+            IntArray gridDims,
+            IntArray chunkCellCount) {
+
+        int totalCells    = gridDims.get(3);
+        int bodyChunkSize = chunkParams.get(0);
+        int numChunks     = chunkParams.get(1);
+        int S             = counts.get(1);
+
+        for (@Parallel int bc = 0; bc < numChunks; bc++) {
+            int start = bc * bodyChunkSize;
+            int end   = start + bodyChunkSize;
+            if (end > S) end = S;
+            int rowBase = bc * totalCells;
+            for (int s = start; s < end; s++) {
+                int c = bodyCell.get(s);
+                if (c >= 0) {
+                    int idx = rowBase + c;
+                    chunkCellCount.set(idx, chunkCellCount.get(idx) + 1);
+                }
+            }
+        }
+    }
+
+    /** Per-cell merge: cellCount[c] = Σ over chunks of row[c]; overwrite each chunk's row[c]
+     *  with its EXCLUSIVE column-prefix (the chunk's base offset within cell c). Parallel over
+     *  cells — column c is disjoint across threads ⇒ race-free. */
+    public static void gridChunkReduce(
+            IntArray gridDims,
+            IntArray chunkParams,
+            IntArray chunkCellCount,
+            IntArray cellCount) {
+
+        int totalCells = gridDims.get(3);
+        int numChunks  = chunkParams.get(1);
+        for (@Parallel int c = 0; c < totalCells; c++) {
+            int acc = 0;
+            for (int bc = 0; bc < numChunks; bc++) {
+                int idx = bc * totalCells + c;
+                int v = chunkCellCount.get(idx);
+                chunkCellCount.set(idx, acc);   // exclusive prefix over chunks → chunk base within cell
+                acc += v;
+            }
+            cellCount.set(c, acc);              // cell total (fed to the existing scan)
+        }
+    }
+
+    /** Counting-sort scatter: each body-chunk places its bodies (index order) at
+     *  gridCellOffsets[cell] + row[cell]++, the per-(chunk,cell) cursor private to chunk bc.
+     *  Distinct chunks → distinct base ranges; in-order within a chunk ⇒ stable, bit-identical
+     *  to the serial gridScatter. Race-free, no atomics. */
+    public static void gridChunkScatter(
+            IntArray bodyCell,
+            IntArray counts,
+            IntArray chunkParams,
+            IntArray gridDims,
+            IntArray gridCellOffsets,
+            IntArray gridCellContents,
+            IntArray chunkCellCount) {
+
+        int totalCells    = gridDims.get(3);
+        int bodyChunkSize = chunkParams.get(0);
+        int numChunks     = chunkParams.get(1);
+        int S             = counts.get(1);
+        int contentsCap   = gridCellContents.getSize();
+
+        for (@Parallel int bc = 0; bc < numChunks; bc++) {
+            int start = bc * bodyChunkSize;
+            int end   = start + bodyChunkSize;
+            if (end > S) end = S;
+            int rowBase = bc * totalCells;
+            for (int s = start; s < end; s++) {
+                int c = bodyCell.get(s);
+                if (c < 0) continue;
+                int idx = rowBase + c;
+                int writePos = gridCellOffsets.get(c) + chunkCellCount.get(idx);
+                if (writePos < contentsCap) { gridCellContents.set(writePos, s); }
+                chunkCellCount.set(idx, chunkCellCount.get(idx) + 1);
+            }
+        }
+    }
+
     /**
      * Broad-phase: per body i, scan the 27-cell neighborhood of its center cell, emit each
      * partner j>i whose bounding spheres are within cutoff. Output is per-body owned slices

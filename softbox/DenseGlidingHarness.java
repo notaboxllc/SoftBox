@@ -46,6 +46,10 @@ public final class DenseGlidingHarness {
     static final double MYO_COL_TOL = 0.006;  // v1 myoColTol — bind reach
     static final double ALIGN_TOL   = -0.4;   // v1 myoMotorAlignWithFilTolerance
     static int SEED = 0x6111D;
+    static boolean PROF = false;   // -prof: per-task kernel-time breakdown (diagnostic)
+    static boolean SERIALGRID = false;  // -serialgrid: old single-threaded grid build (A/B regression + speedup measurement)
+    static boolean OLDBIND = false;     // -oldbind: old broadPhase+invertCandidates+computeReachable (the single-threaded invert; A/B)
+    static boolean SERIALCSR = false;   // -serialcsr: old single-threaded csrHistogram+csrScatter (A/B)
     static boolean BRUTE = false;   // -brute: GPU-parallel brute reachable instead of the grid (bottleneck diagnostic; GPU path only)
     static GridScheduler sched;
 
@@ -60,6 +64,10 @@ public final class DenseGlidingHarness {
                 case "-cpu"       -> cpu = true;
                 case "-gridcheck" -> gridcheck = true;
                 case "-brute"     -> BRUTE = true;
+                case "-prof"      -> PROF = true;
+                case "-serialgrid" -> SERIALGRID = true;
+                case "-oldbind"    -> OLDBIND = true;
+                case "-serialcsr"  -> SERIALCSR = true;
                 case "-seed"      -> SEED = 0x6111D + 7919 * Integer.parseInt(args[++i]);
                 default           -> pos.add(args[i]);
             }
@@ -81,9 +89,11 @@ public final class DenseGlidingHarness {
         FilamentStore fil; MotorStore mot; SpatialBodyView view;
         FloatArray bondData, xbParams;
         IntArray segMotorCount, segMotorOffsets, segMotorMyo;
+        IntArray csrChunkParams, csrMatrix; int numMotorChunks;   // parallel CSR-inverse
         // grid
         FloatArray gridParams, viewParams; IntArray gridDims, gridCounts;
         IntArray bodyCell, cellCount, chunkSum, gridCellOffsets, gridCellContents;
+        IntArray chunkParams, chunkCellCount; int numBodyChunks;   // parallel counting-sort build
         IntArray candPartner, candCount, motorCandSeg, motorCandCount, reachSeg, reachCount;
         IntArray bruteReachSeg, bruteReachCount;   // gridcheck only
         int cap, totalCells, nFil; double side;
@@ -143,6 +153,10 @@ public final class DenseGlidingHarness {
         sc.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
         sc.xbParams = FloatArray.fromElements((float) 1.0e-9, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, 0f);
         sc.segMotorCount = new IntArray(nSeg); sc.segMotorOffsets = new IntArray(nSeg + 1); sc.segMotorMyo = new IntArray(nMot);
+        int mcs = SpatialGrid.bodyChunkSize(nMot, nSeg);
+        sc.numMotorChunks = SpatialGrid.numBodyChunks(nMot, mcs);
+        sc.csrChunkParams = IntArray.fromElements(mcs, sc.numMotorChunks);
+        sc.csrMatrix = new IntArray(sc.numMotorChunks * nSeg); sc.csrMatrix.init(0);
 
         // ---- grid + body view (inc-3) ----
         int cap = nSeg + nMot;
@@ -163,6 +177,10 @@ public final class DenseGlidingHarness {
         sc.bodyCell = new IntArray(cap); sc.bodyCell.init(-1);
         sc.cellCount = new IntArray(sc.totalCells);
         sc.chunkSum = new IntArray((sc.totalCells + SpatialGrid.GRID_SCAN_CHUNK - 1) / SpatialGrid.GRID_SCAN_CHUNK + 1);
+        int bcs = SpatialGrid.bodyChunkSize(cap, sc.totalCells);
+        sc.numBodyChunks = SpatialGrid.numBodyChunks(cap, bcs);
+        sc.chunkParams = IntArray.fromElements(bcs, sc.numBodyChunks);
+        sc.chunkCellCount = new IntArray(sc.numBodyChunks * sc.totalCells); sc.chunkCellCount.init(0);
         sc.gridCellOffsets = new IntArray(sc.totalCells + 1);
         sc.gridCellContents = new IntArray(cap); sc.gridCellContents.init(-1);
         sc.candPartner = new IntArray(cap * MAXC); sc.candPartner.init(-1);
@@ -190,12 +208,14 @@ public final class DenseGlidingHarness {
                     mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.stats, mot.capStats, mot.cooldown,
                     mot.bodyParams, mot.jointParams, mot.nucParams, mot.kinParams, mot.publishParams,
                     sc.bondData, sc.xbParams, sc.segMotorCount, sc.segMotorOffsets, sc.segMotorMyo,
+                    sc.csrChunkParams, sc.csrMatrix,
                     f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.bTransGam, f.bRotGam,
                     f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.brownTransScale, f.brownRotScale,
                     f.params, f.chainParams, f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
                     v.center, v.boundingRadius, v.ownerStore, v.ownerSlot,
                     sc.gridParams, sc.gridDims, sc.gridCounts, sc.viewParams,
                     sc.bodyCell, sc.cellCount, sc.chunkSum, sc.gridCellOffsets, sc.gridCellContents,
+                    sc.chunkParams, sc.chunkCellCount,
                     sc.candPartner, sc.candCount, sc.motorCandSeg, sc.motorCandCount, sc.reachSeg, sc.reachCount)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, f.counts)
             // --- publish + grid build + broad-phase + binding reach (replaces brute reachable) ---
@@ -206,16 +226,36 @@ public final class DenseGlidingHarness {
             tg = tg
             .task("filPublish", FilamentStore::publishToBodyView, f.coord, f.segLength, v.center, v.boundingRadius, v.ownerStore, v.ownerSlot, sc.viewParams, sc.gridCounts)
             .task("motPublish", MotorStore::publishToBodyView, mot.head, mot.reach, v.center, v.boundingRadius, v.ownerStore, v.ownerSlot, mot.publishParams, mot.counts)
-            .task("bodyCell", SpatialGrid::bodyCell, v.center, sc.gridParams, sc.gridDims, sc.gridCounts, sc.bodyCell)
+            .task("bodyCell", SpatialGrid::bodyCell, v.center, sc.gridParams, sc.gridDims, sc.gridCounts, sc.bodyCell);
+        if (SERIALGRID) {   // A/B: the old single-threaded inc-3 build (regression + speedup baseline)
+            tg = tg
             .task("gridZero", SpatialGrid::gridZero, sc.gridDims, sc.cellCount)
             .task("gridHist", SpatialGrid::gridHistogram, sc.bodyCell, sc.gridCounts, sc.cellCount)
             .task("gridScanLocal", SpatialGrid::gridScanLocal, sc.gridDims, sc.cellCount, sc.gridCellOffsets, sc.chunkSum)
             .task("gridScanChunks", SpatialGrid::gridScanChunks, sc.gridDims, sc.chunkSum)
             .task("gridScanAdd", SpatialGrid::gridScanAdd, sc.gridDims, sc.gridCellOffsets, sc.gridCellContents, sc.cellCount, sc.chunkSum)
-            .task("gridScatter", SpatialGrid::gridScatter, sc.bodyCell, sc.gridCounts, sc.gridCellOffsets, sc.gridCellContents, sc.cellCount)
+            .task("gridScatter", SpatialGrid::gridScatter, sc.bodyCell, sc.gridCounts, sc.gridCellOffsets, sc.gridCellContents, sc.cellCount);
+        } else {
+            tg = tg
+            .task("chunkZero", SpatialGrid::gridChunkZero, sc.chunkParams, sc.gridDims, sc.chunkCellCount)
+            .task("chunkHist", SpatialGrid::gridChunkHistogram, sc.bodyCell, sc.gridCounts, sc.chunkParams, sc.gridDims, sc.chunkCellCount)
+            .task("chunkReduce", SpatialGrid::gridChunkReduce, sc.gridDims, sc.chunkParams, sc.chunkCellCount, sc.cellCount)
+            .task("gridScanLocal", SpatialGrid::gridScanLocal, sc.gridDims, sc.cellCount, sc.gridCellOffsets, sc.chunkSum)
+            .task("gridScanChunks", SpatialGrid::gridScanChunks, sc.gridDims, sc.chunkSum)
+            .task("gridScanAdd", SpatialGrid::gridScanAdd, sc.gridDims, sc.gridCellOffsets, sc.gridCellContents, sc.cellCount, sc.chunkSum)
+            .task("chunkScatter", SpatialGrid::gridChunkScatter, sc.bodyCell, sc.gridCounts, sc.chunkParams, sc.gridDims, sc.gridCellOffsets, sc.gridCellContents, sc.chunkCellCount);
+        }
+        if (OLDBIND) {   // A/B: old broadPhase + single-threaded invertCandidates + computeReachable
+            tg = tg
             .task("broadPhase", SpatialGrid::broadPhase, v.center, v.boundingRadius, sc.bodyCell, sc.gridCellOffsets, sc.gridCellContents, sc.gridDims, sc.gridParams, sc.gridCounts, sc.candPartner, sc.candCount)
             .task("invert", BindingDetectionSystem::invertCandidates, sc.candPartner, sc.candCount, v.ownerStore, v.ownerSlot, sc.gridCounts, mot.counts, sc.motorCandSeg, sc.motorCandCount)
             .task("reachable", BindingDetectionSystem::computeReachable, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.motorCandSeg, sc.motorCandCount, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
+        } else {         // FUSED per-motor grid query (parallel; retires the single-threaded invert)
+            tg = tg
+            .task("gridReachable", BindingDetectionSystem::gridReachable, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2,
+                    sc.gridParams, sc.gridDims, sc.gridCellOffsets, sc.gridCellContents, v.ownerStore, v.ownerSlot,
+                    sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
+        }
         }
         tg = tg
             // --- gliding force chain (GlidingHarness default order; bindNearest consumes reachSeg/reachCount) ---
@@ -233,27 +273,57 @@ public final class DenseGlidingHarness {
             .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
             .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
             .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
-            .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
+            .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        if (SERIALCSR) {   // A/B: old single-threaded CSR-inverse
+            tg = tg
             .task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, sc.segMotorCount)
             .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, sc.segMotorCount, sc.segMotorOffsets)
-            .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo)
+            .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
+        } else {           // parallel counting-sort CSR-inverse (retires the single-threaded csr*)
+            tg = tg
+            .task("csrChunkZero", CrossBridgeSystem::csrChunkZero, sc.csrChunkParams, mot.counts, sc.csrMatrix)
+            .task("csrChunkHist", CrossBridgeSystem::csrChunkHistogram, mot.boundSeg, mot.counts, sc.csrChunkParams, sc.csrMatrix)
+            .task("csrChunkReduce", CrossBridgeSystem::csrChunkReduce, mot.counts, sc.csrChunkParams, sc.csrMatrix, sc.segMotorCount)
+            .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, sc.segMotorCount, sc.segMotorOffsets)
+            .task("csrChunkScatter", CrossBridgeSystem::csrChunkScatter, mot.boundSeg, mot.counts, sc.csrChunkParams, sc.segMotorOffsets, sc.segMotorMyo, sc.csrMatrix);
+        }
+        tg = tg
             .task("gather", CrossBridgeSystem::segGather, sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts)
             .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
-            .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
-            .transferToHost(DataTransferMode.UNDER_DEMAND, f.coord, mot.boundSeg, sc.candCount, sc.reachCount);
+            .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        // candCount is only written by broadPhase (OLDBIND); transferring an untouched buffer out
+        // fails with "invalid variable" at streamOut (the journal's broken-`-brute` symptom).
+        if (OLDBIND) tg = tg.transferToHost(DataTransferMode.UNDER_DEMAND, f.coord, mot.boundSeg, sc.candCount, sc.reachCount);
+        else         tg = tg.transferToHost(DataTransferMode.UNDER_DEMAND, f.coord, mot.boundSeg, sc.reachCount);
 
         int nB = 3 * mot.nMotors, nM = mot.nMotors, nSeg = f.n, cap = sc.cap, totalCells = sc.totalCells;
         int numScanChunks = (totalCells + SpatialGrid.GRID_SCAN_CHUNK - 1) / SpatialGrid.GRID_SCAN_CHUNK;
         sched = new GridScheduler();
-        for (String t : new String[]{ "publishHead","motPublish","release","bind","cycle","anchor","bond","applyHead","register","reachable","invert" }) addW("densegliding." + t, pad(nM));
+        for (String t : new String[]{ "publishHead","motPublish","release","bind","cycle","anchor","bond","applyHead","register","reachable","invert","gridReachable" }) addW("densegliding." + t, pad(nM));
         for (String t : new String[]{ "zeroMot","brownMot","joints","integMot","deriveMot" }) addW("densegliding." + t, pad(nB));
         for (String t : new String[]{ "filPublish","zeroFil","brownFil","chain","gather","integFil","deriveFil" }) addW("densegliding." + t, pad(nSeg));
         addW("densegliding.bodyCell", pad(cap));
         addW("densegliding.broadPhase", pad(cap));
-        addW("densegliding.gridZero", pad(totalCells));
+        if (SERIALGRID) {
+            addW("densegliding.gridZero", pad(totalCells));
+            for (String t : new String[]{ "gridHist","gridScatter" }) addS("densegliding." + t);
+        } else {
+            addW("densegliding.chunkZero",   pad(sc.numBodyChunks * totalCells));
+            addW("densegliding.chunkHist",   pad(sc.numBodyChunks));
+            addW("densegliding.chunkReduce", pad(totalCells));
+            addW("densegliding.chunkScatter", pad(sc.numBodyChunks));
+        }
         addW("densegliding.gridScanLocal", pad(numScanChunks));
         addW("densegliding.gridScanAdd", pad(numScanChunks));
-        for (String t : new String[]{ "gridHist","gridScanChunks","gridScatter","csrHist","csrScan","csrScatter" }) addS("densegliding." + t);
+        if (SERIALCSR) {
+            for (String t : new String[]{ "csrHist","csrScatter" }) addS("densegliding." + t);
+        } else {
+            addW("densegliding.csrChunkZero",  pad(sc.numMotorChunks * nSeg));
+            addW("densegliding.csrChunkHist",  pad(sc.numMotorChunks));
+            addW("densegliding.csrChunkReduce", pad(nSeg));
+            addW("densegliding.csrChunkScatter", pad(sc.numMotorChunks));
+        }
+        for (String t : new String[]{ "gridScanChunks","csrScan" }) addS("densegliding." + t);
         if (BRUTE) addW("densegliding.brute", pad(nM));
         return new TornadoExecutionPlan(tg.snapshot());
     }
@@ -271,15 +341,22 @@ public final class DenseGlidingHarness {
         FilamentStore.publishToBodyView(f.coord, f.segLength, v.center, v.boundingRadius, v.ownerStore, v.ownerSlot, sc.viewParams, sc.gridCounts);
         MotorStore.publishToBodyView(mot.head, mot.reach, v.center, v.boundingRadius, v.ownerStore, v.ownerSlot, mot.publishParams, mot.counts);
         SpatialGrid.bodyCell(v.center, sc.gridParams, sc.gridDims, sc.gridCounts, sc.bodyCell);
-        SpatialGrid.gridZero(sc.gridDims, sc.cellCount);
-        SpatialGrid.gridHistogram(sc.bodyCell, sc.gridCounts, sc.cellCount);
+        SpatialGrid.gridChunkZero(sc.chunkParams, sc.gridDims, sc.chunkCellCount);
+        SpatialGrid.gridChunkHistogram(sc.bodyCell, sc.gridCounts, sc.chunkParams, sc.gridDims, sc.chunkCellCount);
+        SpatialGrid.gridChunkReduce(sc.gridDims, sc.chunkParams, sc.chunkCellCount, sc.cellCount);
         SpatialGrid.gridScanLocal(sc.gridDims, sc.cellCount, sc.gridCellOffsets, sc.chunkSum);
         SpatialGrid.gridScanChunks(sc.gridDims, sc.chunkSum);
         SpatialGrid.gridScanAdd(sc.gridDims, sc.gridCellOffsets, sc.gridCellContents, sc.cellCount, sc.chunkSum);
-        SpatialGrid.gridScatter(sc.bodyCell, sc.gridCounts, sc.gridCellOffsets, sc.gridCellContents, sc.cellCount);
-        SpatialGrid.broadPhase(v.center, v.boundingRadius, sc.bodyCell, sc.gridCellOffsets, sc.gridCellContents, sc.gridDims, sc.gridParams, sc.gridCounts, sc.candPartner, sc.candCount);
-        BindingDetectionSystem.invertCandidates(sc.candPartner, sc.candCount, v.ownerStore, v.ownerSlot, sc.gridCounts, mot.counts, sc.motorCandSeg, sc.motorCandCount);
-        BindingDetectionSystem.computeReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.motorCandSeg, sc.motorCandCount, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
+        SpatialGrid.gridChunkScatter(sc.bodyCell, sc.gridCounts, sc.chunkParams, sc.gridDims, sc.gridCellOffsets, sc.gridCellContents, sc.chunkCellCount);
+        if (OLDBIND) {
+            SpatialGrid.broadPhase(v.center, v.boundingRadius, sc.bodyCell, sc.gridCellOffsets, sc.gridCellContents, sc.gridDims, sc.gridParams, sc.gridCounts, sc.candPartner, sc.candCount);
+            BindingDetectionSystem.invertCandidates(sc.candPartner, sc.candCount, v.ownerStore, v.ownerSlot, sc.gridCounts, mot.counts, sc.motorCandSeg, sc.motorCandCount);
+            BindingDetectionSystem.computeReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.motorCandSeg, sc.motorCandCount, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
+        } else {
+            BindingDetectionSystem.gridReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2,
+                    sc.gridParams, sc.gridDims, sc.gridCellOffsets, sc.gridCellContents, v.ownerStore, v.ownerSlot,
+                    sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
+        }
     }
 
     /** CPU runner — the SAME system methods in the SAME order, sequential. */
@@ -301,9 +378,17 @@ public final class DenseGlidingHarness {
         ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
         ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
-        CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sc.segMotorCount);
-        CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
-        CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
+        if (SERIALCSR) {
+            CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sc.segMotorCount);
+            CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
+            CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
+        } else {
+            CrossBridgeSystem.csrChunkZero(sc.csrChunkParams, mot.counts, sc.csrMatrix);
+            CrossBridgeSystem.csrChunkHistogram(mot.boundSeg, mot.counts, sc.csrChunkParams, sc.csrMatrix);
+            CrossBridgeSystem.csrChunkReduce(mot.counts, sc.csrChunkParams, sc.csrMatrix, sc.segMotorCount);
+            CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
+            CrossBridgeSystem.csrChunkScatter(mot.boundSeg, mot.counts, sc.csrChunkParams, sc.segMotorOffsets, sc.segMotorMyo, sc.csrMatrix);
+        }
         CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
@@ -319,8 +404,71 @@ public final class DenseGlidingHarness {
         for (int t = warm; t < M; t++) { sc.mot.setCounts(t, SEED, sc.fil.n); sc.fil.counts.set(1, t); plan.withGridScheduler(sched).execute(); }
         long t1 = System.nanoTime();
         TornadoExecutionResult res = plan.withGridScheduler(sched).execute();
-        res.transferToHost(sc.mot.boundSeg, sc.candCount, sc.reachCount, sc.fil.coord);
+        if (OLDBIND) res.transferToHost(sc.mot.boundSeg, sc.candCount, sc.reachCount, sc.fil.coord);
+        else         res.transferToHost(sc.mot.boundSeg, sc.reachCount, sc.fil.coord);
         report("GPU", sc, M - warm, (t1 - t0) / 1e9);
+        if (PROF) profile(sc, plan, 30);
+    }
+
+    /** Per-task kernel-time breakdown (requires -Dtornado.profiler=True). Sums TASK_KERNEL_TIME
+     *  over `iters` executions, groups grid-build vs force-chain, and prints the dominant tasks. */
+    static final String[] GRID_TASKS = { "filPublish","motPublish","publishHead","bodyCell",
+            "chunkZero","chunkHist","chunkReduce","gridScanLocal","gridScanChunks","gridScanAdd",
+            "chunkScatter","broadPhase","invert","reachable","gridReachable" };
+    static final String[] ALL_TASKS = { "publishHead","filPublish","motPublish","bodyCell",
+            "chunkZero","chunkHist","chunkReduce","gridScanLocal","gridScanChunks","gridScanAdd",
+            "chunkScatter","broadPhase","invert","reachable","gridReachable","release","bind","cycle","zeroMot",
+            "brownMot","joints","anchor","bond","applyHead","integMot","deriveMot","register",
+            "zeroFil","brownFil","chain","csrHist","csrScan","csrScatter",
+            "csrChunkZero","csrChunkHist","csrChunkReduce","csrChunkScatter","gather","integFil","deriveFil" };
+
+    static void profile(Scene sc, TornadoExecutionPlan plan, int iters) {
+        plan = plan.withProfiler(uk.ac.manchester.tornado.api.enums.ProfilerMode.SILENT);
+        java.util.Map<String,Long> acc = new java.util.LinkedHashMap<>();
+        for (String t : ALL_TASKS) acc.put(t, 0L);
+        long total = 0;
+        for (int k = 0; k < iters; k++) {
+            int t = 9000 + k; sc.mot.setCounts(t, SEED, sc.fil.n); sc.fil.counts.set(1, t);
+            TornadoExecutionResult res = plan.withGridScheduler(sched).execute();
+            String json;
+            try { json = res.getProfilerResult().getProfileLog(); } catch (Exception e) { json = null; }
+            if (json == null || json.isEmpty()) continue;
+            for (String name : ALL_TASKS) {
+                long ns = extractTaskKernelTime(json, "densegliding." + name);
+                acc.put(name, acc.get(name) + ns);
+                total += ns;
+            }
+        }
+        if (total == 0) { System.out.println("  [prof] no profiler data — run with -Dtornado.profiler=True"); return; }
+        final long totalF = total;
+        long gridNs = 0; for (String t : GRID_TASKS) gridNs += acc.getOrDefault(t, 0L);
+        System.out.printf("--- per-task kernel time (sum/%d execs, ms/step) ---%n", iters);
+        acc.entrySet().stream()
+           .sorted((a,b) -> Long.compare(b.getValue(), a.getValue()))
+           .limit(14)
+           .forEach(e -> System.out.printf("  %-16s %8.3f ms/step  (%4.1f%%)%n",
+                   e.getKey(), e.getValue() / 1e6 / iters, 100.0 * e.getValue() / totalF));
+        System.out.printf("  GRID-BUILD subtotal: %.3f ms/step (%.1f%%)   force-chain: %.3f ms/step (%.1f%%)%n",
+                gridNs / 1e6 / iters, 100.0 * gridNs / total,
+                (total - gridNs) / 1e6 / iters, 100.0 * (total - gridNs) / total);
+    }
+
+    static long extractTaskKernelTime(String json, String taskName) {
+        if (json == null || json.isEmpty()) return 0L;
+        int keyIdx = json.indexOf("\"" + taskName + "\"");
+        if (keyIdx < 0) return 0L;
+        int braceIdx = json.indexOf('{', keyIdx);
+        if (braceIdx < 0) return 0L;
+        int endBlock = json.indexOf('}', braceIdx);
+        if (endBlock < 0) endBlock = json.length();
+        String block = json.substring(braceIdx, endBlock);
+        int tktIdx = block.indexOf("TASK_KERNEL_TIME");
+        if (tktIdx < 0) return 0L;
+        int colonIdx = block.indexOf(':', tktIdx);
+        int q1 = block.indexOf('"', colonIdx);
+        int q2 = block.indexOf('"', q1 + 1);
+        if (colonIdx < 0 || q1 < 0 || q2 < 0) return 0L;
+        try { return Long.parseLong(block.substring(q1 + 1, q2).trim()); } catch (NumberFormatException e) { return 0L; }
     }
 
     static void cpuProbe(Scene sc, int M) {
@@ -344,7 +492,7 @@ public final class DenseGlidingHarness {
                 label, steps / sec, msStep, sc.mot.nMotors, sc.nFil);
         System.out.printf("  avgBound=%d (%.3f/motor)  maxCandCount=%d  maxReachCount=%d  MAX_CAND=%d %s  NaN=%b%n",
                 bound, bound / (double) sc.mot.nMotors, maxCand, maxReach, SpatialGrid.MAX_CAND,
-                (maxCand >= SpatialGrid.MAX_CAND ? "*BROADPHASE OVERFLOW*" : "(ok)"), nan);
+                ((maxCand >= SpatialGrid.MAX_CAND || maxReach >= SpatialGrid.MAX_CAND) ? "*OVERFLOW*" : "(ok)"), nan);
     }
 
     // ============================================================== grid==brute gate (small scale, CPU)

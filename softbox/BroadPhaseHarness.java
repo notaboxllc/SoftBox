@@ -67,6 +67,10 @@ public final class BroadPhaseHarness {
         }
 
         System.out.println();
+        boolean okParSer = parallelVsSerial(N, dt);
+        ok &= okParSer;
+
+        System.out.println();
         runScaling(dt);
 
         System.out.println();
@@ -89,6 +93,9 @@ public final class BroadPhaseHarness {
         final IntArray   bodyCell;     // cap
         final IntArray   cellCount;    // totalCells
         final IntArray   chunkSum;     // ceil(totalCells/CHUNK)+1
+        final IntArray   chunkParams;     // [bodyChunkSize, numBodyChunks] — parallel build
+        final IntArray   chunkCellCount;  // numBodyChunks × totalCells (segmented histogram / scatter cursor)
+        final int        numBodyChunks;
         final IntArray   gridCellOffsets;   // totalCells+1
         final IntArray   gridCellContents;  // cap (center binning: one entry per body)
         final IntArray   candPartner, candCount;     // cap*MAX_CAND, cap
@@ -107,13 +114,17 @@ public final class BroadPhaseHarness {
             bodyCell   = new IntArray(cap);
             cellCount  = new IntArray(totalCells);
             chunkSum   = new IntArray((totalCells + SpatialGrid.GRID_SCAN_CHUNK - 1) / SpatialGrid.GRID_SCAN_CHUNK + 1);
+            int bcs = SpatialGrid.bodyChunkSize(cap, totalCells);
+            numBodyChunks = SpatialGrid.numBodyChunks(cap, bcs);
+            chunkParams    = IntArray.fromElements(bcs, numBodyChunks);
+            chunkCellCount = new IntArray(numBodyChunks * totalCells);
             gridCellOffsets  = new IntArray(totalCells + 1);
             gridCellContents = new IntArray(cap);
             candPartner = new IntArray(cap * SpatialGrid.MAX_CAND);
             candCount   = new IntArray(cap);
             brutePartner = new IntArray(cap * SpatialGrid.MAX_CAND);
             bruteCount   = new IntArray(cap);
-            bodyCell.init(-1); cellCount.init(0); chunkSum.init(0);
+            bodyCell.init(-1); cellCount.init(0); chunkSum.init(0); chunkCellCount.init(0);
             gridCellOffsets.init(0); gridCellContents.init(-1);
             candPartner.init(-1); candCount.init(0); brutePartner.init(-1); bruteCount.init(0);
         }
@@ -250,6 +261,7 @@ public final class BroadPhaseHarness {
                     v.center, v.boundingRadius, v.ownerStore, v.ownerSlot,
                     g.gridParams, g.gridDims, g.gridCounts, g.viewParams,
                     g.bodyCell, g.cellCount, g.chunkSum, g.gridCellOffsets, g.gridCellContents,
+                    g.chunkParams, g.chunkCellCount,
                     g.candPartner, g.candCount, g.brutePartner, g.bruteCount)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, s.counts)
             .task("brownian", BrownianForceSystem::brownianForce,
@@ -262,12 +274,13 @@ public final class BroadPhaseHarness {
                     s.coord, s.segLength, v.center, v.boundingRadius, v.ownerStore, v.ownerSlot,
                     g.viewParams, g.gridCounts)
             .task("bodyCell", SpatialGrid::bodyCell, v.center, g.gridParams, g.gridDims, g.gridCounts, g.bodyCell)
-            .task("gridZero", SpatialGrid::gridZero, g.gridDims, g.cellCount)
-            .task("gridHist", SpatialGrid::gridHistogram, g.bodyCell, g.gridCounts, g.cellCount)
+            .task("chunkZero", SpatialGrid::gridChunkZero, g.chunkParams, g.gridDims, g.chunkCellCount)
+            .task("chunkHist", SpatialGrid::gridChunkHistogram, g.bodyCell, g.gridCounts, g.chunkParams, g.gridDims, g.chunkCellCount)
+            .task("chunkReduce", SpatialGrid::gridChunkReduce, g.gridDims, g.chunkParams, g.chunkCellCount, g.cellCount)
             .task("gridScanLocal", SpatialGrid::gridScanLocal, g.gridDims, g.cellCount, g.gridCellOffsets, g.chunkSum)
             .task("gridScanChunks", SpatialGrid::gridScanChunks, g.gridDims, g.chunkSum)
             .task("gridScanAdd", SpatialGrid::gridScanAdd, g.gridDims, g.gridCellOffsets, g.gridCellContents, g.cellCount, g.chunkSum)
-            .task("gridScatter", SpatialGrid::gridScatter, g.bodyCell, g.gridCounts, g.gridCellOffsets, g.gridCellContents, g.cellCount)
+            .task("chunkScatter", SpatialGrid::gridChunkScatter, g.bodyCell, g.gridCounts, g.chunkParams, g.gridDims, g.gridCellOffsets, g.gridCellContents, g.chunkCellCount)
             .task("broadPhase", SpatialGrid::broadPhase,
                     v.center, v.boundingRadius, g.bodyCell, g.gridCellOffsets, g.gridCellContents,
                     g.gridDims, g.gridParams, g.gridCounts, g.candPartner, g.candCount)
@@ -284,12 +297,13 @@ public final class BroadPhaseHarness {
         addWorker("broadphase.integrate", pad(cap));
         addWorker("broadphase.publish",   pad(cap));
         addWorker("broadphase.bodyCell",  pad(cap));
-        addWorker("broadphase.gridZero",  pad(totalCells));
-        addWorkerSingle("broadphase.gridHist");
+        addWorker("broadphase.chunkZero",   pad(g.numBodyChunks * totalCells));
+        addWorker("broadphase.chunkHist",   pad(g.numBodyChunks));
+        addWorker("broadphase.chunkReduce", pad(totalCells));
         addWorker("broadphase.gridScanLocal", pad(numScanChunks));
         addWorkerSingle("broadphase.gridScanChunks");
         addWorker("broadphase.gridScanAdd",   pad(numScanChunks));
-        addWorkerSingle("broadphase.gridScatter");
+        addWorker("broadphase.chunkScatter",  pad(g.numBodyChunks));
         addWorker("broadphase.broadPhase", pad(cap));
         addWorker("broadphase.bruteForce", pad(cap));
         return new TornadoExecutionPlan(tg.snapshot());
@@ -315,12 +329,13 @@ public final class BroadPhaseHarness {
             FilamentStore.publishToBodyView(s.coord, s.segLength, v.center, v.boundingRadius,
                     v.ownerStore, v.ownerSlot, g.viewParams, g.gridCounts);
             SpatialGrid.bodyCell(v.center, g.gridParams, g.gridDims, g.gridCounts, g.bodyCell);
-            SpatialGrid.gridZero(g.gridDims, g.cellCount);
-            SpatialGrid.gridHistogram(g.bodyCell, g.gridCounts, g.cellCount);
+            SpatialGrid.gridChunkZero(g.chunkParams, g.gridDims, g.chunkCellCount);
+            SpatialGrid.gridChunkHistogram(g.bodyCell, g.gridCounts, g.chunkParams, g.gridDims, g.chunkCellCount);
+            SpatialGrid.gridChunkReduce(g.gridDims, g.chunkParams, g.chunkCellCount, g.cellCount);
             SpatialGrid.gridScanLocal(g.gridDims, g.cellCount, g.gridCellOffsets, g.chunkSum);
             SpatialGrid.gridScanChunks(g.gridDims, g.chunkSum);
             SpatialGrid.gridScanAdd(g.gridDims, g.gridCellOffsets, g.gridCellContents, g.cellCount, g.chunkSum);
-            SpatialGrid.gridScatter(g.bodyCell, g.gridCounts, g.gridCellOffsets, g.gridCellContents, g.cellCount);
+            SpatialGrid.gridChunkScatter(g.bodyCell, g.gridCounts, g.chunkParams, g.gridDims, g.gridCellOffsets, g.gridCellContents, g.chunkCellCount);
             SpatialGrid.broadPhase(v.center, v.boundingRadius, g.bodyCell, g.gridCellOffsets, g.gridCellContents,
                     g.gridDims, g.gridParams, g.gridCounts, g.candPartner, g.candCount);
             SpatialGrid.bruteForce(v.center, v.boundingRadius, g.gridParams, g.gridCounts, g.brutePartner, g.bruteCount);
@@ -352,6 +367,52 @@ public final class BroadPhaseHarness {
             SpatialGrid.broadPhase(v.center, v.boundingRadius, g.bodyCell, g.gridCellOffsets, g.gridCellContents,
                     g.gridDims, g.gridParams, g.gridCounts, g.candPartner, g.candCount);
         };
+    }
+
+    /** Cross-check: the PARALLEL counting-sort build produces a CSR BIT-IDENTICAL to the
+     *  serial gridHistogram+gridScatter oracle (same offsets AND within-cell order), on an
+     *  evolved cluster. Both are deterministic, so this is exact — proving the parallel build
+     *  retired the bottleneck without changing the grid contents. */
+    static boolean parallelVsSerial(int N, double dt) {
+        System.out.println("--- parallel build == serial build (CSR bit-identity, evolved cluster) ---");
+        Object[] r = buildRun(N, dt, 0xB0A5EEDL);
+        FilamentStore s = (FilamentStore) r[0];
+        SpatialBodyView v = (SpatialBodyView) r[1];
+        GridScratch g = (GridScratch) r[2];
+        Runnable diffuse = cpuDiffuseStep(s);
+        for (int k = 0; k < 50; k++) { s.counts.set(1, k); diffuse.run(); }      // evolve the cluster
+        s.counts.set(1, 50);
+        FilamentStore.publishToBodyView(s.coord, s.segLength, v.center, v.boundingRadius,
+                v.ownerStore, v.ownerSlot, g.viewParams, g.gridCounts);
+        SpatialGrid.bodyCell(v.center, g.gridParams, g.gridDims, g.gridCounts, g.bodyCell);
+
+        // SERIAL build (the inc-3 oracle)
+        SpatialGrid.gridZero(g.gridDims, g.cellCount);
+        SpatialGrid.gridHistogram(g.bodyCell, g.gridCounts, g.cellCount);
+        SpatialGrid.gridScanLocal(g.gridDims, g.cellCount, g.gridCellOffsets, g.chunkSum);
+        SpatialGrid.gridScanChunks(g.gridDims, g.chunkSum);
+        SpatialGrid.gridScanAdd(g.gridDims, g.gridCellOffsets, g.gridCellContents, g.cellCount, g.chunkSum);
+        SpatialGrid.gridScatter(g.bodyCell, g.gridCounts, g.gridCellOffsets, g.gridCellContents, g.cellCount);
+        int[] serOff = new int[g.totalCells + 1]; for (int c = 0; c <= g.totalCells; c++) serOff[c] = g.gridCellOffsets.get(c);
+        int[] serCon = new int[N]; for (int k = 0; k < N; k++) serCon[k] = g.gridCellContents.get(k);
+
+        // PARALLEL build (same bodyCell)
+        SpatialGrid.gridChunkZero(g.chunkParams, g.gridDims, g.chunkCellCount);
+        SpatialGrid.gridChunkHistogram(g.bodyCell, g.gridCounts, g.chunkParams, g.gridDims, g.chunkCellCount);
+        SpatialGrid.gridChunkReduce(g.gridDims, g.chunkParams, g.chunkCellCount, g.cellCount);
+        SpatialGrid.gridScanLocal(g.gridDims, g.cellCount, g.gridCellOffsets, g.chunkSum);
+        SpatialGrid.gridScanChunks(g.gridDims, g.chunkSum);
+        SpatialGrid.gridScanAdd(g.gridDims, g.gridCellOffsets, g.gridCellContents, g.cellCount, g.chunkSum);
+        SpatialGrid.gridChunkScatter(g.bodyCell, g.gridCounts, g.chunkParams, g.gridDims, g.gridCellOffsets, g.gridCellContents, g.chunkCellCount);
+        int[] parOff = new int[g.totalCells + 1]; for (int c = 0; c <= g.totalCells; c++) parOff[c] = g.gridCellOffsets.get(c);
+        int[] parCon = new int[N]; for (int k = 0; k < N; k++) parCon[k] = g.gridCellContents.get(k);
+
+        boolean offOk = java.util.Arrays.equals(serOff, parOff);
+        boolean conOk = java.util.Arrays.equals(serCon, parCon);
+        System.out.printf("  N=%d  bodyChunkSize=%d  numBodyChunks=%d  matrix=%d ints   offsets=%s  contents=%s%n",
+                N, g.chunkParams.get(0), g.chunkParams.get(1), g.numBodyChunks * g.totalCells,
+                offOk ? "bit-identical" : "*DIFFERS*", conOk ? "bit-identical" : "*DIFFERS*");
+        return offOk && conOk;
     }
 
     // ============================================================== reporting
