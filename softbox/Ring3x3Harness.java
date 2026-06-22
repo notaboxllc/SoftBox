@@ -228,10 +228,12 @@ public final class Ring3x3Harness {
         FilamentStore f = new FilamentStore(cap, cap);
         for (int sl = 0; sl < cap; sl++) f.monomerCount.set(sl, Constants.actinSeed);
         DragTensorSystem.run(f);
-        f.setParams(dt, Constants.brownianForceMag());
-        f.setChainParams();
-        f.chainParams.set(0, (float) dt);     // chain-dt fix (Test B flag): chain force ∝ 1/dt — set to the step dt
-        double bornScale = Constants.BTransCoeff / 30.0;     // damped seed (B2 dt-compensation; the formin's stiff hold)
+        f.setParams(dt, Constants.brownianForceMag(dt));
+        f.setChainParams(dt);                 // chainParams[0]=dt by construction (chain-dt class fix)
+        // Faithful to v1 (FilSegment.java:621-642, motherFil==null): formin-anchored filaments get the FULL FDT
+        // Brownian (transScale=BTransCoeff), held by the node tether — NO per-seed damping. The old BTransCoeff/30
+        // hack was tuned against the wrong (10× cold) brownianForceMag; removed with the amplitude fix.
+        double bornScale = Constants.BTransCoeff;
         f.setBirthParams(bornScale, bornScale);
         f.setBirthRequestCount(cap);
         // park all FREE far away — the binding path is brute over ALL segments (no broad-phase publish guard)

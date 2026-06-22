@@ -16,6 +16,42 @@ script `./run_ring3x3.sh`. Reports: `INC7_RING_3x3_FINDINGS.md` (coalescence) + 
 ```
 Knobs: `-spacing -formins -kin -cofratio -noaging -nosever -polyboost -pool -warmseed -nowarm -nucboost -box -steps -3js -gpu`.
 
+## 2026-06-22 — CHAIN-dt CLASS FIX — `brownianForceMag(dt)` + `setChainParams(dt)` structurally eliminate the class
+Acted on the audit's two stale copies (chain-dt class), both hardcoding `Constants.deltaT` while the sim steps at
+1e-5. **Root fix (single source structurally enforced):** `Constants.brownianForceMag(double dt)` (no-arg DELETED —
+the FDT amplitude can't silently use deltaT) + `FilamentStore.setChainParams(double dt)` (writes chainParams[0]=dt —
+override-or-bug footgun gone). 27 callers pass their stepping dt; DiffusionHarness passes Constants.deltaT (no-op);
+the 21 inline `sqrt(2kT/dt)` forms were already local-dt-correct (unchanged). Faithful to v1 (`GPUMoveThing:6789`
+`sqrt(2kT/Env.deltaT)`; `chainParams[0]=dt`). TestB `-chaindtfix` flag now vestigial (conditional + "BUG:" comment
+removed). **Seed-Brownian (the one judgment call — RESOLVED: proceed):** the formin-seed `bornScale=BTransCoeff/30`
+hack (tuned vs the wrong cold amplitude) → **full `BTransCoeff`**, faithful to v1 `FilSegment.java:621-642`
+(motherFil==null ⇒ full FDT Brownian, the node tether holds it, NO per-seed damping). **Empirically stable** — no
+flailing (nodenuc undamped wander 4 nm bounded; at dt=1e-5 the per-step thermal is 10× smaller than v1's at 1e-4 ⇒
+the fracMove=0.5 tether holds it easily); v1's model is a clean match. **Validation:** turnover physics STAND
+(filbirth/deadslot/depoly/growth/aging C_c 0.8%/severing/treadmill C_c 1.4%/nodenuc — all PASS); **CPU≡GPU PRESERVED**
+(deadslot bit-identical state/mon/seedNode=0; TestB agree); **production BYTE-UNCHANGED** (gliding/contractile/dimer/
+minifil don't call the changed methods — contractile 2.09 pN, dimer, minifil re-run PASS). **Coalescence
+re-baselined, qualitative SURVIVES:** Test B′ aimed 0.600→0.526 µm (~17× noise), self-capture 0.00, SCPR demonstrated;
+Ring3x3 KIN=1 **COALESCES** (RMS extent −64.8%, 9/9 connected, conservation EXACT, 0 phantoms). Inc-7 filaments now at
+the correct temperature (was 10× cold) on a correctly-stiff chain (was 10× soft) — ring search reach faithful. New:
+`CHAIN_DT_FIX_FINDINGS.md`. Commit + push. `BoA-v1ref` byte-clean (read-only).
+
+## 2026-06-22 — deltaT SINGLE-SOURCE AUDIT (read-only) — two stale-copy instances of the chain-dt class flagged
+Audited every dt source + every dt-dependent quantity. Authoritative source = `Constants.deltaT=1e-4`, but dt is
+plumbed as a per-call param (the real per-sim authoritative dt is the harness stepping value; motor/turnover/ring
+harnesses step at 1e-5). **CLEAN:** biochem turnover cadence (`biochemCheckInt=round(biochemDeltaT/dt)`,
+`P=rate·biochemDeltaT` — all derived, never stale, biochemDeltaT=10·deltaT exact); KIN scales rate constants only,
+NOT the clock (rate-space ✓); nucleotide cycle, motor joints, containment collisionDeltaT cadence, crosslinker
+dtCheck — all derive from the passed dt. **TWO STALE COPIES (chain-dt class), both hardcode `Constants.deltaT`
+while the sim steps at 1e-5:** (A NEW) `Constants.brownianForceMag()` = `sqrt(2kT/deltaT)` ⇒ filaments 10× too COLD
+in 10 harnesses incl. Ring3x3 (smoking gun: Ring3x3 motors use `sqrt(2kT/1e-5)`, filaments `sqrt(2kT/1e-4)` — same
+sim, filaments 10× colder); (B KNOWN, Test B precedent) `FilamentStore.setChainParams()` sets `chainParams[0]=deltaT`
+⇒ 10× too-soft chain in Aging/Growth/Depoly/Sever/Treadmill/DeadSlot (no override). Gates pass anyway
+(conservation/rate/lifecycle/CPU≡GPU are amplitude-insensitive; seed `bornScale` tuning absorbs A). **NOT FIXED** —
+fixing re-baselines validated numbers (Pause+document boundary). Root fix recommended (`brownianForceMag(dt)` +
+`setChainParams(dt)`); secondary: the motor-free turnover harnesses could step at `Constants.deltaT` ⇒ both vanish
+for free. Production paths (gliding/contractile/dimer/minifil/node-glide) unaffected. Report: `DELTAT_AUDIT_FINDINGS.md`.
+
 ## 2026-06-22 — INC 7 → RING addendum: KIN=1 FAITHFUL rates — node motion BEATS turnover; the §wind-down was a KIN artifact
 Per jba — run all realistic rates at **KIN=1** to preserve the true filament-lifetime ↔ node-motion (myosin-walking)
 ratio. **Decisive correction.** KIN scaled only the actin turnover; the **myosin nucleotide cycle that walks the

@@ -101,8 +101,8 @@ public final class TreadmillHarness {
         ns.node.setCoord(0, 0f, 0f, 0f); ns.node.setUVec(0, 1f, 0f, 0f); ns.node.setYVec(0, 0f, 1f, 0f);
         ns.initNodeDrag();
         FilamentStore f = new FilamentStore(FILCAP, FILCAP);
-        f.setParams(dt, Constants.brownianForceMag());
-        f.setChainParams();
+        f.setParams(dt, Constants.brownianForceMag(dt));
+        f.setChainParams(dt);
         f.setBirthParams(0.0, 0.0);          // Brownian off for the scalar measurement
         f.setBirthRequestCount(FILCAP);
         for (int s = 0; s < FILCAP; s++) { f.setCoord(s, 0f, 0f, 0f); f.setUVec(s, -1f, 0f, 0f); f.setYVec(s, 0f, 1f, 0f); f.markFree(s); }

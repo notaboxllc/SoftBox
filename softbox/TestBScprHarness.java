@@ -224,7 +224,7 @@ public final class TestBScprHarness {
         FilamentStore f = new FilamentStore(cap, cap);
         for (int s = 0; s < cap; s++) f.monomerCount.set(s, FIL_MONO);
         DragTensorSystem.run(f);
-        f.setParams(dt, 0); f.setChainParams();
+        f.setParams(dt, 0); f.setChainParams(dt);
         for (int s = 0; s < cap; s++) { f.setCoord(s, 0f, 0f, 0f); f.setUVec(s, 1f, 0f, 0f); f.setYVec(s, 0f, 1f, 0f); f.markFree(s); }
         int seg = 0;
         f.filState.set(seg, FilamentStore.FIL_ACTIVE);
@@ -447,12 +447,8 @@ public final class TestBScprHarness {
         FilamentStore f = new FilamentStore(cap, cap);                 // reqCap == capacity (request index == slot, growth)
         for (int sl = 0; sl < cap; sl++) f.monomerCount.set(sl, Constants.actinSeed);
         DragTensorSystem.run(f);
-        f.setParams(dt, Constants.brownianForceMag());
-        f.setChainParams();
-        // BUG: setChainParams() leaves chainParams[0]=Constants.deltaT (1e-4) while the harness steps at dt (1e-5)
-        // ⇒ the chain force (∝ 1/dt) is 10× too soft (effective fracMove ~0.05). ContractileAssayHarness sets
-        // chainParams[0]=dt correctly. -chaindtfix applies that fix (stiffer, properly-tuned filament chain).
-        if (CHAIN_DT_FIX || V1_PAIRS) f.chainParams.set(0, (float) dt);   // dt-fix (required for the coeffs to apply correctly)
+        f.setParams(dt, Constants.brownianForceMag(dt));
+        f.setChainParams(dt);   // chainParams[0]=dt by construction now (chain-dt class fix); CHAIN_DT_FIX vestigial
         if (V1_PAIRS) {                                                // match the v1 twoNodeFormin chain PAIRS coefficients
             f.chainParams.set(1, 0.0573f);   // fracMove
             f.chainParams.set(2, 1.0f);      // fracR
@@ -460,7 +456,10 @@ public final class TestBScprHarness {
         }
         AIM_DIR = new FloatArray(3 * cap); AIM_DIR.init(0f);           // aim-torque targets (set in placeAimedChain)
         AIM_PARAMS = FloatArray.fromElements((float) AIM_TORQUE, (float) dt);
-        double bornScale = Constants.BTransCoeff / 30.0;               // damped seed (B2 dt-compensation; held near the node)
+        // Faithful to v1 (FilSegment.java:621-642, motherFil==null): formin/node-anchored filaments get the FULL
+        // FDT Brownian (transScale=BTransCoeff); the node tether does the holding — NO per-seed damping. The old
+        // BTransCoeff/30 hack was tuned against the wrong (10× cold) brownianForceMag — removed with the amplitude fix.
+        double bornScale = Constants.BTransCoeff;
         f.setBirthParams(bornScale, bornScale);
         f.setBirthRequestCount(cap);
         // Park ALL slots FREE and FAR away (100,100,100): the binding path uses bruteReachable over ALL

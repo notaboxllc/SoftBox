@@ -85,8 +85,8 @@ public final class NodeNucleationHarness {
         FilamentStore f = new FilamentStore(filCap, nNodes);
         for (int s = 0; s < filCap; s++) f.monomerCount.set(s, Constants.actinSeed);
         DragTensorSystem.run(f);
-        f.setParams(dt, Constants.brownianForceMag());
-        f.setChainParams();
+        f.setParams(dt, Constants.brownianForceMag(dt));
+        f.setChainParams(dt);
         f.setBirthParams(bornScale, bornScale);          // born-seed Brownian scale (damped or 0)
         for (int s = 0; s < filCap; s++) { f.setCoord(s, 0f, 0f, 0f); f.setUVec(s, 1f, 0f, 0f); f.setYVec(s, 0f, 1f, 0f); f.markFree(s); }
         f.setBirthRequestCount(nNodes);

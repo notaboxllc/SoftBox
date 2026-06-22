@@ -100,6 +100,16 @@ oracle, but its role changes across the migration:
   code on a different runner. Stay single-precision; fix float problems with better algorithms (cf.
   the `asin(|cross|)` bending angle), not a parallel double path. One-off double checks for a
   specific diagnosis are fine if thrown away.
+- **Single-source dt — no hardcoded dt in any force law (structurally enforced, 2026-06-22).** Every
+  dt-dependent quantity derives from the *caller's stepping dt*, never a hardcoded `Constants.deltaT`.
+  The two force-law dt-carriers REQUIRE dt: `Constants.brownianForceMag(double dt)` (FDT amplitude
+  `sqrt(2kT/dt)`; the no-arg form is deleted) and `FilamentStore.setChainParams(double dt)` (writes
+  `chainParams[0]=dt`). This eliminates the chain-dt class (a stale `Constants.deltaT` silently
+  rescaling the physics when a harness steps at 1e-5 — the Test B / `DELTAT_AUDIT_FINDINGS.md`
+  precedent). Faithful to v1 (`GPUMoveThing.java:6789` `sqrt(2kT/Env.deltaT)`; `chainParams[0]=dt`).
+  Biochem rates use the declared cadence `biochemDeltaT` (= `N·deltaT`), KIN scales rate constants not
+  the clock. Formin/node-anchored seed filaments get the **full FDT Brownian** (`BTransCoeff`, held by
+  the tether — v1 `FilSegment.java:621-642`), NOT a per-seed damping hack. See `CHAIN_DT_FIX_FINDINGS.md`.
 - **CPU≡GPU validation standard.** Bit-identical (to printed precision) for non-chaotic or
   short-horizon checks (FDT, broad-phase set, static deflection, joint geometry). For **chaotic
   many-body dynamics over long horizons** (gliding, contractile networks), float32 op-ordering

@@ -112,8 +112,8 @@ public final class DeadSlotReuseHarness {
         FilamentStore f = new FilamentStore(filCap, 1);
         for (int s = 0; s < filCap; s++) f.monomerCount.set(s, Constants.actinSeed);
         DragTensorSystem.run(f);
-        f.setParams(dt, Constants.brownianForceMag());
-        f.setChainParams();
+        f.setParams(dt, Constants.brownianForceMag(dt));
+        f.setChainParams(dt);
         f.setBirthParams(0.0, 0.0);   // Brownian off (deterministic conservation / reuse); seeds tethered to the node
         for (int s = 0; s < filCap; s++) { f.setCoord(s, 0f, 0f, 0f); f.setUVec(s, 1f, 0f, 0f); f.setYVec(s, 0f, 1f, 0f); f.markFree(s); }
         f.setBirthRequestCount(1);

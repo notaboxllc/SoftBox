@@ -73,9 +73,9 @@ public final class FilamentBirthHarness {
         FilamentStore f = new FilamentStore(cap, cap);   // reqCap = cap (worst case: birth into all free slots)
         for (int s = 0; s < cap; s++) f.monomerCount.set(s, SEED_MONO);
         DragTensorSystem.run(f);                          // seed segLength + drag for all slots (length-agnostic)
-        f.setParams(dt, Constants.brownianForceMag());
+        f.setParams(dt, Constants.brownianForceMag(dt));
         f.setCounts(0, SEED);
-        f.setChainParams();
+        f.setChainParams(dt);
         f.setBirthParams(bornScale, 0.0);                 // born filaments get this Brownian scale
         return f;
     }
@@ -390,7 +390,7 @@ public final class FilamentBirthHarness {
         // length-agnostic; B1 births fixed seeds in the node use-case, but binding geometry wants a real segment)
         FilamentStore f = new FilamentStore(1, 1);
         f.monomerCount.set(0, Constants.stdSegLength);
-        DragTensorSystem.run(f); f.setParams(dt, 0); f.setCounts(0, 0); f.setChainParams();
+        DragTensorSystem.run(f); f.setParams(dt, 0); f.setCounts(0, 0); f.setChainParams(dt);
         f.setBirthParams(0.0, 0.0);
         // PARK the slot FREE, far above the heads (out of reach) — the data-driven guard: geometry excludes it
         f.setCoord(0, 0f, 0f, 1.0f); f.setUVec(0, 1f, 0f, 0f); f.setYVec(0, 0f, 1f, 0f); f.markFree(0);

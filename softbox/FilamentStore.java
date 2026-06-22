@@ -338,9 +338,12 @@ public final class FilamentStore {
     }
 
     /** v1 deflection defaults (FilSegment/Env): fracMove=0.5, fracR=0.1, fracMoveTorq=0.265,
-     *  filTorqSpring inactive (damped F4 branch). Carries continuously into 2b. */
-    public void setChainParams() {
-        chainParams.set(0, (float) Constants.deltaT);
+     *  filTorqSpring inactive (damped F4 branch). Carries continuously into 2b.
+     *  dt is the CALLER'S stepping dt — REQUIRED: the chain force is ∝ 1/dt, so chainParams[0]
+     *  MUST be the integration step or the chain is silently rescaled (the chain-dt class; v1's
+     *  chainParams[0] is Env.deltaT, its stepping dt — see DELTAT_AUDIT_FINDINGS.md §3.B). */
+    public void setChainParams(double dt) {
+        chainParams.set(0, (float) dt);
         chainParams.set(1, 0.5f);     // fracMove
         chainParams.set(2, 0.1f);     // fracR
         chainParams.set(3, 0.265f);   // fracMoveTorq

@@ -92,8 +92,8 @@ public final class DepolyHarness {
         FilamentStore f = new FilamentStore(filCap, filCap);   // reqCap = capacity (request index == slot)
         for (int s = 0; s < filCap; s++) f.monomerCount.set(s, monomerInit);
         DragTensorSystem.run(f);
-        f.setParams(dt, Constants.brownianForceMag());
-        f.setChainParams();
+        f.setParams(dt, Constants.brownianForceMag(dt));
+        f.setChainParams(dt);
         double bornScale = brownOn ? Constants.BTransCoeff : 0.0;
         f.setBirthParams(bornScale, bornScale);
         f.setBirthRequestCount(filCap);

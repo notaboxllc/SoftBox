@@ -59,8 +59,11 @@ public final class Constants {
 
     // Brownian force magnitude prefactor used by the device kernel: sqrt(2 kT / dt).
     // (v1 GPUMoveThing.java:6786-6789; randForce = brownianForceMag * sqrt(gamma) * g.)
-    public static double brownianForceMag() {
-        return Math.sqrt(2.0 * kT / deltaT);
+    // dt is the CALLER'S stepping dt — REQUIRED, never the hardcoded deltaT (the FDT amplitude
+    // must match the integration step or the temperature is wrong; v1 uses sqrt(2kT/Env.deltaT)
+    // where Env.deltaT IS the stepping dt — see DELTAT_AUDIT_FINDINGS.md §3.A / CHAIN_DT_FIX).
+    public static double brownianForceMag(double dt) {
+        return Math.sqrt(2.0 * kT / dt);
     }
 
     // --- inc 6c B2: actin nucleation + the implicit-actin pool (v1 Env / Crucible) ---

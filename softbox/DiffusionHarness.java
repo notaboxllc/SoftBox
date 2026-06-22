@@ -313,7 +313,7 @@ public final class DiffusionHarness {
         }
         DragTensorSystem.run(s);
         s.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt));
-        s.setChainParams();
+        s.setChainParams(dt);
         s.chainParams.set(0, (float) dt);
         if (!Double.isNaN(fracROverride)) s.chainParams.set(2, (float) fracROverride);
         if (!Double.isNaN(fmtOverride))   s.chainParams.set(3, (float) fmtOverride);
@@ -409,7 +409,7 @@ public final class DiffusionHarness {
         }
         DragTensorSystem.run(s);
         s.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt));
-        s.setChainParams();
+        s.setChainParams(dt);
         if (!Double.isNaN(fracROverride)) s.chainParams.set(2, (float) fracROverride);
         if (!Double.isNaN(fmtOverride))   s.chainParams.set(3, (float) fmtOverride);
 
@@ -548,7 +548,7 @@ public final class DiffusionHarness {
         }
         DragTensorSystem.run(s);    // segLength + drag (topology already wired -> filAtEnd correct)
         s.setParams(dt, Math.sqrt(2.0 * Constants.kT / dt));   // brownianForceMag = sqrt(2kT/dt)
-        s.setChainParams();
+        s.setChainParams(dt);
         s.chainParams.set(0, (float) dt);   // override chain dt with the requested timestep
         if (!Double.isNaN(fracROverride)) s.chainParams.set(2, (float) fracROverride);
         if (!Double.isNaN(fmtOverride))   s.chainParams.set(3, (float) fmtOverride);
@@ -710,7 +710,7 @@ public final class DiffusionHarness {
             s.brownRotScale.set(i, 1.0f);
         }
         DragTensorSystem.run(s);
-        s.setParams(Constants.deltaT, Constants.brownianForceMag());
+        s.setParams(Constants.deltaT, Constants.brownianForceMag(Constants.deltaT));
 
         // View box: FIXED, sized to ~5 sigma of the expected diffusive spread over the run.
         // Framing only (no walls; not physics). The viewer builds the box from frame 0.
@@ -750,7 +750,7 @@ public final class DiffusionHarness {
             s.brownRotScale.set(i, (float) rotScale);
         }
         DragTensorSystem.run(s);                 // fill gamma/diff + segLength (host, once)
-        s.setParams(Constants.deltaT, Constants.brownianForceMag());
+        s.setParams(Constants.deltaT, Constants.brownianForceMag(Constants.deltaT));
         return s;
     }
 
