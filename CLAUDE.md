@@ -1039,3 +1039,59 @@ control reproducing the exact `actinSeed·#reuse` deficit, turnover-only/nucleat
 ./run_deadslot.sh        # GPU + CPU (newborn correctness, conservation, fix-off control, regression, CPU≡GPU)
 ./run_deadslot.sh -cpu   # CPU runner only (triage)
 ```
+
+**Increment 7 → Ring — EXPERIMENT: a 3×3 net of nucleating, treadmilling nodes — DONE (2026-06-22). The net
+COALESCES.** The first multi-node SCPR coalescence test (`Ring3x3Harness`/`run_ring3x3.sh`): 9 free, box-confined
+protein nodes in a 3×3 grid, each sprouting 4–6 **randomly-oriented treadmilling** formin filaments + the validated
+myosin shell, capture one another's filaments and **contract into a single connected 9-node cluster (RMS extent
+−41%)** via the **scheme-0 soft tether — SUFFICIENT (no scheme-1 signal)**. **Pure COMPOSITION** (generalises Test
+B's two-node SCPR loop to 9 nodes + adds the treadmilling depoly cadence + the dead-slot `initNewborn`) — NO new
+force law/gather/shared-kernel edit; every system reused byte-unchanged; `BoA-v1ref` byte-clean; production
+untouched; exploratory, no default change. **Reach-vs-spacing calibration (sweep):** clean monotonic transition —
+COALESCING for spacing ≤0.30 µm (−23…27%, all 9 connected), PARTIAL at 0.35–0.40; the capture cone needs **~1.35×
+OVERSHOOT** (the foreign filament must reach the captor's FAR hemisphere, `rodDotFil≥0` — the Test B′ finding).
+**Sanity AT SCALE:** conservation **EXACT** (integer pool ledger, every step/spacing), **0 phantoms** (dead-slot
+`initNewborn` holds), brisk turnover (1364 taken/1377 returned monomers ≈ steady treadmilling near C_c), **no
+crash/race** on CPU (616 steps/s) AND the device-resident **GPU** ~50-kernel TaskGraph (no race, conservation EXACT,
+phantoms 0, bound-head aggregate 20≈CPU 19 — §8 standard). **Timescale compression (stated):** `KIN=100` scales k_on
+AND k_off1 equally ⇒ C_c (hence reach) PRESERVED; warm-started at the pool-bounded reach (Test B′ overrun fixed by
+turnover + the shared pool). **Reveals for the ring:** mechanisms compose at scale; scheme 0 is enough; the dominant
+loss is **3D-random orientation in a planar net** ⇒ an in-plane/toward-neighbour nucleation bias (seam-#3 SPECIFIED)
+is the cheapest next lever; FREE nodes clump into a BALL — turning it into a RING needs the membrane/cortex
+**geometric constraint** (later increment; the net does NOT fly apart ⇒ constraint is geometry, not stability).
+Report: `INC7_RING_3x3_FINDINGS.md`; JOURNAL 2026-06-22.
+```
+./run_ring3x3.sh                          # CPU experiment (default 3×3, spacing 0.25, 6 formins, 30000 steps) — COALESCES
+./run_ring3x3.sh -gpu -steps 30000        # + GPU device-resident scale/no-crash/throughput check
+./run_ring3x3.sh -spacing 0.40 -formins 6 # the SPARSE regime (partial coalescence — the reach-vs-spacing edge)
+./run_ring3x3.sh -3js threejs_ring3x3     # viewer frames (the net sprouting, reaching, capturing, clumping)
+```
+
+**Increment 7 → Ring — 3×3 net + FULL turnover (treadmilling · aging · severing) + SPHERE nodes — DONE
+(2026-06-22).** Two changes to `Ring3x3Harness`: (1) protein nodes render as **SPHERES** (the viewer's existing
+grey-sphere `data.nodes` channel — **NO viewer edit**, BoA rendering untouched); (2) the net runs the **FULL
+simplified turnover — growth + pointed depoly + AGING (cascade→ADP depoly) + SEVERING (cofilin en-masse dissolve),
+formin-PINNED (release OFF)**. **Pure composition** (the SeveringHarness combined cadence generalised to 9 nodes;
+`AgingSystem`/`SeveringSystem`/`depolyProxy` reused byte-unchanged). **THE FINDING (clean 3-way, same
+KIN=100/spacing/formins):** growth+depoly **coalesces 49%**; +AGING **39%** (ADP depoly shortens filaments — aging
+benign); +SEVERING **WIND-DOWN 2%** — severing is the qualitative lever. **Root cause:** formin-pinned single-tip
+growth (1 mono/cadence) cannot sustain a filament against cofilin **whole-segment** severing (7215 mono / ~245
+events vs depoly 707) once KIN-fast aging makes the body ADP ⇒ the population **runs away to ~0**; nucleation doesn't
+rescue. **Bistable, no coexistence window** (cofilinRatio∈[0.5,0.95]×KIN∈[15,100]). **SURFACED + FIXED (additive):**
+the cofilin **"poisoned slot"** — a dissolved slot keeps `cofFrac>ratio`, so a reused slot instantly re-dissolves;
+closed with `SeveringSystem.nucleateFreshCofilin` (born slots→cofFrac=0; the dead-slot-fix pattern, the cofilin
+analog), called after split AND nucleation allocs (no existing kernel touched). **Robust at scale (every regime):**
+conservation **EXACT**, **0 phantoms** (initNewborn+nucleateFreshAtp+nucleateFreshCofilin), no crash/race on CPU
+(624 steps/s) AND the device-resident GPU graph (~58 kernels), **CPU≡GPU aggregate-agree** (active 216=216, bound
+16=16). **Watchable** (`-3js`): grow (barbed "+") / age (segments redden, notADPRatio 1.0→0.26 = the cascade) /
+sever (aged segments vanish + fragment). **Flags (report, not added):** free-fragment **end2 depoly** still the
+Stage-1 deferral (fragments turn over + conserve but shrink only from the pointed end); the wind-down is the
+faithful machinery's honest behaviour (not a bug). **For the ring:** sustained severing + a persistent contractile
+structure need a growth source that replenishes whole severed segments (multi-site/branched nucleation, faster
+barbed growth, or end2-aware recycling) — the formin-pinned single-tip mode can't. Report:
+`INC7_RING_3x3_TURNOVER_FINDINGS.md`; JOURNAL 2026-06-22.
+```
+./run_ring3x3.sh                 # full turnover (winds down — the finding)  | -nosever → coalesces 39% | -noaging -nosever → 49%
+./run_ring3x3.sh -gpu -steps 30000           # + GPU device scale/no-crash/CPU≡GPU-aggregate
+./run_ring3x3.sh -3js threejs_ring3x3_turnover -steps 15000   # sphere nodes, ADP gradient, severing
+```

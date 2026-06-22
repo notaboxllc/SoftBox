@@ -72,4 +72,28 @@ public final class SeveringSystem {
             }
         }
     }
+
+    /**
+     * Increment 7 RING DEAD-SLOT-REUSE FIX (cofilin side). A born slot (nucleation newborn OR split child) must
+     * start with ZERO cofilin: a dissolved slot is markFree'd with its cofFrac still > cofilinRatio (that is WHY it
+     * dissolved), so a reused slot left stale would instantly RE-dissolve on its first cadence ("a poisoned slot")
+     * — the cofilin analog of the nucFrac/monomerCount staleness the dead-slot fix (initNewborn + nucleateFreshAtp)
+     * already closes. Surfaced ONLY when severing + nucleation + the slot recycle coexist (the 3×3 turnover net);
+     * the SeveringHarness has no nucleation and the DeadSlotReuseHarness has no severing, so neither hit it.
+     * Same rank→slot iteration as nucleateFreshAtp (one writer per born slot ⇒ race-free, no atomics). A fresh seed
+     * has no cofilin (cofFrac=0); a split child sits at the YOUNG barbed tip (cofFrac≈0 there) so resetting to 0 is
+     * faithful (≈ inheriting the parent) AND clears any poison from the recycled free slot. ADDITIVE — touches no
+     * existing kernel; the SeveringHarness/DeadSlot paths never call it ⇒ they are byte-unaffected.
+     */
+    public static void nucleateFreshCofilin(IntArray rankOffsets, IntArray freeList, IntArray freeOffsets,
+                                            FloatArray cofFrac, IntArray allocCounts) {
+        int C = allocCounts.get(0), K = allocCounts.get(1);
+        int nFree = freeOffsets.get(C);
+        for (@Parallel int r = 0; r < K; r++) {
+            int rank = rankOffsets.get(r);
+            if (!(rankOffsets.get(r + 1) > rank)) continue;   // not an accepted request
+            if (rank >= nFree) continue;                      // over-clamp ⇒ no birth
+            cofFrac.set(freeList.get(rank), 0f);
+        }
+    }
 }
