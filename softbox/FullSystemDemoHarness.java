@@ -120,6 +120,7 @@ public final class FullSystemDemoHarness {
     static int STEPS = 30000;
     static String vizDir = null;
     static boolean smoke = false;
+    static boolean filidCheck = false;   // -filidcheck : gate-1 — FilIDSystem ≡ reference chain-walk across turnover
     static int gpuSteps = 2000;               // -gpusteps : device-resident SPLIT probe/validation horizon
     static int N_SPLIT = 6;                    // chained device graphs (fdTurnFire·fdNuc·fdBind·fdStruct·fdFil·fdInteg)
     static boolean overnight = false;          // -overnight : Stage 2 device-resident milestone + scale-up run
@@ -187,6 +188,7 @@ public final class FullSystemDemoHarness {
                 case "-noprof" -> noprof = true;
                 case "-planreset" -> planResetEvery = Integer.parseInt(args[++i]);
                 case "-planresetmode" -> planResetMode = args[++i];
+                case "-filidcheck" -> filidCheck = true;
                 case "-smoke" -> { smoke = true; STEPS = 1500; }
                 case "-3js" -> vizDir = args[++i];
                 default -> {}
@@ -212,6 +214,7 @@ public final class FullSystemDemoHarness {
         System.out.printf("scene built: %d nodes, %d warm filaments (%d active segments), %d minifilaments (%d heads), %d crosslink slots; pool0=%.4f µM, total actin=%.3f µM%n%n",
                 s.nNodes, s.nNodes * FORMINS, activeSegments(s.fil), s.nMini, s.mot2.nMotors, s.xl == null ? 0 : s.xl.nLinks, s.grow.pool.conc(), totalActinUM(s));
 
+        if (filidCheck) { filIDCheck(s, dt); return; }
         if (profile) { profileRun(s, dt); return; }
         if (overnight) { overnightRun(s, dt); return; }
         if (vizDir != null) { runViz(s, dt); return; }
@@ -236,7 +239,7 @@ public final class FullSystemDemoHarness {
         SpatialBodyView view; FloatArray gridParams, viewParams; IntArray gridDims, gridCounts;
         IntArray bodyCell, cellCount, chunkSum, gridCellOffsets, gridCellContents, chunkParams, chunkCellCount; int numBodyChunks, totalCells, viewCap;
         // crosslinkers
-        CrosslinkerStore xl; FormationGrid fg; IntArray filID;
+        CrosslinkerStore xl; FormationGrid fg; IntArray filID, filIDScratch; int filIDRounds;
         IntArray segCountA, segOffsetsA, segIdxA, segCountB, segOffsetsB, segIdxB;
         // containment
         FloatArray boxParams;
@@ -512,9 +515,11 @@ public final class FullSystemDemoHarness {
         xl.setRequestCount(reqCap);
         xl.setTorsionParams(FIL_TORQ_SPRING, true);
         s.filID = new IntArray(nSeg);   // CHAIN id (the connected-component terminal), recomputed each formation
-                                        // step by computeFilID — so two segments of the SAME filament are NOT
-                                        // crosslinked (they always touch at their shared joint ⇒ a spurious
-                                        // "crosslink on one filament"). v1 filID = the filament's stable id.
+                                        // step by FilIDSystem pointer-doubling — so two segments of the SAME
+                                        // filament are NOT crosslinked (they always touch at their shared joint ⇒
+                                        // a spurious "crosslink on one filament"). v1 filID = the filament's stable id.
+        s.filIDScratch = new IntArray(nSeg);   // pointer-doubling ping-pong partner of s.filID
+        s.filIDRounds = FilIDSystem.rounds(nSeg);   // ceil(log2(nSeg)) rounded to even ⇒ init→jumps ends in s.filID
         s.segCountA = new IntArray(nSeg); s.segOffsetsA = new IntArray(nSeg + 1); s.segIdxA = new IntArray(C);
         s.segCountB = new IntArray(nSeg); s.segOffsetsB = new IntArray(nSeg + 1); s.segIdxB = new IntArray(C);
         // formation grid sized to the shallow box (segments span the whole slab)
@@ -764,21 +769,79 @@ public final class FullSystemDemoHarness {
     }
 
     /** O(N) crosslinker formation on the host (the grid build + fused per-segment query + the pipeline). */
-    /** Per-segment CHAIN id = the barbed/node terminal slot of its chain (walk end2NbrSlot to the end). Segments of
-     *  the same filament share it ⇒ formation excludes same-filament pairs (the v1 filID semantics). Recomputed each
-     *  formation step because growth/split/death/nucleation mutate the chain topology. */
+    /** Per-segment CHAIN id = the end2NbrSlot-terminal slot of its chain. Segments of the same filament share it ⇒
+     *  formation excludes same-filament pairs (the v1 filID semantics). Recomputed each formation step because
+     *  growth/split/death/nucleation mutate the chain topology. DEVICE-AGNOSTIC: the SAME FilIDSystem pointer-
+     *  doubling kernels run here on the host runner and (unrolled) in the device formation graph; init writes
+     *  s.filID, then an even # of jumps ping-pong filID↔scratch and land back in s.filID. */
     static void computeFilID(Scene s) {
+        FilamentStore f = s.fil;
+        FilIDSystem.init(f.filState, f.end2NbrSlot, s.filID, f.counts);
+        IntArray a = s.filID, b = s.filIDScratch;
+        for (int k = 0; k < s.filIDRounds; k++) { FilIDSystem.jump(a, b, f.filState, f.counts); IntArray t = a; a = b; b = t; }
+        // filIDRounds is EVEN ⇒ after the swaps the latest result is back in s.filID (a == s.filID)
+    }
+
+    /** Reference per-segment filID by the explicit one-step-at-a-time chain walk (the pre-port host algorithm) —
+     *  the gate-1 oracle FilIDSystem pointer-doubling must reproduce exactly. */
+    static void refFilIDWalk(Scene s, IntArray out) {
         FilamentStore f = s.fil; int n = f.n;
         for (int seg = 0; seg < n; seg++) {
-            if (f.filState.get(seg) < 0) { s.filID.set(seg, -seg - 2); continue; }   // FREE ⇒ a distinct negative id
+            if (f.filState.get(seg) < 0) { out.set(seg, -seg - 2); continue; }
             int cur = seg, guard = 0;
             while (guard++ < n) {
                 int nxt = f.end2NbrSlot.get(cur);
                 if (nxt < 0 || nxt == cur || f.filState.get(nxt) < 0) break;
                 cur = nxt;
             }
-            s.filID.set(seg, cur);   // the chain's terminal slot identifies the whole filament
+            out.set(seg, cur);
         }
+    }
+
+    /** GATE 1 — the device-agnostic FilIDSystem (pointer-doubling) ≡ the reference chain-walk, as a PARTITION (and,
+     *  for chains, value-identical), across a turnover-active horizon exercising grow/depoly/sever/split/nucleation
+     *  (the events that mutate chain membership). Runs on the host runner (the device path runs the identical
+     *  kernels); the device==host bit-identity is covered by the formation CPU≡GPU gate once wired. */
+    static void filIDCheck(Scene s, double dt) {
+        FilamentStore f = s.fil; int n = f.n;
+        IntArray ref = new IntArray(n);
+        int M = STEPS > 0 ? STEPS : 15000;
+        System.out.printf("%n=== GATE 1 — FilIDSystem (pointer-doubling, %d rounds) ≡ reference chain-walk over %d turnover-active steps ===%n", s.filIDRounds, M);
+        int worstValue = 0, worstPartition = 0, checks = 0, minActive = n, maxActive = 0;
+        long births = 0; int splits = 0, prevActive = activeSegments(f);
+        for (int t = 0; t < M; t++) {
+            cpuStep(s, t);   // turnover + nucleation (mutate chain) + formation (computeFilID = FilIDSystem) on cadence
+            births += s.lastNucBirths;
+            int actNow = activeSegments(f); if (actNow > prevActive) splits += (actNow - prevActive); prevActive = actNow;
+            if (t % XL_CHECK_INT == 0) {
+                refFilIDWalk(s, ref);
+                int vmm = 0;
+                for (int seg = 0; seg < n; seg++) if (s.filID.get(seg) != ref.get(seg)) vmm++;
+                int pmm = (vmm > 0) ? partitionMismatch(s.filID, ref, n) : 0;   // value-identical ⟹ partition-identical
+                worstValue = Math.max(worstValue, vmm); worstPartition = Math.max(worstPartition, pmm);
+                int act = activeSegments(f); minActive = Math.min(minActive, act); maxActive = Math.max(maxActive, act);
+                checks++;
+            }
+        }
+        long grown = s.grow.pool.totalTaken(), returned = s.grow.pool.totalReturned();
+        System.out.printf("  checks=%d (every %d steps); active segments %d→%d (split/death/nucleation churn ⇒ membership changed)%n",
+                checks, XL_CHECK_INT, minActive, maxActive);
+        System.out.printf("  turnover exercised: %d monomers grown / %d returned (depoly+sever); %d nucleation births; %d split/birth active-count increases%n", grown, returned, births, splits);
+        System.out.printf("  worst per-check VALUE mismatches = %d ; worst PARTITION mismatches = %d%n", worstValue, worstPartition);
+        System.out.printf("  GATE 1: %s%n", (worstPartition == 0 && worstValue == 0) ? "PASS — FilIDSystem ≡ reference walk (value-identical) every check" :
+                worstPartition == 0 ? "PASS (partition) — value differs but same partition (acceptable)" : "*** FAIL — partition mismatch ***");
+    }
+
+    /** Count segments whose (filID-partition) membership disagrees between two labelings: i mismatches if any j has
+     *  (a[i]==a[j]) != (b[i]==b[j]). O(n²) — probe-only. Returns the number of mismatching segments. */
+    static int partitionMismatch(IntArray a, IntArray b, int n) {
+        int bad = 0;
+        for (int i = 0; i < n; i++) {
+            boolean ok = true;
+            for (int j = 0; j < n && ok; j++) if ((a.get(i) == a.get(j)) != (b.get(i) == b.get(j))) ok = false;
+            if (!ok) bad++;
+        }
+        return bad;
     }
 
     static void formationCpu(Scene s, int step) {
