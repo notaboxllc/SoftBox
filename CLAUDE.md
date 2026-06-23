@@ -299,6 +299,30 @@ default block size overflows the register file → CUDA 701 (LAUNCH_OUT_OF_RESOU
 `task()` tops out at 15 args, which is why each vector quantity is one planar-SoA buffer rather than
 three per-component arrays (see the FilamentStore layout note + JOURNAL).
 
+Two further device-path design rules, both load-bearing on this toolchain (TornadoVM 4.0.1-dev PTX,
+RTX 5070), measured in `PROFILE_FULLDEMO_FINDINGS.md`:
+
+- **The device path is kernel-COUNT-bound, not work-bound (the ~8000-launch/s ceiling).** The per-step
+  rate is ≈ `8000 / (kernels-per-step)` — a fixed ~115–130 µs host cost per kernel launch, confirmed two
+  ways (Ring3x3 58×143 ≈ the full composition 106×75 ≈ 8000 launches/s; and a +2.5× work bump moved the
+  step wall only +1.2×). So a broad multi-system composition is launch-bound at small/medium scale (kernel
+  math was only 16–21 % of the step; the GPU sat ~42 % idle) and the speedup amortizes only with scale
+  (a denser scene fills the idle SMs). **Design rule: minimize kernels-per-step on the device path** — fuse
+  co-indexed kernels, skip graphs that don't fire this step (cadence-gate), prefer fewer-larger kernels over
+  many-tiny. This is a known constraint, not a surprise; do not chase the 5-graph dispatch count or the 3 KB
+  per-step transfer — neither is the cost.
+
+- **The chained-split `execute()` accrues a per-execution creep on long runs.** The chained multi-graph
+  residency path shows a **linear, state-independent** per-`execute()` time accumulation localized to a
+  graph's repeated `execute()` (the overnight 70→19 steps/s decay; a FROZEN turnover control decayed
+  *identically* to the live run — 14.92 vs 14.85 ms — so it is NOT growth/broad-phase, NOT thermal/VRAM/GC).
+  Single-`TaskGraph` harnesses (DenseContractile, one `execute()`/step) do **not** show it ⇒ it is specific
+  to the chained multi-graph `execute()` pattern, a TornadoVM-internal per-execution accumulation (~0.19
+  µs/step added, landing on the first/largest graph). **Mitigation: cadence-gate graphs that don't fire every
+  step** (throttles the accrual by the cadence factor); the underlying TornadoVM-internal root cause is an
+  open follow-up. **Related profiler gotcha:** `ProfilerMode.SILENT` retains a result/execution per
+  `execute()` → OOM on long runs; clear it with `plan.clearProfiles()` each step (or run `-noprof`).
+
 ## Documentation conventions
 Same as v1: `CLAUDE.md` = cross-session context (this file); `JOURNAL.md` = terse, newest-first,
 what-was-done / what-was-learned / what's-open. Do not archive JOURNAL entries autonomously.
