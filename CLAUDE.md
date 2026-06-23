@@ -1105,3 +1105,36 @@ barbed growth, or end2-aware recycling) — the formin-pinned single-tip mode ca
 ./run_ring3x3.sh -gpu -steps 30000           # + GPU device scale/no-crash/CPU≡GPU-aggregate
 ./run_ring3x3.sh -3js threejs_ring3x3_turnover -steps 15000   # sphere nodes, ADP gradient, severing
 ```
+
+**FULL-SYSTEM DEMONSTRATION — the maximal-composition contractile network — DONE (2026-06-22); NEXT: GET IT ON THE
+GPU.** `FullSystemDemoHarness` (+ `run_fulldemo.sh`) composes EVERY validated subsystem in one shallow in-vitro
+chamber at faithful KIN=1 rates: protein NODES nucleating biochemically-active treadmilling formin filaments
+(growth+depoly+aging+severing) + free myosin MINIFILAMENTS binding/contracting + O(N) CROSSLINKER bundling +
+CONTAINMENT, all on one shared `FilamentStore.forceSum`. PURE COMPOSITION (no new force law/gather/shared-kernel
+edit). Aberration hunt (KIN=1, 20k steps) CLEAN: conservation EXACT, 0 phantoms, no crash, gentle contraction;
+behaviors surfaced+explained (t=0 warm-start transient ×aeta drag, rare wall-contact containment kicks,
+sparse-network binding at faithful 0.025µm reach, the `filID`-must-be-chain-id crosslinker fix). Report:
+`FULL_SYSTEM_DEMO_FINDINGS.md`; JOURNAL 2026-06-22. **Renders:** `threejs_fulldemo` (KIN=1), `threejs_fulldemo_lifecycle`
+(KIN=30 viewing-speed), `threejs_fulldemo_dense` (`-dense`).
+**⇒ THE GPU BLOCKER (the next task):** the FULL merged device graph (~100 tasks: turnover+nucleation+node-shell+
+free-minifil+grid-binding) is **already written** in `FullSystemDemoHarness.buildPlan()`, but **TornadoVM throws
+`TornadoInternalError: unimplemented: Tornado Graph resize not implemented yet`** at run — the maximal composition
+exceeds TornadoVM's single-`TaskGraph` node capacity (independent of `-Dtornado.tvm.maxbytecodesize`). **FIX
+DIRECTION: SPLIT into multiple chained `TaskGraph`s** (device-resident across them — keep SoA on-device, only the
+integer pool ledger crosses host each step as `stepHostBookkeeping` already does). The constituent device graphs are
+EACH validated device-resident at scale (turnover+nucleation+node = Ring3x3 GPU ~58 kernels; minifil+xlink-force =
+DenseContractile GPU; O(N) xlink formation = XlinkFormation GATE B, bit-identical CPU↔GPU) — so the pieces lower
+fine; only the monolithic single-graph assembly fails. **WHY IT MATTERS:** CPU is ~22 steps/s on the dense scene =
+**~72 min wall-clock per 1 s of simulated time**; the GPU device-resident path is the whole point (DenseContractile
+GPU beat BoA GPU 5–7×). The `-gpu` flag attempts the full graph + reports this blocker cleanly.
+```
+./run_fulldemo.sh -smoke                                       # cheap assembly/sanity
+./run_fulldemo.sh -steps 20000                                 # CPU demo + aberration hunt (KIN=1)
+./run_fulldemo.sh -dense -steps 200000 -3js threejs_fulldemo_dense   # dense render (~2 s sim time)
+./run_fulldemo.sh -gpu -steps 20000                            # attempts the full device graph ⇒ hits the Graph-resize blocker (the next task: split it)
+```
+**Unified viewer (2026-06-22):** `sim_viewer_boa.html` is now ONE canonical file — `~/Code/BoA/sim_viewer_boa.html`
+(the superset: membrane/DTS + an additive crosslink channel, `MAX_MYOSINS`=24000) — and SoftBox's is a **symlink**
+to it. Run ONE `sim_server.py` from `~/Code` (`python3 SoftBox/sim_server.py 8000`); it recursively serves BOTH
+repos' runs. Open `http://localhost:8000/SoftBox/sim_viewer_boa.html`. (Both viewer commits pushed: SoftBox
+`xlink-formation-on`, BoA `membrane-render-and-dense-v5`.)
