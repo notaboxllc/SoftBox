@@ -426,6 +426,181 @@ public final class CrosslinkerSystem {
         }
     }
 
+    // ============== 5d: O(N) GRID formation candidate query (retires the O(N²) filFilCandidates) ==============
+    //
+    // The binding broad-phase pattern applied to FORMATION: segments are published into a DEDICATED,
+    // entity-agnostic SpatialGrid (the STORE_CROSSLINKER publisher; cell size ≥ maxSegLength + crossLinkGrabDist
+    // so the 27-cell stencil is provably complete), and each segment scans its 27-cell neighborhood for partner
+    // segments — replacing the single-threaded all-pairs enumeration (reqCap = nSeg(nSeg−1)/2 ≈ 288M @1×) that
+    // could not run at dense scale. The fused query produces reqFilA/reqFilB **bit-identical** to filFilCandidates
+    // (the FORMATION==BRUTE gate): same predicate, same i<j lower-index-owns-the-pair rule, and the same
+    // lexicographic (i, j-ascending) packing — so the WHOLE downstream (formGates / admit / allocator) is reused
+    // VERBATIM with zero re-baseline of inc-5 (the formGates candidate-index-keyed RNG and the min-candidate-index
+    // admission stay valid because the candidate index c is the SAME function of the pair).
+    //
+    // Two passes (count → emit), no per-segment partner buffer, race-free (each segment OWNS a contiguous output
+    // region [base, base+cnt) in reqFilA/reqFilB), no atomics / no KernelContext:
+    //   gridFormCount : per seg i, count partners j>i (distinct fil, within the coarse capsule bound) in 27 cells
+    //   gridFormScan  : single-thread exclusive prefix-sum of the counts → candBaseSeg; total → formCounts[0];
+    //                   −1 the unused tail of reqFilA/reqFilB (matches filFilCandidates' tail convention)
+    //   gridFormEmit  : per seg i, re-scan the 27 cells and INSERTION-SORT partners ascending into its owned
+    //                   region (⇒ j-ascending within i, == brute's inner-loop order); fill reqFilA[base+k]=i
+    //
+    // The predicate (centerDist via double, coarse bound hi+½lenJ+grab, filID!=filID) is REPLICATED bit-for-bit
+    // from filFilCandidates; the grid only changes WHICH j's are tested (completeness ⇒ the SET is identical).
+    // The dedicated formation grid contains ONLY segments (one body per segment), so gridCellContents[idx] is the
+    // segment slot directly. Per-segment cap FORM_MAXC bounds memory O(N) and prevents OOB; an exceeded cap drops
+    // surplus partners (kept = the smallest-index FORM_MAXC, deterministic) — reported by the host, never silent.
+
+    /** Max partners emitted per segment (bounds the O(N) request capacity + prevents region overflow). 256 to
+     *  match SpatialGrid.MAX_CAND; the host reports if a segment's true partner count exceeds it. */
+    public static final int FORM_MAXC = 256;
+
+    /** Pass 1 — per segment i, count partners j>i (distinct filID, centerDist ≤ ½lenI+½lenJ+grab) found in the
+     *  27-cell neighborhood of i's center cell. candCountSeg[i] = min(true count, FORM_MAXC). */
+    public static void gridFormCount(FloatArray filCoord, FloatArray filSegLength, IntArray filID,
+                                     FloatArray gridParams, IntArray gridDims,
+                                     IntArray gridCellOffsets, IntArray gridCellContents,
+                                     IntArray candCountSeg, FloatArray formParams, IntArray formCounts) {
+        int nSeg = filCoord.getSize() / 3;
+        double grab = formParams.get(6);
+        float xMin = gridParams.get(0), yMin = gridParams.get(1), zMin = gridParams.get(2);
+        float invCell = gridParams.get(4);
+        int nX = gridDims.get(0), nY = gridDims.get(1), nZ = gridDims.get(2);
+        int nXY = nX * nY;
+        int MAXFC = FORM_MAXC;
+        for (@Parallel int i = 0; i < nSeg; i++) {
+            double cix = filCoord.get(i), ciy = filCoord.get(nSeg + i), ciz = filCoord.get(2 * nSeg + i);
+            double hi = 0.5 * filSegLength.get(i);
+            int fi = filID.get(i);
+            int cx = (int) (((float) cix - xMin) * invCell);
+            int cy = (int) (((float) ciy - yMin) * invCell);
+            int cz = (int) (((float) ciz - zMin) * invCell);
+            if (cx < 0) cx = 0; if (cx >= nX) cx = nX - 1;
+            if (cy < 0) cy = 0; if (cy >= nY) cy = nY - 1;
+            if (cz < 0) cz = 0; if (cz >= nZ) cz = nZ - 1;
+            int x0 = cx - 1; if (x0 < 0) x0 = 0;
+            int x1 = cx + 1; if (x1 >= nX) x1 = nX - 1;
+            int y0 = cy - 1; if (y0 < 0) y0 = 0;
+            int y1 = cy + 1; if (y1 >= nY) y1 = nY - 1;
+            int z0 = cz - 1; if (z0 < 0) z0 = 0;
+            int z1 = cz + 1; if (z1 >= nZ) z1 = nZ - 1;
+            int cnt = 0;
+            for (int zz = z0; zz <= z1; zz++) {
+                int zOff = zz * nXY;
+                for (int yy = y0; yy <= y1; yy++) {
+                    int yOff = yy * nX;
+                    for (int xx = x0; xx <= x1; xx++) {
+                        int cc = xx + yOff + zOff;
+                        int start = gridCellOffsets.get(cc);
+                        int end = gridCellOffsets.get(cc + 1);
+                        for (int idx = start; idx < end; idx++) {
+                            int j = gridCellContents.get(idx);
+                            if (j <= i) continue;                       // lower-index segment owns the pair (i<j)
+                            if (filID.get(j) == fi) continue;           // exclude same-filament (v1 filID!=filID)
+                            double dx = cix - filCoord.get(j), dy = ciy - filCoord.get(nSeg + j), dz = ciz - filCoord.get(2 * nSeg + j);
+                            double cd = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                            double bound = hi + 0.5 * filSegLength.get(j) + grab;
+                            if (cd > bound) continue;                   // coarse capsule-bound prune (filFilCandidates verbatim)
+                            cnt++;
+                        }
+                    }
+                }
+            }
+            candCountSeg.set(i, cnt < MAXFC ? cnt : MAXFC);
+        }
+    }
+
+    /** Pass 1.5 — single-thread exclusive prefix-sum of candCountSeg → candBaseSeg (preserves candCountSeg);
+     *  candBaseSeg[nSeg] = total; formCounts[0] = min(total, reqCap); −1 the unused reqFilA/reqFilB tail. */
+    public static void gridFormScan(IntArray candCountSeg, IntArray candBaseSeg,
+                                    IntArray reqFilA, IntArray reqFilB, IntArray formCounts) {
+        int nSeg = candCountSeg.getSize();
+        int reqCap = reqFilA.getSize();
+        for (@Parallel int gid = 0; gid < 1; gid++) {
+            int acc = 0;
+            for (int s = 0; s < nSeg; s++) { candBaseSeg.set(s, acc); acc += candCountSeg.get(s); }
+            candBaseSeg.set(nSeg, acc);
+            int total = acc < reqCap ? acc : reqCap;
+            formCounts.set(0, total);
+            for (int k = total; k < reqCap; k++) { reqFilA.set(k, -1); reqFilB.set(k, -1); }
+        }
+    }
+
+    /** Pass 2 — per segment i, re-scan the 27 cells and insertion-sort the qualifying partners ASCENDING into
+     *  its owned region reqFilB[base, base+cnt) (== brute's j-ascending inner-loop order), then fill
+     *  reqFilA[base+k]=i. Each segment owns a disjoint contiguous region ⇒ race-free, no atomics. cnt =
+     *  candCountSeg[i] (the capped count); the same predicate as gridFormCount ⇒ exactly cnt qualifiers when
+     *  uncapped (full set, sorted = filFilCandidates). When capped, the smallest-index FORM_MAXC are kept. */
+    public static void gridFormEmit(FloatArray filCoord, FloatArray filSegLength, IntArray filID,
+                                    FloatArray gridParams, IntArray gridDims,
+                                    IntArray gridCellOffsets, IntArray gridCellContents,
+                                    IntArray candBaseSeg, IntArray candCountSeg,
+                                    IntArray reqFilA, IntArray reqFilB, FloatArray formParams, IntArray formCounts) {
+        int nSeg = filCoord.getSize() / 3;
+        int reqCap = reqFilA.getSize();
+        double grab = formParams.get(6);
+        float xMin = gridParams.get(0), yMin = gridParams.get(1), zMin = gridParams.get(2);
+        float invCell = gridParams.get(4);
+        int nX = gridDims.get(0), nY = gridDims.get(1), nZ = gridDims.get(2);
+        int nXY = nX * nY;
+        for (@Parallel int i = 0; i < nSeg; i++) {
+            int base = candBaseSeg.get(i);
+            int cap = candCountSeg.get(i);
+            if (base >= reqCap) cap = 0;                                // fully past capacity (overflow) ⇒ drop
+            else if (base + cap > reqCap) cap = reqCap - base;          // partial clamp at the array end
+            if (cap <= 0) continue;
+            double cix = filCoord.get(i), ciy = filCoord.get(nSeg + i), ciz = filCoord.get(2 * nSeg + i);
+            double hi = 0.5 * filSegLength.get(i);
+            int fi = filID.get(i);
+            int cx = (int) (((float) cix - xMin) * invCell);
+            int cy = (int) (((float) ciy - yMin) * invCell);
+            int cz = (int) (((float) ciz - zMin) * invCell);
+            if (cx < 0) cx = 0; if (cx >= nX) cx = nX - 1;
+            if (cy < 0) cy = 0; if (cy >= nY) cy = nY - 1;
+            if (cz < 0) cz = 0; if (cz >= nZ) cz = nZ - 1;
+            int x0 = cx - 1; if (x0 < 0) x0 = 0;
+            int x1 = cx + 1; if (x1 >= nX) x1 = nX - 1;
+            int y0 = cy - 1; if (y0 < 0) y0 = 0;
+            int y1 = cy + 1; if (y1 >= nY) y1 = nY - 1;
+            int z0 = cz - 1; if (z0 < 0) z0 = 0;
+            int z1 = cz + 1; if (z1 >= nZ) z1 = nZ - 1;
+            int cnt = 0;                                                // currently filled in the owned region
+            for (int zz = z0; zz <= z1; zz++) {
+                int zOff = zz * nXY;
+                for (int yy = y0; yy <= y1; yy++) {
+                    int yOff = yy * nX;
+                    for (int xx = x0; xx <= x1; xx++) {
+                        int cc = xx + yOff + zOff;
+                        int start = gridCellOffsets.get(cc);
+                        int end = gridCellOffsets.get(cc + 1);
+                        for (int idx = start; idx < end; idx++) {
+                            int j = gridCellContents.get(idx);
+                            if (j <= i) continue;
+                            if (filID.get(j) == fi) continue;
+                            double dx = cix - filCoord.get(j), dy = ciy - filCoord.get(nSeg + j), dz = ciz - filCoord.get(2 * nSeg + j);
+                            double cd = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                            double bound = hi + 0.5 * filSegLength.get(j) + grab;
+                            if (cd > bound) continue;
+                            // insertion-sort j ascending into reqFilB[base, base+cnt); cap-bounded (keep smallest)
+                            if (cnt < cap) {
+                                int p = base + cnt;
+                                while (p > base && reqFilB.get(p - 1) > j) { reqFilB.set(p, reqFilB.get(p - 1)); p--; }
+                                reqFilB.set(p, j);
+                                cnt++;
+                            } else if (j < reqFilB.get(base + cap - 1)) {   // region full: replace the current max
+                                int p = base + cap - 1;
+                                while (p > base && reqFilB.get(p - 1) > j) { reqFilB.set(p, reqFilB.get(p - 1)); p--; }
+                                reqFilB.set(p, j);
+                            }
+                        }
+                    }
+                }
+            }
+            for (int k = 0; k < cap; k++) reqFilA.set(base + k, i);
+        }
+    }
+
     /** Per-candidate-LOCAL gates + P_form (each candidate writes its own slot ⇒ race-free). Ports v1
      *  checkToLink: alignment (mode), lineSegmentIntersectTest closest-approach vs crossLinkGrabDist,
      *  orientSame, loc±jitter clamp, P_form = 1−exp(−kon·conc·dtCheck). */

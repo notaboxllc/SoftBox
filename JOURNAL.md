@@ -2,6 +2,34 @@
 
 Last updated: 2026-06-22
 
+## 2026-06-22 — O(N) CROSSLINKER FORMATION — the 5d grid publisher + the fused per-segment query (the last quadratic kernel retired).
+Report: `XLINK_FORMATION_ON_FINDINGS.md`. Branch `xlink-formation-on`. Closes the dense-benchmark gap #1: formation
+was O(N²) (`CrosslinkerSystem.filFilCandidates`, single-thread, reqCap=nSeg(nSeg−1)/2 ≈288M @1× — can't run
+dense). Applies the binding broad-phase pattern (parallel grid build + fused per-motor `gridReachable`) TO
+FORMATION: segments published into a **dedicated** entity-agnostic grid (the 5d STORE_CROSSLINKER publisher,
+`FormationGrid`; cellSize ≥ maxSegLen+grab ⇒ 27-cell stencil complete) + a fused per-segment 27-cell query
+(`CrosslinkerSystem.gridForm{Count,Scan,Emit}`, two passes count→emit, each seg OWNS a contiguous reqFilA/reqFilB
+region ⇒ race-free, no atomics). **The make-or-break gate FORMATION==BRUTE: the O(N) grid emits reqFilA/reqFilB
+BIT-IDENTICAL to the O(N²) brute** (same predicate replicated bit-for-bit, same i<j lower-owns rule, same
+lexicographic j-ascending order via an in-region insertion sort) ⇒ the WHOLE downstream (formGates/admit/scan-rank
+allocator/2-pass gather/unbind) reused VERBATIM, **zero re-baseline of inc-5** (the candidate index c is the same
+function of the pair ⇒ inc-5's index-keyed RNG + min-c admission unshifted). **Design choice:** matching brute's
+ORDER reaches order-independence without rekeying the RNG/admission (strictly stronger gate: literal array
+bit-identity). Validated (`run_xlinkform.sh`): GATE A FORMATION==BRUTE bit-identical under churn (two scenes,
+identical ICs, formation+unbind+force+integrate every step, links+poses bit-identical 400 steps); GATE B CPU≡GPU
+bit-identical formation (full 24-task GPU graph — the nested insertion-sort + deep cell-loop kernel lowered
+cleanly on PTX, no "invalid variable"); inc-5 equilibrium preserved (`run_xlinkbundle` grid default vs `-oldform`
+brute — bit-identical link/spread/force trajectory, `diff` clean). **BENCH (`-bench`):** head-to-head CPU brute
+ms∝N² vs grid µs/fil≈const (candidate counts IDENTICAL every scale); grid-only ms/nFil≈const (0.0067→0.0084) up
+to 32k segments ⇒ O(N); GPU device-resident formation at 16k segments no-crash/finite/bounded. Density held
+constant (box∝cbrt(N)). New: `FormationGrid`, `XlinkFormationHarness`, `run_xlinkform.sh`; additive
+`CrosslinkerSystem` (gridForm*+FORM_MAXC=256) + `CrosslinkerBundleHarness` (grid default, `-oldform` reverts).
+`CrosslinkerHarness` 5a–5c-iii re-runs PASS (additive). `BoA-v1ref` byte-clean; production additive. **Flags:**
+the dedicated formation grid (cell sizes differ from the binding grid; memory modest = 1 body/seg); FORM_MAXC=256
+non-binding at realistic density (maxCand≈58–113), surplus dropped+reported never silent; the dense re-run is
+demonstrated by the focused formation bench (DenseContractileHarness full dynamic-formation re-wire = the unblocked
+follow-on — BoA xlink-formation ≈0 of the step, doesn't change the throughput verdict).
+
 ## 2026-06-22 — DENSE CONTRACTILE COMPUTE BENCHMARK — v2 BEATS BoA's GPU 5–7× AND USES 7.6× LESS HOST RAM (the deferred 2026-06-17 target, unblocked).
 Report: `DENSE_CONTRACTILE_BENCHMARK_FINDINGS.md`. New `DenseContractileHarness` + `run_densecontract.sh` only;
 all systems/stores reused VERBATIM; `BoA-v1ref` byte-clean; production untouched. **The FIRST full-system

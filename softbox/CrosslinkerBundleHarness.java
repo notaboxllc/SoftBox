@@ -114,6 +114,7 @@ public final class CrosslinkerBundleHarness {
                 case "-noform"   -> formOn = false;
                 case "-nounbind" -> unbindOn = false;
                 case "-notorsion"-> NO_TORSION = true;
+                case "-oldform"  -> OLDFORM = true;
                 case "-singlelink"-> mode = "singlelink";
                 case "-v1"       -> { nFil = V1_NFIL; }   // full v1 density (200 fil)
                 case "-loadic"   -> { icFile = args[++i]; mode = "match"; }
@@ -203,6 +204,7 @@ public final class CrosslinkerBundleHarness {
         sc.segCountA = new IntArray(nSeg); sc.segOffsetsA = new IntArray(nSeg + 1); sc.segIdxA = new IntArray(C);
         sc.segCountB = new IntArray(nSeg); sc.segOffsetsB = new IntArray(nSeg + 1); sc.segIdxB = new IntArray(C);
         sc.fil = fil; sc.xl = xl; sc.filID = filID;
+        sc.fg = buildFG(fil, nSeg);
         sc.nFil = nSeg; sc.C = C; sc.reqCap = reqCap; sc.seed = seed; sc.checkInt = checkInt; sc.dt = dt;
         sc.formOn = true; sc.unbindOn = true;
         return sc;
@@ -233,10 +235,24 @@ public final class CrosslinkerBundleHarness {
     static final class BundleScene {
         FilamentStore fil; CrosslinkerStore xl; IntArray filID;
         IntArray segCountA, segOffsetsA, segIdxA, segCountB, segOffsetsB, segIdxB;
+        FormationGrid fg;                      // 5d: O(N) grid formation (default; -oldform reverts to O(N²) brute)
         int nFil, C, reqCap, seed, checkInt;
         double dt;
         boolean formOn, unbindOn;
         TornadoExecutionPlan mechPlan; GridScheduler mechSched;
+    }
+
+    /** 5d: when false (default), formation uses the O(N) grid query; -oldform reverts to the O(N²) all-pairs brute. */
+    static boolean OLDFORM = false;
+
+    /** Build the dedicated formation grid (5d STORE_CROSSLINKER): cell size ≥ maxSegLen + grab; a generous box
+     *  that contains the slowly-dispersing bundle (centres stay in-box ⇒ no clamped-edge missed partner). */
+    static FormationGrid buildFG(FilamentStore fil, int nSeg) {
+        double maxSegLen = 0; for (int s = 0; s < nSeg; s++) maxSegLen = Math.max(maxSegLen, fil.segLength.get(s));
+        double maxC = 0; for (int i = 0; i < fil.coord.getSize(); i++) maxC = Math.max(maxC, Math.abs(fil.coord.get(i)));
+        double cellSize = 2.0 * (0.5 * maxSegLen + Constants.radius) + GRAB_DIST;
+        double g = Math.max(2.0, maxC * 4.0 + cellSize + 0.5);   // generous half-extent for dispersion
+        return new FormationGrid(nSeg, g, g, g, cellSize, GRAB_DIST, Constants.radius);
     }
 
     /** Random dense bundle: nFil single-segment free filaments, centres uniform in the box, uVec
@@ -294,6 +310,7 @@ public final class CrosslinkerBundleHarness {
         sc.segCountA = new IntArray(nSeg); sc.segOffsetsA = new IntArray(nSeg + 1); sc.segIdxA = new IntArray(C);
         sc.segCountB = new IntArray(nSeg); sc.segOffsetsB = new IntArray(nSeg + 1); sc.segIdxB = new IntArray(C);
         sc.fil = fil; sc.xl = xl; sc.filID = filID;
+        sc.fg = buildFG(fil, nSeg);
         sc.nFil = nFil; sc.C = C; sc.reqCap = reqCap; sc.seed = seed; sc.checkInt = checkInt; sc.dt = dt;
         return sc;
     }
@@ -346,6 +363,7 @@ public final class CrosslinkerBundleHarness {
         sc.segCountA = new IntArray(nSeg); sc.segOffsetsA = new IntArray(nSeg + 1); sc.segIdxA = new IntArray(C);
         sc.segCountB = new IntArray(nSeg); sc.segOffsetsB = new IntArray(nSeg + 1); sc.segIdxB = new IntArray(C);
         sc.fil = fil; sc.xl = xl; sc.filID = filID;
+        sc.fg = buildFG(fil, nSeg);
         sc.nFil = nSeg; sc.C = C; sc.reqCap = reqCap; sc.seed = seed; sc.checkInt = checkInt; sc.dt = dt;
         return sc;
     }
@@ -434,7 +452,12 @@ public final class CrosslinkerBundleHarness {
         FilamentStore f = sc.fil; CrosslinkerStore xl = sc.xl;
         xl.setFormStep(step, sc.seed);
         CrosslinkerSystem.countActiveLinks(xl.linkState, xl.linkFilA, xl.linkFilB, xl.activeLinkCount, xl.formCounts);
-        CrosslinkerSystem.filFilCandidates(f.coord, f.segLength, sc.filID, xl.reqFilA, xl.reqFilB, xl.formParams, xl.formCounts);
+        if (OLDFORM) {
+            CrosslinkerSystem.filFilCandidates(f.coord, f.segLength, sc.filID, xl.reqFilA, xl.reqFilB, xl.formParams, xl.formCounts);
+        } else {
+            sc.fg.buildCpu(f);                                  // 5d: O(N) grid build + fused per-segment query
+            sc.fg.formCandidatesCpu(f, sc.filID, xl);          // reqFilA/reqFilB == filFilCandidates (FORMATION==BRUTE)
+        }
         CrosslinkerSystem.formGates(f.uVec, f.end1, f.end2, f.segLength, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2,
                 xl.reqOrient, xl.gatePass, xl.formParams, xl.formCounts);
         if (FORM_DIAG) {
@@ -837,6 +860,7 @@ public final class CrosslinkerBundleHarness {
         sc.segCountA = new IntArray(nSeg); sc.segOffsetsA = new IntArray(nSeg + 1); sc.segIdxA = new IntArray(C);
         sc.segCountB = new IntArray(nSeg); sc.segOffsetsB = new IntArray(nSeg + 1); sc.segIdxB = new IntArray(C);
         sc.fil = fil; sc.xl = xl; sc.filID = filID;
+        sc.fg = buildFG(fil, nSeg);
         sc.nFil = nSeg; sc.C = C; sc.reqCap = reqCap; sc.seed = seed; sc.checkInt = 100; sc.dt = dt;
         sc.formOn = false; sc.unbindOn = false;
         return sc;
