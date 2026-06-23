@@ -2,6 +2,44 @@
 
 Last updated: 2026-06-22
 
+## 2026-06-22 — DENSE CONTRACTILE COMPUTE BENCHMARK — v2 BEATS BoA's GPU 5–7× AND USES 7.6× LESS HOST RAM (the deferred 2026-06-17 target, unblocked).
+Report: `DENSE_CONTRACTILE_BENCHMARK_FINDINGS.md`. New `DenseContractileHarness` + `run_densecontract.sh` only;
+all systems/stores reused VERBATIM; `BoA-v1ref` byte-clean; production untouched. **The FIRST full-system
+composition at dense scale** — free filament network + bipolar minifilaments (binding + cross-bridge
+contraction) + crosslinkers (force + 2-pass gather) + in-vitro chamber box + the parallel-grid fused per-motor
+binding + integration, ALL device-resident (no per-step host pull). Matched to BoA's dense v5 scene.
+**Recon found two v2 gaps (documented, "pause+report"):** (1) crosslinker FORMATION is O(N²) (`filFilCandidates`
+single-thread, reqCap=nSeg²/2; the STORE_CROSSLINKER grid publisher is unwired = "5d") — can't run at dense
+scale; (2) random (non-node) nucleation doesn't exist (`kRdmNuc` undefined). Neither is a per-step throughput
+driver (BoA biochem ≈3 %, xlink-formation ≈0). ⇒ scene PRE-PLACED at matched counts (filaments pre-grown to
+BoA's segs/fil, crosslinkers pre-formed at the active-link count); per-step MECHANICS run device-resident.
+**Headline sweep (RTX 5070, dt=1e-4, 650 steps = 300 warmup + 350 window) — v2 GPU vs BoA GPU:**
+| scale | fil | minifil | heads | xlinks v2/BoA | v2 GPU ms | BoA GPU ms | v2 vs BoA |
+|---|---|---|---|---|---|---|---|
+| 0.5× | 2k | 2k | 64k | 1680/1693 | **12.42** | 86.35 | **7.0×** |
+| 1× | 4k | 4k | 128k | 3360/3363 | **19.86** | 134.55 | **6.8×** |
+| 2× | 8k | 8k | 256k | 6720/6575 | **46.51** | 246.39 | **5.3×** |
+| 4× | 16k | 16k | 512k | 13440/12579 | **92.89** | 494.28 | **5.3×** |
+| 8× | 32k | 32k | 1.02M | 26880/25136 | **179.32** | 1030.23 | **5.7×** |
+**STABLE at BoA's dt=1e-4 over the full window at every scale — no NaN** (the 12 pN cap + chamber box + crowded
+aeta=1.0 keep the free minifilament network bounded; no 1e-5 fallback needed). **Scene-match EXCELLENT** (segs
+24k @1× vs BoA 23779; xlinks match to ~1 %). Per-step ~LINEAR (no super-linear term — every kernel parallel).
+CPU≡GPU aggregate-agree (avgBound GPU 238 / CPU 268 @0.1×, chaotic-Brownian envelope; the deterministic
+`gridReachable` binding is bit-identical per the grid-parallel validation; activeXlinks identical).
+**THE MEMORY HEADLINE (the project's whole thesis, measured): at 8× host RSS 3.36 GB vs BoA 25.5 GB = 7.6× LESS;
+VRAM 3.04 vs 3.79 GB.** The OOP host-heap ceiling is broken on the realistic workload; the whole sweep fits the
+12 GB card (no VRAM ceiling through 8×). BoA's GPU never won this workload (GPU/CPU 0.74→0.58, copy-out +
+host-pack bound) — v2 beats both BoA's GPU AND CPU by 5–9×. **Flagged for follow-up:** the dynamic (grown, not
+pre-placed) version needs the 5d grid-publisher (O(N) formation) + a random-nucleation emitter; crosslinkers
+here are static (force+gather; `-xlunbind` enables Bell-unbind); turnover biochem not wired (≤3.4 % of BoA's
+step). Verdict: **the ECS/GPU path's speed AND memory advantage over v1 is now measured on the contractile
+workload, not just gliding.**
+```
+./run_densecontract.sh -scale 1 650        # GPU sweep point (matched to BoA dense v5 1×)
+./run_densecontract.sh -scale 1 -cpu 650   # CPU runner
+./run_densecontract.sh -check              # small-scale assemble + sanity (no-NaN, binding, xlinks)
+```
+
 ## 2026-06-22 — PARALLEL GPU GRID BUILD + the REAL dense-gliding bottleneck — v2 NOW BEATS BoA's GPU 9–14× AT EVERY SCALE.
 Report: `GRID_PARALLEL_FINDINGS.md`. Branch `grid-parallel-build`. New/added code only on shared kernels (additive
 methods); `BroadPhaseHarness` + `DenseGlidingHarness` rewired; `BoA-v1ref` byte-clean; all other harnesses
