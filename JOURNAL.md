@@ -2,6 +2,21 @@
 
 Last updated: 2026-06-23
 
+## 2026-06-23 — PROBE: does a periodic ExecutionPlan reset flush the chained-split per-execute() creep? (MEASUREMENT-FIRST)
+Branch `cadence-gate-fdturn`. Report: `DECAY_RESET_FINDINGS.md`. Additive `-planreset N -planresetmode device|rebuild`
+probe in `profileRun`/`planReset` (default OFF ⇒ production byte-unchanged; default `-gpu` re-verified CPU≡GPU AGREE,
+conservation EXACT). **VERDICT: the §4 creep is PLAN-LEVEL — a full TornadoExecutionPlan rebuild FLUSHES it cleanly
+(repeatable sawtooth: fdNuc resets to baseline ~2.1–2.3 ms at every rebuild, state-preserving — conc/active bit-match
+the no-reset trajectory — and VRAM-bounded 473–494 MiB, no per-rebuild leak). BUT the rebuild MECHANISM is NOT
+production-robust:** repeated `close()`+rebuild **reproducibly crashes with CUDA 700 (`cuModuleLoadDataEx` PTX-module
+load) after ~3 rebuilds** (both N=8k and N=6k runs died at step ~24k) — a TornadoVM 4.0.1-dev context/module corruption,
+not a SoftBox bug (the same scene runs 30k+ clean with no reset). The cheaper in-place **`resetDevice()` does NOT flush**
+(creep climbs straight across it — it's below the streams/events/code-cache that clears, in the per-plan device-context
+bookkeeping). **⇒ Stage B (production wiring) SKIPPED** — wiring would trade the decay's graceful slowdown for a hard
+crash. Pins PROFILE §4b hypothesis (B): a TornadoVM-internal per-execution accumulation on the plan/context lifetime.
+Recommended path stays the §5 launch-count levers (fuse fdNuc / host-side CSR / `withCUDAGraph()`) or an upstream fix.
+`BoA-v1ref` byte-clean; `stepSplit`/`cpuStep`/constituents untouched.
+
 ## 2026-06-23 — CADENCE-GATE the fdTurn graph (the PROFILE §5.1 launch-floor + §4 decay lever).
 Branch `cadence-gate-fdturn` (off `profile-fulldemo`; production `stepSplit` byte-identical to `xlink-formation-on`,
 branched here to reuse the profiler for the decay re-measure). Report: `TASKGRAPH_SPLIT_FINDINGS.md` §8. **Part 1
