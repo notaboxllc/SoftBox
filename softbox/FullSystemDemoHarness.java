@@ -134,6 +134,11 @@ public final class FullSystemDemoHarness {
     static boolean noprof = false;             // -noprof : profiler OFF (pure per-graph nanoTime, matches production stepSplit;
                                                //   required for LONG decay runs — ProfilerMode.SILENT accumulates a result/execution
                                                //   on the Java heap → GC pressure + OOM over ~10^5 steps, contaminating the decay)
+    static int planResetEvery = 0;             // -planreset N : MEASUREMENT probe — periodically flush the per-execute() creep
+                                               //   (0=off). mode A = plan.resetDevice() (cheap: clean streams/events/codecache,
+                                               //   buffers survive); mode B = full TornadoExecutionPlan rebuild w/ state round-trip.
+    static String planResetMode = "device";    // -planresetmode device|rebuild
+    static long planResetCostNs = 0; static int planResetCount = 0;   // amortized per-reset cost accounting
 
     static double pForm(double conc, double dtCheck) { return 1.0 - Math.exp(-XLINK_ON_RATE * conc * dtCheck); }
 
@@ -180,6 +185,8 @@ public final class FullSystemDemoHarness {
                 case "-profsteps" -> profSteps = Integer.parseInt(args[++i]);
                 case "-proflog" -> profLogEvery = Integer.parseInt(args[++i]);
                 case "-noprof" -> noprof = true;
+                case "-planreset" -> planResetEvery = Integer.parseInt(args[++i]);
+                case "-planresetmode" -> planResetMode = args[++i];
                 case "-smoke" -> { smoke = true; STEPS = 1500; }
                 case "-3js" -> vizDir = args[++i];
                 default -> {}
@@ -1229,6 +1236,7 @@ public final class FullSystemDemoHarness {
     // fdTurnFire result (turnover offsets, fire steps only — may be stale on a non-fire check), fdNuc result (nuc
     // offsets + filament render state, always-run), fdBind result (binding state), last graph (derived geometry).
     static TornadoExecutionResult splitResTurn, splitResNuc, splitResBind, splitResL;
+    static Object[] fullPersistSet;   // the full persisted SoA set (for the -planreset rebuild-mode full host round-trip)
 
     static Object[] cat(Object[] a, Object[] b) {
         Object[] r = new Object[a.length + b.length];
@@ -1372,11 +1380,17 @@ public final class FullSystemDemoHarness {
             if (gi == 0) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host0);
             else if (gi == 1) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, hostNuc);
             else if (gi == 2) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host1);
-            else if (gi == 5) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host4);
+            else if (gi == 5) {
+                g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host4);
+                // -planreset rebuild mode: register the FULL persisted set UNDER_DEMAND on the last graph so a reset
+                // boundary can pull the entire device state to host before tearing the plan down (probe-only).
+                if (planResetEvery > 0 && planResetMode.equals("rebuild")) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, uploaded.toArray());
+            }
             // persist the full running state (keeps it device-resident for later sub-graphs AND the next step).
             g = g.persistOnDevice(uploaded.toArray());
             tg[gi] = g;
         }
+        fullPersistSet = uploaded.toArray();
 
         buildSplitScheduler(s);
         uk.ac.manchester.tornado.api.ImmutableTaskGraph[] snaps = new uk.ac.manchester.tornado.api.ImmutableTaskGraph[N_SPLIT];
@@ -1760,6 +1774,33 @@ public final class FullSystemDemoHarness {
 
     static final String[] GNAME = { "fdTurnFire", "fdNuc", "fdBind", "fdStruct", "fdFil", "fdInteg" };
 
+    /** MEASUREMENT probe — periodically flush the chained-split per-execute() creep (PROFILE §4 / SPLIT §8).
+     *  mode "device": plan.resetDevice() — cleans the PTX streams/events/code-cache + kernel stack frame (the
+     *  per-execution accumulation), data buffers survive (residency intact); forces a one-time PTX recompile on the
+     *  next execute. mode "rebuild": tear down + rebuild the TornadoExecutionPlan from a full host state round-trip.
+     *  Returns the (possibly new) plan; both re-apply the GridScheduler per-execute in profStep. */
+    /** Pull EVERY persisted SoA buffer device→host (the full state), so a rebuild's FIRST_EXECUTION restores it
+     *  bit-exactly. Uses the last graph's result (the full set is registered UNDER_DEMAND there in rebuild mode). */
+    static void pullFullState(Scene s) {
+        if (splitResL != null && fullPersistSet != null) splitResL.transferToHost(fullPersistSet);
+    }
+
+    static TornadoExecutionPlan planReset(TornadoExecutionPlan plan, Scene s) {
+        long t0 = System.nanoTime();
+        TornadoExecutionPlan np;
+        if (planResetMode.equals("rebuild")) {
+            pullFullState(s);                 // device→host: every persisted buffer (so the rebuild's FIRST_EXECUTION restores it)
+            try { plan.close(); } catch (Throwable e) { /* freeDeviceMemory under the hood */ }
+            np = buildPlanSplit(s);           // fresh plan; FIRST_EXECUTION re-uploads the just-pulled host state
+            if (!noprof) np = np.withProfiler(ProfilerMode.SILENT);
+        } else {
+            np = plan.resetDevice();          // cheap in-place flush; buffers survive
+        }
+        long t1 = System.nanoTime();
+        planResetCostNs += (t1 - t0); planResetCount++;
+        return np;
+    }
+
     static void profileRun(Scene s, double dt) {
         System.out.printf("%n=== PROFILE (MEASUREMENT-ONLY) — per-step time + transfer budget across %d chained TaskGraphs ===%n", N_SPLIT);
         System.out.printf("  scene: %d active segments, %d node-shell heads, %d free-minifil heads; turnover=%s%n",
@@ -1783,9 +1824,12 @@ public final class FullSystemDemoHarness {
         // rolling window for the Stage-C decay slope
         long[] prevWall = new long[nG]; long prevClock = System.nanoTime(); long winStart = prevClock; int prevTotalSeg = activeSegments(s.fil);
         long t0 = System.nanoTime();
+        if (planResetEvery > 0)
+            System.out.printf("  PLAN-RESET probe: mode=%s every %d steps (flush the per-execute() creep)%n", planResetMode, planResetEvery);
         for (int i = 0; i < profSteps; i++) {
             int t = profWarm + i;
             profStep(s, t, dt, plan, a);
+            if (planResetEvery > 0 && (i + 1) % planResetEvery == 0) plan = planReset(plan, s);
             if (profLogEvery > 0 && (i + 1) % profLogEvery == 0) {
                 long now = System.nanoTime();
                 double winSecs = (now - prevClock) / 1e9;
@@ -1801,6 +1845,9 @@ public final class FullSystemDemoHarness {
         }
         double measSecs = (System.nanoTime() - t0) / 1e9;
         int M = profSteps;
+        if (planResetCount > 0)
+            System.out.printf("  PLAN-RESET: %d resets, mean cost %.1f ms each (pull+close+rebuild; re-JIT amortizes into the next step) ⇒ %.4f ms/step amortized%n",
+                    planResetCount, planResetCostNs/1e6/planResetCount, planResetCostNs/1e6/M);
 
         // ---- aggregate (per-step averages) ----
         long sumKern=0,sumDisp=0,sumXfer=0,sumWall=0,sumIn=0,sumOut=0;
