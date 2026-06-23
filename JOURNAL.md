@@ -2,6 +2,43 @@
 
 Last updated: 2026-06-22
 
+## 2026-06-22 — FULL-SYSTEM DEMONSTRATION — mid-sized biochemically-active contractile network (watch + aberration hunt).
+Report: `FULL_SYSTEM_DEMO_FINDINGS.md`. Branch `xlink-formation-on`. The MAXIMAL composition of every validated
+subsystem in ONE shallow in-vitro chamber at faithful KIN=1 rates: 16 protein NODES (4×4 planar grid, 0.6 µm
+spacing) nucleating biochemically-active treadmilling formin filaments (growth+pointed-depoly+AGING+SEVERING) +
+60 free myosin MINIFILAMENTS (1920 heads) binding/contracting the network + O(N) CROSSLINKER bundling +
+CONTAINMENT, all on ONE shared `FilamentStore` whose `forceSum` every coupling accumulates into. **PURE
+COMPOSITION** — new files only (`FullSystemDemoHarness`, `run_fulldemo.sh`), every system reused byte-unchanged,
+NO new force law/gather/shared-kernel edit; `BoA-v1ref` byte-clean; production untouched. Two myosin populations
+bind the same network two ways: node shell via the node-AWARE brute (excludes node-held tips, faithful), free
+minifilaments via the parallel-grid fused per-head query (the dense path). **THE HUNT (KIN=1, 20 000 steps) COMES
+BACK CLEAN:** no NaN/blow-up, **conservation EXACT, 0 phantoms, 0 wall escapes, no crash/race** — the dead-slot
+family + O(N) formation + two-population gathers + full turnover all compose correctly. The system **gently
+CONTRACTS** — node-net RMS 0.949→0.913 µm (3.8%; nodes pulled 0.50→0.30 µm min sep, no clipping), bound heads grow
+47→173, crosslinks accumulate 1→46, turnover slow (42 grown/15 depoly, 0 severing — the §11 KIN=1 regime: myosin
+walking ~0.3–1.6 s precedes aging ~4 s / severing ~6.6 s). **Behaviors surfaced + EXPLAINED (bounded, not bugs):**
+(1) a t=0 warm-start force transient ~23 nN for ONE step (node seed-tether+chain relaxing the warm IC ×10 aeta
+drag; independent of minifil/xlink — identical at mini=2/60/-noxlink; decays <66 steps; steady max 143 pN);
+(2) rare ~1 nN single-step containment kicks on a filament tip reaching a wall (corrective, bounded; cut by
+enlarging the box 3.0→3.6 µm); (3) sparse-network binding (faithful 0.025 µm reach ⇒ ~9% head occupancy, the
+DenseContractile free-network regime — NOT an error). **Scene-design findings (for the ring):** a thin slab needs
+in-plane-biased filament splay (`PLANE_BIAS` ⇒ 0 wall escapes) + myosin CO-LOCATED with actin (the smoke's 0/1920
+bind was scattered minifilaments). **GPU finding:** the full merged device graph (~100 tasks) exceeds TornadoVM's
+single-`TaskGraph` capacity (`Graph resize not implemented`) ⇒ device residency of the maximal composition needs
+SPLITTING into chained TaskGraphs (flagged for the ring); the constituent device graphs are each validated
+(Ring3x3/DenseContractile/XlinkFormation); CPU is the hunt's source of truth. **Renders:** `threejs_fulldemo`
+(KIN=1 faithful watch — nodes+brushes, minifilaments+shells binding+contracting, crosslinks forming);
+`threejs_fulldemo_lifecycle` (KIN=30 viewing-speed — the SAME composition showing the full biochemistry: filaments
+grow 672→1536 segs, redden through the ADP cascade meanNotADP 1.0→0.21, sever/fragment, while contracting +
+crosslinking 3→90). Logs `RUN_LOGS/2026-06-22_fulldemo_*.txt`. **The full integration is demonstrated + de-risked
+before the ring.**
+```
+./run_fulldemo.sh -smoke                                # cheap assembly/sanity
+./run_fulldemo.sh -steps 20000                          # CPU demo + aberration hunt (KIN=1)
+./run_fulldemo.sh -gpu -steps 20000                     # + GPU device-graph capacity probe (§6 finding)
+./run_fulldemo.sh -3js threejs_fulldemo -steps 30000    # faithful render | add -kin 30 -polyboost 3 -pool 20 for the lifecycle watch
+```
+
 ## 2026-06-22 — O(N) CROSSLINKER FORMATION — the 5d grid publisher + the fused per-segment query (the last quadratic kernel retired).
 Report: `XLINK_FORMATION_ON_FINDINGS.md`. Branch `xlink-formation-on`. Closes the dense-benchmark gap #1: formation
 was O(N²) (`CrosslinkerSystem.filFilCandidates`, single-thread, reqCap=nSeg(nSeg−1)/2 ≈288M @1× — can't run
