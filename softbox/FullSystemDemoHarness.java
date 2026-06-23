@@ -121,7 +121,7 @@ public final class FullSystemDemoHarness {
     static String vizDir = null;
     static boolean smoke = false;
     static int gpuSteps = 2000;               // -gpusteps : device-resident SPLIT probe/validation horizon
-    static int N_SPLIT = 5;                    // number of chained device graphs the per-step sequence is split into
+    static int N_SPLIT = 6;                    // chained device graphs (fdTurnFire·fdNuc·fdBind·fdStruct·fdFil·fdInteg)
     static boolean overnight = false;          // -overnight : Stage 2 device-resident milestone + scale-up run
     static String overnightViz = null;         // -overnight render dir (frames dumped from the device-resident run)
 
@@ -1226,7 +1226,9 @@ public final class FullSystemDemoHarness {
     //   G4 fdInteg  — containment + integrate + derive                      (≈13 tasks)
     // (crosslinker formation/force stays CPU-side here exactly as the monolith probe did — its filID is host-computed;
     //  the xlink device path is validated in DenseContractile/XlinkFormation. Flagged in the findings.)
-    static TornadoExecutionResult splitRes0, splitRes1, splitResL;
+    // fdTurnFire result (turnover offsets, fire steps only — may be stale on a non-fire check), fdNuc result (nuc
+    // offsets + filament render state, always-run), fdBind result (binding state), last graph (derived geometry).
+    static TornadoExecutionResult splitResTurn, splitResNuc, splitResBind, splitResL;
 
     static Object[] cat(Object[] a, Object[] b) {
         Object[] r = new Object[a.length + b.length];
@@ -1289,7 +1291,11 @@ public final class FullSystemDemoHarness {
         // the executeAlloc NPE). Then every later graph consumes the running uploaded set from its predecessor and
         // persists it forward, keeping the whole state device-resident across sub-graphs AND across steps. No host
         // round-trip; only the pool-ledger offsets are pulled UNDER_DEMAND each step.
-        Object[] u0 = {   // G0 turnover + nucleation
+        // CADENCE-GATE SPLIT (Stage 0 case 1): fdTurn split into fdTurnFire (turnover, fire-gated, the UPLOADER) +
+        // fdNuc (nucleation, ALWAYS-run — nucleation draws every step at kNodeNuc·dt, NOT on the biochem cadence).
+        // The shared SoA buffers are first-used (uploaded FIRST_EXECUTION) by fdTurnFire at step 0 (a fire step) and
+        // consumed by fdNuc; fdNuc lists ONLY the nucleation-unique buffers as its first-use set.
+        Object[] u0 = {   // G0 fdTurnFire — turnover (age/depoly/death/grow/sever/split + allocator + recomputeDrag)
                 f.filState, f.monomerCount, f.coord, f.uVec, f.yVec, f.segLength, f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
                 f.brownTransScale, f.brownRotScale, f.acceptFlag, f.reqCoord, f.reqUVec, f.reqYVec, f.freeCount, f.freeScanCounts, f.freeOffsets,
                 f.freeList, f.rankScanCounts, f.rankOffsets, f.allocCounts, f.birthParams, f.bTransGam, f.bRotGam, f.bTransDiff, f.bRotDiff,
@@ -1297,9 +1303,11 @@ public final class FullSystemDemoHarness {
                 d.returnedMon, d.deathFlag, d.depolyParams, d.returnScanCounts, d.returnedOffsets,
                 grow.grewFlag, grow.grewScanCounts, grow.grewOffsets, grow.splitParams, grow.dragParams,
                 sv.cofFrac, sv.cofilinParams, sv.severDeathFlag, sv.severReturnedMon, sv.severScanCounts, sv.severReturnedOffsets,
-                nuc.seedNode, nuc.nodeBoundFil, nuc.nucParams, nuc.seedParams, nb.coord,
+                nuc.seedNode };
+        Object[] uNuc = {   // G1 fdNuc — node nucleation (count/emit + the B1 allocator path); nuc-unique buffers only
+                nuc.nodeBoundFil, nuc.nucParams, nuc.seedParams, nb.coord,
                 s.nucAccept, s.nucReqCoord, s.nucReqUVec, s.nucReqYVec, s.nucRankScanCounts, s.nucRankOffsets };
-        Object[] u1 = {   // G1 binding (node-shell brute + free-minifil grid)
+        Object[] u1 = {   // G2 binding (node-shell brute + free-minifil grid)
                 b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.boundSeg, mot.bindArc, mot.nucleotideState,
                 mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.nucParams,
                 f.end1, f.end2, f.coord, f.segLength, nuc.seedNode,
@@ -1336,13 +1344,16 @@ public final class FullSystemDemoHarness {
                 bb.coord, bb.uVec, bb.segLength, bb.bTransGam, bb.forceSum, bb.torqueSum, bb.yVec, bb.randForce, bb.randTorque, bb.bRotGam, bb.zVec, bb.end1, bb.end2, mini.bbBodyParams,
                 f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, f.yVec, f.randForce, f.randTorque, f.bRotGam, f.params, f.zVec, f.end1, f.end2,
                 s.boxParams };
-        Object[][] U = { u0, u1, u2, u3, u4 };
-        String[] gname = { "fdTurn", "fdBind", "fdStruct", "fdFil", "fdInteg" };
+        Object[][] U = { u0, uNuc, u1, u2, u3, u4 };
+        String[] gname = { "fdTurnFire", "fdNuc", "fdBind", "fdStruct", "fdFil", "fdInteg" };
 
-        // host-pull buffers per graph (UNDER_DEMAND): G0 pool-ledger offsets + hunt/render state, G1 binding state,
-        // G4 the derived geometry the renderer reads.
-        Object[] host0 = { grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets, s.nucRankOffsets, f.freeOffsets,
-                f.monomerCount, f.filState, f.segLength, nuc.seedNode, ag.nucFrac, sv.cofFrac };
+        // host-pull buffers per graph (UNDER_DEMAND). G0 fdTurnFire: the turnover pool-ledger offsets (pulled inline
+        // ONLY on fire steps). G1 fdNuc (always-run): the nuc pool-ledger offsets (every step) + the filament render
+        // state (filState/monomerCount/segLength/nucFrac/cofFrac/seedNode — fully current after fdNuc births). G2
+        // fdBind: binding state. G5 fdInteg: the derived geometry the renderer reads. NB: the render state is pulled
+        // from fdNuc (always-run), NOT fdTurnFire (skipped on non-fire steps).
+        Object[] host0 = { grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets };
+        Object[] hostNuc = { s.nucRankOffsets, f.freeOffsets, f.monomerCount, f.filState, f.segLength, nuc.seedNode, ag.nucFrac, sv.cofFrac };
         Object[] host1 = { mot.boundSeg, mot2.boundSeg, mot.nucleotideState, mot2.nucleotideState };
         Object[] host4 = { nb.coord, f.coord, f.end1, f.end2, b.end1, b.end2, b2.end1, b2.end2, bb.coord, bb.end1, bb.end2 };
 
@@ -1357,22 +1368,24 @@ public final class FullSystemDemoHarness {
             if (gi > 0 && consumeSet.length > 0) g = g.consumeFromDevice(gname[gi - 1], consumeSet);
             if (!newBufs.isEmpty()) g = g.transferToDevice(DataTransferMode.FIRST_EXECUTION, newBufs.toArray());
             g = g.transferToDevice(DataTransferMode.EVERY_EXECUTION, everyExec);
-            g = switch (gi) { case 0 -> blkTurn(g, s); case 1 -> blkBind(g, s); case 2 -> blkStruct(g, s); case 3 -> blkFil(g, s); default -> blkInteg(g, s); };
+            g = switch (gi) { case 0 -> blkTurnFire(g, s); case 1 -> blkNuc(g, s); case 2 -> blkBind(g, s); case 3 -> blkStruct(g, s); case 4 -> blkFil(g, s); default -> blkInteg(g, s); };
             if (gi == 0) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host0);
-            else if (gi == 1) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host1);
-            else if (gi == 4) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host4);
+            else if (gi == 1) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, hostNuc);
+            else if (gi == 2) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host1);
+            else if (gi == 5) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host4);
             // persist the full running state (keeps it device-resident for later sub-graphs AND the next step).
             g = g.persistOnDevice(uploaded.toArray());
             tg[gi] = g;
         }
 
-        N_SPLIT = 5;
         buildSplitScheduler(s);
-        return new TornadoExecutionPlan(tg[0].snapshot(), tg[1].snapshot(), tg[2].snapshot(), tg[3].snapshot(), tg[4].snapshot());
+        uk.ac.manchester.tornado.api.ImmutableTaskGraph[] snaps = new uk.ac.manchester.tornado.api.ImmutableTaskGraph[N_SPLIT];
+        for (int gi = 0; gi < N_SPLIT; gi++) snaps[gi] = tg[gi].snapshot();
+        return new TornadoExecutionPlan(snaps);
     }
 
-    // ---- the five task blocks (verbatim methods + order from the monolith buildPlan) ----
-    static TaskGraph blkTurn(TaskGraph tg, Scene s) {
+    // ---- the six task blocks (verbatim methods + order from the monolith buildPlan; fdTurn split fdTurnFire+fdNuc) ----
+    static TaskGraph blkTurnFire(TaskGraph tg, Scene s) {
         FilamentStore f = s.fil; NodeNucleationStore nuc = s.nuc; GrowthStore grow = s.grow; DepolyStore d = s.depoly;
         AgingStore ag = s.aging; SeverStore sv = s.sever; NodeStore nd = s.node; RigidRodBody nb = nd.node;
         return tg
@@ -1396,7 +1409,17 @@ public final class FullSystemDemoHarness {
             .task("splitWire", GrowthSystem::splitWire, f.rankOffsets, f.freeList, f.freeOffsets, f.monomerCount, f.coord, f.uVec, f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide, nuc.seedNode, grow.splitParams, f.allocCounts)
             .task("splitInherit", AgingSystem::splitInheritNuc, f.rankOffsets, f.freeList, f.freeOffsets, ag.nucFrac, f.allocCounts)
             .task("splitCof", SeveringSystem::nucleateFreshCofilin, f.rankOffsets, f.freeList, f.freeOffsets, sv.cofFrac, f.allocCounts)
-            .task("recomputeDrag", GrowthSystem::recomputeDrag, f.monomerCount, f.segLength, f.end1NbrSlot, f.end2NbrSlot, f.bTransGam, f.bRotGam, f.bTransDiff, f.bRotDiff, grow.dragParams, grow.growCounts)
+            .task("recomputeDrag", GrowthSystem::recomputeDrag, f.monomerCount, f.segLength, f.end1NbrSlot, f.end2NbrSlot, f.bTransGam, f.bRotGam, f.bTransDiff, f.bRotDiff, grow.dragParams, grow.growCounts);
+    }
+
+    /** fdNuc — node nucleation (the ALWAYS-run G1: nucleation draws every step at kNodeNuc·dt, NOT on the biochem
+     *  cadence). Runs AFTER fdTurnFire on fire steps (same turnover→nucleation order as cpuStep) and ALONE on non-fire
+     *  steps. The B1 free-list is rebuilt fresh here (nFreeFlags/nCsrFree/nFreeScatter from filState) ⇒ nucleation is
+     *  self-contained regardless of whether the (skipped) turnover allocator ran this step. */
+    static TaskGraph blkNuc(TaskGraph tg, Scene s) {
+        FilamentStore f = s.fil; NodeNucleationStore nuc = s.nuc; AgingStore ag = s.aging; SeverStore sv = s.sever;
+        NodeStore nd = s.node; RigidRodBody nb = nd.node;
+        return tg
             .task("count", NodeNucleationSystem::countBoundFil, nuc.seedNode, nuc.nodeBoundFil, nuc.nucCounts)
             .task("emit", NodeNucleationSystem::emit, nb.coord, nuc.nodeBoundFil, s.nucAccept, s.nucReqCoord, s.nucReqUVec, s.nucReqYVec, nuc.nucParams, nuc.nucCounts)
             .task("nFreeFlags", FilamentBirthSystem::freeFlags, f.filState, f.freeCount, f.allocCounts)
@@ -1519,12 +1542,14 @@ public final class FullSystemDemoHarness {
         int nM2 = mot2.nMotors, nMB2 = b2.n, nD2 = dim2.nDimers, nBb = bb.n, nA = nd.nAttach, cap = s.viewCap, totalCells = s.totalCells;
         int numScan = (totalCells + SpatialGrid.GRID_SCAN_CHUNK - 1) / SpatialGrid.GRID_SCAN_CHUNK;
         sched = new GridScheduler();
-        // G0 fdTurn — turnover/nucleation (all C-sized except count/emit and the single-thread CSR scans)
+        // G0 fdTurnFire — turnover (fire-gated; all C-sized except the single-thread CSR scans)
         for (String t : new String[]{ "age","depoly","applyDeath","grow","growthAtp","cofAcc","cofDis","severDeath","markSplits",
-                "gFreeFlags","gFreeScatter","gAllocate","splitWire","splitInherit","splitCof","recomputeDrag",
-                "nFreeFlags","nFreeScatter","nAllocate","tagSeeds","initNewborn","nucFresh","nucCof" }) addW("fdTurn." + t, pad(C));
-        addW("fdTurn.count", pad(1)); addW("fdTurn.emit", pad(nN));
-        for (String t : new String[]{ "csrReturn","csrGrew","csrSever","gCsrFree","gCsrRank","nCsrFree","nCsrRank" }) addS("fdTurn." + t);
+                "gFreeFlags","gFreeScatter","gAllocate","splitWire","splitInherit","splitCof","recomputeDrag" }) addW("fdTurnFire." + t, pad(C));
+        for (String t : new String[]{ "csrReturn","csrGrew","csrSever","gCsrFree","gCsrRank" }) addS("fdTurnFire." + t);
+        // G1 fdNuc — node nucleation (always-run; C-sized except count/emit and the single-thread CSR scans)
+        for (String t : new String[]{ "nFreeFlags","nFreeScatter","nAllocate","tagSeeds","initNewborn","nucFresh","nucCof" }) addW("fdNuc." + t, pad(C));
+        addW("fdNuc.count", pad(1)); addW("fdNuc.emit", pad(nN));
+        for (String t : new String[]{ "nCsrFree","nCsrRank" }) addS("fdNuc." + t);
         // G1 fdBind
         for (String t : new String[]{ "publishHead","reach","release","bind","cycle" }) addW("fdBind." + t, pad(nM));
         for (String t : new String[]{ "publishHead2","gridReach","release2","bind2","cycle2","motPublish" }) addW("fdBind." + t, pad(nM2));
@@ -1568,16 +1593,24 @@ public final class FullSystemDemoHarness {
         d.setCounts(t, SEED, fires); ag.setFires(fires); sv.setFires(fires);
         nuc.setCounts(t, SEED);
         nuc.nucCounts.set(3, grow.pool.available(Constants.actinSeed) ? 1 : 0);
+        // CADENCE GATE: fdTurnFire (G0) launches its 32→21 turnover kernels ONLY on fire steps (turnover no-ops
+        // off-cadence; skipping the dispatch is physically equivalent — it writes nothing fdNuc/downstream read on a
+        // non-fire step). fdNuc (G1) + binding/structure/force/integrate run every step. ~106→~74 launches off-cadence.
         for (int gi = 0; gi < N_SPLIT; gi++) {
+            if (gi == 0 && !fires) continue;            // skip the turnover graph on non-fire steps
             TornadoExecutionResult r = plan.withGraph(gi).withGridScheduler(sched).execute();
-            if (gi == 0) {
-                r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets, g.nucRankOffsets, f.freeOffsets);
-                splitRes0 = r;
-            } else if (gi == 1) splitRes1 = r;
+            if (gi == 0)      { r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets); splitResTurn = r; }
+            else if (gi == 1) { r.transferToHost(g.nucRankOffsets, f.freeOffsets); splitResNuc = r; }
+            else if (gi == 2) splitResBind = r;
             if (gi == N_SPLIT - 1) splitResL = r;
         }
-        grow.pool.put(d.returnedOffsets.get(f.n) + sv.severReturnedOffsets.get(f.n));
-        grow.pool.take(grow.grewOffsets.get(f.n));
+        // turnover pool bookkeeping: ONLY on fire steps (on non-fire steps the device did no depoly/sever/grow ⇒ those
+        // offsets would be 0; the host arrays hold stale fire-step values, so the add must be skipped, not zeroed).
+        if (fires) {
+            grow.pool.put(d.returnedOffsets.get(f.n) + sv.severReturnedOffsets.get(f.n));
+            grow.pool.take(grow.grewOffsets.get(f.n));
+        }
+        // nucleation pool bookkeeping: every step (fdNuc always runs).
         int nucBirths = Math.min(g.nucRankOffsets.get(f.n), f.freeOffsets.get(f.n));
         if (nucBirths > 0) grow.pool.take(nucBirths * Constants.actinSeed);
         g.lastNucBirths = nucBirths;
@@ -1588,8 +1621,10 @@ public final class FullSystemDemoHarness {
     static void pullRenderState(Scene g) {
         MotorStore mot = g.mot, mot2 = g.mot2; NodeStore nd = g.node; MiniFilamentStore mini = g.mini; FilamentStore f = g.fil;
         AgingStore ag = g.aging; SeverStore sv = g.sever; RigidRodBody b = mot.body, nb = nd.node, b2 = mot2.body, bb = mini.backbone;
-        if (splitRes0 != null) splitRes0.transferToHost(f.filState, f.monomerCount, f.segLength, ag.nucFrac, sv.cofFrac);
-        if (splitRes1 != null) splitRes1.transferToHost(mot.boundSeg, mot2.boundSeg, mot.nucleotideState, mot2.nucleotideState);
+        // render state from the ALWAYS-run graphs: filament state from fdNuc (current after births), binding from
+        // fdBind, derived geometry from the last graph. (NOT fdTurnFire — skipped on non-fire check steps.)
+        if (splitResNuc != null) splitResNuc.transferToHost(f.filState, f.monomerCount, f.segLength, ag.nucFrac, sv.cofFrac);
+        if (splitResBind != null) splitResBind.transferToHost(mot.boundSeg, mot2.boundSeg, mot.nucleotideState, mot2.nucleotideState);
         if (splitResL != null) splitResL.transferToHost(nb.coord, f.coord, f.end1, f.end2, b.end1, b.end2, b2.end1, b2.end2, bb.coord, bb.end1, bb.end2);
     }
 
@@ -1688,16 +1723,18 @@ public final class FullSystemDemoHarness {
         nuc.nucCounts.set(3, grow.pool.available(Constants.actinSeed) ? 1 : 0);
         long h1 = System.nanoTime();
         for (int gi = 0; gi < N_SPLIT; gi++) {
+            if (gi == 0 && !fires) continue;            // CADENCE GATE — mirror stepSplit: skip fdTurnFire off-cadence
             long d0 = System.nanoTime();
             TornadoExecutionResult r = plan.withGraph(gi).withGridScheduler(sched).execute();
             long d1 = System.nanoTime();
-            if (gi == 0) { r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets, g.nucRankOffsets, f.freeOffsets); splitRes0 = r; }
-            else if (gi == 1) splitRes1 = r;
+            if (gi == 0)      { r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets); splitResTurn = r; }
+            else if (gi == 1) { r.transferToHost(g.nucRankOffsets, f.freeOffsets); splitResNuc = r; }
+            else if (gi == 2) splitResBind = r;
             if (gi == N_SPLIT - 1) splitResL = r;
             long d2 = System.nanoTime();
             if (a != null) {
                 a.gWall[gi] += d1 - d0;
-                a.hostPull += d2 - d1;                 // the UNDER_DEMAND pool-ledger pull after G0 (5 IntArrays); 0 elsewhere
+                a.hostPull += d2 - d1;                 // the UNDER_DEMAND pool-ledger pull after G0/G1; ~0 elsewhere
                 if (!noprof) {
                     TornadoProfilerResult pr = r.getProfilerResult();   // read OUTSIDE the timed regions (measurement overhead, unattributed)
                     a.gKern[gi] += pr.getDeviceKernelTime();
@@ -1710,8 +1747,10 @@ public final class FullSystemDemoHarness {
         }
         if (!noprof) plan.clearProfiles();   // bound the per-execution profiler-result accumulation on the Java heap (else OOM over 10^5 steps)
         long h2 = System.nanoTime();
-        grow.pool.put(d.returnedOffsets.get(f.n) + sv.severReturnedOffsets.get(f.n));
-        grow.pool.take(grow.grewOffsets.get(f.n));
+        if (fires) {
+            grow.pool.put(d.returnedOffsets.get(f.n) + sv.severReturnedOffsets.get(f.n));
+            grow.pool.take(grow.grewOffsets.get(f.n));
+        }
         int nucBirths = Math.min(g.nucRankOffsets.get(f.n), f.freeOffsets.get(f.n));
         if (nucBirths > 0) grow.pool.take(nucBirths * Constants.actinSeed);
         g.lastNucBirths = nucBirths;
@@ -1719,7 +1758,7 @@ public final class FullSystemDemoHarness {
         if (a != null) a.hostBkkp += (h1 - h0) + (h3 - h2);
     }
 
-    static final String[] GNAME = { "fdTurn", "fdBind", "fdStruct", "fdFil", "fdInteg" };
+    static final String[] GNAME = { "fdTurnFire", "fdNuc", "fdBind", "fdStruct", "fdFil", "fdInteg" };
 
     static void profileRun(Scene s, double dt) {
         System.out.printf("%n=== PROFILE (MEASUREMENT-ONLY) — per-step time + transfer budget across %d chained TaskGraphs ===%n", N_SPLIT);
@@ -1782,7 +1821,7 @@ public final class FullSystemDemoHarness {
         System.out.println("\n  ---- per-step BUDGET (ms and % of the composed step) ----");
         System.out.printf("  composed step wall (Σ exec-wall + host) ......... %7.3f ms  (raw measured loop %.3f ms/step ⇒ %.0f steps/s)%n", pStepWall, 1000.0/rawSps, rawSps);
         System.out.printf("  1. GPU kernel-compute (Σ devKernelTime) ......... %7.3f ms  (%4.1f%%)%n", pKern, 100*pKern/pStepWall);
-        System.out.printf("  2. per-graph dispatch wall (Σ exec-wall) ........ %7.3f ms  (%4.1f%%)   [5 execute() calls]%n", pGWall, 100*pGWall/pStepWall);
+        System.out.printf("  2. per-graph dispatch wall (Σ exec-wall) ........ %7.3f ms  (%4.1f%%)   [%d execute() calls/fire-step]%n", pGWall, 100*pGWall/pStepWall, nG);
         System.out.printf("       of which kernel-dispatch (launch) .......... %7.3f ms  (%4.1f%%)%n", pDisp, 100*pDisp/pStepWall);
         System.out.printf("       of which data-transfer time ................ %7.3f ms  (%4.1f%%)%n", pXfer, 100*pXfer/pStepWall);
         System.out.printf("       of which SYNC/GPU-idle gap ................. %7.3f ms  (%4.1f%%)%n", pIdle, 100*pIdle/pStepWall);
@@ -1794,8 +1833,9 @@ public final class FullSystemDemoHarness {
         if (noprof) {
             System.out.println("\n  ---- REGIME VERDICT ----");
             System.out.printf("  (profiler OFF — kernel/transfer not measured; per-graph wall + steps/s only, production-faithful)%n");
-            System.out.printf("  composed step %.3f ms ⇒ %.0f steps/s; per-graph wall ms/step: fdTurn=%.2f fdBind=%.2f fdStruct=%.2f fdFil=%.2f fdInteg=%.2f%n",
-                    pStepWall, M/measSecs, a.gWall[0]/NS/M, a.gWall[1]/NS/M, a.gWall[2]/NS/M, a.gWall[3]/NS/M, a.gWall[4]/NS/M);
+            StringBuilder pgw = new StringBuilder();
+            for (int gi = 0; gi < nG; gi++) pgw.append(String.format("%s=%.2f ", GNAME[gi], a.gWall[gi]/NS/M));
+            System.out.printf("  composed step %.3f ms ⇒ %.0f steps/s; per-graph wall ms/step: %s%n", pStepWall, M/measSecs, pgw.toString());
             return;
         }
         // ---- regime verdict ----
