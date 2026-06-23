@@ -2,6 +2,36 @@
 
 Last updated: 2026-06-23
 
+## 2026-06-23 — Decay-creep root-caused & deferred; filID→GPU next
+
+**Creep root cause (DECAY_RESET_FINDINGS).** Split-path per-execute() throughput creep is plan-level
+TornadoVM-internal state: a full TornadoExecutionPlan rebuild flushes it cleanly (state-preserving, VRAM-bounded,
+cheap); resetDevice() does NOT (accumulation sits below the streams/events/code-cache it clears). Confirms
+PROFILE §4b hyp. B. Not a SoftBox bug.
+
+**No in-toolchain production mitigation.** Repeated plan close()+rebuild crashes reproducibly with CUDA 700
+(cuModuleLoadDataEx) after ~3 rebuilds — a periodic reset would trade graceful slowdown for a hard crash. Stage B
+skipped.
+
+**Decision: DEFER — a documented run-LENGTH ceiling, not a wall.** Linear ~0.1 µs/step, no plateau to 370k steps.
+≤~100k steps (≤1 s sim) barely taxed; multi-second single device runs degrade (~660k→~15 steps/s, 1M→~10,
+3M→~3). CPU path unaffected (stable) — fallback for one-off long device runs. Creep scales with task COUNT not
+head count → density doesn't worsen it and shrinks its relative bite. Ring science unblocked: the periodic-axis
+sweep is many medium (≤100k-step) runs, each a fresh process where the creep resets at startup.
+
+**Eventual cure (when a single multi-second device run is needed):** withCUDAGraph() probe (highest upside — may
+sidestep both the launch floor and the per-execute path), fuse-fdNuc fallback, upstream TornadoVM fix the free
+long shot. Upstream issue drafted (TORNADOVM_ISSUE_decay_and_rebuild.md) for filing.
+
+**Julia note (platform data point, NOT a now-trigger).** The creep is TornadoVM-runtime-specific (per-plan/
+ExecutionPlan bookkeeping). A CUDA.jl / KernelAbstractions.jl port has no ExecutionPlan to accumulate in (kernels
+launch directly against persistent device arrays) and far lower per-launch overhead (~µs vs ~115 µs) → would
+likely dissolve the creep and ease the launch floor. A real argument for Julia as an eventual platform; a port is
+a second rewrite + full oracle re-validation, so logged for that future decision, not acted on now.
+
+**Next:** filID→GPU (live crosslinker bundling on the device path, closing the §5.1 gap), then the density retest
+(where the launch floor / dense-benchmark speedup crossover actually lands at scale).
+
 ## 2026-06-23 — PROBE: does a periodic ExecutionPlan reset flush the chained-split per-execute() creep? (MEASUREMENT-FIRST)
 Branch `cadence-gate-fdturn`. Report: `DECAY_RESET_FINDINGS.md`. Additive `-planreset N -planresetmode device|rebuild`
 probe in `profileRun`/`planReset` (default OFF ⇒ production byte-unchanged; default `-gpu` re-verified CPU≡GPU AGREE,
