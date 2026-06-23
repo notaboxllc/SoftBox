@@ -2,6 +2,23 @@
 
 Last updated: 2026-06-23
 
+## 2026-06-23 — filID→GPU Part 1a: device-agnostic pointer-doubling filID (GATE 1 PASS); pipeline wiring scoped
+Branch `cadence-gate-fdturn`. Report: `TASKGRAPH_SPLIT_FINDINGS.md` §9. Closes the §5.1 crosslinker gap's
+*algorithmic* blocker. **Stage-0 recon: CASE (a) but a PURE CHAIN** — host `computeFilID` walks `end2NbrSlot` to the
+chain terminal (a connected-components label, recomputed each formation cadence as grow/split/sever/death/nucleation
+mutate the chain), but the actin backbone is linear+acyclic (no branching) ⇒ the case-(a)-chains **pointer-jump**
+path, not general CC/union-find, not a thread-through. New `FilIDSystem` (init + ceil(log2 n)-rounded-even ping-pong
+`jump` rounds; race-free, no atomics/KernelContext) computes the same terminal label, **device-agnostic** (identical
+kernels on the GPU graph and `-cpu`); `computeFilID` now drives it on both runners. **GATE 1 PASS: FilIDSystem ≡
+reference chain-walk, VALUE-identical every formation step over 400 checks** (15k+25k turnover-active steps, real
+7-segment chains + depoly churn; worst value/partition mismatch 0; `-filidcheck`). Split/sever correctness is
+structural (depends only on the current linear chain, not how it formed). `-cpu` value-unchanged (crosslinks still
+form, conservation EXACT). **Part 1b (the §5.1 payoff — wiring the whole crosslinker pipeline into the device
+residency plan: a cadence-gated `fdXForm` formation graph reading device filID + every-step force into `blkFil`,
+~60 buffers/~47 tasks) is SCOPED turnkey in §9.2**, deferred to its own commit to keep it behind the device-validation
+gates rather than rush it unvalidated. New: `FilIDSystem.java`; `+filIDScratch`/`filIDRounds`/`-filidcheck`.
+`BoA-v1ref` byte-clean; constituents/monolith untouched.
+
 ## 2026-06-23 — Decay-creep root-caused & deferred; filID→GPU next
 
 **Creep root cause (DECAY_RESET_FINDINGS).** Split-path per-execute() throughput creep is plan-level

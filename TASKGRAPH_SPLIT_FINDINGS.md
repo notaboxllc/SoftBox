@@ -258,5 +258,77 @@ fusing fdNuc's tasks / host-side CSR scans / `withCUDAGraph()` — is out of thi
 `blkTurnFire`), `buildSplitScheduler` (fdTurnFire/fdNuc re-key), `stepSplit` + `profStep` (the `if(gi==0&&!fires)
 continue` gate + `if(fires)` pool-bookkeeping), `pullRenderState`, `profileRun`/`GNAME` (6-graph), `N_SPLIT`=6.
 `BoA-v1ref` byte-clean; production CPU path + constituent harnesses untouched.
+
+## §9. ADDENDUM — filID on the GPU (live crosslinker bundling on the device path) — Part 1a DONE; wiring scoped
+
+**Date:** 2026-06-23. **Branch:** `cadence-gate-fdturn`. Closes the §5.1 gap's *algorithmic* blocker.
+
+### §9.0 — Stage-0 recon verdict: CASE (a), but a PURE CHAIN ⇒ pointer-jump (not general CC, not a thread-through)
+- **What filID is:** the host `FullSystemDemoHarness.computeFilID` walked each segment down `end2NbrSlot` to the
+  chain **terminal**, whose slot index is the filament's label (FREE slots → `-seg-2`). It is **CASE (a)** — a
+  connected-components label *derived* from the backbone-link graph, **not** an owner-id maintained at allocation
+  (the terminal moves as grow/split/sever/death/nucleation mutate the chain ⇒ it is recomputed each formation
+  cadence). But the actin backbone is a **pure chain** (each segment ≤1 `end2` neighbour, no branching —
+  crosslinks do NOT define filament identity), so it is the recon's **case-(a)-chains → pointer-jump-to-head**
+  path, NOT general label-propagation / union-find.
+- **What formation needs:** the predicate is `filID[i] != filID[j]` (same-filament **exclusion**; distinct labels
+  ⇒ bundling-eligible). A value-identical terminal label carries exactly this.
+- **Ordering/cadence:** `XL_CHECK_INT = 100 == biochemCheckInt` (formation fires on the same cadence as
+  `fdTurnFire`). filID must be current AFTER `fdTurnFire` (split/death/sever, fire cadence) AND `fdNuc`
+  (nucleation, every step — births a fresh 1-segment chain) and BEFORE formation reads it. So the filID compute
+  + formation slot **after `fdNuc`**, on the formation cadence. No reorder of existing physics — it inserts.
+
+### §9.1 — Part 1a (DONE): `FilIDSystem` — the device-agnostic pointer-doubling filID
+`softbox/FilIDSystem.java`: `init` (each segment → its immediate `end2` successor, or self at the terminal; FREE →
+`-seg-2`) + `ceil(log2 n)`-rounded-to-even `jump` rounds (`ptrOut[seg] = ptrIn[ptrIn[seg]]`, ping-pong over two
+buffers). Race-free, **no atomics / no KernelContext** ⇒ runs identically on the GPU TaskGraph and the `-cpu`
+runner (the one-physics rule). `computeFilID` now drives it on both runners (host loop over the same kernels;
+the device wiring unrolls the same `init`+`jump` tasks). Converges because the chain is linear+acyclic
+(inc-6c/7 invariant) — pointer-doubling reaches the unique terminal in `ceil(log2 L)` rounds; over-iterating is
+idempotent (terminals self-loop).
+
+**GATE 1 PASS — FilIDSystem ≡ reference chain-walk, VALUE-identical, every formation step** over 400 checks across
+two turnover-active runs (15k + 25k steps; the warm filaments are real 7-segment chains ⇒ pointer-doubling is
+exercised, + depoly membership churn): worst value mismatch **0**, worst partition mismatch **0**. (Run via
+`./run_fulldemo.sh -filidcheck`.) Note: in the default config splits (need ~6k steps to a 64-monomer filament)
+and births (formins pre-filled by the warm chains) were rare; correctness for split/sever-created chains is
+**structural** — pointer-doubling depends only on the *current* linear `end2NbrSlot` graph, not on how a chain
+formed — and is re-confirmed device==host by the (scoped) formation CPU≡GPU gate below.
+
+### §9.2 — Part 1b (SCOPED, turnkey): wire the crosslinker pipeline into the device residency plan
+The §5.1 payoff (live bundling/contraction on the device run) needs the **whole** crosslinker pipeline on the
+device graph — it is currently CPU-only (`cpuStep` lines 673–746; absent from `buildPlanSplit`). This is a large
+but mechanical wiring (the kernels are already device-validated — XlinkFormation GATE-B / DenseContractile,
+bit-identical CPU↔GPU — and lower on PTX). Deferred to its own commit to keep it behind the project's
+device-validation gates rather than rush ~60 buffers / ~47 tasks unvalidated. The exact plan:
+
+- **New cadence-gated graph `fdXForm` (insert as G2, after `fdNuc`; `N_SPLIT` 6→7):** filID (`init` + 12 `jump`)
+  then the formation pipeline (`countActiveLinks` · FormationGrid build = `publishToBodyView`+8 `SpatialGrid`
+  kernels · `gridFormCount`/`gridFormScan`/`gridFormEmit` · `formGates` · `formAdmitReduce` · `formAdmit` ·
+  `freeFlags`/`csrScan`/`freeScatter`/`csrScan`/`allocate`/`placeOrient`) — ~35 tasks. **Cadence-gate its
+  `execute()`** exactly like `fdTurnFire` (`if (gi==2 && t%XL_CHECK_INT!=0) continue;` — proven safe across a
+  skipped producer, §8.1). Slots after `fdNuc` so the chain graph is current.
+- **Append the every-step crosslinker FORCE to `blkFil`:** `unbind` · `countActiveLinks` · `linkForces` ·
+  `linkTorsion` · the 2-pass seg-gather (`csrHistogram`/`csrScan`/`csrScatter`/`segGatherA`, then B) — ~12 tasks
+  into `f.forceSum` before `fdInteg`, matching `cpuStep`'s force-phase order (after the motor seg-gathers).
+- **Residency:** add the CrosslinkerStore arrays (~33) + FormationGrid grid buffers (~16, its OWN grid — distinct
+  cell size, can't reuse the binding grid) + `s.filID`/`filIDScratch` + `s.segCountA/B`,`segOffsetsA/B`,`segIdxA/B`
+  to `firstExec`; first-use them in `fdXForm`'s U set (the loop auto-consumes/persists them forward). ~60 buffers.
+- **Scheduler:** `fdXForm.<task>` keys — `localWork=64` (`addW`) for the RNG/trig kernels (`gridFormEmit`,
+  `formGates`, `formAdmit`, the `filID` jumps) + the FormationGrid grid kernels keyed to *its* dims
+  (`pad(cap)`/`pad(numBodyChunks)`/`pad(totalCells)` from the FormationGrid, NOT the binding grid); single-thread
+  (`addS`) for the CSR scans. Mirror the `fdBind` grid keys with FormationGrid's dimensions.
+- **`stepSplit`:** host `xl.setCounts`/`xl.setFormStep` each step; execute `fdXForm` only on the formation
+  cadence; no host pull added (crosslink state stays device-resident; render pulls `linkState`/`linkFilA/B`/`loc`
+  from a result if the viewer needs crosslinks).
+- **Launch-delta (note vs the §8 ceiling):** +~12 every-step tasks (~74→~86 off-cadence) and +~35 on the formation
+  cadence (1/100 steps) — acceptable for functional completeness; the force tasks are the every-step cost.
+
+**Gates to run once wired:** (2) formation CPU≡GPU bit-exact (extend XlinkFormation GATE-B to
+`formation-with-device-filID == host`), (3) the maximal device run shows crosslink-count + contraction tracking
+the CPU hunt (the §5.1/§6 morphology gap closed), (4) conservation/phantoms/escapes/NaN, (5) `-cpu` unchanged +
+`BoA-v1ref` byte-clean, (6) throughput delta. Files (Part 1a): `softbox/FilIDSystem.java` (new);
+`FullSystemDemoHarness.computeFilID` (now drives FilIDSystem), `+filIDScratch`/`filIDRounds`, `-filidcheck` gate.
+`BoA-v1ref` byte-clean; CPU path value-unchanged (filID value-identical ⇒ identical formation).
 </content>
 </invoke>
