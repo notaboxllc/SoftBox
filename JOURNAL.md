@@ -2,6 +2,29 @@
 
 Last updated: 2026-06-23
 
+## 2026-06-23 — CADENCE-GATE the fdTurn graph (the PROFILE §5.1 launch-floor + §4 decay lever).
+Branch `cadence-gate-fdturn` (off `profile-fulldemo`; production `stepSplit` byte-identical to `xlink-formation-on`,
+branched here to reuse the profiler for the decay re-measure). Report: `TASKGRAPH_SPLIT_FINDINGS.md` §8. **Part 1
+(CLAUDE.md):** two durable device-path rules — the ~8000-launch/s kernel-COUNT ceiling (steps/s ≈ 8000/kernels-per-step
+⇒ minimize kernels-per-step) + the chained-split per-`execute()` creep (cadence-gate graphs that don't fire every step;
+`clearProfiles()` for the SILENT-profiler OOM). **Part 2 (cadence gate):** **Stage-0 recon = CASE 1** — `fdTurn`'s 32
+tasks have MIXED cadence: turnover (21 tasks) fires every 100 steps (biochemCheckInt, `*Counts[fires]`-gated, writes
+only zeros off-cadence), but **node nucleation (11 tasks) draws EVERY step** at `kNodeNuc·dt` (cpuStep + device both
+unconditional) ⇒ a whole-graph fire-gate would 100×-undercount nucleation. So `fdTurn` SPLIT → **fdTurnFire** (turnover,
+fire-gated, the FIRST_EXECUTION uploader, skipped 99/100 steps) + **fdNuc** (nucleation, always-run); 6 chained graphs,
+turnover→nucleation order preserved (no reorder ⇒ bit-exact). **Stage-0 case 2 RESOLVED:** `consumeFromDevice` SURVIVES
+a skipped producer (the GPU split ran 1500 steps past 99 non-fire steps, no NPE, conservation EXACT) — consume is a
+residency lookup, no upload relocation needed; render pulls re-homed to the always-run fdNuc/fdBind/fdInteg, turnover
+pool-bookkeeping `if(fires)`-gated. **Validation (all GREEN):** the decisive A/B — gated-GPU ≡ ungated-GPU
+**bit-identical** (proves the skip changes no device state; the CPU≡GPU minifil-bound 40/26 spread @ 400 steps is
+PRE-EXISTING chaos — the baseline shows it too — and equilibrates to 58=58 @ 1500); CPU≡GPU @ 1500 AGREE EXACTLY
+(active 672, node-bound 14, minifil-bound 58); conservation EXACT, phantoms 0, escapes 0, NaN none; **default scene
+83→101 steps/s (+22 %), fdTurn 4.14→fdTurnFire 0.031 ms/step**, residency 3.1 KB/step intact; `-cpu`/constituents/
+monolith untouched, `BoA-v1ref` byte-clean. **Decay (honest):** fdTurnFire FLAT 0.03 ms (throttled ~100×) but the
+per-execute creep **RE-HOMED to fdNuc** at ~0.105 µs/step (vs §4 baseline ~0.16 on fdTurn) — reduced ~35 % (the
+11-vs-32 task ratio, §4b-B) but NOT eliminated; it's a property of the first always-run persisting graph, not turnover.
+Open follow-up (out of scope): fuse fdNuc / host-side CSR scans / `withCUDAGraph()`.
+
 ## 2026-06-23 — PROFILE (MEASUREMENT-ONLY) — where each step of the maximal-composition device path goes.
 Report: `PROFILE_FULLDEMO_FINDINGS.md`. Branch `profile-fulldemo` (instrumentation only, off `xlink-formation-on`
 @ 371c300; production `stepSplit`/`overnightRun`/`gpuScaleCheck`/`-cpu` byte-unaffected; `BoA-v1ref` byte-clean).

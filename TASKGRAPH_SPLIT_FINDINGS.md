@@ -176,5 +176,87 @@ task methods+order from the monolith), `buildSplitScheduler` (re-keyed WorkerGri
 `overnightRun`, `vramMB`; `gpuScaleCheck` re-routed to the split; new args `-gpusteps` / `-overnight` / `-overnightviz`.
 The monolithic `buildPlan` / `stepHostBookkeeping` are retained (unused) as the documented Graph-resize reference.
 `CLAUDE.md` gained the CPU-fallback disclosure rule. `BoA-v1ref` byte-clean; constituent harnesses + viewer untouched.
+
+## §8. ADDENDUM — cadence-gating the turnover graph (the §5.1 / PROFILE §4 lever) — DONE (2026-06-23)
+
+**Date:** 2026-06-23. **Branch:** `cadence-gate-fdturn` (off `profile-fulldemo`, which is `xlink-formation-on` +
+the measurement-only profiler; production `stepSplit` byte-identical between them — branched here so the Stage-2
+decay re-measure can use the profiler). **Goal (PROFILE §5.1):** the turnover graph launches its kernels EVERY
+step but turnover only *fires* on the biochem cadence; skip its `execute()` on non-fire steps to cut the launch
+floor AND throttle the §4 per-execute creep ~100×.
+
+### §8.0 — Stage 0 recon: cadence audit ⇒ **CASE 1 (mixed cadence ⇒ graph SPLIT required)**
+`fdTurn`'s 32 tasks do NOT share one cadence. Every turnover kernel (`age`/`depoly`/`applyDeath`/`grow`/`sever`/
+`markSplits`/`recomputeDrag` + the split allocator) gates internally on `fires` (`*Counts[fires]`,
+`firesAt(t)=t%biochemCheckInt==0`, biochemCheckInt=round(biochemDeltaT/dt)=1e-3/1e-5=**100**) and writes only
+zeros off-cadence. **But node nucleation (`count`/`emit` + the B1 allocator path, 11 tasks) runs EVERY step** —
+`emit` draws at `pNuc=kNodeNuc·dt` (a per-STEP probability, the wang-hash salted by `step`), unconditionally in
+BOTH `cpuStep` (the oracle, lines 627-639) and the device graph. So a whole-graph fire-gate would 100×-undercount
+nucleation — **not physically equivalent.** Per the task's Stage-0 case-1 rule, `fdTurn` is SPLIT into a
+fire-gated turnover graph + an always-run nucleation graph.
+
+**Equivalence proof (why skipping turnover off-cadence writes nothing nucleation/downstream read):** on a non-fire
+step the turnover no-op kernels zero their scratch *every* step then `continue` (e.g. `depolyProxy` sets
+`returnedMon=deathFlag=0` for every slot before the `if(fires==0) continue`) ⇒ they leave `filState`/`coord`/
+`monomerCount`/`seedNode` UNCHANGED and write only zeros to scratch (`grewFlag`/`deathFlag`/`acceptFlag`/…) that
+ONLY turnover tasks read. Nucleation rebuilds its OWN free-list from `filState` (`nFreeFlags`/`nCsrFree`/
+`nFreeScatter`) ⇒ it is self-contained regardless of whether the (skipped) turnover allocator ran. The
+turnover→nucleation ORDER is preserved (no reorder ⇒ no slot-assignment change ⇒ bit-exact on the validation
+horizon, where no filament reaches the 64-monomer split before ~6100 steps anyway).
+
+### §8.1 — Stage 0 case 2: **residency SURVIVES a skipped producer** (the load-bearing unknown — RESOLVED)
+`fdNuc` (G1) `consumeFromDevice("fdTurnFire", …)` the shared SoA that `fdTurnFire` (G0) uploads FIRST_EXECUTION at
+step 0 (a fire step). On the 99/100 non-fire steps `fdTurnFire` is SKIPPED — yet the consume works: **the GPU split
+ran 1500 steps (past the first 99 non-fire steps) with no NPE/crash, conservation EXACT, phantoms 0.** So
+`consumeFromDevice` is a residency LOOKUP (the buffer is device-resident from the prior persist), NOT a "the named
+producer must have executed THIS invocation" dependency. **No upload relocation needed; no residency-mechanism
+rework.** (Render-state pulls were moved off `fdTurnFire` onto the always-run `fdNuc`/`fdBind`/`fdInteg` results so
+a non-fire check step never reads a skipped graph; turnover pool-ledger offsets are pulled inline from
+`fdTurnFire` ONLY on fire steps, and the host pool put/take is `if(fires)`-gated.)
+
+### §8.2 — revised partition map (6 chained graphs; `fdTurn` → `fdTurnFire` + `fdNuc`)
+| # | graph | tasks | cadence | content |
+|---|---|---:|---|---|
+| 0 | `fdTurnFire` | 21 | **fire-step only** (skipped 99/100) | age·depoly·death·grow·sever·split·B1-split-allocator·recomputeDrag — the UPLOADER (FIRST_EXECUTION at step 0) |
+| 1 | `fdNuc` | 11 | **every step** | node count·emit·B1-nuc-allocator·tagSeeds·initNewborn·nucFresh·nucCof |
+| 2 | `fdBind` | 20 | every step | (unchanged) |
+| 3 | `fdStruct` | 28 | every step | (unchanged) |
+| 4 | `fdFil` | 13 | every step | (unchanged) |
+| 5 | `fdInteg` | 13 | every step | (unchanged) |
+
+Per step: fire ⇒ execute {0,1,2,3,4,5} (106 launches, == the old monolith order); non-fire ⇒ execute {1,2,3,4,5}
+(**74 launches** — the 21 turnover kernels skipped). `GridScheduler` re-keyed `fdTurnFire.<task>` / `fdNuc.<task>`.
+
+### §8.3 — validation (all gates GREEN)
+| gate | result |
+|---|---|
+| **skip is physically equivalent** (the decisive A/B) | gated-GPU ≡ ungated-GPU **bit-identical** on the deterministic device (active 672, node-bound 7, minifil-bound 40, conc 0.2483 — identical @ 400 steps); proves the off-cadence skip changes no device state |
+| **#1 CPU≡GPU @ 1500 steps** | **AGREE EXACTLY** — active 672=672, node-bound 14=14, minifil-bound 58=58, conc 0.2480; (the chaotic minifil count decorrelates transiently — GPU 40 / CPU 26 @ 400 steps — but this is PRE-EXISTING: the ungated baseline shows the identical 40/26 split, §8.1 A/B, the §8 chaotic-many-body standard) |
+| **#2 hard invariants** | conservation EXACT, phantoms 0, wall-escapes 0, NaN none (@ 400 and 1500 steps) |
+| **#4 steps/s (default scene)** | **83 → 101 steps/s** (+22%; composed step 12.07 → 9.90 ms). **fdTurn 4.14 ms/step → fdTurnFire 0.031 ms/step** (the turnover launch storm amortized over the 100-step cadence); fdNuc (always-run) 1.65 ms/step. GPU went 1.0× → 1.2× the CPU runner |
+| **#5 residency intact** | per-step copyIn ~3.1 KB (fdBind 0.79 + fdStruct 0.98 + fdFil 0.70 + fdInteg 0.63; fdTurnFire/fdNuc 0 KB) — unchanged, no full-state copy |
+| **#3 decay re-measured** | dense scene, `-noprof`, 30k steps (see slope below): **fdTurnFire FLAT at 0.03 ms/step** (throttled ~100×) — the turnover graph is no longer the decay carrier. BUT the per-execute creep **RE-HOMED to fdNuc** (the new first always-run graph) at **~0.105 µs/step vs the §4 baseline ~0.16 µs/step on fdTurn** — reduced ~35 % (≈ the 11-vs-32 task-count ratio, confirming §4b hypothesis B) but **NOT eliminated**. Absolute steps/s far better: 98→81 over 10–30k vs baseline 67→~50 |
+| **#6 regression** | `-cpu` byte-unaffected (`cpuStep` untouched); only `FullSystemDemoHarness` split path + profiler changed; constituent harnesses + monolith `buildPlan`/`stepHostBookkeeping` untouched; `BoA-v1ref` byte-clean |
+
+**Decay slope (dense, `-noprof`, 30k steps; per-graph ms/step):**
+
+| step | steps/s | fdTurnFire | fdNuc | fdBind | fdStruct | fdFil | fdInteg |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10 100 | 98 | **0.03** | 2.20 | 1.82 | 2.16 | 2.72 | 1.22 |
+| 20 100 | 89 | **0.03** | 3.17 | 1.84 | 2.16 | 2.74 | 1.23 |
+| 30 100 | 81 | **0.03** | 4.31 | 1.86 | 2.18 | 2.75 | 1.24 |
+
+Everything but fdNuc is flat; fdTurnFire (the gated graph) is pinned ~0.03 ms regardless of step count. **Verdict: the
+§4 creep is a per-execution accumulation on the FIRST always-run / full-state-persisting graph in the chain — NOT
+turnover-specific.** Cadence-gating throttles the *gated* graph ~100× and roughly halves the carrier's slope (fewer
+tasks), but the TornadoVM-internal root cause persists on fdNuc and remains the open follow-up (further mitigation —
+fusing fdNuc's tasks / host-side CSR scans / `withCUDAGraph()` — is out of this task's cadence-gate-only scope).
+
+### §8.4 — files
+`softbox/FullSystemDemoHarness.java` (additive, split path + profiler only): `buildPlanSplit` (6 graphs;
+`u0`/`uNuc` first-use split; render pulls re-homed to always-run graphs), new `blkNuc` (split out of renamed
+`blkTurnFire`), `buildSplitScheduler` (fdTurnFire/fdNuc re-key), `stepSplit` + `profStep` (the `if(gi==0&&!fires)
+continue` gate + `if(fires)` pool-bookkeeping), `pullRenderState`, `profileRun`/`GNAME` (6-graph), `N_SPLIT`=6.
+`BoA-v1ref` byte-clean; production CPU path + constituent harnesses untouched.
 </content>
 </invoke>
