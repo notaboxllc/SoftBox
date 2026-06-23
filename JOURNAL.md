@@ -2,6 +2,29 @@
 
 Last updated: 2026-06-23
 
+## 2026-06-23 — PROFILE (MEASUREMENT-ONLY) — where each step of the maximal-composition device path goes.
+Report: `PROFILE_FULLDEMO_FINDINGS.md`. Branch `profile-fulldemo` (instrumentation only, off `xlink-formation-on`
+@ 371c300; production `stepSplit`/`overnightRun`/`gpuScaleCheck`/`-cpu` byte-unaffected; `BoA-v1ref` byte-clean).
+Added a `-profile` path to `FullSystemDemoHarness` (`Acc`/`profStep`/`profileRun`/`nvidiaStat`, `-frozen`/`-noprof`/
+`-profwarm`/`-profsteps`/`-proflog`, `run_profile.sh`) mirroring `stepSplit` EXACTLY + the TornadoVM per-graph
+profiler (`ProfilerMode.SILENT` → devKernel/dispatch/xfer/bytes) + `nanoTime` buckets. **Candidate fixes RECOMMENDED,
+none applied.** **REGIME VERDICT: LAUNCH/OCCUPANCY-BOUND** — of the ~12–15 ms step, **GPU kernel-compute is only
+16–21 %**, **~77–82 % is per-task launch/sync overhead of the ~106 tiny kernels/step**, host <1 %, **transfer 3 KB/step
+(§1 residency CONFIRMED — no hidden full-state copy; nvidia mem-ctrl util ~0 %)**, GPU sm-util ~42 % (idle the
+majority). The most striking line: **`fdTurn` (32 tasks) is ~34 % of the step with ZERO kernel time** = pure dispatch
+(~115–130 µs/launch; ~8000 launches/s ceiling — cross-checked: Ring3x3 58 kernels×143 sps ≈ full 106×75 sps ≈ 8000).
+Stage B: default→dense work +2.5× but step wall only +1.23× (launch overhead is fixed). **Stage C — the 70→19 decay
+is NOT growth-driven broad-phase** (the overnight guess, REFUTED: `fdBind` dead flat): it is a **state-independent
+TornadoVM per-execution accumulation localized to `fdTurn`** (the FROZEN control — turnover off, pool pinned, segs
+flat — decays IDENTICALLY to live, 60k: 14.92 vs 14.85 ms; thermal/VRAM/JVM-GC all measured out — GC 0.24 % of wall,
+pauses bounded). Linear ~0.19 µs/step ⇒ extrapolates to the overnight 70→19. **Found+fixed an instrumentation OOM:**
+`ProfilerMode.SILENT` retains a result/execution → heap OOM @ ~90k steps; fixed with `clearProfiles()` + `-noprof`
+(the production-faithful long-run mode). **Top recommendation (NOT applied): cadence-gate `fdTurn` to the biochem
+fire-step** (it launches 32 kernels every step but turnover fires every 100 steps) — cuts the latency floor AND
+throttles the decay ~100×; then fuse co-indexed kernels, host-side the single-thread CSR scans, try `withCUDAGraph()`.
+Root-causing the specific TornadoVM internal is the recommended follow-up (split-path-specific; single-graph
+DenseContractile is stable, no decay). Logs `RUN_LOGS/2026-06-23_profile_*` (gitignored).
+
 ## 2026-06-23 — TASKGRAPH SPLIT — the maximal composition made device-resident (the §6 Graph-resize blocker, fixed).
 Report: `TASKGRAPH_SPLIT_FINDINGS.md`. Branch `xlink-formation-on`. The FullSystemDemo maximal composition merged
 ~106 tasks into ONE `TaskGraph`, exceeded TornadoVM's single-`TaskGraph` capacity (`Graph resize not implemented`),

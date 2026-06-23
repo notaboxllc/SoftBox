@@ -7,6 +7,8 @@ import uk.ac.manchester.tornado.api.TornadoExecutionResult;
 import uk.ac.manchester.tornado.api.WorkerGrid;
 import uk.ac.manchester.tornado.api.WorkerGrid1D;
 import uk.ac.manchester.tornado.api.enums.DataTransferMode;
+import uk.ac.manchester.tornado.api.enums.ProfilerMode;
+import uk.ac.manchester.tornado.api.TornadoProfilerResult;
 import uk.ac.manchester.tornado.api.types.arrays.FloatArray;
 import uk.ac.manchester.tornado.api.types.arrays.IntArray;
 
@@ -123,6 +125,16 @@ public final class FullSystemDemoHarness {
     static boolean overnight = false;          // -overnight : Stage 2 device-resident milestone + scale-up run
     static String overnightViz = null;         // -overnight render dir (frames dumped from the device-resident run)
 
+    // ---- profiling (MEASUREMENT-ONLY; additive, removable; production path untouched) ----
+    static boolean profile = false;            // -profile : per-step time/transfer budget via the TornadoVM profiler
+    static boolean frozen  = false;            // -frozen  : growth-cap control — freeze turnover (fires=0) + nuc rate 0
+    static int profWarm  = 100;                // -profwarm  : warmup steps (FIRST_EXECUTION uploads + JIT) before measuring
+    static int profSteps = 500;                // -profsteps : measured steps (Stage A: 500; Stage C: large for the decay slope)
+    static int profLogEvery = 2000;            // -proflog   : per-graph snapshot cadence (Stage C decay triangulation)
+    static boolean noprof = false;             // -noprof : profiler OFF (pure per-graph nanoTime, matches production stepSplit;
+                                               //   required for LONG decay runs — ProfilerMode.SILENT accumulates a result/execution
+                                               //   on the Java heap → GC pressure + OOM over ~10^5 steps, contaminating the decay)
+
     static double pForm(double conc, double dtCheck) { return 1.0 - Math.exp(-XLINK_ON_RATE * conc * dtCheck); }
 
     public static void main(String[] args) {
@@ -162,6 +174,12 @@ public final class FullSystemDemoHarness {
                 case "-gpusteps" -> gpuSteps = Integer.parseInt(args[++i]);
                 case "-overnight" -> { overnight = true; gpuScale = true; }
                 case "-overnightviz" -> overnightViz = args[++i];
+                case "-profile" -> { profile = true; gpuScale = true; }
+                case "-frozen" -> frozen = true;
+                case "-profwarm" -> profWarm = Integer.parseInt(args[++i]);
+                case "-profsteps" -> profSteps = Integer.parseInt(args[++i]);
+                case "-proflog" -> profLogEvery = Integer.parseInt(args[++i]);
+                case "-noprof" -> noprof = true;
                 case "-smoke" -> { smoke = true; STEPS = 1500; }
                 case "-3js" -> vizDir = args[++i];
                 default -> {}
@@ -187,6 +205,7 @@ public final class FullSystemDemoHarness {
         System.out.printf("scene built: %d nodes, %d warm filaments (%d active segments), %d minifilaments (%d heads), %d crosslink slots; pool0=%.4f µM, total actin=%.3f µM%n%n",
                 s.nNodes, s.nNodes * FORMINS, activeSegments(s.fil), s.nMini, s.mot2.nMotors, s.xl == null ? 0 : s.xl.nLinks, s.grow.pool.conc(), totalActinUM(s));
 
+        if (profile) { profileRun(s, dt); return; }
         if (overnight) { overnightRun(s, dt); return; }
         if (vizDir != null) { runViz(s, dt); return; }
         run(s, dt);
@@ -1640,6 +1659,172 @@ public final class FullSystemDemoHarness {
         System.out.printf("  SANITY: conservation=%s, phantoms=%d, wall-escapes=%d, NaN=%s ⇒ %s; peak VRAM≈%s%n",
                 conservationCheck(s) ? "EXACT" : "*** FAIL ***", phantomCount(s.fil), wallEscapes(s), anyNaN(s) ? "*** YES ***" : "none",
                 ok ? "CLEAN" : "*** BAILED: " + fail + " ***", vramMB());
+    }
+
+    // ====================================================================== PROFILE — per-step time/transfer budget
+    // MEASUREMENT-ONLY. Mirrors stepSplit EXACTLY (same host bookkeeping, same per-graph execute order, same host
+    // pull) but wraps each section in System.nanoTime() and reads the TornadoVM per-graph profiler result
+    // (getDeviceKernelTime / getKernelDispatchTime / getDataTransfersTime / getTotalBytesCopyIn|Out). No kernel /
+    // force-law / ordering / default edit; the production stepSplit/overnightRun/gpuScaleCheck paths are untouched.
+    /** Per-graph + host timing accumulators (ns / bytes), summed over the measured steps. */
+    static final class Acc {
+        final long[] gWall, gKern, gDisp, gXfer, gIn, gOut;
+        long hostBkkp, hostPull;
+        Acc(int n) { gWall=new long[n]; gKern=new long[n]; gDisp=new long[n]; gXfer=new long[n]; gIn=new long[n]; gOut=new long[n]; }
+    }
+
+    /** One device-resident step, identical to stepSplit, with optional timing into {@code a} (null ⇒ warmup, untimed). */
+    static void profStep(Scene g, int t, double dt, TornadoExecutionPlan plan, Acc a) {
+        MotorStore mot = g.mot, mot2 = g.mot2; NodeStore nd = g.node; MiniFilamentStore mini = g.mini;
+        FilamentStore f = g.fil; NodeNucleationStore nuc = g.nuc; GrowthStore grow = g.grow; DepolyStore d = g.depoly;
+        AgingStore ag = g.aging; SeverStore sv = g.sever;
+        long h0 = System.nanoTime();
+        boolean fires = !frozen && grow.firesAt(t);   // -frozen ⇒ no growth/depoly/aging/sever events (segment count flat)
+        mot.setCounts(t, SEED, f.n); nd.setNodeBodyCounts(t, SEED_NODE); f.setCounts(t, SEED);
+        mot2.setCounts(t, SEED_MINI, f.n); mini.setBackboneCounts(t, SEED_BB);
+        grow.setCounts(t, SEED, fires); grow.refreshRate(fires);
+        d.setCounts(t, SEED, fires); ag.setFires(fires); sv.setFires(fires);
+        nuc.setCounts(t, SEED);
+        nuc.nucCounts.set(3, grow.pool.available(Constants.actinSeed) ? 1 : 0);
+        long h1 = System.nanoTime();
+        for (int gi = 0; gi < N_SPLIT; gi++) {
+            long d0 = System.nanoTime();
+            TornadoExecutionResult r = plan.withGraph(gi).withGridScheduler(sched).execute();
+            long d1 = System.nanoTime();
+            if (gi == 0) { r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets, g.nucRankOffsets, f.freeOffsets); splitRes0 = r; }
+            else if (gi == 1) splitRes1 = r;
+            if (gi == N_SPLIT - 1) splitResL = r;
+            long d2 = System.nanoTime();
+            if (a != null) {
+                a.gWall[gi] += d1 - d0;
+                a.hostPull += d2 - d1;                 // the UNDER_DEMAND pool-ledger pull after G0 (5 IntArrays); 0 elsewhere
+                if (!noprof) {
+                    TornadoProfilerResult pr = r.getProfilerResult();   // read OUTSIDE the timed regions (measurement overhead, unattributed)
+                    a.gKern[gi] += pr.getDeviceKernelTime();
+                    a.gDisp[gi] += pr.getKernelDispatchTime();
+                    a.gXfer[gi] += pr.getDataTransfersTime();
+                    a.gIn[gi]   += pr.getTotalBytesCopyIn();
+                    a.gOut[gi]  += pr.getTotalBytesCopyOut();
+                }
+            }
+        }
+        if (!noprof) plan.clearProfiles();   // bound the per-execution profiler-result accumulation on the Java heap (else OOM over 10^5 steps)
+        long h2 = System.nanoTime();
+        grow.pool.put(d.returnedOffsets.get(f.n) + sv.severReturnedOffsets.get(f.n));
+        grow.pool.take(grow.grewOffsets.get(f.n));
+        int nucBirths = Math.min(g.nucRankOffsets.get(f.n), f.freeOffsets.get(f.n));
+        if (nucBirths > 0) grow.pool.take(nucBirths * Constants.actinSeed);
+        g.lastNucBirths = nucBirths;
+        long h3 = System.nanoTime();
+        if (a != null) a.hostBkkp += (h1 - h0) + (h3 - h2);
+    }
+
+    static final String[] GNAME = { "fdTurn", "fdBind", "fdStruct", "fdFil", "fdInteg" };
+
+    static void profileRun(Scene s, double dt) {
+        System.out.printf("%n=== PROFILE (MEASUREMENT-ONLY) — per-step time + transfer budget across %d chained TaskGraphs ===%n", N_SPLIT);
+        System.out.printf("  scene: %d active segments, %d node-shell heads, %d free-minifil heads; turnover=%s%n",
+                activeSegments(s.fil), s.mot.nMotors, s.mot2.nMotors, frozen ? "FROZEN (growth-cap control: fires=0, nuc rate 0)" : "LIVE");
+        TornadoExecutionPlan plan;
+        try { plan = buildPlanSplit(s); }
+        catch (Throwable e) { System.out.println("  profile plan build FAILED: " + e); e.printStackTrace(); return; }
+        if (!noprof) plan = plan.withProfiler(ProfilerMode.SILENT);
+        else System.out.println("  PROFILER OFF (-noprof): per-graph nanoTime only (matches production stepSplit; no heap accumulation) — devKernel/xfer/bytes will read 0.");
+        if (frozen) s.nuc.nucParams.set(0, 0f);
+
+        int nG = N_SPLIT;
+        System.out.printf("  warmup %d steps (FIRST_EXECUTION uploads + PTX JIT), then measure %d steps; nvidia: %s%n",
+                profWarm, profSteps, nvidiaStat());
+        for (int t = 0; t < profWarm; t++) profStep(s, t, dt, plan, null);
+        pullRenderState(s);
+        System.out.printf("  post-warmup: active=%d, node-bound=%d, minifil-bound=%d, conc=%.4f µM%n",
+                activeSegments(s.fil), boundTotal(s.mot), boundTotal(s.mot2), s.grow.pool.conc());
+
+        Acc a = new Acc(nG);
+        // rolling window for the Stage-C decay slope
+        long[] prevWall = new long[nG]; long prevClock = System.nanoTime(); long winStart = prevClock; int prevTotalSeg = activeSegments(s.fil);
+        long t0 = System.nanoTime();
+        for (int i = 0; i < profSteps; i++) {
+            int t = profWarm + i;
+            profStep(s, t, dt, plan, a);
+            if (profLogEvery > 0 && (i + 1) % profLogEvery == 0) {
+                long now = System.nanoTime();
+                double winSecs = (now - prevClock) / 1e9;
+                double sps = profLogEvery / winSecs;
+                StringBuilder pg = new StringBuilder();
+                for (int gi = 0; gi < nG; gi++) { pg.append(String.format("%s=%.2f ", GNAME[gi], (a.gWall[gi]-prevWall[gi])/1e6/profLogEvery)); prevWall[gi]=a.gWall[gi]; }
+                pullRenderState(s);
+                int seg = activeSegments(s.fil);
+                System.out.printf("  [decay] step %d  %.0f steps/s  per-graph ms/step{ %s}  active=%d (Δ%+d)  conc=%.4f  nvidia=%s%n",
+                        t+1, sps, pg.toString(), seg, seg-prevTotalSeg, s.grow.pool.conc(), nvidiaStat());
+                prevClock = now; prevTotalSeg = seg;
+            }
+        }
+        double measSecs = (System.nanoTime() - t0) / 1e9;
+        int M = profSteps;
+
+        // ---- aggregate (per-step averages) ----
+        long sumKern=0,sumDisp=0,sumXfer=0,sumWall=0,sumIn=0,sumOut=0;
+        for (int gi=0; gi<nG; gi++){ sumKern+=a.gKern[gi]; sumDisp+=a.gDisp[gi]; sumXfer+=a.gXfer[gi]; sumWall+=a.gWall[gi]; sumIn+=a.gIn[gi]; sumOut+=a.gOut[gi]; }
+        double NS=1e6;   // ns→ms divisor per the running total; per-step = /M
+        double pStepWall = (sumWall + a.hostBkkp + a.hostPull) / NS / M;   // composed real step (excl. profiler overhead)
+        double pKern = sumKern/NS/M, pDisp=sumDisp/NS/M, pXfer=sumXfer/NS/M, pGWall=sumWall/NS/M;
+        double pHostB = a.hostBkkp/NS/M, pHostP = a.hostPull/NS/M;
+        double pIdle = pGWall - (pKern + pDisp + pXfer);   // GPU-idle/launch gap inside the dispatch wall
+        double rawSps = M / measSecs;
+
+        System.out.println("\n  ---- per-graph (averaged over " + M + " measured steps) ----");
+        System.out.println("  graph      exec-wall   devKernel  kDispatch  xfer-time   copyIn     copyOut");
+        for (int gi=0; gi<nG; gi++)
+            System.out.printf("  %-9s  %7.3f ms %7.3f ms %7.3f ms %7.3f ms %8.2f KB %8.2f KB%n",
+                GNAME[gi], a.gWall[gi]/NS/M, a.gKern[gi]/NS/M, a.gDisp[gi]/NS/M, a.gXfer[gi]/NS/M, a.gIn[gi]/1024.0/M, a.gOut[gi]/1024.0/M);
+
+        System.out.println("\n  ---- per-step BUDGET (ms and % of the composed step) ----");
+        System.out.printf("  composed step wall (Σ exec-wall + host) ......... %7.3f ms  (raw measured loop %.3f ms/step ⇒ %.0f steps/s)%n", pStepWall, 1000.0/rawSps, rawSps);
+        System.out.printf("  1. GPU kernel-compute (Σ devKernelTime) ......... %7.3f ms  (%4.1f%%)%n", pKern, 100*pKern/pStepWall);
+        System.out.printf("  2. per-graph dispatch wall (Σ exec-wall) ........ %7.3f ms  (%4.1f%%)   [5 execute() calls]%n", pGWall, 100*pGWall/pStepWall);
+        System.out.printf("       of which kernel-dispatch (launch) .......... %7.3f ms  (%4.1f%%)%n", pDisp, 100*pDisp/pStepWall);
+        System.out.printf("       of which data-transfer time ................ %7.3f ms  (%4.1f%%)%n", pXfer, 100*pXfer/pStepWall);
+        System.out.printf("       of which SYNC/GPU-idle gap ................. %7.3f ms  (%4.1f%%)%n", pIdle, 100*pIdle/pStepWall);
+        System.out.printf("  3. host bookkeeping (counts + pool ledger) ...... %7.3f ms  (%4.1f%%)%n", pHostB, 100*pHostB/pStepWall);
+        System.out.printf("  4. host pull (G0 pool-ledger transferToHost) .... %7.3f ms  (%4.1f%%)%n", pHostP, 100*pHostP/pStepWall);
+        System.out.printf("  5. transfer per step: copyIn=%.2f KB  copyOut=%.2f KB  (Σ over the 5 graphs)%n", sumIn/1024.0/M, sumOut/1024.0/M);
+        System.out.printf("  6. GPU utilization (sample): %s%n", nvidiaStat());
+
+        if (noprof) {
+            System.out.println("\n  ---- REGIME VERDICT ----");
+            System.out.printf("  (profiler OFF — kernel/transfer not measured; per-graph wall + steps/s only, production-faithful)%n");
+            System.out.printf("  composed step %.3f ms ⇒ %.0f steps/s; per-graph wall ms/step: fdTurn=%.2f fdBind=%.2f fdStruct=%.2f fdFil=%.2f fdInteg=%.2f%n",
+                    pStepWall, M/measSecs, a.gWall[0]/NS/M, a.gWall[1]/NS/M, a.gWall[2]/NS/M, a.gWall[3]/NS/M, a.gWall[4]/NS/M);
+            return;
+        }
+        // ---- regime verdict ----
+        double kernPct = 100*pKern/pStepWall, idlePct=100*(pIdle+pDisp)/pStepWall, hostPct=100*(pHostB+pHostP)/pStepWall, xferPct=100*pXfer/pStepWall;
+        long bigXferKB = (sumIn+sumOut)/1024/M;
+        String verdict;
+        if (bigXferKB > 1024) verdict = "TRANSFER-BOUND (per-step copy ≫ pool-ledger — a hidden full-state copy; see §1 check)";
+        else if (kernPct >= 50) verdict = "COMPUTE-BOUND (kernels are the majority of the step)";
+        else if (idlePct >= hostPct && idlePct >= kernPct) verdict = "LAUNCH/OCCUPANCY-BOUND (dispatch+idle dominate; kernels a minority — starved GPU)";
+        else verdict = "HOST-SERIAL-BOUND (host bookkeeping/pull dominates)";
+        System.out.println("\n  ---- REGIME VERDICT ----");
+        System.out.printf("  kernel=%.1f%%  launch+idle=%.1f%%  host=%.1f%%  xfer=%.1f%%  per-step copy=%d KB%n", kernPct, idlePct, hostPct, xferPct, bigXferKB);
+        System.out.printf("  ⇒ %s%n", verdict);
+        System.out.printf("  §1 residency check: per-step copyIn+copyOut = %d KB ⇒ %s (only the EVERY_EXECUTION counts re-upload + the 5 pool-ledger IntArrays should cross; a full-state copy would be MB)%n",
+                bigXferKB, bigXferKB <= 1024 ? "CONSISTENT with §1 (no hidden full-state copy)" : "*** CONTRADICTS §1 — full-state copy detected ***");
+    }
+
+    /** Best-effort nvidia-smi {memMiB, tempC, smClockMHz, util%} one-liner; "?" if unavailable. */
+    static String nvidiaStat() {
+        try {
+            Process p = new ProcessBuilder("nvidia-smi",
+                    "--query-gpu=memory.used,temperature.gpu,clocks.sm,utilization.gpu",
+                    "--format=csv,noheader,nounits").redirectErrorStream(true).start();
+            String out = new String(p.getInputStream().readAllBytes()).trim();
+            p.waitFor();
+            String[] v = out.split("\n")[0].split(",");
+            return String.format("mem=%sMiB temp=%sC smClk=%sMHz util=%s%%", v[0].trim(),
+                    v.length>1?v[1].trim():"?", v.length>2?v[2].trim():"?", v.length>3?v[3].trim():"?");
+        } catch (Throwable e) { return "?"; }
     }
 
     /** Best-effort GPU memory.used (MiB) via nvidia-smi; "?" if unavailable. */
