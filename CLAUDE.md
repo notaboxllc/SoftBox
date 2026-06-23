@@ -80,6 +80,14 @@ oracle, but its role changes across the migration:
 - **Device residency from day one.** SoA state lives on the GPU across steps (TornadoVM PTX backend,
   same toolchain as v1's `-gpu` path); the host reads only at output-frame boundaries. Per-step
   CPU<->GPU transfer is the bottleneck to *eliminate*, not optimize (v1 GPU_STRATEGY lesson).
+- **CPU-fallback disclosure (mandatory).** Any run of a maximal / merged composition MUST state,
+  **before committing wall-clock**, whether it executes device-resident (a GPU TaskGraph, or chained
+  TaskGraphs sharing device buffers via `persistOnDevice`/`consumeFromDevice`) or falls back to the
+  `-cpu` sequential runner, and why. The CPU runner is a debug/validation instrument, never a silent
+  default for a large or long run. If a composition can only run on CPU (e.g. its merged graph exceeds
+  TornadoVM's single-`TaskGraph` capacity — the "Graph resize not implemented" limit), say so up front
+  with the expected steps/s and per-simulated-second cost so the run can be approved or rescoped — do
+  not start it and report the runner afterward.
 - A thin CPU-side OOP "view" layer may exist for topology operations only — convenience, never the
   source of truth.
 - **Abstract from the second instance, not from anticipation.** General *names* and *shared
@@ -159,6 +167,10 @@ oracle, but its role changes across the migration:
 Java 21 + TornadoVM 4.0.1-dev PTX backend, same environment as v1's `-gpu` path
 (`$TORNADOVM_HOME`, `@tornado-argfile`, `--enable-preview`, `-g`). Sources live in the `softbox/`
 package. Two helper scripts:
+
+> **Before a large/long run, disclose the runner up front** (the device-residency invariant's
+> CPU-fallback rule): GPU device-resident (single or chained TaskGraphs) vs the `-cpu` sequential
+> debug runner, and the expected steps/s. Never let a big run silently fall back to CPU.
 
 ```
 ./build.sh                 # javac -g --release 21 --enable-preview, tornado-api on the classpath

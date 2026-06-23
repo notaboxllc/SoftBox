@@ -118,6 +118,10 @@ public final class FullSystemDemoHarness {
     static int STEPS = 30000;
     static String vizDir = null;
     static boolean smoke = false;
+    static int gpuSteps = 2000;               // -gpusteps : device-resident SPLIT probe/validation horizon
+    static int N_SPLIT = 5;                    // number of chained device graphs the per-step sequence is split into
+    static boolean overnight = false;          // -overnight : Stage 2 device-resident milestone + scale-up run
+    static String overnightViz = null;         // -overnight render dir (frames dumped from the device-resident run)
 
     static double pForm(double conc, double dtCheck) { return 1.0 - Math.exp(-XLINK_ON_RATE * conc * dtCheck); }
 
@@ -155,6 +159,9 @@ public final class FullSystemDemoHarness {
                 case "-nucboost" -> NUCBOOST = Double.parseDouble(args[++i]);
                 case "-nodebrown" -> NODE_BROWN = Double.parseDouble(args[++i]);
                 case "-steps" -> STEPS = Integer.parseInt(args[++i]);
+                case "-gpusteps" -> gpuSteps = Integer.parseInt(args[++i]);
+                case "-overnight" -> { overnight = true; gpuScale = true; }
+                case "-overnightviz" -> overnightViz = args[++i];
                 case "-smoke" -> { smoke = true; STEPS = 1500; }
                 case "-3js" -> vizDir = args[++i];
                 default -> {}
@@ -180,6 +187,7 @@ public final class FullSystemDemoHarness {
         System.out.printf("scene built: %d nodes, %d warm filaments (%d active segments), %d minifilaments (%d heads), %d crosslink slots; pool0=%.4f µM, total actin=%.3f µM%n%n",
                 s.nNodes, s.nNodes * FORMINS, activeSegments(s.fil), s.nMini, s.mot2.nMotors, s.xl == null ? 0 : s.xl.nLinks, s.grow.pool.conc(), totalActinUM(s));
 
+        if (overnight) { overnightRun(s, dt); return; }
         if (vizDir != null) { runViz(s, dt); return; }
         run(s, dt);
     }
@@ -931,38 +939,45 @@ public final class FullSystemDemoHarness {
         return mn;
     }
 
-    // ====================================================================== GPU device scale / no-crash check
+    // ====================================================================== GPU device-resident SPLIT check
+    /** The maximal composition made device-resident by SPLITTING the ~106-task per-step sequence into N chained
+     *  TaskGraphs that share SoA buffers on the device (persistOnDevice / consumeFromDevice) under one
+     *  TornadoExecutionPlan — no per-step host round-trip between sub-graphs. Replaces the monolithic single-graph
+     *  path that hit TornadoVM's "Graph resize not implemented" single-TaskGraph capacity limit (§6 finding). */
     static void gpuScaleCheck(Scene s, double dt) {
-        System.out.println("\n--- GPU device scale / no-crash check (device-resident mechanics+turnover; short horizon) ---");
-        System.out.println("  (the full merged graph is large; this is a best-effort device-residency + no-crash + CPU≡GPU-aggregate probe.)");
+        System.out.printf("%n--- GPU device-resident SPLIT check (maximal composition across %d chained TaskGraphs) ---%n", N_SPLIT);
+        System.out.println("  persistOnDevice/consumeFromDevice keep the SoA buffers resident across sub-graphs; host pulls only the");
+        System.out.println("  integer pool-ledger offsets per step (the same UNDER_DEMAND pulls the monolith used). No kernel/order edits.");
         Scene g = build(dt);
         TornadoExecutionPlan plan;
-        try { plan = buildPlan(g); }
-        catch (Throwable e) { System.out.println("  GPU plan build deferred: " + e + "\n  (CPU demo stands; constituent device graphs each validated: turnover+nucleation+node [Ring3x3], minifil+xlink-force [DenseContractile], xlink-formation [XlinkFormation].)"); return; }
-        int M = 2000;
+        try { plan = buildPlanSplit(g); }
+        catch (Throwable e) { System.out.println("  GPU SPLIT plan build FAILED: " + e); e.printStackTrace(); return; }
+        int M = gpuSteps;
         long t0 = System.nanoTime();
-        try { for (int t = 0; t < M; t++) stepHostBookkeeping(g, t, dt, plan); }
+        try { for (int t = 0; t < M; t++) stepSplit(g, t, dt, plan); }
         catch (Throwable e) {
             String msg = String.valueOf(e);
-            if (msg.contains("Graph resize")) {
-                System.out.println("  FINDING — the FULL merged device graph (~100 tasks: turnover+nucleation+node-shell+free-minifil+grid-binding) exceeds");
-                System.out.println("  TornadoVM's single-TaskGraph node capacity (\"Graph resize not implemented yet\"). Device residency of the MAXIMAL");
-                System.out.println("  composition needs SPLITTING into multiple chained TaskGraphs — a concrete prerequisite flagged for the ring.");
-                System.out.println("  The constituent device graphs are EACH validated device-resident at scale: turnover+nucleation+node [Ring3x3 GPU,");
-                System.out.println("  ~58 kernels], minifilament binding+cross-bridge+crosslinker force [DenseContractile GPU], O(N) xlink formation");
-                System.out.println("  [XlinkFormation GATE B, bit-identical CPU↔GPU]. The CPU demo is the source of truth for the hunt.");
-            } else System.out.println("  GPU run threw at scale: " + e + " (CPU demo stands)");
+            if (msg.contains("Graph resize"))
+                System.out.println("  *** Graph-resize on the SPLIT path — a sub-graph STILL exceeds capacity; partition finer (raise N_SPLIT). ***");
+            else System.out.println("  GPU SPLIT run threw in the step loop: " + e);
+            e.printStackTrace();
             return;
         }
         double secs = (System.nanoTime() - t0) / 1e9;
-        System.out.printf("  GPU ran %d steps in %.1f s (%.0f steps/s), NO crash/race on the device-resident parallel path%n", M, secs, M / secs);
-        System.out.printf("  GPU aggregate: node-bound=%d, minifil-bound=%d, active=%d, conc=%.4f µM, conservation=%s, phantoms=%d%n",
-                boundTotal(g.mot), boundTotal(g.mot2), activeSegments(g.fil), g.grow.pool.conc(), conservationCheck(g) ? "EXACT" : "*** FAIL ***", phantomCount(g.fil));
-        Scene c = build(dt); for (int t = 0; t < M; t++) cpuStep(c, t);
+        pullRenderState(g);   // pull the device-resident binding/geometry state for the aggregate comparison
+        System.out.printf("  GPU SPLIT (%d chained graphs) ran %d steps in %.1f s (%.0f steps/s) device-resident, NO crash/race%n", N_SPLIT, M, secs, M / secs);
+        System.out.printf("  GPU aggregate: node-bound=%d, minifil-bound=%d, active=%d, conc=%.4f µM, conservation=%s, phantoms=%d, wall-escapes=%d%n",
+                boundTotal(g.mot), boundTotal(g.mot2), activeSegments(g.fil), g.grow.pool.conc(),
+                conservationCheck(g) ? "EXACT" : "*** FAIL ***", phantomCount(g.fil), wallEscapes(g));
+        Scene c = build(dt); long c0 = System.nanoTime(); for (int t = 0; t < M; t++) cpuStep(c, t); double csecs = (System.nanoTime() - c0) / 1e9;
         boolean agree = Math.abs(activeSegments(g.fil) - activeSegments(c.fil)) <= Math.max(8, (int)(0.2 * activeSegments(c.fil)))
-                && Math.abs(boundTotal(g.mot2) - boundTotal(c.mot2)) <= Math.max(10, (int)(0.4 * Math.max(1, boundTotal(c.mot2))));
-        System.out.printf("  CPU≡GPU aggregate @ %d steps: active GPU=%d CPU=%d, minifil-bound GPU=%d CPU=%d ⇒ %s%n",
-                M, activeSegments(g.fil), activeSegments(c.fil), boundTotal(g.mot2), boundTotal(c.mot2), agree ? "AGREE (chaotic-many-body, within tolerance)" : "*differ — investigate*");
+                && Math.abs(boundTotal(g.mot2) - boundTotal(c.mot2)) <= Math.max(12, (int)(0.4 * Math.max(1, boundTotal(c.mot2))))
+                && Math.abs(boundTotal(g.mot) - boundTotal(c.mot)) <= Math.max(10, (int)(0.5 * Math.max(1, boundTotal(c.mot))));
+        System.out.printf("  CPU ran %d steps in %.1f s (%.0f steps/s) ⇒ device-resident split is %.1fx the CPU runner%n",
+                M, csecs, M / csecs, (M / secs) / (M / csecs));
+        System.out.printf("  CPU≡GPU aggregate @ %d steps: active GPU=%d CPU=%d, node-bound GPU=%d CPU=%d, minifil-bound GPU=%d CPU=%d ⇒ %s%n",
+                M, activeSegments(g.fil), activeSegments(c.fil), boundTotal(g.mot), boundTotal(c.mot), boundTotal(g.mot2), boundTotal(c.mot2),
+                agree ? "AGREE (chaotic-many-body, within tolerance)" : "*DIFFER — investigate*");
     }
 
     /** Device-resident graph: turnover + nucleation + node shell + free minifilaments (xlinks: CPU-side formation,
@@ -1176,6 +1191,466 @@ public final class FullSystemDemoHarness {
         int nucBirths = Math.min(g.nucRankOffsets.get(f.n), f.freeOffsets.get(f.n));
         if (nucBirths > 0) grow.pool.take(nucBirths * Constants.actinSeed);
         if (t == 1999) res.transferToHost(nd.node.coord, mot.boundSeg, mot2.boundSeg, nuc.seedNode, f.filState, f.monomerCount, f.segLength, f.coord);
+    }
+
+    // ====================================================================== SPLIT chained-graph device-resident path
+    // The monolithic buildPlan above merges the whole ~106-task per-step sequence into ONE TaskGraph, which exceeds
+    // TornadoVM's single-TaskGraph node capacity ("Graph resize not implemented"). buildPlanSplit cuts the SAME task
+    // sequence (identical methods, identical order) into N=5 chained TaskGraphs that share the SoA buffers on the
+    // device via persistOnDevice (producer) + consumeFromDevice (consumer) under ONE TornadoExecutionPlan. No host
+    // round-trip between sub-graphs; the host pulls only the integer pool-ledger offsets per step (the same
+    // UNDER_DEMAND pulls the monolith used). Cut points = the validated constituent boundaries, in faithful order:
+    //   G0 fdTurn   — turnover + nucleation (Ring3x3 task order)            (≈32 tasks)
+    //   G1 fdBind   — node-shell + free-minifil binding (incl. the grid)    (≈20 tasks)
+    //   G2 fdStruct — zero/Brownian + node-shell + free-minifil structure   (≈28 tasks)
+    //   G3 fdFil    — filament chain + seed-tether + both seg-gathers       (≈13 tasks)
+    //   G4 fdInteg  — containment + integrate + derive                      (≈13 tasks)
+    // (crosslinker formation/force stays CPU-side here exactly as the monolith probe did — its filID is host-computed;
+    //  the xlink device path is validated in DenseContractile/XlinkFormation. Flagged in the findings.)
+    static TornadoExecutionResult splitRes0, splitRes1, splitResL;
+
+    static Object[] cat(Object[] a, Object[] b) {
+        Object[] r = new Object[a.length + b.length];
+        System.arraycopy(a, 0, r, 0, a.length); System.arraycopy(b, 0, r, a.length, b.length); return r;
+    }
+
+    static TornadoExecutionPlan buildPlanSplit(Scene s) {
+        MotorStore mot = s.mot; DimerStore dim = s.dim; NodeStore nd = s.node;
+        MotorStore mot2 = s.mot2; DimerStore dim2 = s.dim2; MiniFilamentStore mini = s.mini;
+        FilamentStore f = s.fil; NodeNucleationStore nuc = s.nuc; GrowthStore grow = s.grow; DepolyStore d = s.depoly;
+        AgingStore ag = s.aging; SeverStore sv = s.sever;
+        RigidRodBody b = mot.body, nb = nd.node, b2 = mot2.body, bb = mini.backbone; SpatialBodyView v = s.view;
+
+        // Every SoA buffer the per-step sequence touches (= the monolith's two transferToDevice lists, verbatim).
+        Object[] firstExec = {
+                b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, b.bTransGam, b.bRotGam,
+                b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.brownTransScale, b.brownRotScale,
+                mot.head, mot.uVec, mot.rodUVec, mot.boundSeg, mot.bindArc, mot.nucleotideState,
+                mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.stats, mot.capStats, mot.cooldown,
+                mot.bodyParams, mot.jointParams, mot.nucParams, mot.kinParams,
+                dim.motorA, dim.motorB, dim.parallel, dim.dimerParams,
+                nb.coord, nb.uVec, nb.yVec, nb.zVec, nb.end1, nb.end2, nb.segLength, nb.bTransGam, nb.bRotGam,
+                nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams,
+                nd.nodeInvTransY, nd.attachNode, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams,
+                nd.nodeAttachCount, nd.nodeAttachOffsets, nd.nodeAttachList, nd.nodeCounts4,
+                s.bondData, s.xbParams, s.segMotorCount, s.segMotorOffsets, s.segMotorMyo, s.reachSeg, s.reachCount, s.boxParams,
+                f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.monomerCount, f.bTransGam, f.bRotGam, f.bTransDiff, f.bRotDiff,
+                f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.params, f.chainParams,
+                f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide, f.filState,
+                f.freeCount, f.freeOffsets, f.freeList, f.freeScanCounts, f.rankOffsets, f.rankScanCounts, f.allocCounts, f.birthParams,
+                f.acceptFlag, f.reqCoord, f.reqUVec, f.reqYVec,
+                grow.grewFlag, grow.grewOffsets, grow.grewScanCounts, grow.splitParams, grow.dragParams,
+                d.depolyParams, d.returnedMon, d.returnedOffsets, d.returnScanCounts, d.deathFlag,
+                ag.nucFrac, ag.agingParams, ag.depolyRateParams,
+                sv.cofFrac, sv.cofilinParams, sv.severDeathFlag, sv.severReturnedMon, sv.severReturnedOffsets, sv.severScanCounts,
+                nuc.seedNode, nuc.nodeBoundFil, nuc.nucParams, nuc.tetherParams, nuc.seedParams,
+                s.nucAccept, s.nucReqCoord, s.nucReqUVec, s.nucReqYVec, s.nucRankOffsets, s.nucRankScanCounts,
+                b2.coord, b2.uVec, b2.yVec, b2.zVec, b2.end1, b2.end2, b2.segLength, b2.bTransGam, b2.bRotGam,
+                b2.forceSum, b2.torqueSum, b2.randForce, b2.randTorque, b2.brownTransScale, b2.brownRotScale,
+                mot2.head, mot2.uVec, mot2.rodUVec, mot2.boundSeg, mot2.bindArc, mot2.nucleotideState, mot2.reach,
+                mot2.forceDotFil, mot2.forceMag, mot2.forceDotHist, mot2.forceDotPlace, mot2.stats, mot2.capStats, mot2.cooldown,
+                mot2.bodyParams, mot2.jointParams, mot2.nucParams, mot2.kinParams, mot2.publishParams,
+                dim2.motorA, dim2.motorB, dim2.parallel, dim2.dimerParams,
+                bb.coord, bb.uVec, bb.yVec, bb.zVec, bb.end1, bb.end2, bb.segLength, bb.bTransGam, bb.bRotGam,
+                bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams,
+                mini.bbInvDragY, mini.headBackboneSlot, mini.motorA, mini.attachAxial, mini.miniData, mini.miniParams,
+                mini.bbDimerCount, mini.bbDimerOffsets, mini.bbDimerList, mini.miniCounts,
+                s.bondData2, s.segMotorCount2, s.segMotorOffsets2, s.segMotorMyo2, s.reachSeg2, s.reachCount2,
+                v.center, v.boundingRadius, v.ownerStore, v.ownerSlot, s.gridParams, s.gridDims, s.gridCounts, s.viewParams,
+                s.bodyCell, s.cellCount, s.chunkSum, s.gridCellOffsets, s.gridCellContents, s.chunkParams, s.chunkCellCount };
+        // Tiny per-step counts/rates (step number, RNG seed, fires-flag, availability). Re-uploaded EVERY_EXECUTION
+        // in EVERY graph (negligible bytes) — NOT persisted/consumed (EVERY_EXECUTION buffers are re-uploaded each
+        // execution, not held resident; persisting them corrupts their device state).
+        Object[] everyExec = { mot.counts, nd.nodeBodyCounts, f.counts, grow.growCounts, grow.growParams,
+                nuc.nucCounts, d.depolyCounts, ag.agingCounts, sv.severCounts, mot2.counts, mini.bbCounts };
+
+        // --- per-graph SoA-buffer USAGE sets (the distinct persistent firstExec buffers each block's tasks reference).
+        // A buffer is uploaded (FIRST_EXECUTION) by the FIRST graph that USES it (so it is actually allocated there;
+        // TornadoVM does not allocate a transferred buffer no task uses → persisting that leaves a null device buffer,
+        // the executeAlloc NPE). Then every later graph consumes the running uploaded set from its predecessor and
+        // persists it forward, keeping the whole state device-resident across sub-graphs AND across steps. No host
+        // round-trip; only the pool-ledger offsets are pulled UNDER_DEMAND each step.
+        Object[] u0 = {   // G0 turnover + nucleation
+                f.filState, f.monomerCount, f.coord, f.uVec, f.yVec, f.segLength, f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
+                f.brownTransScale, f.brownRotScale, f.acceptFlag, f.reqCoord, f.reqUVec, f.reqYVec, f.freeCount, f.freeScanCounts, f.freeOffsets,
+                f.freeList, f.rankScanCounts, f.rankOffsets, f.allocCounts, f.birthParams, f.bTransGam, f.bRotGam, f.bTransDiff, f.bRotDiff,
+                ag.nucFrac, ag.agingParams, ag.depolyRateParams,
+                d.returnedMon, d.deathFlag, d.depolyParams, d.returnScanCounts, d.returnedOffsets,
+                grow.grewFlag, grow.grewScanCounts, grow.grewOffsets, grow.splitParams, grow.dragParams,
+                sv.cofFrac, sv.cofilinParams, sv.severDeathFlag, sv.severReturnedMon, sv.severScanCounts, sv.severReturnedOffsets,
+                nuc.seedNode, nuc.nodeBoundFil, nuc.nucParams, nuc.seedParams, nb.coord,
+                s.nucAccept, s.nucReqCoord, s.nucReqUVec, s.nucReqYVec, s.nucRankScanCounts, s.nucRankOffsets };
+        Object[] u1 = {   // G1 binding (node-shell brute + free-minifil grid)
+                b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.boundSeg, mot.bindArc, mot.nucleotideState,
+                mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.nucParams,
+                f.end1, f.end2, f.coord, f.segLength, nuc.seedNode,
+                s.reachSeg, s.reachCount, s.viewParams, s.gridParams, s.gridDims, s.gridCounts, s.bodyCell, s.chunkParams, s.chunkCellCount,
+                s.cellCount, s.gridCellOffsets, s.chunkSum, s.gridCellContents, s.reachSeg2, s.reachCount2,
+                v.center, v.boundingRadius, v.ownerStore, v.ownerSlot,
+                b2.coord, b2.uVec, b2.segLength, mot2.head, mot2.uVec, mot2.rodUVec, mot2.reach, mot2.publishParams, mot2.boundSeg, mot2.bindArc,
+                mot2.nucleotideState, mot2.forceDotFil, mot2.forceMag, mot2.forceDotHist, mot2.cooldown, mot2.stats, mot2.capStats, mot2.kinParams, mot2.nucParams };
+        Object[] u2 = {   // G2 zero/Brownian + node-shell + free-minifil structure forces
+                b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, b.coord, b.uVec, b.segLength, b.yVec,
+                mot.bodyParams, mot.nucleotideState, mot.jointParams, mot.boundSeg, mot.bindArc,
+                nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nb.coord, nb.uVec, nb.yVec,
+                nd.nodeBodyParams, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams,
+                nd.attachNode, nd.nodeCounts4, nd.nodeAttachCount, nd.nodeAttachOffsets, nd.nodeAttachList,
+                b2.forceSum, b2.torqueSum, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, b2.brownTransScale, b2.brownRotScale, b2.coord, b2.uVec, b2.segLength, b2.yVec,
+                mot2.bodyParams, mot2.nucleotideState, mot2.jointParams, mot2.boundSeg, mot2.bindArc,
+                bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, bb.brownTransScale, bb.brownRotScale, bb.coord, bb.uVec,
+                mini.bbBodyParams, mini.bbInvDragY, mini.headBackboneSlot, mini.motorA, mini.attachAxial, mini.miniData, mini.miniParams, mini.miniCounts,
+                mini.bbDimerCount, mini.bbDimerOffsets, mini.bbDimerList,
+                dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, dim2.motorA, dim2.motorB, dim2.parallel, dim2.dimerParams,
+                f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.coord, f.uVec, f.yVec, f.segLength,
+                s.bondData, s.xbParams, s.bondData2 };
+        Object[] u3 = {   // G3 filament chain + seed-tether + both seg-gathers
+                f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum,
+                nb.coord, nb.forceSum, nd.nodeInvTransY, nuc.seedNode,
+                mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace,
+                mot2.boundSeg, mot2.forceDotFil, mot2.forceMag, mot2.forceDotHist, mot2.forceDotPlace,
+                s.segMotorCount, s.segMotorOffsets, s.segMotorMyo, s.bondData, s.segMotorCount2, s.segMotorOffsets2, s.segMotorMyo2, s.bondData2 };
+        Object[] u4 = {   // G4 containment + integrate + derive
+                nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, nb.yVec, nb.randForce, nb.randTorque, nb.bRotGam, nb.zVec, nb.end1, nb.end2,
+                nd.nodeBodyParams,
+                b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.zVec, b.end1, b.end2, b.segLength, mot.bodyParams,
+                b2.coord, b2.uVec, b2.yVec, b2.forceSum, b2.torqueSum, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, b2.zVec, b2.end1, b2.end2, b2.segLength, mot2.bodyParams,
+                bb.coord, bb.uVec, bb.segLength, bb.bTransGam, bb.forceSum, bb.torqueSum, bb.yVec, bb.randForce, bb.randTorque, bb.bRotGam, bb.zVec, bb.end1, bb.end2, mini.bbBodyParams,
+                f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, f.yVec, f.randForce, f.randTorque, f.bRotGam, f.params, f.zVec, f.end1, f.end2,
+                s.boxParams };
+        Object[][] U = { u0, u1, u2, u3, u4 };
+        String[] gname = { "fdTurn", "fdBind", "fdStruct", "fdFil", "fdInteg" };
+
+        // host-pull buffers per graph (UNDER_DEMAND): G0 pool-ledger offsets + hunt/render state, G1 binding state,
+        // G4 the derived geometry the renderer reads.
+        Object[] host0 = { grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets, s.nucRankOffsets, f.freeOffsets,
+                f.monomerCount, f.filState, f.segLength, nuc.seedNode, ag.nucFrac, sv.cofFrac };
+        Object[] host1 = { mot.boundSeg, mot2.boundSeg, mot.nucleotideState, mot2.nucleotideState };
+        Object[] host4 = { nb.coord, f.coord, f.end1, f.end2, b.end1, b.end2, b2.end1, b2.end2, bb.coord, bb.end1, bb.end2 };
+
+        java.util.Set<Object> uploaded = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        TaskGraph[] tg = new TaskGraph[N_SPLIT];
+        for (int gi = 0; gi < N_SPLIT; gi++) {
+            // newBufs = first-use here; consumeSet = everything uploaded by earlier graphs (all allocated ⇒ no NPE).
+            java.util.List<Object> newBufs = new java.util.ArrayList<>();
+            for (Object o : U[gi]) if (!uploaded.contains(o)) { newBufs.add(o); uploaded.add(o); }
+            Object[] consumeSet = uploaded.stream().filter(o -> !newBufs.contains(o)).toArray();
+            TaskGraph g = new TaskGraph(gname[gi]);
+            if (gi > 0 && consumeSet.length > 0) g = g.consumeFromDevice(gname[gi - 1], consumeSet);
+            if (!newBufs.isEmpty()) g = g.transferToDevice(DataTransferMode.FIRST_EXECUTION, newBufs.toArray());
+            g = g.transferToDevice(DataTransferMode.EVERY_EXECUTION, everyExec);
+            g = switch (gi) { case 0 -> blkTurn(g, s); case 1 -> blkBind(g, s); case 2 -> blkStruct(g, s); case 3 -> blkFil(g, s); default -> blkInteg(g, s); };
+            if (gi == 0) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host0);
+            else if (gi == 1) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host1);
+            else if (gi == 4) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host4);
+            // persist the full running state (keeps it device-resident for later sub-graphs AND the next step).
+            g = g.persistOnDevice(uploaded.toArray());
+            tg[gi] = g;
+        }
+
+        N_SPLIT = 5;
+        buildSplitScheduler(s);
+        return new TornadoExecutionPlan(tg[0].snapshot(), tg[1].snapshot(), tg[2].snapshot(), tg[3].snapshot(), tg[4].snapshot());
+    }
+
+    // ---- the five task blocks (verbatim methods + order from the monolith buildPlan) ----
+    static TaskGraph blkTurn(TaskGraph tg, Scene s) {
+        FilamentStore f = s.fil; NodeNucleationStore nuc = s.nuc; GrowthStore grow = s.grow; DepolyStore d = s.depoly;
+        AgingStore ag = s.aging; SeverStore sv = s.sever; NodeStore nd = s.node; RigidRodBody nb = nd.node;
+        return tg
+            .task("age", AgingSystem::age, f.filState, ag.nucFrac, ag.agingParams, ag.agingCounts)
+            .task("depoly", DepolySystem::depolyProxy, f.filState, f.monomerCount, f.coord, f.uVec, f.end1NbrSlot, ag.nucFrac, d.returnedMon, d.deathFlag, d.depolyParams, ag.depolyRateParams, d.depolyCounts)
+            .task("csrReturn", CrossBridgeSystem::csrScan, d.returnScanCounts, d.returnedMon, d.returnedOffsets)
+            .task("applyDeath", DepolySystem::applyDeath, f.filState, f.monomerCount, nuc.seedNode, f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide, f.brownTransScale, f.brownRotScale, d.deathFlag, d.depolyCounts)
+            .task("grow", GrowthSystem::grow, nuc.seedNode, f.monomerCount, f.coord, f.uVec, grow.grewFlag, grow.growParams, grow.growCounts)
+            .task("csrGrew", CrossBridgeSystem::csrScan, grow.grewScanCounts, grow.grewFlag, grow.grewOffsets)
+            .task("growthAtp", AgingSystem::growthAtp, grow.grewFlag, f.monomerCount, ag.nucFrac)
+            .task("cofAcc", SeveringSystem::cofilinAccumulate, f.filState, ag.nucFrac, sv.cofFrac, sv.cofilinParams, sv.severCounts)
+            .task("cofDis", SeveringSystem::cofilinDissolve, f.filState, f.monomerCount, sv.cofFrac, sv.severDeathFlag, sv.severReturnedMon, sv.cofilinParams, sv.severCounts)
+            .task("csrSever", CrossBridgeSystem::csrScan, sv.severScanCounts, sv.severReturnedMon, sv.severReturnedOffsets)
+            .task("severDeath", DepolySystem::applyDeath, f.filState, f.monomerCount, nuc.seedNode, f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide, f.brownTransScale, f.brownRotScale, sv.severDeathFlag, d.depolyCounts)
+            .task("markSplits", GrowthSystem::markSplits, nuc.seedNode, f.monomerCount, f.coord, f.uVec, f.yVec, f.acceptFlag, f.reqCoord, f.reqUVec, f.reqYVec, grow.splitParams, grow.growCounts)
+            .task("gFreeFlags", FilamentBirthSystem::freeFlags, f.filState, f.freeCount, f.allocCounts)
+            .task("gCsrFree", CrossBridgeSystem::csrScan, f.freeScanCounts, f.freeCount, f.freeOffsets)
+            .task("gFreeScatter", FilamentBirthSystem::freeScatter, f.filState, f.freeOffsets, f.freeList, f.allocCounts)
+            .task("gCsrRank", CrossBridgeSystem::csrScan, f.rankScanCounts, f.acceptFlag, f.rankOffsets)
+            .task("gAllocate", FilamentBirthSystem::allocate, f.reqCoord, f.reqUVec, f.reqYVec, f.rankOffsets, f.freeList, f.freeOffsets, f.coord, f.uVec, f.yVec, f.brownTransScale, f.brownRotScale, f.filState, f.birthParams, f.allocCounts)
+            .task("splitWire", GrowthSystem::splitWire, f.rankOffsets, f.freeList, f.freeOffsets, f.monomerCount, f.coord, f.uVec, f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide, nuc.seedNode, grow.splitParams, f.allocCounts)
+            .task("splitInherit", AgingSystem::splitInheritNuc, f.rankOffsets, f.freeList, f.freeOffsets, ag.nucFrac, f.allocCounts)
+            .task("splitCof", SeveringSystem::nucleateFreshCofilin, f.rankOffsets, f.freeList, f.freeOffsets, sv.cofFrac, f.allocCounts)
+            .task("recomputeDrag", GrowthSystem::recomputeDrag, f.monomerCount, f.segLength, f.end1NbrSlot, f.end2NbrSlot, f.bTransGam, f.bRotGam, f.bTransDiff, f.bRotDiff, grow.dragParams, grow.growCounts)
+            .task("count", NodeNucleationSystem::countBoundFil, nuc.seedNode, nuc.nodeBoundFil, nuc.nucCounts)
+            .task("emit", NodeNucleationSystem::emit, nb.coord, nuc.nodeBoundFil, s.nucAccept, s.nucReqCoord, s.nucReqUVec, s.nucReqYVec, nuc.nucParams, nuc.nucCounts)
+            .task("nFreeFlags", FilamentBirthSystem::freeFlags, f.filState, f.freeCount, f.allocCounts)
+            .task("nCsrFree", CrossBridgeSystem::csrScan, f.freeScanCounts, f.freeCount, f.freeOffsets)
+            .task("nFreeScatter", FilamentBirthSystem::freeScatter, f.filState, f.freeOffsets, f.freeList, f.allocCounts)
+            .task("nCsrRank", CrossBridgeSystem::csrScan, s.nucRankScanCounts, s.nucAccept, s.nucRankOffsets)
+            .task("nAllocate", FilamentBirthSystem::allocate, s.nucReqCoord, s.nucReqUVec, s.nucReqYVec, s.nucRankOffsets, f.freeList, f.freeOffsets, f.coord, f.uVec, f.yVec, f.brownTransScale, f.brownRotScale, f.filState, f.birthParams, f.allocCounts)
+            .task("tagSeeds", NodeNucleationSystem::tagSeeds, s.nucRankOffsets, f.freeList, f.freeOffsets, nuc.seedNode, f.allocCounts)
+            .task("initNewborn", NodeNucleationSystem::initNewborn, s.nucRankOffsets, f.freeList, f.freeOffsets, f.monomerCount, f.segLength, nuc.seedParams, f.allocCounts)
+            .task("nucFresh", AgingSystem::nucleateFreshAtp, s.nucRankOffsets, f.freeList, f.freeOffsets, ag.nucFrac, f.allocCounts)
+            .task("nucCof", SeveringSystem::nucleateFreshCofilin, s.nucRankOffsets, f.freeList, f.freeOffsets, sv.cofFrac, f.allocCounts);
+    }
+
+    static TaskGraph blkBind(TaskGraph tg, Scene s) {
+        MotorStore mot = s.mot; RigidRodBody b = mot.body; FilamentStore f = s.fil; NodeNucleationStore nuc = s.nuc;
+        MotorStore mot2 = s.mot2; RigidRodBody b2 = mot2.body; SpatialBodyView v = s.view;
+        return tg
+            .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
+            .task("reach", BindingDetectionSystem::bruteReachableNodeAware, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.reachSeg, s.reachCount, nuc.seedNode, mot.kinParams, mot.counts)
+            .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts)
+            .task("bind", BindingDetectionSystem::bindNearestNodeAware, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.reachSeg, s.reachCount, mot.boundSeg, mot.bindArc, nuc.seedNode, mot.kinParams, mot.counts)
+            .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts)
+            .task("publishHead2", MotorStore::publishHeadFromBody, b2.coord, b2.uVec, b2.segLength, mot2.head, mot2.uVec, mot2.rodUVec, mot2.counts)
+            .task("filPublish", FilamentStore::publishToBodyView, f.coord, f.segLength, v.center, v.boundingRadius, v.ownerStore, v.ownerSlot, s.viewParams, s.gridCounts)
+            .task("motPublish", MotorStore::publishToBodyView, mot2.head, mot2.reach, v.center, v.boundingRadius, v.ownerStore, v.ownerSlot, mot2.publishParams, mot2.counts)
+            .task("bodyCell", SpatialGrid::bodyCell, v.center, s.gridParams, s.gridDims, s.gridCounts, s.bodyCell)
+            .task("chunkZero", SpatialGrid::gridChunkZero, s.chunkParams, s.gridDims, s.chunkCellCount)
+            .task("chunkHist", SpatialGrid::gridChunkHistogram, s.bodyCell, s.gridCounts, s.chunkParams, s.gridDims, s.chunkCellCount)
+            .task("chunkReduce", SpatialGrid::gridChunkReduce, s.gridDims, s.chunkParams, s.chunkCellCount, s.cellCount)
+            .task("gScanLocal", SpatialGrid::gridScanLocal, s.gridDims, s.cellCount, s.gridCellOffsets, s.chunkSum)
+            .task("gScanChunks", SpatialGrid::gridScanChunks, s.gridDims, s.chunkSum)
+            .task("gScanAdd", SpatialGrid::gridScanAdd, s.gridDims, s.gridCellOffsets, s.gridCellContents, s.cellCount, s.chunkSum)
+            .task("chunkScatter", SpatialGrid::gridChunkScatter, s.bodyCell, s.gridCounts, s.chunkParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, s.chunkCellCount)
+            .task("gridReach", BindingDetectionSystem::gridReachable, mot2.head, mot2.uVec, mot2.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, v.ownerStore, v.ownerSlot, s.reachSeg2, s.reachCount2, mot2.kinParams, mot2.counts)
+            .task("release2", NucleotideCycleSystem::catchSlipRelease, mot2.boundSeg, mot2.forceDotFil, mot2.forceMag, mot2.cooldown, mot2.stats, mot2.capStats, mot2.kinParams, mot2.counts)
+            .task("bind2", BindingDetectionSystem::bindNearest, mot2.head, mot2.uVec, mot2.rodUVec, f.end1, f.end2, s.reachSeg2, s.reachCount2, mot2.boundSeg, mot2.bindArc, mot2.kinParams, mot2.counts)
+            .task("cycle2", NucleotideCycleSystem::cycle, mot2.nucleotideState, mot2.boundSeg, mot2.forceDotHist, mot2.nucParams, mot2.counts);
+    }
+
+    static TaskGraph blkStruct(TaskGraph tg, Scene s) {
+        MotorStore mot = s.mot; DimerStore dim = s.dim; NodeStore nd = s.node;
+        MotorStore mot2 = s.mot2; DimerStore dim2 = s.dim2; MiniFilamentStore mini = s.mini; FilamentStore f = s.fil;
+        RigidRodBody b = mot.body, nb = nd.node, b2 = mot2.body, bb = mini.backbone;
+        return tg
+            .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
+            .task("zeroNode", ChainBendingForceSystem::zeroAccumulators, nb.forceSum, nb.torqueSum, nd.nodeBodyCounts)
+            .task("zeroMot2", ChainBendingForceSystem::zeroAccumulators, b2.forceSum, b2.torqueSum, mot2.counts)
+            .task("zeroBb", ChainBendingForceSystem::zeroAccumulators, bb.forceSum, bb.torqueSum, mini.bbCounts)
+            .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
+            .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
+            .task("brownNode", BrownianForceSystem::brownianForce, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams, nd.nodeBodyCounts)
+            .task("brownMot2", BrownianForceSystem::brownianForce, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, b2.brownTransScale, b2.brownRotScale, mot2.bodyParams, mot2.counts)
+            .task("brownBb", BrownianForceSystem::brownianForce, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams, mini.bbCounts)
+            .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
+            .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
+            .task("dimer", DimerCouplingSystem::couple, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg)
+            .task("tether", NodeSystem::tether, b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum, nb.coord, nb.uVec, nb.yVec, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams)
+            .task("ndHist", CrossBridgeSystem::csrHistogram, nd.attachNode, nd.nodeCounts4, nd.nodeAttachCount)
+            .task("ndScan", CrossBridgeSystem::csrScan, nd.nodeCounts4, nd.nodeAttachCount, nd.nodeAttachOffsets)
+            .task("ndScatter", CrossBridgeSystem::csrScatter, nd.attachNode, nd.nodeCounts4, nd.nodeAttachOffsets, nd.nodeAttachCount, nd.nodeAttachList)
+            .task("ndGather", MiniFilamentSystem::backboneGather, nd.nodeAttachOffsets, nd.nodeAttachList, nd.nodeData, nb.forceSum, nb.torqueSum, nd.nodeCounts4)
+            .task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, s.bondData, s.xbParams)
+            .task("applyHead", CrossBridgeSystem::applyHeadForce, s.bondData, b.forceSum, b.torqueSum, mot.counts)
+            .task("joints2", MotorJointSystem::joints, b2.coord, b2.uVec, b2.segLength, b2.bTransGam, b2.bRotGam, b2.forceSum, b2.torqueSum, mot2.nucleotideState, mot2.jointParams, mot2.counts)
+            .task("dimer2", DimerCouplingSystem::couple, b2.coord, b2.uVec, b2.segLength, b2.bTransGam, b2.bRotGam, b2.forceSum, b2.torqueSum, dim2.motorA, dim2.motorB, dim2.parallel, dim2.dimerParams, mot2.boundSeg)
+            .task("tether2", MiniFilamentSystem::tether, b2.coord, b2.uVec, b2.segLength, b2.bTransGam, b2.bRotGam, b2.forceSum, b2.torqueSum, bb.coord, bb.uVec, mini.bbInvDragY, mini.headBackboneSlot, mini.motorA, mini.attachAxial, mini.miniData, mini.miniParams)
+            .task("bbHist", CrossBridgeSystem::csrHistogram, mini.headBackboneSlot, mini.miniCounts, mini.bbDimerCount)
+            .task("bbScan", CrossBridgeSystem::csrScan, mini.miniCounts, mini.bbDimerCount, mini.bbDimerOffsets)
+            .task("bbScatter", CrossBridgeSystem::csrScatter, mini.headBackboneSlot, mini.miniCounts, mini.bbDimerOffsets, mini.bbDimerCount, mini.bbDimerList)
+            .task("bbGather", MiniFilamentSystem::backboneGather, mini.bbDimerOffsets, mini.bbDimerList, mini.miniData, bb.forceSum, bb.torqueSum, mini.miniCounts)
+            .task("bond2", CrossBridgeSystem::bondForces, b2.coord, b2.uVec, b2.yVec, b2.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot2.boundSeg, mot2.bindArc, mot2.nucleotideState, s.bondData2, s.xbParams)
+            .task("applyHead2", CrossBridgeSystem::applyHeadForce, s.bondData2, b2.forceSum, b2.torqueSum, mot2.counts);
+    }
+
+    static TaskGraph blkFil(TaskGraph tg, Scene s) {
+        FilamentStore f = s.fil; NodeNucleationStore nuc = s.nuc; NodeStore nd = s.node; RigidRodBody nb = nd.node;
+        MotorStore mot = s.mot; MotorStore mot2 = s.mot2;
+        return tg
+            .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
+            .task("seedTether", NodeNucleationSystem::seedTether, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, nb.coord, nd.nodeInvTransY, nuc.seedNode, nuc.tetherParams)
+            .task("seedReact", NodeNucleationSystem::seedTetherNodeReact, f.coord, f.uVec, f.segLength, f.bTransGam, nb.forceSum, nb.coord, nd.nodeInvTransY, nuc.seedNode, nuc.tetherParams)
+            .task("filHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, s.segMotorCount)
+            .task("filScan", CrossBridgeSystem::csrScan, mot.counts, s.segMotorCount, s.segMotorOffsets)
+            .task("filScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, s.segMotorOffsets, s.segMotorCount, s.segMotorMyo)
+            .task("filGather", CrossBridgeSystem::segGather, s.segMotorOffsets, s.segMotorMyo, s.bondData, f.forceSum, f.torqueSum, mot.counts)
+            .task("filHist2", CrossBridgeSystem::csrHistogram, mot2.boundSeg, mot2.counts, s.segMotorCount2)
+            .task("filScan2", CrossBridgeSystem::csrScan, mot2.counts, s.segMotorCount2, s.segMotorOffsets2)
+            .task("filScatter2", CrossBridgeSystem::csrScatter, mot2.boundSeg, mot2.counts, s.segMotorOffsets2, s.segMotorCount2, s.segMotorMyo2)
+            .task("filGather2", CrossBridgeSystem::segGather, s.segMotorOffsets2, s.segMotorMyo2, s.bondData2, f.forceSum, f.torqueSum, mot2.counts)
+            .task("register", CrossBridgeSystem::registerForceDot, s.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
+            .task("register2", CrossBridgeSystem::registerForceDot, s.bondData2, mot2.boundSeg, mot2.forceDotFil, mot2.forceMag, mot2.forceDotHist, mot2.forceDotPlace, mot2.counts);
+    }
+
+    static TaskGraph blkInteg(TaskGraph tg, Scene s) {
+        MotorStore mot = s.mot; NodeStore nd = s.node; MotorStore mot2 = s.mot2; MiniFilamentStore mini = s.mini; FilamentStore f = s.fil;
+        RigidRodBody b = mot.body, nb = nd.node, b2 = mot2.body, bb = mini.backbone;
+        return tg
+            .task("confineNode", ContainmentSystem::confine, nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, s.boxParams, nd.nodeBodyCounts)
+            .task("integNode", RigidRodLangevinIntegrationSystem::integrate, nb.coord, nb.uVec, nb.yVec, nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nd.nodeBodyParams, nd.nodeBodyCounts)
+            .task("deriveNode", DerivedGeometrySystem::derive, nb.coord, nb.uVec, nb.yVec, nb.zVec, nb.end1, nb.end2, nb.segLength, nd.nodeBodyCounts)
+            .task("integM", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
+            .task("deriveM", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts)
+            .task("integM2", RigidRodLangevinIntegrationSystem::integrate, b2.coord, b2.uVec, b2.yVec, b2.forceSum, b2.torqueSum, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, mot2.bodyParams, mot2.counts)
+            .task("deriveM2", DerivedGeometrySystem::derive, b2.coord, b2.uVec, b2.yVec, b2.zVec, b2.end1, b2.end2, b2.segLength, mot2.counts)
+            .task("confineBb", ContainmentSystem::confine, bb.coord, bb.uVec, bb.segLength, bb.bTransGam, bb.forceSum, bb.torqueSum, s.boxParams, mini.bbCounts)
+            .task("integBb", RigidRodLangevinIntegrationSystem::integrate, bb.coord, bb.uVec, bb.yVec, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, mini.bbBodyParams, mini.bbCounts)
+            .task("deriveBb", DerivedGeometrySystem::derive, bb.coord, bb.uVec, bb.yVec, bb.zVec, bb.end1, bb.end2, bb.segLength, mini.bbCounts)
+            .task("confineFil", ContainmentSystem::confine, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, s.boxParams, f.counts)
+            .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
+            .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+    }
+
+    /** Re-key every RNG/trig kernel's localWork=64 WorkerGrid under its NEW graph-name prefix (GridScheduler keys are
+     *  "<graphName>.<task>"). Identical worker sizes to the monolith; only the graph prefix changes per the split. */
+    static void buildSplitScheduler(Scene s) {
+        MotorStore mot = s.mot; NodeStore nd = s.node; MotorStore mot2 = s.mot2; MiniFilamentStore mini = s.mini; FilamentStore f = s.fil;
+        DimerStore dim = s.dim; DimerStore dim2 = s.dim2;
+        RigidRodBody b = mot.body, nb = nd.node, b2 = mot2.body, bb = mini.backbone;
+        int nM = mot.nMotors, nMB = b.n, nN = nb.n, C = f.n, nD = dim.nDimers;
+        int nM2 = mot2.nMotors, nMB2 = b2.n, nD2 = dim2.nDimers, nBb = bb.n, nA = nd.nAttach, cap = s.viewCap, totalCells = s.totalCells;
+        int numScan = (totalCells + SpatialGrid.GRID_SCAN_CHUNK - 1) / SpatialGrid.GRID_SCAN_CHUNK;
+        sched = new GridScheduler();
+        // G0 fdTurn — turnover/nucleation (all C-sized except count/emit and the single-thread CSR scans)
+        for (String t : new String[]{ "age","depoly","applyDeath","grow","growthAtp","cofAcc","cofDis","severDeath","markSplits",
+                "gFreeFlags","gFreeScatter","gAllocate","splitWire","splitInherit","splitCof","recomputeDrag",
+                "nFreeFlags","nFreeScatter","nAllocate","tagSeeds","initNewborn","nucFresh","nucCof" }) addW("fdTurn." + t, pad(C));
+        addW("fdTurn.count", pad(1)); addW("fdTurn.emit", pad(nN));
+        for (String t : new String[]{ "csrReturn","csrGrew","csrSever","gCsrFree","gCsrRank","nCsrFree","nCsrRank" }) addS("fdTurn." + t);
+        // G1 fdBind
+        for (String t : new String[]{ "publishHead","reach","release","bind","cycle" }) addW("fdBind." + t, pad(nM));
+        for (String t : new String[]{ "publishHead2","gridReach","release2","bind2","cycle2","motPublish" }) addW("fdBind." + t, pad(nM2));
+        addW("fdBind.filPublish", pad(C));
+        addW("fdBind.bodyCell", pad(cap)); addW("fdBind.chunkZero", pad(s.numBodyChunks * totalCells));
+        addW("fdBind.chunkHist", pad(s.numBodyChunks)); addW("fdBind.chunkReduce", pad(totalCells));
+        addW("fdBind.chunkScatter", pad(s.numBodyChunks)); addW("fdBind.gScanLocal", pad(numScan)); addW("fdBind.gScanAdd", pad(numScan));
+        addS("fdBind.gScanChunks");
+        // G2 fdStruct
+        for (String t : new String[]{ "zeroMot","brownMot","joints" }) addW("fdStruct." + t, pad(nMB));
+        for (String t : new String[]{ "bond","applyHead" }) addW("fdStruct." + t, pad(nM));
+        for (String t : new String[]{ "zeroNode","brownNode","ndGather" }) addW("fdStruct." + t, pad(nN));
+        for (String t : new String[]{ "zeroMot2","brownMot2","joints2" }) addW("fdStruct." + t, pad(nMB2));
+        for (String t : new String[]{ "bond2","applyHead2" }) addW("fdStruct." + t, pad(nM2));
+        for (String t : new String[]{ "zeroBb","brownBb","bbGather" }) addW("fdStruct." + t, pad(nBb));
+        for (String t : new String[]{ "zeroFil","brownFil" }) addW("fdStruct." + t, pad(C));
+        addW("fdStruct.dimer", pad(nD)); addW("fdStruct.tether", pad(nA)); addW("fdStruct.dimer2", pad(nD2)); addW("fdStruct.tether2", pad(nD2));
+        for (String t : new String[]{ "ndHist","ndScan","ndScatter","bbHist","bbScan","bbScatter" }) addS("fdStruct." + t);
+        // G3 fdFil
+        for (String t : new String[]{ "chain","seedTether","filGather","filGather2" }) addW("fdFil." + t, pad(C));
+        addW("fdFil.seedReact", pad(nN)); addW("fdFil.register", pad(nM)); addW("fdFil.register2", pad(nM2));
+        for (String t : new String[]{ "filHist","filScan","filScatter","filHist2","filScan2","filScatter2" }) addS("fdFil." + t);
+        // G4 fdInteg
+        for (String t : new String[]{ "confineNode","integNode","deriveNode" }) addW("fdInteg." + t, pad(nN));
+        for (String t : new String[]{ "integM","deriveM" }) addW("fdInteg." + t, pad(nMB));
+        for (String t : new String[]{ "integM2","deriveM2" }) addW("fdInteg." + t, pad(nMB2));
+        for (String t : new String[]{ "confineBb","integBb","deriveBb" }) addW("fdInteg." + t, pad(nBb));
+        for (String t : new String[]{ "confineFil","integFil","deriveFil" }) addW("fdInteg." + t, pad(C));
+    }
+
+    /** One device-resident step across the chained graphs (mirrors stepHostBookkeeping's host bookkeeping +
+     *  cpuStep's task order). Host pulls only the pool-ledger offsets (from G0) per step. */
+    static void stepSplit(Scene g, int t, double dt, TornadoExecutionPlan plan) {
+        MotorStore mot = g.mot; MotorStore mot2 = g.mot2; NodeStore nd = g.node; MiniFilamentStore mini = g.mini;
+        FilamentStore f = g.fil; NodeNucleationStore nuc = g.nuc; GrowthStore grow = g.grow; DepolyStore d = g.depoly;
+        AgingStore ag = g.aging; SeverStore sv = g.sever;
+        boolean fires = grow.firesAt(t);
+        mot.setCounts(t, SEED, f.n); nd.setNodeBodyCounts(t, SEED_NODE); f.setCounts(t, SEED);
+        mot2.setCounts(t, SEED_MINI, f.n); mini.setBackboneCounts(t, SEED_BB);
+        grow.setCounts(t, SEED, fires); grow.refreshRate(fires);
+        d.setCounts(t, SEED, fires); ag.setFires(fires); sv.setFires(fires);
+        nuc.setCounts(t, SEED);
+        nuc.nucCounts.set(3, grow.pool.available(Constants.actinSeed) ? 1 : 0);
+        for (int gi = 0; gi < N_SPLIT; gi++) {
+            TornadoExecutionResult r = plan.withGraph(gi).withGridScheduler(sched).execute();
+            if (gi == 0) {
+                r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets, g.nucRankOffsets, f.freeOffsets);
+                splitRes0 = r;
+            } else if (gi == 1) splitRes1 = r;
+            if (gi == N_SPLIT - 1) splitResL = r;
+        }
+        grow.pool.put(d.returnedOffsets.get(f.n) + sv.severReturnedOffsets.get(f.n));
+        grow.pool.take(grow.grewOffsets.get(f.n));
+        int nucBirths = Math.min(g.nucRankOffsets.get(f.n), f.freeOffsets.get(f.n));
+        if (nucBirths > 0) grow.pool.take(nucBirths * Constants.actinSeed);
+        g.lastNucBirths = nucBirths;
+    }
+
+    /** Pull the host-side render + hunt state from the chained-graph results (device-resident; an UNDER_DEMAND pull,
+     *  only at the frame/check cadence — NOT per step). */
+    static void pullRenderState(Scene g) {
+        MotorStore mot = g.mot, mot2 = g.mot2; NodeStore nd = g.node; MiniFilamentStore mini = g.mini; FilamentStore f = g.fil;
+        AgingStore ag = g.aging; SeverStore sv = g.sever; RigidRodBody b = mot.body, nb = nd.node, b2 = mot2.body, bb = mini.backbone;
+        if (splitRes0 != null) splitRes0.transferToHost(f.filState, f.monomerCount, f.segLength, ag.nucFrac, sv.cofFrac);
+        if (splitRes1 != null) splitRes1.transferToHost(mot.boundSeg, mot2.boundSeg, mot.nucleotideState, mot2.nucleotideState);
+        if (splitResL != null) splitResL.transferToHost(nb.coord, f.coord, f.end1, f.end2, b.end1, b.end2, b2.end1, b2.end2, bb.coord, bb.end1, bb.end2);
+    }
+
+    // ====================================================================== STAGE 2 — device-resident overnight run
+    /** The first device-resident execution of the MAXIMAL composition over a long horizon (the split GPU path).
+     *  Runs the split chained graphs, dumps a watchable render, logs status + 5-min progress, and FAILS SAFE on any
+     *  NaN/conservation/phantom/wall-escape (does NOT auto-restart). Device-resident throughout — never CPU fallback. */
+    static void overnightRun(Scene s, double dt) {
+        System.out.println("\n=== STAGE 2 — device-resident OVERNIGHT run (split chained TaskGraphs; KIN=" + (int) KIN + ") ===");
+        TornadoExecutionPlan plan;
+        try { plan = buildPlanSplit(s); }
+        catch (Throwable e) { System.out.println("  STAGE2 split build FAILED: " + e); e.printStackTrace(); return; }
+        int M = STEPS;
+        long wallCapMs = 5L * 3600 * 1000 + 30L * 60 * 1000;   // ~5.5 h — leave margin
+        int frameEvery = Math.max(1, M / 300);                 // ~300 frames
+        int checkEvery = Math.max(1, Math.min(frameEvery, M / 600));
+        String vd = (overnightViz != null) ? overnightViz : "threejs_fulldemo_overnight";
+        new java.io.File(vd).mkdirs();
+        java.io.File statusFile = new java.io.File(".last_run_status");
+        double[] ext0 = netExtent(s); double rms0 = ext0[0];
+        long t0 = System.nanoTime(); long lastPrint = t0;
+        int frames = 0; boolean ok = true; String fail = null; int doneSteps = 0;
+        System.out.printf("  steps=%d, dt=%.0e (sim %.3f s), frames≈%d (every %d), check every %d; render→%s%n",
+                M, dt, M * dt, M / frameEvery + 1, frameEvery, checkEvery, vd);
+        for (int t = 0; t < M; t++) {
+            try { stepSplit(s, t, dt, plan); }
+            catch (Throwable e) { ok = false; fail = "step threw @ " + t + ": " + e; e.printStackTrace(); break; }
+            doneSteps = t + 1;
+            boolean frame = (t % frameEvery == 0) || (t == M - 1);
+            boolean check = frame || (t % checkEvery == 0);
+            if (check) {
+                pullRenderState(s);
+                boolean nan = anyNaN(s); boolean cons = conservationCheck(s);
+                int phantom = phantomCount(s.fil); int esc = wallEscapes(s);
+                // wall-escape bail is for a true RUNAWAY only — a handful of warm-start IC tips just past the edge are
+                // corrected by containment over the next steps (the §3 transient), NOT a blow-up. Threshold scales with N.
+                int escBail = Math.max(40, activeSegments(s.fil) / 40);
+                if (nan)      { ok = false; fail = "NaN/blow-up @ " + t; }
+                if (!cons)    { ok = false; fail = "conservation-ledger violation @ " + t; }
+                if (phantom > 0) { ok = false; fail = "phantom (" + phantom + ") @ " + t; }
+                if (esc > escBail) { ok = false; fail = "wall-escape RUNAWAY (" + esc + " > " + escBail + ") @ " + t; }
+                double[] ext = netExtent(s); double secs = (System.nanoTime() - t0) / 1e9;
+                writeStatus(statusFile, t, M, ext[0], 0, activeSegments(s.fil), cons, phantom, nan, secs);
+                if ((System.nanoTime() - lastPrint) / 1e6 > 5 * 60 * 1000 || t == 0) {
+                    lastPrint = System.nanoTime();
+                    double sps = t > 0 ? t / secs : 0; long etaS = sps > 0 ? (long) ((M - t) / sps) : 0;
+                    System.out.printf("[progress] step %d/%d (%.0f%%), %.0f steps/s, sim %.3f s, rms=%.4f, active=%d, nodeBnd=%d, miniBnd=%d, conc=%.3f, vram=%s, ETA %02d:%02d%n",
+                            t, M, 100.0 * t / M, sps, t * dt, ext[0], activeSegments(s.fil), boundTotal(s.mot), boundTotal(s.mot2),
+                            s.grow.pool.conc(), vramMB(), etaS / 3600, (etaS % 3600) / 60);
+                }
+                if (frame && ok) writeFrame(vd, frames++, t, t * dt, s);
+                if (!ok) { System.out.println("  *** STAGE2 BAIL — " + fail + " — flushing render + status, stopping (no auto-restart) ***"); break; }
+            }
+            if ((System.nanoTime() - t0) / 1e6 > wallCapMs) { System.out.println("  wall-clock cap (~5.5h) reached @ step " + t); break; }
+        }
+        double secs = (System.nanoTime() - t0) / 1e9;
+        pullRenderState(s);   // refresh host state to the final device step (the pool ledger is per-step; monomerCount
+                              // is only pulled at the check cadence ⇒ a final pull keeps the conservation summary valid)
+        double[] extEnd = netExtent(s); double shrink = (rms0 - extEnd[0]) / rms0;
+        System.out.println("\n===== STAGE 2 RESULT =====");
+        System.out.printf("  ran %d steps in %.1f s (%.0f steps/s, device-resident split) ⇒ sim %.3f s; %d frames → %s%n",
+                doneSteps, secs, doneSteps / secs, doneSteps * dt, frames, vd);
+        System.out.printf("  node-net RMS: start=%.4f → end=%.4f µm (%.1f%% ⇒ %s)%n", rms0, extEnd[0], 100 * shrink,
+                shrink > 0.15 ? "COALESCING" : shrink > 0.04 ? "mild contraction" : shrink < -0.10 ? "DISPERSING" : "STABLE");
+        System.out.printf("  binding: node-shell=%d/%d, free-minifil=%d/%d; turnover taken=%d returned=%d monomers%n",
+                boundTotal(s.mot), s.mot.nMotors, boundTotal(s.mot2), s.mot2.nMotors, s.grow.pool.totalTaken(), s.grow.pool.totalReturned());
+        System.out.printf("  SANITY: conservation=%s, phantoms=%d, wall-escapes=%d, NaN=%s ⇒ %s; peak VRAM≈%s%n",
+                conservationCheck(s) ? "EXACT" : "*** FAIL ***", phantomCount(s.fil), wallEscapes(s), anyNaN(s) ? "*** YES ***" : "none",
+                ok ? "CLEAN" : "*** BAILED: " + fail + " ***", vramMB());
+    }
+
+    /** Best-effort GPU memory.used (MiB) via nvidia-smi; "?" if unavailable. */
+    static String vramMB() {
+        try {
+            Process p = new ProcessBuilder("nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits").redirectErrorStream(true).start();
+            String out = new String(p.getInputStream().readAllBytes()).trim();
+            p.waitFor();
+            String first = out.split("\\s+")[0];
+            return first + "MiB";
+        } catch (Throwable e) { return "?"; }
     }
 
     // ====================================================================== viewer

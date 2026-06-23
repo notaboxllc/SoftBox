@@ -1,6 +1,40 @@
 # Soft Box Project Journal
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
+
+## 2026-06-23 — TASKGRAPH SPLIT — the maximal composition made device-resident (the §6 Graph-resize blocker, fixed).
+Report: `TASKGRAPH_SPLIT_FINDINGS.md`. Branch `xlink-formation-on`. The FullSystemDemo maximal composition merged
+~106 tasks into ONE `TaskGraph`, exceeded TornadoVM's single-`TaskGraph` capacity (`Graph resize not implemented`),
+and silently fell back to the CPU runner. **FIXED** by SPLITTING the identical per-step kernel sequence (same methods,
+same order) into **5 chained `TaskGraph`s** sharing the SoA buffers device-resident via `persistOnDevice`/
+`consumeFromDevice` under one `TornadoExecutionPlan` (`plan.withGraph(i).execute()`, i=0..4). **No kernel/force-law/
+gather/ordering edit** — execution-plan wiring only; `-cpu` byte-unaffected; constituents (Ring3x3/DenseContractile/
+XlinkFormation) byte-unchanged; `BoA-v1ref` byte-clean. **Residency mechanism (Stage-0 unknown, RESOLVED):** TornadoVM
+4.0.1-dev (PTX) keeps `FloatArray`/`IntArray` resident across chained graphs with no host round-trip (confirmed vs the
+`TestSharedBuffers` unit test + measurement). **Load-bearing lesson:** a buffer may be persisted/consumed only if a
+task in its graph actually USES it (TornadoVM elides unused transfers ⇒ null device buffer ⇒ `executeAlloc` NPE) — so
+each SoA buffer is uploaded `FIRST_EXECUTION` in the FIRST graph that uses it, then threaded forward. Tiny per-step
+counts re-uploaded `EVERY_EXECUTION` per graph (never persisted). GridScheduler `localWork=64` keys re-keyed under the
+new graph-name prefixes (`fdTurn.<task>`…). **Partition:** fdTurn(32, turnover+nucleation) → fdBind(20) → fdStruct(28,
+node+minifil structure) → fdFil(13, chain+seg-gathers) → fdInteg(13, containment+integrate); max 32 ≪ the ~58 a single
+graph handles. **Gates:** (1) builds+lowers on PTX, no Graph-resize ✓; (2) device-resident, only the 5 pool-ledger
+offsets pulled per step ✓; (3) split-GPU ≡ CPU **exact** on the default scene (active 672=672, node-bound 14=14,
+minifil-bound 58=58, conservation EXACT, 0 phantoms, 0 wall-escapes) + within-1-head on dense ✓; (4) throughput
+**device-resident + scale-improving** (1.0× default → 2.0× dense → 3.0× 2×dense vs CPU) = launch/compute-bound NOT
+transfer-bound; absolute steps/s modest (~52 dense) because the full composition is ~106 kernels/step (~2× a
+constituent; Ring3x3's 58-kernel graph does 143 steps/s) ✓; (5) Ring3x3 `-gpu` re-ran bit-faithful ✓. **Flagged:**
+crosslinker formation/force stays CPU-side (host `filID`, as the monolith probe; device xlink-force validated
+separately) ⇒ no live crosslinking on the device path. **CLAUDE.md:** added the mandatory CPU-fallback disclosure rule
+under the device-residency invariant. **Stage 2 (overnight, DONE):** the first device-resident execution of the maximal
+composition — dense scene, **370,280 steps in 5.5 h** (wall-cap), **3.70 s sim**, KIN=1, 112 frames →
+`threejs_fulldemo_overnight`. Conservation **EXACT at every checkpoint**, 0 phantoms, 0 wall-escapes, no NaN/crash,
+**peak VRAM 393 MiB/12 GiB** (flat ⇒ no leak). Throughput **decayed ~70→~19 steps/s** over the run (VRAM flat ⇒ not a
+leak; likely growth-driven broad-phase cost as filaments elongate + possible thermal) — flagged; it reached 3.7 s sim,
+short of the 6.6 s severing onset. Mild stable contraction (no crosslinker bundling on the device path ⇒ weaker than the
+CPU hunt's 3.8 %). A final-summary `conservation=FAIL` print was a stale-host-read artifact (monomerCount pulled only at
+check cadence) — fixed with a final pull; the gating per-step checks were all EXACT. New code: `buildPlanSplit`/`blk*`/`buildSplitScheduler`/`stepSplit`/`pullRenderState`/`overnightRun` in
+`FullSystemDemoHarness` (additive; monolithic `buildPlan` retained as the Graph-resize reference); args `-gpusteps`/
+`-overnight`/`-overnightviz`.
 
 ## 2026-06-22 — FULL-SYSTEM DEMONSTRATION — mid-sized biochemically-active contractile network (watch + aberration hunt).
 Report: `FULL_SYSTEM_DEMO_FINDINGS.md`. Branch `xlink-formation-on`. The MAXIMAL composition of every validated
