@@ -381,6 +381,7 @@ public final class FullSystemDemoHarness {
         int checkInt = Math.max(1, (int) Math.round(1.0e-4 / dt));
         s.boxParams = FloatArray.fromElements(1.0e-4f, (float) BOX_XY, (float) BOX_XY, (float) BOX_Z,
                 (float) Constants.radius, 0.5f, (float) checkInt, (float) dt);   // [7]=dt for the confined integrate megakernel
+        if (CSRHOST) hostNodeCSR(s);   // lever 2: the STATIC node-attach CSR-inverse, computed once (device skips its 3 scans/step)
         return s;
     }
 
@@ -915,6 +916,26 @@ public final class FullSystemDemoHarness {
                 xl.torqueMagHist, xl.torqueMagPlace, xl.allocCounts);
     }
 
+    // ====================================================================== LEVER 2 (CSRHOST) host-side CSR builds
+    /** Static node-attach CSR-inverse (attachNode never changes ⇒ compute ONCE; the device path then skips the 3
+     *  ndHist/ndScan/ndScatter launches every step, ZERO per-step round-trip). */
+    static void hostNodeCSR(Scene s) {
+        NodeStore nd = s.node;
+        CrossBridgeSystem.csrHistogram(nd.attachNode, nd.nodeCounts4, nd.nodeAttachCount);
+        CrossBridgeSystem.csrScan(nd.nodeCounts4, nd.nodeAttachCount, nd.nodeAttachOffsets);
+        CrossBridgeSystem.csrScatter(nd.attachNode, nd.nodeCounts4, nd.nodeAttachOffsets, nd.nodeAttachCount, nd.nodeAttachList);
+    }
+    /** Dynamic seg-gather CSR-inverse (keyed by boundSeg ⇒ recompute each step from the boundSeg pulled after fdBind
+     *  — the round-trip lever 2 measures). Host-fills segMotor* which fdFil re-uploads EVERY_EXECUTION before filGather.
+     *  Bit-identical to the device single-thread csr* (pure integer CSR). */
+    static void hostSegCSR(Scene s) {
+        MotorStore mot = s.mot;   // node-shell motor → segment CSR (the real every-step gather at -mini 0).
+        CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, s.segMotorCount);
+        CrossBridgeSystem.csrScan(mot.counts, s.segMotorCount, s.segMotorOffsets);
+        CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, s.segMotorOffsets, s.segMotorCount, s.segMotorMyo);
+        // the free-minifil seg CSR (mot2) stays device-side — empty at -mini 0; left general for mini>0.
+    }
+
     static void allocCpu(FilamentStore f, IntArray accept, FloatArray rc, FloatArray ru, FloatArray ry, IntArray rankScan, IntArray rankOff) {
         FilamentBirthSystem.freeFlags(f.filState, f.freeCount, f.allocCounts);
         CrossBridgeSystem.csrScan(f.freeScanCounts, f.freeCount, f.freeOffsets);
@@ -1144,8 +1165,8 @@ public final class FullSystemDemoHarness {
      *       is not the test here, matching the existing FullSystemDemo CPU≡GPU posture). */
     static void validateRun(Scene s0, double dt) {
         int H = STEPS > 0 ? Math.min(STEPS, 400) : 200;
-        System.out.printf("%n=== MEGAKERNEL PROBE — VALIDATION (megakernel=%b csrhost=%b; node-centric scene, %d steps) ===%n", true, CSRHOST, H);
         boolean savedMega = MEGAKERNEL, savedCsr = CSRHOST;
+        System.out.printf("%n=== MEGAKERNEL PROBE — VALIDATION (megakernel=%b csrhost=%b; node-centric scene, %d steps) ===%n", savedMega, savedCsr, H);
 
         // ---- #1 fused-CPU vs unfused-CPU, BIT-EXACT ----
         MEGAKERNEL = false; Scene cu = build(dt); for (int t = 0; t < H; t++) cpuStep(cu, t);
@@ -1154,8 +1175,8 @@ public final class FullSystemDemoHarness {
         System.out.printf("  #1 fused-CPU vs unfused-CPU: max|Δ pose| = %.3e over %d steps ⇒ %s%n",
                 dmax, H, dmax == 0.0 ? "BIT-EXACT (recomposition preserves arithmetic)" : "*** NOT bit-exact — fusion changed physics ***");
 
-        // ---- #2 CPU(fused) vs GPU(fused), AGGREGATE + sanity ----
-        MEGAKERNEL = true; CSRHOST = savedCsr;     // GPU run uses the fused path (the probe target)
+        // ---- #2 CPU vs GPU under the user's lever config, AGGREGATE + sanity (cf≡cu bit-exact ⇒ either is the CPU ref) ----
+        MEGAKERNEL = savedMega; CSRHOST = savedCsr;
         Scene g = build(dt);
         TornadoExecutionPlan plan;
         try { plan = buildPlanSplit(g); }
@@ -1628,7 +1649,14 @@ public final class FullSystemDemoHarness {
                 nb.coord, nb.forceSum, nd.nodeInvTransY, nuc.seedNode,
                 mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace,
                 mot2.boundSeg, mot2.forceDotFil, mot2.forceMag, mot2.forceDotHist, mot2.forceDotPlace,
-                s.segMotorCount, s.segMotorOffsets, s.segMotorMyo, s.bondData, s.segMotorCount2, s.segMotorOffsets2, s.segMotorMyo2, s.bondData2 };
+                s.bondData, s.bondData2 };
+        // Lever 2 (CSRHOST): the seg-gather CSR-inverse is built on the HOST each step ⇒ NOT device-produced/persisted;
+        // it is re-uploaded EVERY_EXECUTION into fdFil (filGather consumes it). When CSRHOST is off these are
+        // device-produced by filHist/filScan/filScatter and persisted here (FIRST_EXECUTION) exactly as before.
+        Object[] segCsrHost = { s.segMotorCount, s.segMotorOffsets, s.segMotorMyo };   // mot (node-shell) — host-sided under CSRHOST
+        Object[] segCsrMot2 = { s.segMotorCount2, s.segMotorOffsets2, s.segMotorMyo2 };   // mot2 — always device-produced+persisted
+        u3 = cat(u3, segCsrMot2);
+        if (!CSRHOST) u3 = cat(u3, segCsrHost);   // baseline: mot seg CSR device-produced+persisted; CSRHOST: EVERY_EXECUTION in fdFil
         // The crosslinker 2-pass seg-gather CSR-inverse arrays are first-USED by blkFil's appended xlGatherA/B tasks,
         // so they are uploaded FIRST_EXECUTION here (the first graph whose tasks reference them — the executeAlloc-NPE
         // rule of §1: a persisted buffer no task uses is elided → null device buffer. NOT in fdXForm's set, which never
@@ -1709,6 +1737,8 @@ public final class FullSystemDemoHarness {
             if (gi > 0 && consumeSet.length > 0) g = g.consumeFromDevice(gname[gi - 1], consumeSet);
             if (!newBufs.isEmpty()) g = g.transferToDevice(DataTransferMode.FIRST_EXECUTION, newBufs.toArray());
             g = g.transferToDevice(DataTransferMode.EVERY_EXECUTION, everyExec);
+            if (CSRHOST && gi == GI_FIL)   // lever 2: re-upload the HOST-built mot seg-gather CSR each step (filGather consumes it)
+                g = g.transferToDevice(DataTransferMode.EVERY_EXECUTION, segCsrHost);
             g = switch (gname[gi]) {
                 case "fdTurnFire" -> blkTurnFire(g, s); case "fdNuc" -> blkNuc(g, s); case "fdXForm" -> blkXForm(g, s);
                 case "fdBind" -> blkBind(g, s); case "fdStruct" -> blkStruct(g, s); case "fdFil" -> blkFil(g, s); default -> blkInteg(g, s);
@@ -1871,13 +1901,16 @@ public final class FullSystemDemoHarness {
                 .task("brownBb", BrownianForceSystem::brownianForce, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams, mini.bbCounts)
                 .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
         }
-        return tg
+        tg = tg
             .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
             .task("dimer", DimerCouplingSystem::couple, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg)
-            .task("tether", NodeSystem::tether, b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum, nb.coord, nb.uVec, nb.yVec, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams)
-            .task("ndHist", CrossBridgeSystem::csrHistogram, nd.attachNode, nd.nodeCounts4, nd.nodeAttachCount)
-            .task("ndScan", CrossBridgeSystem::csrScan, nd.nodeCounts4, nd.nodeAttachCount, nd.nodeAttachOffsets)
-            .task("ndScatter", CrossBridgeSystem::csrScatter, nd.attachNode, nd.nodeCounts4, nd.nodeAttachOffsets, nd.nodeAttachCount, nd.nodeAttachList)
+            .task("tether", NodeSystem::tether, b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum, nb.coord, nb.uVec, nb.yVec, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams);
+        if (!CSRHOST)   // lever 2: the node-attach CSR is STATIC (attachNode fixed) ⇒ host-precomputed once, skip the 3 device scans
+            tg = tg
+                .task("ndHist", CrossBridgeSystem::csrHistogram, nd.attachNode, nd.nodeCounts4, nd.nodeAttachCount)
+                .task("ndScan", CrossBridgeSystem::csrScan, nd.nodeCounts4, nd.nodeAttachCount, nd.nodeAttachOffsets)
+                .task("ndScatter", CrossBridgeSystem::csrScatter, nd.attachNode, nd.nodeCounts4, nd.nodeAttachOffsets, nd.nodeAttachCount, nd.nodeAttachList);
+        return tg
             .task("ndGather", MiniFilamentSystem::backboneGather, nd.nodeAttachOffsets, nd.nodeAttachList, nd.nodeData, nb.forceSum, nb.torqueSum, nd.nodeCounts4)
             .task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, s.bondData, s.xbParams)
             .task("applyHead", CrossBridgeSystem::applyHeadForce, s.bondData, b.forceSum, b.torqueSum, mot.counts)
@@ -1898,10 +1931,13 @@ public final class FullSystemDemoHarness {
         tg = tg
             .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
             .task("seedTether", NodeNucleationSystem::seedTether, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, nb.coord, nd.nodeInvTransY, nuc.seedNode, nuc.tetherParams)
-            .task("seedReact", NodeNucleationSystem::seedTetherNodeReact, f.coord, f.uVec, f.segLength, f.bTransGam, nb.forceSum, nb.coord, nd.nodeInvTransY, nuc.seedNode, nuc.tetherParams)
-            .task("filHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, s.segMotorCount)
-            .task("filScan", CrossBridgeSystem::csrScan, mot.counts, s.segMotorCount, s.segMotorOffsets)
-            .task("filScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, s.segMotorOffsets, s.segMotorCount, s.segMotorMyo)
+            .task("seedReact", NodeNucleationSystem::seedTetherNodeReact, f.coord, f.uVec, f.segLength, f.bTransGam, nb.forceSum, nb.coord, nd.nodeInvTransY, nuc.seedNode, nuc.tetherParams);
+        if (!CSRHOST)   // lever 2: the seg-gather CSR-inverse is host-built each step (boundSeg pulled after fdBind) ⇒ skip device scans
+            tg = tg
+                .task("filHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, s.segMotorCount)
+                .task("filScan", CrossBridgeSystem::csrScan, mot.counts, s.segMotorCount, s.segMotorOffsets)
+                .task("filScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, s.segMotorOffsets, s.segMotorCount, s.segMotorMyo);
+        tg = tg
             .task("filGather", CrossBridgeSystem::segGather, s.segMotorOffsets, s.segMotorMyo, s.bondData, f.forceSum, f.torqueSum, mot.counts)
             .task("filHist2", CrossBridgeSystem::csrHistogram, mot2.boundSeg, mot2.counts, s.segMotorCount2)
             .task("filScan2", CrossBridgeSystem::csrScan, mot2.counts, s.segMotorCount2, s.segMotorOffsets2)
@@ -2004,11 +2040,13 @@ public final class FullSystemDemoHarness {
         for (String t : new String[]{ "bond2","applyHead2" }) addW("fdStruct." + t, pad(nM2));
         for (String t : new String[]{ "bbGather" }) addW("fdStruct." + t, pad(nBb));
         addW("fdStruct.dimer", pad(nD)); addW("fdStruct.tether", pad(nA)); addW("fdStruct.dimer2", pad(nD2)); addW("fdStruct.tether2", pad(nD2));
-        for (String t : new String[]{ "ndHist","ndScan","ndScatter","bbHist","bbScan","bbScatter" }) addS("fdStruct." + t);
+        for (String t : (CSRHOST ? new String[]{ "bbHist","bbScan","bbScatter" }   // node CSR host-precomputed ⇒ no nd* workers
+                                  : new String[]{ "ndHist","ndScan","ndScatter","bbHist","bbScan","bbScatter" })) addS("fdStruct." + t);
         // G3 fdFil
         for (String t : new String[]{ "chain","seedTether","filGather","filGather2" }) addW("fdFil." + t, pad(C));
         addW("fdFil.seedReact", pad(nN)); addW("fdFil.register", pad(nM)); addW("fdFil.register2", pad(nM2));
-        for (String t : new String[]{ "filHist","filScan","filScatter","filHist2","filScan2","filScatter2" }) addS("fdFil." + t);
+        for (String t : (CSRHOST ? new String[]{ "filHist2","filScan2","filScatter2" }   // mot seg CSR host-sided ⇒ no filHist/Scan/Scatter workers
+                                  : new String[]{ "filHist","filScan","filScatter","filHist2","filScan2","filScatter2" })) addS("fdFil." + t);
         // G4 fdInteg — megakernel 2 (id*, one per store) OR the separate confine/integrate/derive tasks
         if (MEGAKERNEL) {
             addW("fdInteg.idNode", pad(nN)); addW("fdInteg.idM", pad(nMB)); addW("fdInteg.idM2", pad(nMB2));
@@ -2072,7 +2110,7 @@ public final class FullSystemDemoHarness {
             TornadoExecutionResult r = plan.withGraph(gi).withGridScheduler(sched).execute();
             if (gi == GI_TURN)      { r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets); splitResTurn = r; }
             else if (gi == GI_NUC)  { r.transferToHost(g.nucRankOffsets, f.freeOffsets); splitResNuc = r; }
-            else if (gi == GI_BIND) splitResBind = r;
+            else if (gi == GI_BIND) { splitResBind = r; if (CSRHOST) { r.transferToHost(mot.boundSeg); hostSegCSR(g); } }   // lever 2 round-trip: pull boundSeg, host-build seg CSR (fdFil re-uploads it)
             else if (gi == GI_FIL)  splitResFil = r;
             if (gi == GI_INTEG) splitResInteg = r;          // always-run; the derived-geometry render pull
             if (gi == N_SPLIT - 1) splitResL = r;
@@ -2211,7 +2249,7 @@ public final class FullSystemDemoHarness {
             long d1 = System.nanoTime();
             if (gi == GI_TURN)      { r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets); splitResTurn = r; }
             else if (gi == GI_NUC)  { r.transferToHost(g.nucRankOffsets, f.freeOffsets); splitResNuc = r; }
-            else if (gi == GI_BIND) splitResBind = r;
+            else if (gi == GI_BIND) { splitResBind = r; if (CSRHOST) { r.transferToHost(mot.boundSeg); hostSegCSR(g); } }   // lever 2 round-trip: pull boundSeg, host-build seg CSR (fdFil re-uploads it)
             else if (gi == GI_FIL)  splitResFil = r;
             if (gi == GI_INTEG) splitResInteg = r;          // always-run; the derived-geometry render pull
             if (gi == N_SPLIT - 1) splitResL = r;
