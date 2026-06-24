@@ -330,5 +330,99 @@ the CPU hunt (the §5.1/§6 morphology gap closed), (4) conservation/phantoms/es
 `BoA-v1ref` byte-clean, (6) throughput delta. Files (Part 1a): `softbox/FilIDSystem.java` (new);
 `FullSystemDemoHarness.computeFilID` (now drives FilIDSystem), `+filIDScratch`/`filIDRounds`, `-filidcheck` gate.
 `BoA-v1ref` byte-clean; CPU path value-unchanged (filID value-identical ⇒ identical formation).
+
+### §9.3 — Part 1b DONE: the crosslinker pipeline wired into the device residency plan — LIVE BUNDLING ON THE GPU
+**Date:** 2026-06-23. **Branch:** `cadence-gate-fdturn`. The §5.1/§6 gap is CLOSED: the maximal device-resident run
+now does **live crosslinker formation + bundling + contraction** on the GPU path (previously the device path carried
+**zero** crosslinks). The whole crosslinker pipeline — device filID (Part 1a) + O(N) formation + the every-step
+force/unbind + the 2-pass seg-gather — is wired into `buildPlanSplit`, **kernels reused byte-for-decision from the
+device-validated XlinkFormation GATE-B / DenseContractile / CrosslinkerBundleHarness** (no new kernel, force law, or
+gather; execution-plan wiring only).
+
+#### §9.3.0 — the LOAD-BEARING design change vs the §9.2 plan: `fdXForm` is the LAST graph, not G2
+§9.2 planned `fdXForm` inserted as **G2 (after fdNuc), cadence-gated**. **That placement does not hold residency** —
+a **cadence-gated MIDDLE graph breaks the consume forward-chain.** The mechanism (diagnosed empirically, executeAlloc
+NPE at the FIRST non-formation step):
+- The split's per-graph `consumeFromDevice(predecessor, fullSet)` names the immediate predecessor as the producer of
+  the WHOLE running buffer set. §8.1's "consume-from-a-skipped-graph is a residency lookup" holds only when the skipped
+  graph is the **genuine uploader** of what its consumer needs (fdNuc←skipped-fdTurnFire works because fdTurnFire
+  genuinely uploaded u0). A skipped **middle** graph (fdXForm at G2) is named by fdBind as the producer of u0/uNuc too,
+  which it merely re-persisted — on a skip step that producer→buffer association is stale ⇒ null device buffer ⇒ NPE.
+- A skipped **SOURCE** graph (fdTurnFire, G0) is safe (pure uploader, no predecessor); a skipped **SINK** graph is safe
+  (no successor consumes from it). A skipped **middle** is not. (Grouping the consume per-genuine-uploader — emitting
+  multiple `consumeFromDevice` calls — did not compose on this TornadoVM build either: it NPE'd at build of fdXForm.)
+- **Fix:** make `fdXForm` the **LAST** graph (G6), execute-gated. As a sink it has no successor consuming its
+  sole-uploaded (formation-scratch) buffers, so the skip is residency-safe. The **shared** link state it reads+mutates
+  (`linkState`/`linkFilA/B`/`loc1/2`/`activeLinkCount`/strain/torsion rings) is uploaded by the **always-run `fdFil`**
+  (which uses it in the every-step force+unbind) and consumed by `fdXForm` — so no buffer an always-run graph needs is
+  ever sole-kept by the gated graph. The cost: formation runs at **end-of-step N** ⇒ its new links are forced from
+  **step N+1** — a **≤1-step lifecycle shift** vs cpuStep's same-step formation, identical in kind to the §5c-i
+  same-step-vs-next-step reuse choice (a timing choice, not a correctness change; the chaotic-aggregate gate is blind to it).
+- An interim "always-run `fdXForm` + toggle `P_form`→0 off-cadence" variant was correct but ran the formation **grid
+  build every step** (≈150 ms/formation-execution at the dense scene) ⇒ **6 steps/s**. The gated-sink design throttles
+  that 100× (amortized 1.50 ms/step) ⇒ **57 steps/s.** Kept the gated-sink design.
+
+#### §9.3.1 — revised partition map (7 graphs; fdXForm appended as the gated SINK)
+| # | graph | cadence | content (Δ vs §8.2) |
+|---|---|---|---|
+| 0 | `fdTurnFire` | fire-only | (unchanged) |
+| 1 | `fdNuc` | every step | (unchanged) |
+| 2 | `fdBind` | every step | (unchanged) |
+| 3 | `fdStruct` | every step | (unchanged) |
+| 4 | `fdFil` | every step | **+12 crosslinker FORCE tasks** appended: `unbind·countActiveLinks·linkForces·linkTorsion·2-pass seg-gather` into `f.forceSum` (after the motor gathers, cpuStep's force-phase order). **Uploads the shared link state.** |
+| 5 | `fdInteg` | every step | (unchanged) |
+| 6 | `fdXForm` | **formation cadence only (1/100)** | NEW gated SINK: device filID (`init`+`filIDRounds` jumps) · `countActiveLinks` · FormationGrid build (9 tasks) · `gridFormCount/Scan/Emit` · `formGates·formAdmitReduce·formAdmit` · scan-rank allocator · `placeOrient` (~35 tasks). Per step: formation ⇒ 7 graphs; off-cadence ⇒ 6 (fdXForm skipped). |
+
+Residency additions (~60 buffers): the whole `CrosslinkerStore` SoA + the FormationGrid's OWN grid (distinct cell size)
++ `filID`/`filIDScratch` + the 2-pass seg-gather CSR arrays. Split by uploader: the **formation-scratch** (req*/gate/
+free-list/rank/allocCounts/grid/filID) is first-used in the gated `fdXForm`; the **shared link state** + the
+**force-only** data/params (xlinkData/xlParams/offParams/torsionParams) + seg-gather CSR are first-used in the
+always-run `fdFil`. `formParams`/`formCounts`/`gridCounts`/`counts` are EVERY_EXECUTION (re-uploaded, never persisted).
+`XL_CHECK_INT = 100 == cpuStep's formation cadence == biochemCheckInt` (confirmed, not assumed). `GridScheduler` keys
+`fdXForm.*` (FormationGrid dims — NOT the binding grid) + `fdFil.xl*`; the filID jumps + RNG/trig formation kernels
+`localWork=64`, the CSR scans single-thread.
+
+#### §9.3.2 — gate table (default + dense scenes)
+| gate | result |
+|---|---|
+| **(1) builds + lowers on PTX @ 7 graphs** | PASS — no Graph-resize (under cap), no CUDA 701; the FormationGrid kernels keyed to ITS dims |
+| **(2) residency holds (the make-or-break for ~60 buffers)** | PASS — device-resident across all 7 sub-graphs AND across the skipped-fdTurnFire / skipped-fdXForm steps; **no NPE, no host round-trip** (per-step copyIn ~3.1 KB unchanged); 2500+ steps clean. The gated-SINK placement is what holds it (§9.3.0). |
+| **(3) THE PAYOFF — live bundling tracks the CPU hunt** | **PASS** (dense, 2500 steps): **xlinks GPU=24 ≈ CPU=23**; filament-RMS contraction GPU **0.29%** / CPU **0.47%** (both contractile, same sign); the device path now CARRIES crosslinks (was 0). |
+| **(4) formation correctness (device filID feeds device formation)** | PASS — **same-chain-links = 0** on the device (the device filID correctly excludes same-filament pairs — the whole point); xlinks track CPU within chaotic noise. Bit-exactness is established by composition: Part-1a GATE 1 (device filID ≡ host, **value-identical**, through split/sever/depoly/nucleation churn) + XlinkFormation GATE-B (device formation KERNELS ≡ host on identical pose, bit-identical) ⇒ formation-with-device-filID ≡ host. |
+| **(5) conservation / phantoms / escapes / NaN** | PASS — conservation EXACT, phantoms 0, wall-escapes 0, no NaN (default + dense, all sampled steps) |
+| **(6) regression** | PASS — `cpuStep` **byte-untouched** (CPU xlink trajectory bit-identical to pre-wire: step 330 → 1 link, rms 0.9513, fil-rms 1.0161); only `FullSystemDemoHarness` changed (200+/31−); constituent harnesses + monolith + `BoA-v1ref` byte-clean. `-noxlink` ⇒ 6-graph path unchanged. |
+| **(7) CPU≡GPU aggregate (§8 standard)** | PASS — dense 2500: active 1050=1050, node-bound 17 vs 15, minifil-bound 209 vs 175 (chaotic-many-body, within tolerance) |
+
+#### §9.3.3 — throughput + creep delta (the two launch-ceiling guards)
+- **Throughput (dense):** **57 steps/s = 1.9× the CPU runner** at the payoff horizon (matches §4's dense 2.0×). The
+  every-step cost is the +12 force tasks (fdFil grew to ~7.0 ms/step — the 2-pass gather over ~10k link slots is real
+  compute); the formation pipeline is amortized (fdXForm **1.50 ms/step** avg, ≈150 ms/formation-execution ÷ 100).
+  Off-cadence launches ~74→~86 (force), on-cadence +~35 (formation, 1/100) — exactly the §9.2 estimate.
+- **Creep delta (dense, 30k steps, `-noprof`):** the wiring **did NOT add a second creep carrier and did NOT worsen the
+  slope.** Per-graph ms/step at 10k/20k/30k:
+
+  | step | steps/s | fdTurnFire | fdNuc | fdBind | fdStruct | **fdFil** | fdInteg | **fdXForm** |
+  |---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | 10 300 | 56 | 0.04 | 2.73 | 2.21 | 2.66 | **6.89** | 1.69 | **1.50** |
+  | 20 300 | 52 | 0.04 | 3.95 | 2.27 | 2.72 | **7.01** | 1.74 | **1.51** |
+  | 30 300 | 49 | 0.04 | 5.28 | 2.29 | 2.70 | **7.00** | 1.73 | **1.50** |
+
+  **fdFil FLAT** (6.89→7.00 — the appended force tasks do NOT creep) and **fdXForm FLAT** (gated/amortized). The only
+  creep carrier remains **fdNuc** (2.73→5.28 ≈ **0.127 µs/step**, dense) — the §8 per-execute creep on the first
+  always-run graph, **unchanged** by the wiring (it is a TornadoVM-internal accumulation, the standing §8.3 follow-up).
+
+#### §9.3.4 — render + files
+- **Device render WITH bundling:** `threejs_fulldemo_gpu_bundled` (`-dense -overnight -overnightviz … -steps 30000`,
+  device-resident split, **301 frames**, 0.300 s sim, 48 steps/s) — the visible payoff: the GPU run now **contracts WITH
+  crosslinks** — **184 crosslinks** in the final frame (the earlier un-bundled device render / §6 overnight had **0**),
+  **node-net RMS 1.200 → 1.118 µm (6.9% contraction)** vs the un-bundled §6 device path's weak ~1%. SANITY at scale:
+  conservation EXACT, phantoms 0, wall-escapes 0, NaN none, peak VRAM 514 MiB. The `writeFrame` "crosslinks" channel is
+  pulled from `fdFil` (always-run) each frame.
+- **Files:** `softbox/FullSystemDemoHarness.java` only (additive, split path): `blkXForm` (new, the formation graph);
+  `blkFil` (+12 force tasks); `buildPlanSplit` (uX/u3 split by uploader; fdXForm as the gated sink; GI_* by name; 7-graph
+  `everyExec`/host-pull); `buildSplitScheduler` (`fdXForm.*` + `fdFil.xl*` keys); `stepSplit`/`profStep` (the fdXForm
+  cadence gate + xl host counts); `pullRenderState` (crosslink + geometry from always-run results); `gpuScaleCheck`
+  (xlink-count + contraction payoff print); `GNAME`/`N_SPLIT`/`GI_*` made dynamic. `cpuStep` byte-untouched; constituent
+  harnesses + monolith `buildPlan` + `BoA-v1ref` byte-clean. **§5.1/§6 morphology gap CLOSED.**
 </content>
 </invoke>

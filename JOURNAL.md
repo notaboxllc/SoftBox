@@ -2,6 +2,26 @@
 
 Last updated: 2026-06-23
 
+## 2026-06-23 — filID→GPU Part 1b: crosslinker pipeline wired into the device plan — LIVE BUNDLING ON THE GPU
+Branch `cadence-gate-fdturn`. Report: `TASKGRAPH_SPLIT_FINDINGS.md` §9.3. **The §5.1/§6 gap is CLOSED** — the maximal
+device-resident run now does **live crosslinker formation + bundling + contraction on the GPU** (the device path
+previously carried ZERO crosslinks). The whole pipeline — device filID (Part 1a) + O(N) formation + every-step
+force/unbind + the 2-pass seg-gather — wired into `buildPlanSplit`; **kernels reused byte-for-decision from the
+device-validated XlinkFormation GATE-B / DenseContractile / CrosslinkerBundleHarness** (no new kernel/force-law/gather).
+**THE LOAD-BEARING DESIGN CHANGE vs §9.2:** `fdXForm` is the **LAST (gated SINK) graph, not G2** — a cadence-gated
+MIDDLE graph **breaks the consume forward-chain** (a skipped non-genuine-uploader ⇒ stale producer→buffer association ⇒
+executeAlloc NPE; §8.1's skip-safety holds for a SOURCE like fdTurnFire but not a MIDDLE). As a SINK, fdXForm has no
+successor consuming its sole-uploaded scratch (skip-safe); the **shared link state** is uploaded by the always-run
+`fdFil` (which forces it every step) and consumed by fdXForm ⇒ formation at end-of-step N, forced from N+1 (a ≤1-step
+shift, §5c-i kind). **Gates (dense, all GREEN):** PAYOFF — xlinks **GPU 24 ≈ CPU 23**, **same-chain-links 0** (device
+filID excludes same-filament pairs), contraction GPU 0.29%/CPU 0.47%; render `threejs_fulldemo_gpu_bundled` (301 frames,
+**184 crosslinks**, **6.9% node contraction** vs the un-bundled §6 device path's ~1%/0 links); conservation EXACT,
+phantoms 0, escapes 0, NaN none; CPU≡GPU aggregate AGREE; **throughput 57 steps/s = 1.9× CPU**; **creep — fdFil FLAT
+(6.89→7.00, the force tasks do NOT creep), fdXForm FLAT (gated/amortized 1.50 ms/step), the §8 fdNuc creep unchanged
+(~0.127 µs/step) — no second carrier, slope not worsened**. `cpuStep` byte-untouched (CPU trajectory bit-identical);
+only `FullSystemDemoHarness.java` changed; constituents + monolith + `BoA-v1ref` byte-clean. New `blkXForm`; `blkFil`
++12 force tasks; fdXForm gated sink + GI_*-by-name; `-noxlink` ⇒ 6-graph path unchanged.
+
 ## 2026-06-23 — filID→GPU Part 1a: device-agnostic pointer-doubling filID (GATE 1 PASS); pipeline wiring scoped
 Branch `cadence-gate-fdturn`. Report: `TASKGRAPH_SPLIT_FINDINGS.md` §9. Closes the §5.1 crosslinker gap's
 *algorithmic* blocker. **Stage-0 recon: CASE (a) but a PURE CHAIN** — host `computeFilID` walks `end2NbrSlot` to the

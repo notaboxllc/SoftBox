@@ -97,6 +97,7 @@ public final class FullSystemDemoHarness {
     static double XLINK_CONC = 1.0;          // -xlconc
     static final double XL_MAX_ANGLE = 0.6;  // rad (dense-config aperture)
     static int XL_CHECK_INT = 100;           // formation cadence (steps) — pForm = 1-exp(-kon*conc*dt*checkInt)
+    static float XL_PFORM = 0;               // the real per-cadence P_form (set in buildCrosslinkers); device fdXForm toggles formParams[4] between this (on cadence) and 0 (off)
 
     // ---- turnover (the ring-relevant formin-pinned mode) ----
     static boolean AGING_ON = true;          // -noaging
@@ -511,7 +512,8 @@ public final class FullSystemDemoHarness {
         CrosslinkerStore xl = new CrosslinkerStore(C, nSeg, reqCap);
         xl.setParams(REST_LEN, FRAC_MOVE, dt);
         xl.setOffParams(OFF_CONST, OFF_COEFF, OFF_EXP, dt, REST_LEN);
-        xl.setFormParams(XL_MAX_ANGLE, GRAB_DIST, MIN_SEP, MAX_LINKS_ON_SEG, pForm(XLINK_CONC, dt * XL_CHECK_INT), MIN_FILLINK_SEP, 0);
+        XL_PFORM = (float) pForm(XLINK_CONC, dt * XL_CHECK_INT);   // the real on-cadence P_form (device toggles formParams[4] to this/0)
+        xl.setFormParams(XL_MAX_ANGLE, GRAB_DIST, MIN_SEP, MAX_LINKS_ON_SEG, XL_PFORM, MIN_FILLINK_SEP, 0);
         xl.setRequestCount(reqCap);
         xl.setTorsionParams(FIL_TORQ_SPRING, true);
         s.filID = new IntArray(nSeg);   // CHAIN id (the connected-component terminal), recomputed each formation
@@ -1038,6 +1040,7 @@ public final class FullSystemDemoHarness {
         System.out.println("  persistOnDevice/consumeFromDevice keep the SoA buffers resident across sub-graphs; host pulls only the");
         System.out.println("  integer pool-ledger offsets per step (the same UNDER_DEMAND pulls the monolith used). No kernel/order edits.");
         Scene g = build(dt);
+        filRms0gpu = filRms(g.fil);
         TornadoExecutionPlan plan;
         try { plan = buildPlanSplit(g); }
         catch (Throwable e) { System.out.println("  GPU SPLIT plan build FAILED: " + e); e.printStackTrace(); return; }
@@ -1055,10 +1058,12 @@ public final class FullSystemDemoHarness {
         double secs = (System.nanoTime() - t0) / 1e9;
         pullRenderState(g);   // pull the device-resident binding/geometry state for the aggregate comparison
         System.out.printf("  GPU SPLIT (%d chained graphs) ran %d steps in %.1f s (%.0f steps/s) device-resident, NO crash/race%n", N_SPLIT, M, secs, M / secs);
-        System.out.printf("  GPU aggregate: node-bound=%d, minifil-bound=%d, active=%d, conc=%.4f µM, conservation=%s, phantoms=%d, wall-escapes=%d%n",
-                boundTotal(g.mot), boundTotal(g.mot2), activeSegments(g.fil), g.grow.pool.conc(),
-                conservationCheck(g) ? "EXACT" : "*** FAIL ***", phantomCount(g.fil), wallEscapes(g));
-        Scene c = build(dt); long c0 = System.nanoTime(); for (int t = 0; t < M; t++) cpuStep(c, t); double csecs = (System.nanoTime() - c0) / 1e9;
+        System.out.printf("  GPU aggregate: node-bound=%d, minifil-bound=%d, active=%d, xlinks=%d, conc=%.4f µM, conservation=%s, phantoms=%d, wall-escapes=%d, same-chain-links=%d%n",
+                boundTotal(g.mot), boundTotal(g.mot2), activeSegments(g.fil), g.xl == null ? 0 : activeLinks(g.xl), g.grow.pool.conc(),
+                conservationCheck(g) ? "EXACT" : "*** FAIL ***", phantomCount(g.fil), wallEscapes(g), sameChainLinks(g));
+        double gpuShrink = 100 * (filRms0gpu - filRms(g.fil)) / filRms0gpu;
+        Scene c = build(dt); double cRms0 = filRms(c.fil); long c0 = System.nanoTime(); for (int t = 0; t < M; t++) cpuStep(c, t); double csecs = (System.nanoTime() - c0) / 1e9;
+        double cpuShrink = 100 * (cRms0 - filRms(c.fil)) / cRms0;
         boolean agree = Math.abs(activeSegments(g.fil) - activeSegments(c.fil)) <= Math.max(8, (int)(0.2 * activeSegments(c.fil)))
                 && Math.abs(boundTotal(g.mot2) - boundTotal(c.mot2)) <= Math.max(12, (int)(0.4 * Math.max(1, boundTotal(c.mot2))))
                 && Math.abs(boundTotal(g.mot) - boundTotal(c.mot)) <= Math.max(10, (int)(0.5 * Math.max(1, boundTotal(c.mot))));
@@ -1067,7 +1072,11 @@ public final class FullSystemDemoHarness {
         System.out.printf("  CPU≡GPU aggregate @ %d steps: active GPU=%d CPU=%d, node-bound GPU=%d CPU=%d, minifil-bound GPU=%d CPU=%d ⇒ %s%n",
                 M, activeSegments(g.fil), activeSegments(c.fil), boundTotal(g.mot), boundTotal(c.mot), boundTotal(g.mot2), boundTotal(c.mot2),
                 agree ? "AGREE (chaotic-many-body, within tolerance)" : "*DIFFER — investigate*");
+        if (g.xl != null)
+            System.out.printf("  *** PAYOFF (live bundling on device) @ %d steps: xlinks GPU=%d CPU=%d ; filament-RMS shrink GPU=%.2f%% CPU=%.2f%% (same-chain-links GPU=%d) ***%n",
+                    M, activeLinks(g.xl), activeLinks(c.xl), gpuShrink, cpuShrink, sameChainLinks(g));
     }
+    static double filRms0gpu = 0;
 
     /** Device-resident graph: turnover + nucleation + node shell + free minifilaments (xlinks: CPU-side formation,
      *  device force omitted from this probe — the xlink device path is validated in DenseContractile/XlinkFormation).
@@ -1298,7 +1307,9 @@ public final class FullSystemDemoHarness {
     //  the xlink device path is validated in DenseContractile/XlinkFormation. Flagged in the findings.)
     // fdTurnFire result (turnover offsets, fire steps only — may be stale on a non-fire check), fdNuc result (nuc
     // offsets + filament render state, always-run), fdBind result (binding state), last graph (derived geometry).
-    static TornadoExecutionResult splitResTurn, splitResNuc, splitResBind, splitResL;
+    static TornadoExecutionResult splitResTurn, splitResNuc, splitResBind, splitResFil, splitResInteg, splitResL;
+    // graph indices (computed in buildPlanSplit; xl-present ⇒ 7 graphs with fdXForm at G2, else 6). GI_XFORM=-1 when off.
+    static int GI_TURN, GI_NUC, GI_XFORM = -1, GI_BIND, GI_STRUCT, GI_FIL, GI_INTEG;
     static Object[] fullPersistSet;   // the full persisted SoA set (for the -planreset rebuild-mode full host round-trip)
 
     static Object[] cat(Object[] a, Object[] b) {
@@ -1355,6 +1366,12 @@ public final class FullSystemDemoHarness {
         // execution, not held resident; persisting them corrupts their device state).
         Object[] everyExec = { mot.counts, nd.nodeBodyCounts, f.counts, grow.growCounts, grow.growParams,
                 nuc.nucCounts, d.depolyCounts, ag.agingCounts, sv.severCounts, mot2.counts, mini.bbCounts };
+        // Crosslinker per-step counts re-uploaded EVERY_EXECUTION (used by fdXForm formation + fdFil force/unbind):
+        // xl.counts (unbind/gather bounds + RNG), xl.formCounts (formation RNG + candidate counter), fg.gridCounts
+        // (formation-grid body count). NOT persisted (counts buffers are re-uploaded, not held). xl off ⇒ unchanged.
+        boolean xlDev = s.xl != null;
+        // Crosslinker per-step counts (used every step by fdFil force/unbind + the formation cadence by fdXForm).
+        if (xlDev) everyExec = cat(everyExec, new Object[]{ s.xl.counts, s.xl.formCounts, s.fg.gridCounts });
 
         // --- per-graph SoA-buffer USAGE sets (the distinct persistent firstExec buffers each block's tasks reference).
         // A buffer is uploaded (FIRST_EXECUTION) by the FIRST graph that USES it (so it is actually allocated there;
@@ -1407,6 +1424,18 @@ public final class FullSystemDemoHarness {
                 mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace,
                 mot2.boundSeg, mot2.forceDotFil, mot2.forceMag, mot2.forceDotHist, mot2.forceDotPlace,
                 s.segMotorCount, s.segMotorOffsets, s.segMotorMyo, s.bondData, s.segMotorCount2, s.segMotorOffsets2, s.segMotorMyo2, s.bondData2 };
+        // The crosslinker 2-pass seg-gather CSR-inverse arrays are first-USED by blkFil's appended xlGatherA/B tasks,
+        // so they are uploaded FIRST_EXECUTION here (the first graph whose tasks reference them — the executeAlloc-NPE
+        // rule of §1: a persisted buffer no task uses is elided → null device buffer. NOT in fdXForm's set, which never
+        // touches them). All other crosslinker force buffers are uploaded by fdXForm and consumed here.
+        // fdFil (always-run) is the UPLOADER of the shared crosslinker link state (it uses it in the every-step force +
+        // unbind); fdXForm (the cadence-gated LAST graph) consumes it. Uploading the link state in an always-run graph
+        // is what makes the gated fdXForm skip-safe (it would otherwise be a skipped sole-uploader of buffers a later
+        // always-run graph needs). + the 2-pass seg-gather CSR arrays + the force-only params/data.
+        if (xlDev) u3 = cat(u3, new Object[]{ s.segCountA, s.segOffsetsA, s.segIdxA, s.segCountB, s.segOffsetsB, s.segIdxB,
+                s.xl.xlinkData, s.xl.xlParams, s.xl.offParams, s.xl.torsionParams,
+                s.xl.linkState, s.xl.linkFilA, s.xl.linkFilB, s.xl.loc1, s.xl.loc2, s.xl.activeLinkCount,
+                s.xl.strainHist, s.xl.strainPlace, s.xl.linkOrientSame, s.xl.torqueMagHist, s.xl.torqueMagPlace });
         Object[] u4 = {   // G4 containment + integrate + derive
                 nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, nb.yVec, nb.randForce, nb.randTorque, nb.bRotGam, nb.zVec, nb.end1, nb.end2,
                 nd.nodeBodyParams,
@@ -1415,8 +1444,36 @@ public final class FullSystemDemoHarness {
                 bb.coord, bb.uVec, bb.segLength, bb.bTransGam, bb.forceSum, bb.torqueSum, bb.yVec, bb.randForce, bb.randTorque, bb.bRotGam, bb.zVec, bb.end1, bb.end2, mini.bbBodyParams,
                 f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, f.yVec, f.randForce, f.randTorque, f.bRotGam, f.params, f.zVec, f.end1, f.end2,
                 s.boxParams };
-        Object[][] U = { u0, uNuc, u1, u2, u3, u4 };
-        String[] gname = { "fdTurnFire", "fdNuc", "fdBind", "fdStruct", "fdFil", "fdInteg" };
+        // fdXForm (CADENCE-GATED, the LAST graph) — device filID (pointer-doubling) + the WHOLE crosslinker formation
+        // pipeline. As the LAST graph it has NO successor consuming its sole-uploaded (formation-scratch) buffers, so
+        // skipping it 99/100 steps is residency-safe; the SHARED link state it reads/mutates is uploaded by the
+        // always-run fdFil (u3) and consumed here. First-use set = filID buffers + the FormationGrid's OWN grid (distinct
+        // cell size, can't reuse the binding grid) + the formation-ONLY request/allocator scratch + formParams. NOT
+        // f.end1/f.end2 (uploaded by fdBind) and NOT the shared link buffers (uploaded by fdFil). gridCounts/formCounts
+        // are EVERY_EXECUTION (above). xl.filLinkCt is build-only (no device task) ⇒ omitted (else executeAlloc NPE).
+        Object[] uX = !xlDev ? null : new Object[]{
+                s.filID, s.filIDScratch,
+                s.fg.view.center, s.fg.view.boundingRadius, s.fg.view.ownerStore, s.fg.view.ownerSlot, s.fg.viewParams,
+                s.fg.gridParams, s.fg.gridDims, s.fg.bodyCell, s.fg.cellCount, s.fg.chunkSum, s.fg.chunkParams, s.fg.chunkCellCount,
+                s.fg.gridCellOffsets, s.fg.gridCellContents, s.fg.candCountSeg, s.fg.candBaseSeg,
+                s.xl.reqFilA, s.xl.reqFilB, s.xl.reqLoc1, s.xl.reqLoc2, s.xl.reqOrient, s.xl.gatePass, s.xl.minCand, s.xl.acceptFlag,
+                s.xl.freeCount, s.xl.freeOffsets, s.xl.freeList, s.xl.freeScanCounts, s.xl.rankOffsets, s.xl.rankScanCounts, s.xl.allocCounts,
+                s.xl.formParams };
+        Object[][] U; String[] gname;
+        if (xlDev) {
+            U = new Object[][]{ u0, uNuc, u1, u2, u3, u4, uX };
+            gname = new String[]{ "fdTurnFire", "fdNuc", "fdBind", "fdStruct", "fdFil", "fdInteg", "fdXForm" };
+        } else {
+            U = new Object[][]{ u0, uNuc, u1, u2, u3, u4 };
+            gname = new String[]{ "fdTurnFire", "fdNuc", "fdBind", "fdStruct", "fdFil", "fdInteg" };
+        }
+        N_SPLIT = gname.length;
+        GI_TURN = GI_NUC = GI_BIND = GI_STRUCT = GI_FIL = GI_INTEG = -1; GI_XFORM = -1;
+        for (int gi = 0; gi < N_SPLIT; gi++) switch (gname[gi]) {
+            case "fdTurnFire" -> GI_TURN = gi; case "fdNuc" -> GI_NUC = gi; case "fdXForm" -> GI_XFORM = gi;
+            case "fdBind" -> GI_BIND = gi; case "fdStruct" -> GI_STRUCT = gi; case "fdFil" -> GI_FIL = gi; case "fdInteg" -> GI_INTEG = gi;
+        }
+        GNAME = gname;
 
         // host-pull buffers per graph (UNDER_DEMAND). G0 fdTurnFire: the turnover pool-ledger offsets (pulled inline
         // ONLY on fire steps). G1 fdNuc (always-run): the nuc pool-ledger offsets (every step) + the filament render
@@ -1427,11 +1484,19 @@ public final class FullSystemDemoHarness {
         Object[] hostNuc = { s.nucRankOffsets, f.freeOffsets, f.monomerCount, f.filState, f.segLength, nuc.seedNode, ag.nucFrac, sv.cofFrac };
         Object[] host1 = { mot.boundSeg, mot2.boundSeg, mot.nucleotideState, mot2.nucleotideState };
         Object[] host4 = { nb.coord, f.coord, f.end1, f.end2, b.end1, b.end2, b2.end1, b2.end2, bb.coord, bb.end1, bb.end2 };
+        // crosslink render/count state (active links + endpoints) — pulled from fdFil (always-run; unbind/force mutate
+        // linkState there) so a non-formation check step never reads the skipped fdXForm graph.
+        Object[] hostXl = xlDev ? new Object[]{ s.xl.linkState, s.xl.linkFilA, s.xl.linkFilB, s.xl.loc1, s.xl.loc2, s.xl.linkOrientSame } : null;
 
         java.util.Set<Object> uploaded = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         TaskGraph[] tg = new TaskGraph[N_SPLIT];
         for (int gi = 0; gi < N_SPLIT; gi++) {
             // newBufs = first-use here; consumeSet = everything uploaded by earlier graphs (all allocated ⇒ no NPE).
+            // Consume from the immediate predecessor (the proven §8 pattern): every graph EXCEPT fdTurnFire is always-run
+            // and re-persists the full running set under its own tag each step, so the predecessor always has them; the
+            // sole gated graph (fdTurnFire) is the GENUINE uploader of what its consumer (fdNuc) needs, which §8.1 proved
+            // is skip-safe. fdXForm is kept ALWAYS-RUN (formation is gated internally by P_form, below) precisely so it
+            // never becomes a skipped non-uploader in this chain — a skipped MIDDLE graph breaks the consume forward-link.
             java.util.List<Object> newBufs = new java.util.ArrayList<>();
             for (Object o : U[gi]) if (!uploaded.contains(o)) { newBufs.add(o); uploaded.add(o); }
             Object[] consumeSet = uploaded.stream().filter(o -> !newBufs.contains(o)).toArray();
@@ -1439,16 +1504,19 @@ public final class FullSystemDemoHarness {
             if (gi > 0 && consumeSet.length > 0) g = g.consumeFromDevice(gname[gi - 1], consumeSet);
             if (!newBufs.isEmpty()) g = g.transferToDevice(DataTransferMode.FIRST_EXECUTION, newBufs.toArray());
             g = g.transferToDevice(DataTransferMode.EVERY_EXECUTION, everyExec);
-            g = switch (gi) { case 0 -> blkTurnFire(g, s); case 1 -> blkNuc(g, s); case 2 -> blkBind(g, s); case 3 -> blkStruct(g, s); case 4 -> blkFil(g, s); default -> blkInteg(g, s); };
-            if (gi == 0) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host0);
-            else if (gi == 1) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, hostNuc);
-            else if (gi == 2) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host1);
-            else if (gi == 5) {
-                g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host4);
-                // -planreset rebuild mode: register the FULL persisted set UNDER_DEMAND on the last graph so a reset
+            g = switch (gname[gi]) {
+                case "fdTurnFire" -> blkTurnFire(g, s); case "fdNuc" -> blkNuc(g, s); case "fdXForm" -> blkXForm(g, s);
+                case "fdBind" -> blkBind(g, s); case "fdStruct" -> blkStruct(g, s); case "fdFil" -> blkFil(g, s); default -> blkInteg(g, s);
+            };
+            if (gi == GI_TURN) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host0);
+            else if (gi == GI_NUC) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, hostNuc);
+            else if (gi == GI_BIND) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host1);
+            if (xlDev && gi == GI_FIL) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, hostXl);
+            if (gi == GI_INTEG) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host4);   // derived geometry for the renderer (fdInteg produces it)
+            if (gi == N_SPLIT - 1 && planResetEvery > 0 && planResetMode.equals("rebuild"))
+                // -planreset rebuild mode: register the FULL persisted set UNDER_DEMAND on the LAST graph so a reset
                 // boundary can pull the entire device state to host before tearing the plan down (probe-only).
-                if (planResetEvery > 0 && planResetMode.equals("rebuild")) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, uploaded.toArray());
-            }
+                g = g.transferToHost(DataTransferMode.UNDER_DEMAND, uploaded.toArray());
             // persist the full running state (keeps it device-resident for later sub-graphs AND the next step).
             g = g.persistOnDevice(uploaded.toArray());
             tg[gi] = g;
@@ -1508,6 +1576,44 @@ public final class FullSystemDemoHarness {
             .task("initNewborn", NodeNucleationSystem::initNewborn, s.nucRankOffsets, f.freeList, f.freeOffsets, f.monomerCount, f.segLength, nuc.seedParams, f.allocCounts)
             .task("nucFresh", AgingSystem::nucleateFreshAtp, s.nucRankOffsets, f.freeList, f.freeOffsets, ag.nucFrac, f.allocCounts)
             .task("nucCof", SeveringSystem::nucleateFreshCofilin, s.nucRankOffsets, f.freeList, f.freeOffsets, sv.cofFrac, f.allocCounts);
+    }
+
+    /** fdXForm — device filID (pointer-doubling to the chain terminal) + the WHOLE crosslinker FORMATION pipeline
+     *  (FormationGrid build + fused per-segment query + gates + one-per-seg admission + the scan-rank allocator +
+     *  placeOrient). CADENCE-GATED in stepSplit (executes only on the formation cadence, like fdTurnFire — proven safe
+     *  across a skipped producer, §8.1). filID must be current AFTER fdTurnFire+fdNuc (chain mutations) and BEFORE
+     *  formation reads it (§9.0). countActiveLinks here is the start-of-formation count (the formAdmit saturation
+     *  reference, exactly as formationCpu line 851). Mirrors XlinkFormation GATE-B (bit-identical CPU↔GPU) verbatim. */
+    static TaskGraph blkXForm(TaskGraph tg, Scene s) {
+        FilamentStore f = s.fil; CrosslinkerStore xl = s.xl; FormationGrid fg = s.fg;
+        // filID: pointer-doubling — init (each seg → its end2 successor / self at terminal; FREE → -seg-2) then an EVEN
+        // number of jumps ping-ponging s.filID↔s.filIDScratch, landing the result back in s.filID (filIDRounds even).
+        tg = tg.task("filidInit", FilIDSystem::init, f.filState, f.end2NbrSlot, s.filID, f.counts);
+        IntArray a = s.filID, b = s.filIDScratch;
+        for (int k = 0; k < s.filIDRounds; k++) { tg = tg.task("filidJump" + k, FilIDSystem::jump, a, b, f.filState, f.counts); IntArray tmp = a; a = b; b = tmp; }
+        return tg
+            .task("xfCount", CrosslinkerSystem::countActiveLinks, xl.linkState, xl.linkFilA, xl.linkFilB, xl.activeLinkCount, xl.formCounts)
+            .task("xfPublish", FilamentStore::publishToBodyView, f.coord, f.segLength, fg.view.center, fg.view.boundingRadius, fg.view.ownerStore, fg.view.ownerSlot, fg.viewParams, fg.gridCounts)
+            .task("xfBodyCell", SpatialGrid::bodyCell, fg.view.center, fg.gridParams, fg.gridDims, fg.gridCounts, fg.bodyCell)
+            .task("xfChunkZero", SpatialGrid::gridChunkZero, fg.chunkParams, fg.gridDims, fg.chunkCellCount)
+            .task("xfChunkHist", SpatialGrid::gridChunkHistogram, fg.bodyCell, fg.gridCounts, fg.chunkParams, fg.gridDims, fg.chunkCellCount)
+            .task("xfChunkReduce", SpatialGrid::gridChunkReduce, fg.gridDims, fg.chunkParams, fg.chunkCellCount, fg.cellCount)
+            .task("xfScanLocal", SpatialGrid::gridScanLocal, fg.gridDims, fg.cellCount, fg.gridCellOffsets, fg.chunkSum)
+            .task("xfScanChunks", SpatialGrid::gridScanChunks, fg.gridDims, fg.chunkSum)
+            .task("xfScanAdd", SpatialGrid::gridScanAdd, fg.gridDims, fg.gridCellOffsets, fg.gridCellContents, fg.cellCount, fg.chunkSum)
+            .task("xfChunkScatter", SpatialGrid::gridChunkScatter, fg.bodyCell, fg.gridCounts, fg.chunkParams, fg.gridDims, fg.gridCellOffsets, fg.gridCellContents, fg.chunkCellCount)
+            .task("xfFormCount", CrosslinkerSystem::gridFormCount, f.coord, f.segLength, s.filID, fg.gridParams, fg.gridDims, fg.gridCellOffsets, fg.gridCellContents, fg.candCountSeg, xl.formParams, xl.formCounts)
+            .task("xfFormScan", CrosslinkerSystem::gridFormScan, fg.candCountSeg, fg.candBaseSeg, xl.reqFilA, xl.reqFilB, xl.formCounts)
+            .task("xfFormEmit", CrosslinkerSystem::gridFormEmit, f.coord, f.segLength, s.filID, fg.gridParams, fg.gridDims, fg.gridCellOffsets, fg.gridCellContents, fg.candBaseSeg, fg.candCountSeg, xl.reqFilA, xl.reqFilB, xl.formParams, xl.formCounts)
+            .task("xfGates", CrosslinkerSystem::formGates, f.uVec, f.end1, f.end2, f.segLength, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.reqOrient, xl.gatePass, xl.formParams, xl.formCounts)
+            .task("xfAdmitReduce", CrosslinkerSystem::formAdmitReduce, xl.reqFilA, xl.reqFilB, xl.gatePass, xl.minCand, xl.formCounts)
+            .task("xfAdmit", CrosslinkerSystem::formAdmit, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.gatePass, xl.minCand, xl.activeLinkCount, xl.linkState, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.acceptFlag, xl.formParams, xl.formCounts)
+            .task("xfFreeFlags", CrosslinkerSystem::freeFlags, xl.linkState, xl.freeCount, xl.allocCounts)
+            .task("xfScanFree", CrossBridgeSystem::csrScan, xl.freeScanCounts, xl.freeCount, xl.freeOffsets)
+            .task("xfFreeScatter", CrosslinkerSystem::freeScatter, xl.linkState, xl.freeOffsets, xl.freeList, xl.allocCounts)
+            .task("xfScanRank", CrossBridgeSystem::csrScan, xl.rankScanCounts, xl.acceptFlag, xl.rankOffsets)
+            .task("xfAllocate", CrosslinkerSystem::allocate, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.rankOffsets, xl.freeList, xl.freeOffsets, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.allocCounts)
+            .task("xfPlaceOrient", CrosslinkerSystem::placeOrient, xl.reqOrient, xl.rankOffsets, xl.freeList, xl.freeOffsets, xl.linkOrientSame, xl.torqueMagHist, xl.torqueMagPlace, xl.allocCounts);
     }
 
     static TaskGraph blkBind(TaskGraph tg, Scene s) {
@@ -1574,7 +1680,7 @@ public final class FullSystemDemoHarness {
     static TaskGraph blkFil(TaskGraph tg, Scene s) {
         FilamentStore f = s.fil; NodeNucleationStore nuc = s.nuc; NodeStore nd = s.node; RigidRodBody nb = nd.node;
         MotorStore mot = s.mot; MotorStore mot2 = s.mot2;
-        return tg
+        tg = tg
             .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
             .task("seedTether", NodeNucleationSystem::seedTether, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, nb.coord, nd.nodeInvTransY, nuc.seedNode, nuc.tetherParams)
             .task("seedReact", NodeNucleationSystem::seedTetherNodeReact, f.coord, f.uVec, f.segLength, f.bTransGam, nb.forceSum, nb.coord, nd.nodeInvTransY, nuc.seedNode, nuc.tetherParams)
@@ -1588,6 +1694,27 @@ public final class FullSystemDemoHarness {
             .task("filGather2", CrossBridgeSystem::segGather, s.segMotorOffsets2, s.segMotorMyo2, s.bondData2, f.forceSum, f.torqueSum, mot2.counts)
             .task("register", CrossBridgeSystem::registerForceDot, s.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
             .task("register2", CrossBridgeSystem::registerForceDot, s.bondData2, mot2.boundSeg, mot2.forceDotFil, mot2.forceMag, mot2.forceDotHist, mot2.forceDotPlace, mot2.counts);
+        // EVERY-STEP crosslinker FORCE (appended after the motor seg-gathers, before fdInteg — cpuStep's force-phase
+        // order, lines 680-685 + 740-750): unbind · countActiveLinks · linkForces · linkTorsion · the 2-pass seg-gather
+        // into f.forceSum/torqueSum. Runs every step (unlike formation, which is cadence-gated in fdXForm). f.forceSum
+        // was zeroed in fdStruct; this accumulates onto it like the chain + motor gathers above.
+        if (s.xl != null) {
+            CrosslinkerStore xl = s.xl;
+            tg = tg
+                .task("xlUnbind", CrosslinkerSystem::unbind, f.coord, f.uVec, f.end1, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams, xl.counts)
+                .task("xlCount", CrosslinkerSystem::countActiveLinks, xl.linkState, xl.linkFilA, xl.linkFilB, xl.activeLinkCount, xl.formCounts)
+                .task("xlForce", CrosslinkerSystem::linkForces, f.coord, f.uVec, f.end1, f.bTransGam, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.activeLinkCount, xl.xlinkData, xl.xlParams)
+                .task("xlTorsion", CrosslinkerSystem::linkTorsion, f.uVec, xl.linkFilA, xl.linkFilB, xl.linkState, xl.linkOrientSame, xl.torqueMagHist, xl.torqueMagPlace, xl.xlinkData, xl.torsionParams)
+                .task("xlHistA", CrossBridgeSystem::csrHistogram, xl.linkFilA, xl.counts, s.segCountA)
+                .task("xlScanA", CrossBridgeSystem::csrScan, xl.counts, s.segCountA, s.segOffsetsA)
+                .task("xlScatterA", CrossBridgeSystem::csrScatter, xl.linkFilA, xl.counts, s.segOffsetsA, s.segCountA, s.segIdxA)
+                .task("xlGatherA", CrosslinkerSystem::segGatherA, s.segOffsetsA, s.segIdxA, xl.xlinkData, xl.linkState, f.forceSum, f.torqueSum, xl.counts)
+                .task("xlHistB", CrossBridgeSystem::csrHistogram, xl.linkFilB, xl.counts, s.segCountB)
+                .task("xlScanB", CrossBridgeSystem::csrScan, xl.counts, s.segCountB, s.segOffsetsB)
+                .task("xlScatterB", CrossBridgeSystem::csrScatter, xl.linkFilB, xl.counts, s.segOffsetsB, s.segCountB, s.segIdxB)
+                .task("xlGatherB", CrosslinkerSystem::segGatherB, s.segOffsetsB, s.segIdxB, xl.xlinkData, xl.linkState, f.forceSum, f.torqueSum, xl.counts);
+        }
+        return tg;
     }
 
     static TaskGraph blkInteg(TaskGraph tg, Scene s) {
@@ -1655,6 +1782,30 @@ public final class FullSystemDemoHarness {
         for (String t : new String[]{ "integM2","deriveM2" }) addW("fdInteg." + t, pad(nMB2));
         for (String t : new String[]{ "confineBb","integBb","deriveBb" }) addW("fdInteg." + t, pad(nBb));
         for (String t : new String[]{ "confineFil","integFil","deriveFil" }) addW("fdInteg." + t, pad(C));
+        // fdXForm (filID + crosslinker formation) + fdFil's appended crosslinker FORCE — only when xlinkers are wired.
+        // FormationGrid grid kernels are keyed to ITS OWN dims (fg.totalCells/numBodyChunks, NOT the binding grid — the
+        // GridScheduler trap). filID jumps + the RNG/trig formation kernels get localWork=64 (addW); CSR scans single.
+        if (s.xl != null) {
+            FormationGrid fg = s.fg; int reqCap = s.xl.reqCap, nLk = s.xl.nLinks;
+            int fgCells = fg.totalCells, fgChunks = fg.numBodyChunks;
+            int fgScan = (fgCells + SpatialGrid.GRID_SCAN_CHUNK - 1) / SpatialGrid.GRID_SCAN_CHUNK;
+            addW("fdXForm.filidInit", pad(C));
+            for (int k = 0; k < s.filIDRounds; k++) addW("fdXForm.filidJump" + k, pad(C));
+            addS("fdXForm.xfCount");
+            addW("fdXForm.xfPublish", pad(C)); addW("fdXForm.xfBodyCell", pad(C));
+            addW("fdXForm.xfChunkZero", pad(fgChunks * fgCells)); addW("fdXForm.xfChunkHist", pad(fgChunks));
+            addW("fdXForm.xfChunkReduce", pad(fgCells)); addW("fdXForm.xfScanLocal", pad(fgScan));
+            addS("fdXForm.xfScanChunks"); addW("fdXForm.xfScanAdd", pad(fgScan)); addW("fdXForm.xfChunkScatter", pad(fgChunks));
+            addW("fdXForm.xfFormCount", pad(C)); addS("fdXForm.xfFormScan"); addW("fdXForm.xfFormEmit", pad(C));
+            addW("fdXForm.xfGates", pad(reqCap)); addS("fdXForm.xfAdmitReduce"); addW("fdXForm.xfAdmit", pad(reqCap));
+            addW("fdXForm.xfFreeFlags", pad(nLk)); addS("fdXForm.xfScanFree"); addS("fdXForm.xfFreeScatter"); addS("fdXForm.xfScanRank");
+            addW("fdXForm.xfAllocate", pad(reqCap)); addW("fdXForm.xfPlaceOrient", pad(reqCap));
+            // fdFil crosslinker force (per-link tasks pad(nLinks); seg-gather pad(nSeg=C); CSR scans single-thread)
+            addW("fdFil.xlUnbind", pad(nLk)); addS("fdFil.xlCount");
+            addW("fdFil.xlForce", pad(nLk)); addW("fdFil.xlTorsion", pad(nLk));
+            addS("fdFil.xlHistA"); addS("fdFil.xlScanA"); addS("fdFil.xlScatterA"); addW("fdFil.xlGatherA", pad(C));
+            addS("fdFil.xlHistB"); addS("fdFil.xlScanB"); addS("fdFil.xlScatterB"); addW("fdFil.xlGatherB", pad(C));
+        }
     }
 
     /** One device-resident step across the chained graphs (mirrors stepHostBookkeeping's host bookkeeping +
@@ -1670,15 +1821,22 @@ public final class FullSystemDemoHarness {
         d.setCounts(t, SEED, fires); ag.setFires(fires); sv.setFires(fires);
         nuc.setCounts(t, SEED);
         nuc.nucCounts.set(3, grow.pool.available(Constants.actinSeed) ? 1 : 0);
-        // CADENCE GATE: fdTurnFire (G0) launches its 32→21 turnover kernels ONLY on fire steps (turnover no-ops
-        // off-cadence; skipping the dispatch is physically equivalent — it writes nothing fdNuc/downstream read on a
-        // non-fire step). fdNuc (G1) + binding/structure/force/integrate run every step. ~106→~74 launches off-cadence.
+        boolean formFires = g.xl != null && t % XL_CHECK_INT == 0;
+        if (g.xl != null && formFires) g.xl.setFormStep(t, SEED);
+        if (g.xl != null) g.xl.setCounts(t, SEED);                 // every step (fdFil force/unbind RNG + CSR bounds)
+        // CADENCE GATE: fdTurnFire (a skipped SOURCE graph) launches turnover ONLY on fire steps; fdXForm (the LAST
+        // graph — a skipped graph with no successor consuming its sole-uploaded scratch) launches the formation pipeline
+        // ONLY on the formation cadence. Both skips are residency-safe (§8.1). fdNuc + binding/structure/force/integrate
+        // run EVERY step. Formation at end-of-step N ⇒ its new links are forced from step N+1 (a ≤1-step shift, §5c-i).
         for (int gi = 0; gi < N_SPLIT; gi++) {
-            if (gi == 0 && !fires) continue;            // skip the turnover graph on non-fire steps
+            if (gi == GI_TURN && !fires) continue;                 // skip turnover off-cadence
+            if (gi == GI_XFORM && !formFires) continue;            // skip crosslinker formation off-cadence
             TornadoExecutionResult r = plan.withGraph(gi).withGridScheduler(sched).execute();
-            if (gi == 0)      { r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets); splitResTurn = r; }
-            else if (gi == 1) { r.transferToHost(g.nucRankOffsets, f.freeOffsets); splitResNuc = r; }
-            else if (gi == 2) splitResBind = r;
+            if (gi == GI_TURN)      { r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets); splitResTurn = r; }
+            else if (gi == GI_NUC)  { r.transferToHost(g.nucRankOffsets, f.freeOffsets); splitResNuc = r; }
+            else if (gi == GI_BIND) splitResBind = r;
+            else if (gi == GI_FIL)  splitResFil = r;
+            if (gi == GI_INTEG) splitResInteg = r;          // always-run; the derived-geometry render pull
             if (gi == N_SPLIT - 1) splitResL = r;
         }
         // turnover pool bookkeeping: ONLY on fire steps (on non-fire steps the device did no depoly/sever/grow ⇒ those
@@ -1702,7 +1860,12 @@ public final class FullSystemDemoHarness {
         // fdBind, derived geometry from the last graph. (NOT fdTurnFire — skipped on non-fire check steps.)
         if (splitResNuc != null) splitResNuc.transferToHost(f.filState, f.monomerCount, f.segLength, ag.nucFrac, sv.cofFrac);
         if (splitResBind != null) splitResBind.transferToHost(mot.boundSeg, mot2.boundSeg, mot.nucleotideState, mot2.nucleotideState);
-        if (splitResL != null) splitResL.transferToHost(nb.coord, f.coord, f.end1, f.end2, b.end1, b.end2, b2.end1, b2.end2, bb.coord, bb.end1, bb.end2);
+        // crosslink state from fdFil (always-run; unbind/force mutate linkState there ⇒ current after every step).
+        if (splitResFil != null && g.xl != null)
+            splitResFil.transferToHost(g.xl.linkState, g.xl.linkFilA, g.xl.linkFilB, g.xl.loc1, g.xl.loc2, g.xl.linkOrientSame);
+        // derived geometry from fdInteg (always-run; host4 is registered there) — NOT splitResL, which is the
+        // cadence-gated fdXForm when crosslinkers are wired (stale on non-formation steps).
+        if (splitResInteg != null) splitResInteg.transferToHost(nb.coord, f.coord, f.end1, f.end2, b.end1, b.end2, b2.end1, b2.end2, bb.coord, bb.end1, bb.end2);
     }
 
     // ====================================================================== STAGE 2 — device-resident overnight run
@@ -1798,15 +1961,21 @@ public final class FullSystemDemoHarness {
         d.setCounts(t, SEED, fires); ag.setFires(fires); sv.setFires(fires);
         nuc.setCounts(t, SEED);
         nuc.nucCounts.set(3, grow.pool.available(Constants.actinSeed) ? 1 : 0);
+        boolean formFires = g.xl != null && t % XL_CHECK_INT == 0;
+        if (g.xl != null && formFires) g.xl.setFormStep(t, SEED);
+        if (g.xl != null) g.xl.setCounts(t, SEED);
         long h1 = System.nanoTime();
         for (int gi = 0; gi < N_SPLIT; gi++) {
-            if (gi == 0 && !fires) continue;            // CADENCE GATE — mirror stepSplit: skip fdTurnFire off-cadence
+            if (gi == GI_TURN && !fires) continue;            // CADENCE GATE — mirror stepSplit: skip fdTurnFire off-cadence
+            if (gi == GI_XFORM && !formFires) continue;       // skip crosslinker formation off-cadence (the LAST graph)
             long d0 = System.nanoTime();
             TornadoExecutionResult r = plan.withGraph(gi).withGridScheduler(sched).execute();
             long d1 = System.nanoTime();
-            if (gi == 0)      { r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets); splitResTurn = r; }
-            else if (gi == 1) { r.transferToHost(g.nucRankOffsets, f.freeOffsets); splitResNuc = r; }
-            else if (gi == 2) splitResBind = r;
+            if (gi == GI_TURN)      { r.transferToHost(grow.grewOffsets, d.returnedOffsets, sv.severReturnedOffsets); splitResTurn = r; }
+            else if (gi == GI_NUC)  { r.transferToHost(g.nucRankOffsets, f.freeOffsets); splitResNuc = r; }
+            else if (gi == GI_BIND) splitResBind = r;
+            else if (gi == GI_FIL)  splitResFil = r;
+            if (gi == GI_INTEG) splitResInteg = r;          // always-run; the derived-geometry render pull
             if (gi == N_SPLIT - 1) splitResL = r;
             long d2 = System.nanoTime();
             if (a != null) {
@@ -1835,7 +2004,7 @@ public final class FullSystemDemoHarness {
         if (a != null) a.hostBkkp += (h1 - h0) + (h3 - h2);
     }
 
-    static final String[] GNAME = { "fdTurnFire", "fdNuc", "fdBind", "fdStruct", "fdFil", "fdInteg" };
+    static String[] GNAME = { "fdTurnFire", "fdNuc", "fdBind", "fdStruct", "fdFil", "fdInteg" };   // reassigned in buildPlanSplit (7 graphs when xlinkers are wired)
 
     /** MEASUREMENT probe — periodically flush the chained-split per-execute() creep (PROFILE §4 / SPLIT §8).
      *  mode "device": plan.resetDevice() — cleans the PTX streams/events/code-cache + kernel stack frame (the
