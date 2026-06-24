@@ -323,6 +323,15 @@ RTX 5070), measured in `PROFILE_FULLDEMO_FINDINGS.md`:
   open follow-up. **Related profiler gotcha:** `ProfilerMode.SILENT` retains a result/execution per
   `execute()` → OOM on long runs; clear it with `plan.clearProfiles()` each step (or run `-noprof`).
 
+- **Cadence-gated graphs must sit at a CHAIN END (source or sink), never the middle.** A gated graph that is
+  skipped breaks the consume forward-chain if a downstream graph names it as the producer of a buffer it only
+  *re-persisted* (not genuinely uploaded) — the stale producer→buffer association NPEs in `executeAlloc` on the
+  skipped step. Skip-safe as a SOURCE (`fdTurnFire`, §8.1 — nothing upstream); skip-safe as a SINK (`fdXForm`,
+  §9.3 — no successor consumes its sole-uploaded scratch; shared state it reads is uploaded by an always-run
+  graph and merely consumed). A gated MIDDLE graph is NOT skip-safe (verified empirically — NPE at the first
+  skipped step). Rule: place any cadence-gated subsystem first or last in the chain, and ensure any shared
+  buffer it reads is uploaded by an always-run graph.
+
 ## Documentation conventions
 Same as v1: `CLAUDE.md` = cross-session context (this file); `JOURNAL.md` = terse, newest-first,
 what-was-done / what-was-learned / what's-open. Do not archive JOURNAL entries autonomously.
