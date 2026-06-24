@@ -1,5 +1,18 @@
 # Megakernel + CSR-host probe — how much of v1's per-step edge is recoverable, by which lever?
 
+> **UPDATE 2026-06-24 — CSR-host promoted to the PRODUCTION DEFAULT** (jba sign-off). The §5 recommendation was
+> acted on: the static node-attach CSR precompute is unconditional, the dynamic seg-gather round-trip is default-on
+> with a `-devicecsr` fallback; `-megakernel` stays opt-in. **Re-baseline (controlled 3-config back-to-back vs the
+> old full-device path, same thermal state): +6.8 / +7.2 / +7.0 / +10.5 / +7.1 % at 1/2/4/8/16×** (new-default
+> steps/s 67.7 / 47.9 / 30.4 / 16.9 / 9.0). Decomposed: static ≈ +2–3 % (pure win, all scales); dynamic noise-
+> dominated at 1× (one throttled draw −4.7 %, the controlled run +3.5 %) and clearly positive ≥4× (+6–9 %). The
+> earlier "+5–13 %" (the fresh-GPU matrix below) and "−4.7 % at 1×" (a throttled draw) are both within this
+> spread — the **bail toward static-only was NOT taken** because the controlled measurement shows the dynamic part
+> net-positive at every tested scale. Re-validated: CPU≡GPU AGREE, conservation EXACT, 0 phantoms, no NaN on the
+> new default AND on `-devicecsr`; the EVERY_EXECUTION re-upload adds no new creep carrier (it is within the
+> existing `fdFil` execute(), so the per-graph execute count is unchanged). `SCALE_SWEEP_FINDINGS` /
+> `V1_MAXIMAL_BENCHMARK §3` carry re-baseline banners. JOURNAL 2026-06-24; `RUN_LOGS/2026-06-24_csrhost_default_rebaseline.txt`.
+
 **Date:** 2026-06-23. **Branch:** `megakernel-probe` (off `cadence-gate-fdturn`). **Status:** DONE.
 **Scope:** MEASUREMENT-ONLY. Two independent, separately-toggleable recompositions of v2's maximal node-centric
 device path (`-megakernel`, `-csrhost`); NO physics/rate/default edit. Production `stepSplit` path (both toggles

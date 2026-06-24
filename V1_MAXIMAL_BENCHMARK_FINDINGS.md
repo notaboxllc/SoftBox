@@ -65,6 +65,14 @@ makeup fixed — the same size-scaling as v2's `-scale`.
 
 ## §3. The matched curve (v1-GPU `BoxOfActin` vs v2-GPU `FullSystemDemo`, RTX 5070, dt=1e-5)
 
+> **⚠ RE-BASELINE NOTE (2026-06-24): the v2 steps/s column below was measured with CSR-host OFF.** CSR-host is now
+> the **production default** (`MEGAKERNEL_PROBE_FINDINGS`), **+~7–11 %** (controlled 3-config back-to-back vs the
+> old full-device path). The re-baselined new-default v2 steps/s are **67.7 / 47.9 / 30.4 / 16.9 / 9.0** at
+> 1/2/4/8/16×. This **narrows but does NOT reverse** v1's per-step lead (new v2/v1 ≈ 0.86 / 0.69 / 0.54 / 0.45 /
+> 0.45) — the megakernel probe confirmed the residual gap is the §4(b) WORK ASYMMETRY (v1 forms 0 crosslinks / 0
+> binding here), not recoverable by recomposition. The §4–§7 conclusions stand. Add `-devicecsr` to revert the
+> dynamic seg round-trip. See `RUN_LOGS/2026-06-24_csrhost_default_rebaseline.txt`.
+
 v1 per-step = the `BENCHMARK_dense` two-step-count difference (wall(K2)−wall(K1))/(K2−K1) — cancels JVM/JIT/plan startup. v2
 per-step = the faithful device-wall steps/s (`-sweep`, warmup-excluded). Host RSS = `/usr/bin/time -v` MaxRSS. VRAM = nvidia-smi.
 

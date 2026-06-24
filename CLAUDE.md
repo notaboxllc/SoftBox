@@ -332,6 +332,27 @@ RTX 5070), measured in `PROFILE_FULLDEMO_FINDINGS.md`:
   skipped step). Rule: place any cadence-gated subsystem first or last in the chain, and ensure any shared
   buffer it reads is uploaded by an always-run graph.
 
+- **CSR-host is the production default for the maximal device path (2026-06-24; signed off; re-baselines prior v2
+  throughput).** The single-GPU-thread CSR scans (`csrHistogram/csrScan/csrScatter`, one thread over `nSeg`) are
+  O(nSeg) **serial-on-one-thread**, so their cost GROWS with scale — a measurable bottleneck. `FullSystemDemo`'s
+  `buildPlanSplit`/`stepSplit` now builds these CSR-inverses host-side by default: **(1)** the STATIC node-attach
+  CSR (`attachNode` fixed) is host-precomputed ONCE at build (`hostNodeCSR`) — pure win, **unconditional**;
+  **(2)** the DYNAMIC node-shell seg-gather CSR (`boundSeg`-keyed) is host-built each step (`hostSegCSR`, from
+  `boundSeg` pulled after `fdBind`) and re-uploaded `EVERY_EXECUTION` into `fdFil` — a round-trip whose copy
+  traffic grows ∝ scale (≈350 KB/step at 16×). CSR is **pure-integer** ⇒ host-built == device-built bit-for-bit
+  (CPU≡GPU/conservation unchanged; revalidated on the new default). **Net effect (controlled 3-config back-to-back
+  vs the old full-device path, same thermal state): +6.8 / +7.2 / +7.0 / +10.5 / +7.1 % at 1/2/4/8/16×** (new-
+  default steps/s ≈ 67.7 / 47.9 / 30.4 / 16.9 / 9.0). The static part (1) is ~+2–3 % at every scale; the dynamic
+  part (2) is **noise-dominated at 1×** (one throttled draw read −4.7 %, the controlled run +3.5 %) and clearly
+  positive ≥4× (+6–9 %) as the serial seg scan grows. **`-devicecsr`** reverts the dynamic part (2) to the device
+  path (the static part (1) stays — it's a free win, bit-identical to device, so `-devicecsr` reproduces the old
+  default's RESULTS exactly). **Caveat:** the dynamic round-trip's transfer is ∝ scale — **re-verify net-positive
+  at ring-scale before a very large production run** (the ~`16·nSeg` bytes/step round-trip is well-amortized
+  through 16× but un-measured past it; use `-devicecsr` if a very large run shows it dominating). The `-megakernel`
+  per-body fusion stays **OPT-IN** (neutral, §4). Report: `MEGAKERNEL_PROBE_FINDINGS.md`. **Note: prior v2
+  throughput numbers in `SCALE_SWEEP_FINDINGS`/`V1_MAXIMAL_BENCHMARK §3` predate this default (measured
+  CSR-host-OFF); see their re-baseline banners.**
+
 ## Documentation conventions
 Same as v1: `CLAUDE.md` = cross-session context (this file); `JOURNAL.md` = terse, newest-first,
 what-was-done / what-was-learned / what's-open. Do not archive JOURNAL entries autonomously.

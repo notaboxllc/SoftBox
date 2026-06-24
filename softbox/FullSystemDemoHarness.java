@@ -149,9 +149,19 @@ public final class FullSystemDemoHarness {
     static boolean sweep = false;               // -sweep : one short GPU window (profiler-on for kernel%) + VRAM + sanity + capped CPU
     static int cpuCap = 400;                    // -cpucap N : CPU comparison window (0 ⇒ skip CPU; small at large scale, extrapolate)
 
-    // ---- MEGAKERNEL PROBE (MEASUREMENT-ONLY; two independent, separately-toggleable levers) ----
+    // ---- device-path recomposition levers (MEGAKERNEL_PROBE_FINDINGS + the 2026-06-24 re-baseline) ----
+    // MEGAKERNEL stays OPT-IN (neutral per §4 — keeps the default path simpler + prior mechanics numbers valid).
     static boolean MEGAKERNEL = false;          // -megakernel : fuse zero+Brownian (forceBuild) + confine+integrate+derive (integDerive) per store
-    static boolean CSRHOST = false;             // -csrhost    : run the single-GPU-thread per-step gather CSR scans host-side (round-trip tradeoff)
+    // CSR-host is the PRODUCTION DEFAULT (2026-06-24, signed off — re-baselines prior v2 throughput, +7–11 %). TWO parts:
+    //  (1) STATIC node-attach CSR (attachNode fixed) — host-precomputed ONCE, UNCONDITIONAL: pure win at all scales
+    //      (−3 serial launches/step, zero round-trip; +~3 %).
+    //  (2) DYNAMIC node-shell seg-gather CSR (boundSeg-keyed) — host-built each step + an EVERY_EXECUTION re-upload.
+    //      Net-positive at every tested scale (controlled 3-config: +3.5/+3.5/+8.6/+8.3 % at 1/2/4/8×; +5–13 % matrix);
+    //      noise-dominated at 1× (one throttled draw read −4.7 %, the controlled same-thermal run +3.5 %), clearly
+    //      positive ≥4× as the serial seg scan grows O(nSeg). Its copy traffic grows ∝ scale (≈350 KB/step at 16×).
+    // CSR is pure-integer ⇒ host-built == device-built bit-for-bit. -devicecsr reverts part (2) to the device path
+    // (the dynamic round-trip's scale-growing transfer is the only reason you'd revert; the static (1) is a free win).
+    static boolean CSRHOST = true;              // CSR-host (default ON); -devicecsr ⇒ false (revert the dynamic seg round-trip)
     static boolean validate = false;            // -validate   : fused-CPU≡unfused-CPU bit-exact + CPU≡GPU aggregate + conservation, then exit
 
     static double pForm(double conc, double dtCheck) { return 1.0 - Math.exp(-XLINK_ON_RATE * conc * dtCheck); }
@@ -206,7 +216,8 @@ public final class FullSystemDemoHarness {
                 case "-sweep" -> { sweep = true; gpuScale = true; }
                 case "-cpucap" -> cpuCap = Integer.parseInt(args[++i]);
                 case "-megakernel" -> MEGAKERNEL = true;
-                case "-csrhost" -> CSRHOST = true;
+                case "-csrhost" -> CSRHOST = true;          // explicit (now the default; kept for clarity/back-compat)
+                case "-devicecsr" -> CSRHOST = false;       // FALLBACK: revert the dynamic seg-gather round-trip to the device path
                 case "-validate" -> { validate = true; gpuScale = true; }
                 case "-smoke" -> { smoke = true; STEPS = 1500; }
                 case "-3js" -> vizDir = args[++i];
@@ -381,7 +392,7 @@ public final class FullSystemDemoHarness {
         int checkInt = Math.max(1, (int) Math.round(1.0e-4 / dt));
         s.boxParams = FloatArray.fromElements(1.0e-4f, (float) BOX_XY, (float) BOX_XY, (float) BOX_Z,
                 (float) Constants.radius, 0.5f, (float) checkInt, (float) dt);   // [7]=dt for the confined integrate megakernel
-        if (CSRHOST) hostNodeCSR(s);   // lever 2: the STATIC node-attach CSR-inverse, computed once (device skips its 3 scans/step)
+        hostNodeCSR(s);   // STATIC node-attach CSR-inverse host-precomputed ONCE (UNCONDITIONAL — pure win; device skips its 3 scans/step)
         return s;
     }
 
@@ -1905,11 +1916,9 @@ public final class FullSystemDemoHarness {
             .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
             .task("dimer", DimerCouplingSystem::couple, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg)
             .task("tether", NodeSystem::tether, b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum, nb.coord, nb.uVec, nb.yVec, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams);
-        if (!CSRHOST)   // lever 2: the node-attach CSR is STATIC (attachNode fixed) ⇒ host-precomputed once, skip the 3 device scans
-            tg = tg
-                .task("ndHist", CrossBridgeSystem::csrHistogram, nd.attachNode, nd.nodeCounts4, nd.nodeAttachCount)
-                .task("ndScan", CrossBridgeSystem::csrScan, nd.nodeCounts4, nd.nodeAttachCount, nd.nodeAttachOffsets)
-                .task("ndScatter", CrossBridgeSystem::csrScatter, nd.attachNode, nd.nodeCounts4, nd.nodeAttachOffsets, nd.nodeAttachCount, nd.nodeAttachList);
+        // The node-attach CSR is STATIC (attachNode fixed) ⇒ UNCONDITIONALLY host-precomputed once (hostNodeCSR in
+        // build()); the 3 device scans (ndHist/ndScan/ndScatter) are never built — nodeAttachOffsets/List are uploaded
+        // FIRST_EXECUTION from the host array and the gather reads them. (A pure win; not reverted by -devicecsr.)
         return tg
             .task("ndGather", MiniFilamentSystem::backboneGather, nd.nodeAttachOffsets, nd.nodeAttachList, nd.nodeData, nb.forceSum, nb.torqueSum, nd.nodeCounts4)
             .task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, s.bondData, s.xbParams)
@@ -2040,8 +2049,7 @@ public final class FullSystemDemoHarness {
         for (String t : new String[]{ "bond2","applyHead2" }) addW("fdStruct." + t, pad(nM2));
         for (String t : new String[]{ "bbGather" }) addW("fdStruct." + t, pad(nBb));
         addW("fdStruct.dimer", pad(nD)); addW("fdStruct.tether", pad(nA)); addW("fdStruct.dimer2", pad(nD2)); addW("fdStruct.tether2", pad(nD2));
-        for (String t : (CSRHOST ? new String[]{ "bbHist","bbScan","bbScatter" }   // node CSR host-precomputed ⇒ no nd* workers
-                                  : new String[]{ "ndHist","ndScan","ndScatter","bbHist","bbScan","bbScatter" })) addS("fdStruct." + t);
+        for (String t : new String[]{ "bbHist","bbScan","bbScatter" }) addS("fdStruct." + t);   // node CSR host-precomputed (unconditional) ⇒ no nd* workers
         // G3 fdFil
         for (String t : new String[]{ "chain","seedTether","filGather","filGather2" }) addW("fdFil." + t, pad(C));
         addW("fdFil.seedReact", pad(nN)); addW("fdFil.register", pad(nM)); addW("fdFil.register2", pad(nM2));

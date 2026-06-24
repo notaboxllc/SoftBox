@@ -12,6 +12,16 @@ comparison). **No physics / rate / kernel / ordering / default edit.** The produ
 ./run_fulldemo.sh -dense -scale 4 -sweep -gpusteps 2000 -cpucap 150   # one point
 ```
 
+> **⚠ RE-BASELINE NOTE (2026-06-24): the GPU steps/s columns below were measured with CSR-host OFF.** CSR-host is
+> now the **production default** (`MEGAKERNEL_PROBE_FINDINGS`); the single-GPU-thread CSR scans (O(nSeg) serial-on-
+> one-thread) are built host-side. Controlled 3-config back-to-back vs the old full-device path (same thermal
+> state): **+6.8 / +7.2 / +7.0 / +10.5 / +7.1 % at 1/2/4/8/16×**; new-default node-centric steps/s (`-dense -mini
+> 0`) ≈ **67.7 / 47.9 / 30.4 / 16.9 / 9.0** (vs the old-device 63.4 / 44.7 / 28.4 / 15.3 / 8.4 measured in the same
+> session; the ×1–×16 column below predates this and used CSR-host-OFF). Kernel-compute %, VRAM, the crossover,
+> and the scaling SHAPE are unchanged (CSR-host removes serial launches; it does not change the work). Add
+> `-devicecsr` to revert the dynamic seg round-trip to the device path. See
+> `RUN_LOGS/2026-06-24_csrhost_default_rebaseline.txt`.
+
 ---
 
 ## TL;DR — the regime verdict
