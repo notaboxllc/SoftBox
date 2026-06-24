@@ -2,6 +2,30 @@
 
 Last updated: 2026-06-23
 
+## 2026-06-23 — Megakernel + CSR-host probe: how much of v1's per-step edge is recoverable, by which lever? (MEASUREMENT-ONLY)
+Branch `megakernel-probe` (off `cadence-gate-fdturn`). Report: `MEGAKERNEL_PROBE_FINDINGS.md`. Tested whether v1's 1.27→2.55×
+per-step edge on the node-centric maximal composition (`V1_MAXIMAL_BENCHMARK §3`) is launch overhead (fixable by recomposing)
+or work asymmetry (v1 forms 0 crosslinks / 0 binding — not fixable). Two independent, separately-toggleable, MEASUREMENT-ONLY
+levers on the universal hot path only; production `stepSplit` (both off) byte-unchanged; `BoA-v1ref` byte-clean (v1 numbers from
+§3, not re-run). **Lever 1 megakernel** (`MechanicsFusion.java`, device-agnostic — cpuStep + the split GPU graph both call it):
+fuse zero+Brownian → `forceBuild`, confine+integrate+derive → `integDerive[Confined]`, bracketing the cross-entity gathers
+(which stay separate kernels). Collapses 13 launches (97→84). Chain stays its own kernel (folding it = 18→15-arg repack for 1
+launch); integrate+derive **inlined** (a helper hits the PTX 600-node cap — the dimer gotcha); `boxParams[7]=dt` keeps the
+confined kernel ≤15 args. **Lever 2 CSR-host**: the node-attach CSR is STATIC ⇒ host-precompute once (no round-trip); the
+node-shell seg-gather CSR is host-built each step from `boundSeg` pulled after fdBind, re-uploaded EVERY_EXECUTION into fdFil
+(the round-trip). Removes 6 launches (97→91 / 84→78). **Validation (Stage 2):** fused-CPU ≡ unfused-CPU **bit-exact**
+(max|Δ pose|=0 over 300 steps, all configs — pure regrouping; CSR is pure-integer so host==device); CPU≡GPU aggregate-agree;
+conservation EXACT, 0 phantoms, no NaN at all 20 sweep points; no atomics/KernelContext. **The decisive measurement (Stage 3,
+4 configs × 5 scales, back-to-back):** megakernel **+2.5 % at 1×, →0 at 16×** (the collapsed per-body kernels were the CHEAP
+launches; kernel-compute is only 43 % at 1× and the overhead is dominated by serial CSR + chained-execute, not small-kernel
+dispatch) ⇒ **by the probe's rule, v1's edge is mostly the §4(b) WORK ASYMMETRY, not launch overhead.** CSR-host helps MORE and
+PERSISTS at scale (+5–13 %, e.g. 8.4→9.0 at 16×) because the single-thread CSR scans are O(nSeg) serial-on-one-thread (cost
+grows with scale) — a fast host scan + a 351 KB/step round-trip beats it. **Both** close only ~37 % of the v2/v1 gap at 1× and
+≤10 % at 4–16×; the majority (and a growing share at scale) is real work v2 does and v1 skips (crosslinks/binding/tethers).
+No-regression: dense regime (minifilaments on) both = +8.4 %, never regresses. **Recommendation: re-examine the work asymmetry,
+do NOT pursue further fusion; keep CSR-host as a clean scale-robust optional optimization, the megakernel as neutral.** Two
+commits (megakernel, CSR-host), separately revertible.
+
 ## 2026-06-23 — v1 (BoA) vs v2 maximal node-centric composition on GPU: matched curve + ceilings (MEASUREMENT-ONLY)
 Branch `cadence-gate-fdturn`. Report: `V1_MAXIMAL_BENCHMARK_FINDINGS.md`. Tested (not assumed) whether v1 can carry the
 biologically-typical node-centric SCPR maximal composition (nodes + node-formin actin nucleation + node myosins + crosslinkers
