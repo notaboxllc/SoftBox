@@ -86,6 +86,8 @@ public final class V2OneXHarness {
     static int XL_CHECK_INT = 100;                  // formation cadence (steps) ⇒ pForm = 1-exp(-kon*conc*dt*checkInt)
 
     static boolean cpu = true;                      // CPU is the priority runner (v1 baseline was CPU)
+    static boolean cmpMode = false;                 // -cmp : run BOTH runners from the same IC, report Δ (CPU≡GPU gate)
+    static boolean brownOff = false;                // -brownoff : zero all Brownian scales (deterministic bit-check IC)
     static int STEPS = 200;
     static String vizDir = null;                    // -3js <dir>: host-side Three.js frame output (off by default)
 
@@ -99,6 +101,9 @@ public final class V2OneXHarness {
             switch (args[i]) {
                 case "-cpu" -> cpu = true;
                 case "-gpu" -> cpu = false;
+                case "-cmp" -> cmpMode = true;
+                case "-brownoff" -> brownOff = true;
+                case "-devicecsr" -> CSRHOST = false;
                 case "-steps" -> STEPS = Integer.parseInt(args[++i]);
                 case "-nodes" -> N_NODES = Integer.parseInt(args[++i]);
                 case "-nfil" -> N_FIL = Integer.parseInt(args[++i]);
@@ -120,9 +125,11 @@ public final class V2OneXHarness {
                 XLINK_ON ? "ON" : "off", XLINK_CONC, pForm(XLINK_CONC, dt * XL_CHECK_INT), XL_CHECK_INT, Constants.aeta);
 
         Scene s = build(dt);
+        if (brownOff) zeroBrownian(s);
         System.out.printf("scene built: %d nodes, %d filament segments, %d myosins, %d crosslink slots%n%n",
                 s.nNodes, activeSegments(s.fil), s.mot.nMotors, s.xl == null ? 0 : s.xl.nLinks);
 
+        if (cmpMode) { runCmp(s, dt, STEPS); return; }
         if (cpu) runCpu(s, dt, STEPS);
         else     runGpu(s, dt, STEPS);
     }
@@ -562,14 +569,435 @@ public final class V2OneXHarness {
         catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
     }
 
+    // ====================================================================== SPLIT chained-graph device-resident GPU path
+    // V2OneX is a clean SUBSET of FullSystemDemo: ONE motor population (the node-shell singlets, bound via the parallel
+    // spatial GRID, NOT the brute node-aware path), crosslinkers ON, NO turnover/nucleation/free-minifilament. The
+    // monolithic per-step sequence (cpuStep) exceeds TornadoVM's single-TaskGraph node capacity ("Graph resize not
+    // implemented"), so it is cut into 5 chained TaskGraphs sharing the SoA on-device via persistOnDevice (producer) +
+    // consumeFromDevice (consumer) under ONE TornadoExecutionPlan — a faithful PORT of FullSystemDemoHarness's
+    // buildPlanSplit/stepSplit with the deletions noted in V2ONEX_GPU_FINDINGS.md.
+    //   G0 fdBind   — grid binding (publish + grid build + reachable + release/bind + cycle)   (≈15 tasks)
+    //   G1 fdStruct — zero/Brownian + node-shell structure (joints/dimer/tether/gather/bond)   (≈12 tasks)
+    //   G2 fdFil    — chain F3/F4 + node-shell seg-gather + crosslinker force/torsion/2-pass   (≈19 tasks)
+    //   G3 fdInteg  — containment + integrate + derive (node/mot/fil)                          (≈9 tasks)
+    //   G4 fdXForm  — device filID + crosslinker FORMATION (cadence-gated SINK)                (≈26 tasks)
+    static TornadoExecutionResult splitResBind, splitResFil, splitResInteg, splitResL;
+    static int GI_BIND, GI_STRUCT, GI_FIL, GI_INTEG, GI_XFORM = -1;
+    static int N_SPLIT;
+    static String[] GNAME;
+    static boolean CSRHOST = true;              // CSR-host default ON (-devicecsr ⇒ false): host-build the dynamic seg CSR
+    static GridScheduler gsched;
+
+    static Object[] cat(Object[] a, Object[] b) {
+        Object[] r = new Object[a.length + b.length];
+        System.arraycopy(a, 0, r, 0, a.length); System.arraycopy(b, 0, r, a.length, b.length); return r;
+    }
+
+    /** Static node-attach CSR-inverse (attachNode never changes ⇒ host-compute ONCE; device skips ndHist/ndScan/ndScatter). */
+    static void hostNodeCSR(Scene s) {
+        NodeStore nd = s.node;
+        CrossBridgeSystem.csrHistogram(nd.attachNode, nd.nodeCounts4, nd.nodeAttachCount);
+        CrossBridgeSystem.csrScan(nd.nodeCounts4, nd.nodeAttachCount, nd.nodeAttachOffsets);
+        CrossBridgeSystem.csrScatter(nd.attachNode, nd.nodeCounts4, nd.nodeAttachOffsets, nd.nodeAttachCount, nd.nodeAttachList);
+    }
+    /** Dynamic node-shell motor→segment CSR (keyed by boundSeg ⇒ host-build each step from the boundSeg pulled after
+     *  fdBind; fdFil re-uploads segMotor* EVERY_EXECUTION before filGather. Bit-identical to the device single-thread csr*). */
+    static void hostSegCSR(Scene s) {
+        MotorStore mot = s.mot;
+        CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, s.segMotorCount);
+        CrossBridgeSystem.csrScan(mot.counts, s.segMotorCount, s.segMotorOffsets);
+        CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, s.segMotorOffsets, s.segMotorCount, s.segMotorMyo);
+    }
+
+    static TornadoExecutionPlan buildPlanSplit(Scene s) {
+        MotorStore mot = s.mot; DimerStore dim = s.dim; NodeStore nd = s.node; FilamentStore f = s.fil;
+        RigidRodBody b = mot.body, nb = nd.node; SpatialBodyView v = s.view;
+        boolean xlDev = s.xl != null && XLINK_ON;
+
+        // node-attach CSR is STATIC ⇒ host-precompute ONCE (device skips the 3 scans; nodeAttachOffsets/List uploaded
+        // FIRST_EXECUTION from the host array).
+        hostNodeCSR(s);
+
+        // Tiny per-step counts/rates — re-uploaded EVERY_EXECUTION in EVERY graph (negligible bytes); NOT persisted.
+        Object[] everyExec = { mot.counts, nd.nodeBodyCounts, f.counts };
+        if (xlDev) everyExec = cat(everyExec, new Object[]{ s.xl.counts, s.xl.formCounts, s.fg.gridCounts });
+        // Lever 2 (CSRHOST): the node-shell seg CSR is host-built each step, re-uploaded EVERY_EXECUTION into fdFil.
+        Object[] segCsrHost = { s.segMotorCount, s.segMotorOffsets, s.segMotorMyo };
+
+        // ---- per-graph first-USE buffer sets (deltas from FullSystemDemo's u1..uX; mot is the node-shell GRID motor) ----
+        Object[] u0 = {   // G0 fdBind — grid binding of the node-shell heads against the IC filaments
+                b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.boundSeg, mot.bindArc, mot.nucleotideState,
+                mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.nucParams, mot.publishParams,
+                f.coord, f.segLength, f.end1, f.end2,
+                s.reachSeg, s.reachCount, s.viewParams, s.gridParams, s.gridDims, s.gridCounts, s.bodyCell, s.chunkParams, s.chunkCellCount,
+                s.cellCount, s.gridCellOffsets, s.chunkSum, s.gridCellContents,
+                v.center, v.boundingRadius, v.ownerStore, v.ownerSlot };
+        Object[] u1 = {   // G1 fdStruct — zero/Brownian + node-shell structure forces
+                b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, b.coord, b.uVec, b.segLength, b.yVec,
+                mot.bodyParams, mot.nucleotideState, mot.jointParams, mot.boundSeg, mot.bindArc,
+                nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nb.coord, nb.uVec, nb.yVec,
+                nd.nodeBodyParams, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams,
+                nd.nodeAttachOffsets, nd.nodeAttachList, nd.nodeCounts4,
+                dim.motorA, dim.motorB, dim.parallel, dim.dimerParams,
+                f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.coord, f.uVec, f.yVec, f.segLength,
+                s.bondData, s.xbParams };
+        Object[] u2 = {   // G2 fdFil — chain + node-shell seg-gather + crosslinker force/torsion/2-pass
+                f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams,
+                mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace,
+                s.bondData };
+        if (!CSRHOST) u2 = cat(u2, segCsrHost);   // baseline: node-shell seg CSR device-produced+persisted here
+        if (xlDev) u2 = cat(u2, new Object[]{ s.segCountA, s.segOffsetsA, s.segIdxA, s.segCountB, s.segOffsetsB, s.segIdxB,
+                s.xl.xlinkData, s.xl.xlParams, s.xl.offParams, s.xl.torsionParams,
+                s.xl.linkState, s.xl.linkFilA, s.xl.linkFilB, s.xl.loc1, s.xl.loc2, s.xl.activeLinkCount,
+                f.end1, s.xl.strainHist, s.xl.strainPlace, s.xl.linkOrientSame, s.xl.torqueMagHist, s.xl.torqueMagPlace });
+        Object[] u3 = {   // G3 fdInteg — containment + integrate + derive
+                nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, nb.yVec, nb.randForce, nb.randTorque, nb.bRotGam, nb.zVec, nb.end1, nb.end2, nd.nodeBodyParams,
+                b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.zVec, b.end1, b.end2, b.segLength, mot.bodyParams,
+                f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, f.yVec, f.randForce, f.randTorque, f.bRotGam, f.params, f.zVec, f.end1, f.end2,
+                s.boxParams };
+        // G4 fdXForm (cadence-gated SINK) — device filID + the WHOLE crosslinker FORMATION pipeline. First-use = filID +
+        // the FormationGrid's OWN grid + formation-only request/allocator scratch + formParams (NOT the shared link state,
+        // uploaded by always-run fdFil; NOT f.end1/end2, uploaded by fdBind/fdFil).
+        Object[] uX = !xlDev ? null : new Object[]{
+                s.filID, s.filIDScratch,
+                s.fg.view.center, s.fg.view.boundingRadius, s.fg.view.ownerStore, s.fg.view.ownerSlot, s.fg.viewParams,
+                s.fg.gridParams, s.fg.gridDims, s.fg.bodyCell, s.fg.cellCount, s.fg.chunkSum, s.fg.chunkParams, s.fg.chunkCellCount,
+                s.fg.gridCellOffsets, s.fg.gridCellContents, s.fg.candCountSeg, s.fg.candBaseSeg,
+                s.xl.reqFilA, s.xl.reqFilB, s.xl.reqLoc1, s.xl.reqLoc2, s.xl.reqOrient, s.xl.gatePass, s.xl.minCand, s.xl.acceptFlag,
+                s.xl.freeCount, s.xl.freeOffsets, s.xl.freeList, s.xl.freeScanCounts, s.xl.rankOffsets, s.xl.rankScanCounts, s.xl.allocCounts,
+                s.xl.formParams };
+
+        Object[][] U; String[] gname;
+        if (xlDev) { U = new Object[][]{ u0, u1, u2, u3, uX }; gname = new String[]{ "fdBind", "fdStruct", "fdFil", "fdInteg", "fdXForm" }; }
+        else       { U = new Object[][]{ u0, u1, u2, u3 };     gname = new String[]{ "fdBind", "fdStruct", "fdFil", "fdInteg" }; }
+        N_SPLIT = gname.length; GNAME = gname;
+        GI_BIND = GI_STRUCT = GI_FIL = GI_INTEG = -1; GI_XFORM = -1;
+        for (int gi = 0; gi < N_SPLIT; gi++) switch (gname[gi]) {
+            case "fdBind" -> GI_BIND = gi; case "fdStruct" -> GI_STRUCT = gi; case "fdFil" -> GI_FIL = gi;
+            case "fdInteg" -> GI_INTEG = gi; case "fdXForm" -> GI_XFORM = gi;
+        }
+
+        // host pulls (UNDER_DEMAND): fdBind → boundSeg (CSR-host trigger) + nucleotideState (render); fdFil → crosslink
+        // render state (always-run, current); fdInteg → derived geometry for the renderer.
+        Object[] host0 = { mot.boundSeg, mot.nucleotideState };
+        Object[] host2 = { nb.coord, f.coord, f.end1, f.end2, b.end1, b.end2 };
+        Object[] hostXl = xlDev ? new Object[]{ s.xl.linkState, s.xl.linkFilA, s.xl.linkFilB, s.xl.loc1, s.xl.loc2, s.xl.linkOrientSame } : null;
+
+        java.util.Set<Object> uploaded = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        TaskGraph[] tg = new TaskGraph[N_SPLIT];
+        for (int gi = 0; gi < N_SPLIT; gi++) {
+            java.util.List<Object> newBufs = new java.util.ArrayList<>();
+            for (Object o : U[gi]) if (!uploaded.contains(o)) { newBufs.add(o); uploaded.add(o); }
+            Object[] consumeSet = uploaded.stream().filter(o -> !newBufs.contains(o)).toArray();
+            TaskGraph g = new TaskGraph(gname[gi]);
+            if (gi > 0 && consumeSet.length > 0) g = g.consumeFromDevice(gname[gi - 1], consumeSet);
+            if (!newBufs.isEmpty()) g = g.transferToDevice(DataTransferMode.FIRST_EXECUTION, newBufs.toArray());
+            g = g.transferToDevice(DataTransferMode.EVERY_EXECUTION, everyExec);
+            if (CSRHOST && gi == GI_FIL)   // re-upload the HOST-built node-shell seg CSR each step (filGather consumes it)
+                g = g.transferToDevice(DataTransferMode.EVERY_EXECUTION, segCsrHost);
+            g = switch (gname[gi]) {
+                case "fdBind" -> blkBind(g, s); case "fdStruct" -> blkStruct(g, s);
+                case "fdFil" -> blkFil(g, s); case "fdXForm" -> blkXForm(g, s); default -> blkInteg(g, s);
+            };
+            if (gi == GI_BIND) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host0);
+            if (xlDev && gi == GI_FIL) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, hostXl);
+            if (gi == GI_INTEG) g = g.transferToHost(DataTransferMode.UNDER_DEMAND, host2);
+            g = g.persistOnDevice(uploaded.toArray());
+            tg[gi] = g;
+        }
+
+        buildSplitScheduler(s);
+        uk.ac.manchester.tornado.api.ImmutableTaskGraph[] snaps = new uk.ac.manchester.tornado.api.ImmutableTaskGraph[N_SPLIT];
+        for (int gi = 0; gi < N_SPLIT; gi++) snaps[gi] = tg[gi].snapshot();
+        return new TornadoExecutionPlan(snaps);
+    }
+
+    // ---- the task blocks (verbatim methods + order from cpuStep) ----
+    static TaskGraph blkBind(TaskGraph tg, Scene s) {
+        MotorStore mot = s.mot; RigidRodBody b = mot.body; FilamentStore f = s.fil; SpatialBodyView v = s.view;
+        return tg
+            .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
+            .task("filPublish", FilamentStore::publishToBodyView, f.coord, f.segLength, v.center, v.boundingRadius, v.ownerStore, v.ownerSlot, s.viewParams, s.gridCounts)
+            .task("motPublish", MotorStore::publishToBodyView, mot.head, mot.reach, v.center, v.boundingRadius, v.ownerStore, v.ownerSlot, mot.publishParams, mot.counts)
+            .task("bodyCell", SpatialGrid::bodyCell, v.center, s.gridParams, s.gridDims, s.gridCounts, s.bodyCell)
+            .task("chunkZero", SpatialGrid::gridChunkZero, s.chunkParams, s.gridDims, s.chunkCellCount)
+            .task("chunkHist", SpatialGrid::gridChunkHistogram, s.bodyCell, s.gridCounts, s.chunkParams, s.gridDims, s.chunkCellCount)
+            .task("chunkReduce", SpatialGrid::gridChunkReduce, s.gridDims, s.chunkParams, s.chunkCellCount, s.cellCount)
+            .task("gScanLocal", SpatialGrid::gridScanLocal, s.gridDims, s.cellCount, s.gridCellOffsets, s.chunkSum)
+            .task("gScanChunks", SpatialGrid::gridScanChunks, s.gridDims, s.chunkSum)
+            .task("gScanAdd", SpatialGrid::gridScanAdd, s.gridDims, s.gridCellOffsets, s.gridCellContents, s.cellCount, s.chunkSum)
+            .task("chunkScatter", SpatialGrid::gridChunkScatter, s.bodyCell, s.gridCounts, s.chunkParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, s.chunkCellCount)
+            .task("gridReach", BindingDetectionSystem::gridReachable, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, v.ownerStore, v.ownerSlot, s.reachSeg, s.reachCount, mot.kinParams, mot.counts)
+            .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts)
+            .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.reachSeg, s.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts)
+            .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
+    }
+
+    static TaskGraph blkStruct(TaskGraph tg, Scene s) {
+        MotorStore mot = s.mot; DimerStore dim = s.dim; NodeStore nd = s.node; FilamentStore f = s.fil;
+        RigidRodBody b = mot.body, nb = nd.node;
+        return tg
+            .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
+            .task("zeroNode", ChainBendingForceSystem::zeroAccumulators, nb.forceSum, nb.torqueSum, nd.nodeBodyCounts)
+            .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
+            .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
+            .task("brownNode", BrownianForceSystem::brownianForce, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams, nd.nodeBodyCounts)
+            .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
+            .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
+            .task("dimer", DimerCouplingSystem::couple, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg)
+            .task("tether", NodeSystem::tether, b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum, nb.coord, nb.uVec, nb.yVec, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams)
+            .task("ndGather", MiniFilamentSystem::backboneGather, nd.nodeAttachOffsets, nd.nodeAttachList, nd.nodeData, nb.forceSum, nb.torqueSum, nd.nodeCounts4)
+            .task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, s.bondData, s.xbParams)
+            .task("applyHead", CrossBridgeSystem::applyHeadForce, s.bondData, b.forceSum, b.torqueSum, mot.counts);
+    }
+
+    static TaskGraph blkFil(TaskGraph tg, Scene s) {
+        FilamentStore f = s.fil; MotorStore mot = s.mot;
+        tg = tg
+            .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        if (!CSRHOST)   // baseline: node-shell seg CSR device-produced (else host-built + EVERY_EXECUTION-uploaded)
+            tg = tg
+                .task("filHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, s.segMotorCount)
+                .task("filScan", CrossBridgeSystem::csrScan, mot.counts, s.segMotorCount, s.segMotorOffsets)
+                .task("filScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, s.segMotorOffsets, s.segMotorCount, s.segMotorMyo);
+        tg = tg
+            .task("filGather", CrossBridgeSystem::segGather, s.segMotorOffsets, s.segMotorMyo, s.bondData, f.forceSum, f.torqueSum, mot.counts)
+            .task("register", CrossBridgeSystem::registerForceDot, s.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts);
+        if (s.xl != null && XLINK_ON) {
+            CrosslinkerStore xl = s.xl;
+            tg = tg
+                .task("xlUnbind", CrosslinkerSystem::unbind, f.coord, f.uVec, f.end1, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.offParams, xl.counts)
+                .task("xlCount", CrosslinkerSystem::countActiveLinks, xl.linkState, xl.linkFilA, xl.linkFilB, xl.activeLinkCount, xl.formCounts)
+                .task("xlForce", CrosslinkerSystem::linkForces, f.coord, f.uVec, f.end1, f.bTransGam, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.activeLinkCount, xl.xlinkData, xl.xlParams)
+                .task("xlTorsion", CrosslinkerSystem::linkTorsion, f.uVec, xl.linkFilA, xl.linkFilB, xl.linkState, xl.linkOrientSame, xl.torqueMagHist, xl.torqueMagPlace, xl.xlinkData, xl.torsionParams)
+                .task("xlHistA", CrossBridgeSystem::csrHistogram, xl.linkFilA, xl.counts, s.segCountA)
+                .task("xlScanA", CrossBridgeSystem::csrScan, xl.counts, s.segCountA, s.segOffsetsA)
+                .task("xlScatterA", CrossBridgeSystem::csrScatter, xl.linkFilA, xl.counts, s.segOffsetsA, s.segCountA, s.segIdxA)
+                .task("xlGatherA", CrosslinkerSystem::segGatherA, s.segOffsetsA, s.segIdxA, xl.xlinkData, xl.linkState, f.forceSum, f.torqueSum, xl.counts)
+                .task("xlHistB", CrossBridgeSystem::csrHistogram, xl.linkFilB, xl.counts, s.segCountB)
+                .task("xlScanB", CrossBridgeSystem::csrScan, xl.counts, s.segCountB, s.segOffsetsB)
+                .task("xlScatterB", CrossBridgeSystem::csrScatter, xl.linkFilB, xl.counts, s.segOffsetsB, s.segCountB, s.segIdxB)
+                .task("xlGatherB", CrosslinkerSystem::segGatherB, s.segOffsetsB, s.segIdxB, xl.xlinkData, xl.linkState, f.forceSum, f.torqueSum, xl.counts);
+        }
+        return tg;
+    }
+
+    static TaskGraph blkInteg(TaskGraph tg, Scene s) {
+        MotorStore mot = s.mot; NodeStore nd = s.node; FilamentStore f = s.fil;
+        RigidRodBody b = mot.body, nb = nd.node;
+        return tg
+            .task("confineNode", ContainmentSystem::confine, nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, s.boxParams, nd.nodeBodyCounts)
+            .task("integNode", RigidRodLangevinIntegrationSystem::integrate, nb.coord, nb.uVec, nb.yVec, nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nd.nodeBodyParams, nd.nodeBodyCounts)
+            .task("deriveNode", DerivedGeometrySystem::derive, nb.coord, nb.uVec, nb.yVec, nb.zVec, nb.end1, nb.end2, nb.segLength, nd.nodeBodyCounts)
+            .task("integM", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
+            .task("deriveM", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts)
+            .task("confineFil", ContainmentSystem::confine, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, s.boxParams, f.counts)
+            .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
+            .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+    }
+
+    /** fdXForm — device filID (pointer-doubling) + the WHOLE crosslinker FORMATION pipeline. CADENCE-GATED SINK. */
+    static TaskGraph blkXForm(TaskGraph tg, Scene s) {
+        FilamentStore f = s.fil; CrosslinkerStore xl = s.xl; FormationGrid fg = s.fg;
+        tg = tg.task("filidInit", FilIDSystem::init, f.filState, f.end2NbrSlot, s.filID, f.counts);
+        IntArray a = s.filID, b = s.filIDScratch;
+        for (int k = 0; k < s.filIDRounds; k++) { tg = tg.task("filidJump" + k, FilIDSystem::jump, a, b, f.filState, f.counts); IntArray tmp = a; a = b; b = tmp; }
+        return tg
+            .task("xfCount", CrosslinkerSystem::countActiveLinks, xl.linkState, xl.linkFilA, xl.linkFilB, xl.activeLinkCount, xl.formCounts)
+            .task("xfPublish", FilamentStore::publishToBodyView, f.coord, f.segLength, fg.view.center, fg.view.boundingRadius, fg.view.ownerStore, fg.view.ownerSlot, fg.viewParams, fg.gridCounts)
+            .task("xfBodyCell", SpatialGrid::bodyCell, fg.view.center, fg.gridParams, fg.gridDims, fg.gridCounts, fg.bodyCell)
+            .task("xfChunkZero", SpatialGrid::gridChunkZero, fg.chunkParams, fg.gridDims, fg.chunkCellCount)
+            .task("xfChunkHist", SpatialGrid::gridChunkHistogram, fg.bodyCell, fg.gridCounts, fg.chunkParams, fg.gridDims, fg.chunkCellCount)
+            .task("xfChunkReduce", SpatialGrid::gridChunkReduce, fg.gridDims, fg.chunkParams, fg.chunkCellCount, fg.cellCount)
+            .task("xfScanLocal", SpatialGrid::gridScanLocal, fg.gridDims, fg.cellCount, fg.gridCellOffsets, fg.chunkSum)
+            .task("xfScanChunks", SpatialGrid::gridScanChunks, fg.gridDims, fg.chunkSum)
+            .task("xfScanAdd", SpatialGrid::gridScanAdd, fg.gridDims, fg.gridCellOffsets, fg.gridCellContents, fg.cellCount, fg.chunkSum)
+            .task("xfChunkScatter", SpatialGrid::gridChunkScatter, fg.bodyCell, fg.gridCounts, fg.chunkParams, fg.gridDims, fg.gridCellOffsets, fg.gridCellContents, fg.chunkCellCount)
+            .task("xfFormCount", CrosslinkerSystem::gridFormCount, f.coord, f.segLength, s.filID, fg.gridParams, fg.gridDims, fg.gridCellOffsets, fg.gridCellContents, fg.candCountSeg, xl.formParams, xl.formCounts)
+            .task("xfFormScan", CrosslinkerSystem::gridFormScan, fg.candCountSeg, fg.candBaseSeg, xl.reqFilA, xl.reqFilB, xl.formCounts)
+            .task("xfFormEmit", CrosslinkerSystem::gridFormEmit, f.coord, f.segLength, s.filID, fg.gridParams, fg.gridDims, fg.gridCellOffsets, fg.gridCellContents, fg.candBaseSeg, fg.candCountSeg, xl.reqFilA, xl.reqFilB, xl.formParams, xl.formCounts)
+            .task("xfGates", CrosslinkerSystem::formGates, f.uVec, f.end1, f.end2, f.segLength, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.reqOrient, xl.gatePass, xl.formParams, xl.formCounts)
+            .task("xfAdmitReduce", CrosslinkerSystem::formAdmitReduce, xl.reqFilA, xl.reqFilB, xl.gatePass, xl.minCand, xl.formCounts)
+            .task("xfAdmit", CrosslinkerSystem::formAdmit, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.gatePass, xl.minCand, xl.activeLinkCount, xl.linkState, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.acceptFlag, xl.formParams, xl.formCounts)
+            .task("xfFreeFlags", CrosslinkerSystem::freeFlags, xl.linkState, xl.freeCount, xl.allocCounts)
+            .task("xfScanFree", CrossBridgeSystem::csrScan, xl.freeScanCounts, xl.freeCount, xl.freeOffsets)
+            .task("xfFreeScatter", CrosslinkerSystem::freeScatter, xl.linkState, xl.freeOffsets, xl.freeList, xl.allocCounts)
+            .task("xfScanRank", CrossBridgeSystem::csrScan, xl.rankScanCounts, xl.acceptFlag, xl.rankOffsets)
+            .task("xfAllocate", CrosslinkerSystem::allocate, xl.reqFilA, xl.reqFilB, xl.reqLoc1, xl.reqLoc2, xl.rankOffsets, xl.freeList, xl.freeOffsets, xl.linkFilA, xl.linkFilB, xl.loc1, xl.loc2, xl.linkState, xl.strainHist, xl.strainPlace, xl.allocCounts)
+            .task("xfPlaceOrient", CrosslinkerSystem::placeOrient, xl.reqOrient, xl.rankOffsets, xl.freeList, xl.freeOffsets, xl.linkOrientSame, xl.torqueMagHist, xl.torqueMagPlace, xl.allocCounts);
+    }
+
+    static int padW(int n) { return ((n + B - 1) / B) * B; }
+    static void addW(String n, int g) { WorkerGrid w = new WorkerGrid1D(Math.max(B, g)); w.setLocalWork(B, 1, 1); gsched.addWorkerGrid(n, w); }
+    static void addS(String n) { WorkerGrid w = new WorkerGrid1D(1); w.setLocalWork(1, 1, 1); gsched.addWorkerGrid(n, w); }
+
+    /** Re-key every RNG/trig kernel's localWork=64 WorkerGrid under its NEW graph-name prefix (the CUDA-701 trap). */
+    static void buildSplitScheduler(Scene s) {
+        MotorStore mot = s.mot; NodeStore nd = s.node; FilamentStore f = s.fil; DimerStore dim = s.dim;
+        RigidRodBody b = mot.body, nb = nd.node;
+        int nM = mot.nMotors, nMB = b.n, nN = nb.n, C = f.n, nD = dim.nDimers, nA = nd.nAttach;
+        int cap = s.viewCap, totalCells = s.totalCells, numScan = (totalCells + SpatialGrid.GRID_SCAN_CHUNK - 1) / SpatialGrid.GRID_SCAN_CHUNK;
+        gsched = new GridScheduler();
+        // G0 fdBind
+        for (String t : new String[]{ "publishHead","gridReach","release","bind","cycle","motPublish" }) addW("fdBind." + t, padW(nM));
+        addW("fdBind.filPublish", padW(C));
+        addW("fdBind.bodyCell", padW(cap)); addW("fdBind.chunkZero", padW(s.numBodyChunks * totalCells));
+        addW("fdBind.chunkHist", padW(s.numBodyChunks)); addW("fdBind.chunkReduce", padW(totalCells));
+        addW("fdBind.chunkScatter", padW(s.numBodyChunks)); addW("fdBind.gScanLocal", padW(numScan)); addW("fdBind.gScanAdd", padW(numScan));
+        addS("fdBind.gScanChunks");
+        // G1 fdStruct
+        for (String t : new String[]{ "zeroMot","brownMot","joints" }) addW("fdStruct." + t, padW(nMB));
+        for (String t : new String[]{ "zeroNode","brownNode","ndGather" }) addW("fdStruct." + t, padW(nN));
+        for (String t : new String[]{ "zeroFil","brownFil" }) addW("fdStruct." + t, padW(C));
+        for (String t : new String[]{ "bond","applyHead" }) addW("fdStruct." + t, padW(nM));
+        addW("fdStruct.dimer", padW(nD)); addW("fdStruct.tether", padW(nA));
+        // G2 fdFil
+        addW("fdFil.chain", padW(C)); addW("fdFil.filGather", padW(C)); addW("fdFil.register", padW(nM));
+        if (!CSRHOST) for (String t : new String[]{ "filHist","filScan","filScatter" }) addS("fdFil." + t);
+        // G3 fdInteg
+        for (String t : new String[]{ "confineNode","integNode","deriveNode" }) addW("fdInteg." + t, padW(nN));
+        for (String t : new String[]{ "integM","deriveM" }) addW("fdInteg." + t, padW(nMB));
+        for (String t : new String[]{ "confineFil","integFil","deriveFil" }) addW("fdInteg." + t, padW(C));
+        // crosslinker FORCE (fdFil) + FORMATION (fdXForm)
+        if (s.xl != null && XLINK_ON) {
+            FormationGrid fg = s.fg; int reqCap = s.xl.reqCap, nLk = s.xl.nLinks;
+            int fgCells = fg.totalCells, fgChunks = fg.numBodyChunks, fgScan = (fgCells + SpatialGrid.GRID_SCAN_CHUNK - 1) / SpatialGrid.GRID_SCAN_CHUNK;
+            addW("fdFil.xlUnbind", padW(nLk)); addS("fdFil.xlCount");
+            addW("fdFil.xlForce", padW(nLk)); addW("fdFil.xlTorsion", padW(nLk));
+            addS("fdFil.xlHistA"); addS("fdFil.xlScanA"); addS("fdFil.xlScatterA"); addW("fdFil.xlGatherA", padW(C));
+            addS("fdFil.xlHistB"); addS("fdFil.xlScanB"); addS("fdFil.xlScatterB"); addW("fdFil.xlGatherB", padW(C));
+            addW("fdXForm.filidInit", padW(C));
+            for (int k = 0; k < s.filIDRounds; k++) addW("fdXForm.filidJump" + k, padW(C));
+            addS("fdXForm.xfCount");
+            addW("fdXForm.xfPublish", padW(C)); addW("fdXForm.xfBodyCell", padW(C));
+            addW("fdXForm.xfChunkZero", padW(fgChunks * fgCells)); addW("fdXForm.xfChunkHist", padW(fgChunks));
+            addW("fdXForm.xfChunkReduce", padW(fgCells)); addW("fdXForm.xfScanLocal", padW(fgScan));
+            addS("fdXForm.xfScanChunks"); addW("fdXForm.xfScanAdd", padW(fgScan)); addW("fdXForm.xfChunkScatter", padW(fgChunks));
+            addW("fdXForm.xfFormCount", padW(C)); addS("fdXForm.xfFormScan"); addW("fdXForm.xfFormEmit", padW(C));
+            addW("fdXForm.xfGates", padW(reqCap)); addS("fdXForm.xfAdmitReduce"); addW("fdXForm.xfAdmit", padW(reqCap));
+            addW("fdXForm.xfFreeFlags", padW(nLk)); addS("fdXForm.xfScanFree"); addS("fdXForm.xfFreeScatter"); addS("fdXForm.xfScanRank");
+            addW("fdXForm.xfAllocate", padW(reqCap)); addW("fdXForm.xfPlaceOrient", padW(reqCap));
+        }
+    }
+
+    /** One device-resident step across the chained graphs (mirrors cpuStep's task order + host bookkeeping). */
+    static void stepSplit(Scene g, int t, double dt, TornadoExecutionPlan plan) {
+        MotorStore mot = g.mot; NodeStore nd = g.node; FilamentStore f = g.fil;
+        mot.setCounts(t, SEED, f.n); nd.setNodeBodyCounts(t, SEED_NODE); f.setCounts(t, SEED);
+        boolean formFires = g.xl != null && XLINK_ON && t % XL_CHECK_INT == 0;
+        if (formFires) g.xl.setFormStep(t, SEED);
+        if (g.xl != null && XLINK_ON) g.xl.setCounts(t, SEED);
+        for (int gi = 0; gi < N_SPLIT; gi++) {
+            if (gi == GI_XFORM && !formFires) continue;   // CADENCE GATE — skip formation off-cadence (the SINK)
+            TornadoExecutionResult r = plan.withGraph(gi).withGridScheduler(gsched).execute();
+            if (gi == GI_BIND)      { splitResBind = r; if (CSRHOST) { r.transferToHost(mot.boundSeg); hostSegCSR(g); } }
+            else if (gi == GI_FIL)  splitResFil = r;
+            if (gi == GI_INTEG) splitResInteg = r;
+            if (gi == N_SPLIT - 1) splitResL = r;
+        }
+    }
+
+    static void pullRenderState(Scene g) {
+        MotorStore mot = g.mot; NodeStore nd = g.node; FilamentStore f = g.fil; RigidRodBody b = mot.body, nb = nd.node;
+        if (splitResBind != null) splitResBind.transferToHost(mot.boundSeg, mot.nucleotideState);
+        if (splitResFil != null && g.xl != null && XLINK_ON)
+            splitResFil.transferToHost(g.xl.linkState, g.xl.linkFilA, g.xl.linkFilB, g.xl.loc1, g.xl.loc2, g.xl.linkOrientSame);
+        if (splitResInteg != null) splitResInteg.transferToHost(nb.coord, f.coord, f.end1, f.end2, b.end1, b.end2);
+    }
+
+    /** Zero ALL Brownian scales (deterministic IC for the CPU≡GPU bit-check). The Langevin scheme is then pure-force ⇒
+     *  CPU and GPU must agree to float32 last-bit at short horizon (no chaotic decorrelation). */
+    static void zeroBrownian(Scene s) {
+        RigidRodBody b = s.mot.body, nb = s.node.node; FilamentStore f = s.fil;
+        for (int i = 0; i < b.n; i++)  { b.brownTransScale.set(i, 0f);  b.brownRotScale.set(i, 0f); }
+        for (int i = 0; i < nb.n; i++) { nb.brownTransScale.set(i, 0f); nb.brownRotScale.set(i, 0f); }
+        for (int i = 0; i < f.n; i++)  { f.brownTransScale.set(i, 0f);  f.brownRotScale.set(i, 0f); }
+        System.out.println("  -brownoff: all Brownian scales zeroed (deterministic bit-check IC)");
+    }
+
+    /** -cmp: run a CPU scene and an INDEPENDENT GPU scene (identical deterministic IC) in lockstep and report the
+     *  max |Δ| in filament coord + the bound-head/link counts on each. Brownian-OFF ⇒ bit-exact; Brownian-ON ⇒
+     *  aggregate-within-SEM (chaotic many-body decorrelation, the §8/CLAUDE CPU≡GPU standard). */
+    static void runCmp(Scene cs, double dt, int M) {
+        System.out.println("--- CPU≡GPU comparison (-cmp): two independent scenes, identical IC ---");
+        Scene gs = build(dt);            // second scene, identical deterministic IC
+        if (brownOff) zeroBrownian(gs);
+        TornadoExecutionPlan plan;
+        try { plan = buildPlanSplit(gs); }
+        catch (Throwable e) { System.out.println("  GPU split build FAILED: " + e); e.printStackTrace(); return; }
+        double worstCoord = 0; int worstStep = -1;
+        for (int t = 0; t < M; t++) {
+            cpuStep(cs, t);
+            stepSplit(gs, t, dt, plan);
+            // pull the GPU filament coord for the per-step diff (UNDER_DEMAND from fdInteg)
+            if (splitResInteg != null) splitResInteg.transferToHost(gs.fil.coord);
+            double d = maxDiff(cs.fil.coord, gs.fil.coord);
+            if (d > worstCoord) { worstCoord = d; worstStep = t; }
+            if (t % Math.max(1, M / 10) == 0 || t == M - 1) {
+                pullRenderState(gs);
+                System.out.printf("  step %-6d  CPU bound=%-5d links=%-4d | GPU bound=%-5d links=%-4d | bound-set Δ=%-4d | max|Δcoord|=%.3e µm (@%d)%n",
+                        t, boundHeads(cs.mot), cs.xl == null ? 0 : activeLinks(cs.xl),
+                        boundHeads(gs.mot), gs.xl == null ? 0 : activeLinks(gs.xl), boundSetDiff(cs.mot, gs.mot), worstCoord, worstStep);
+            }
+        }
+        pullRenderState(gs);
+        System.out.printf("%n  RESULT: max|Δ filament coord| over %d steps = %.3e µm (@step %d)%n", M, worstCoord, worstStep);
+        System.out.printf("  CPU: bound=%d links=%d ; GPU: bound=%d links=%d%n",
+                boundHeads(cs.mot), cs.xl == null ? 0 : activeLinks(cs.xl), boundHeads(gs.mot), gs.xl == null ? 0 : activeLinks(gs.xl));
+        System.out.println(brownOff
+                ? "  (Brownian OFF ⇒ deterministic: Δ should be float32 last-bit; bound/link sets should match exactly)"
+                : "  (Brownian ON ⇒ chaotic many-body: Δ grows by Lyapunov decorrelation; aggregate counts agree within SEM)");
+    }
+
+    /** # of motors whose bound-vs-free state differs between the two runs (0 ⇒ bit-identical binding decisions). */
+    static int boundSetDiff(MotorStore a, MotorStore b) {
+        int n = a.nMotors, c = 0;
+        for (int i = 0; i < n; i++) if ((a.boundSeg.get(i) >= 0) != (b.boundSeg.get(i) >= 0)) c++;
+        return c;
+    }
+
+    static double maxDiff(FloatArray a, FloatArray b) {
+        double m = 0; int n = Math.min(a.getSize(), b.getSize());
+        for (int i = 0; i < n; i++) m = Math.max(m, Math.abs((double) a.get(i) - b.get(i)));
+        return m;
+    }
+
     static void runGpu(Scene s, double dt, int M) {
-        // GPU TODO: a device-resident TaskGraph for this maximal composition would (per CLAUDE.md) exceed
-        // TornadoVM's single-TaskGraph node capacity ("Graph resize not implemented") and require the
-        // chained-split path (the open FullSystemDemo GPU blocker). The CPU runner is the priority + the
-        // v1-comparable baseline; GPU is left as a follow-on. Run -cpu.
-        System.out.println("GPU device-resident path NOT wired (the maximal-composition Graph-resize blocker — see");
-        System.out.println("CLAUDE.md / FULL_SYSTEM_DEMO_FINDINGS). Use -cpu (the priority runner). Falling back to CPU.");
-        runCpu(s, dt, M);
+        System.out.println("--- GPU device-resident run (5 chained TaskGraphs: fdBind·fdStruct·fdFil·fdInteg·fdXForm[gated]) ---");
+        System.out.println("    residency: persistOnDevice/consumeFromDevice; per-step host transfer = boundSeg (CSR-host) + render pulls; CSRHOST=" + CSRHOST);
+        TornadoExecutionPlan plan;
+        try { plan = buildPlanSplit(s); }
+        catch (Throwable e) { System.out.println("  GPU split build FAILED: " + e); e.printStackTrace(); runCpu(s, dt, M); return; }
+
+        boolean viz = vizDir != null;
+        int vizEvery = Math.max(1, M / 300), frames = 0;
+        if (viz) { new java.io.File(vizDir).mkdirs(); System.out.printf("  -3js: a frame every %d steps to %s%n", vizEvery, vizDir); }
+
+        int warm = Math.min(20, M);
+        try {
+            for (int t = 0; t < warm; t++) stepSplit(s, t, dt, plan);
+        } catch (Throwable e) { System.out.println("  *** GPU warmup FAILED at lowering/launch: " + e); e.printStackTrace(); throw new RuntimeException(e); }
+        // pull state after warmup so the periodic reports are current
+        long t0 = System.nanoTime();
+        boolean stable = true; int every = Math.max(1, M / 10);
+        for (int t = warm; t < M; t++) {
+            stepSplit(s, t, dt, plan);
+            if ((t % every == 0 || t == M - 1) || (viz && t % vizEvery == 0)) {
+                pullRenderState(s);
+                if (t % every == 0 || t == M - 1)
+                    System.out.printf("  step %-7d  bound=%-6d  links=%-6d%n", t, boundHeads(s.mot), s.xl == null ? 0 : activeLinks(s.xl));
+                if (viz && (t % vizEvery == 0 || t == M - 1)) writeFrame(vizDir, frames++, t, t * dt, s);
+                if (!finite(s.fil) || !finite(s.mot.body) || !finite(s.node.node)) {
+                    System.out.println("  *** NON-FINITE at step " + t + " — BLOW-UP ***"); stable = false; break;
+                }
+            }
+        }
+        double secs = (System.nanoTime() - t0) / 1e9;
+        int measured = M - warm;
+        pullRenderState(s);
+        System.out.printf("%n  GPU: %d measured steps (warm %d excluded) in %.2fs = %.1f steps/s%n", measured, warm, secs, measured / secs);
+        if (viz) System.out.printf("  -3js: wrote %d frames to %s%n", frames, vizDir);
+        report(s, stable);
     }
 
     static void report(Scene s, boolean stable) {
