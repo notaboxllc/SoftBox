@@ -142,6 +142,13 @@ public final class FullSystemDemoHarness {
     static String planResetMode = "device";    // -planresetmode device|rebuild
     static long planResetCostNs = 0; static int planResetCount = 0;   // amortized per-reset cost accounting
 
+    // ---- density/scale sweep (MEASUREMENT-ONLY; additive — scales the scene at ~constant density) ----
+    static double SCALE = 1.0;                  // -scale F : size-scaling factor over the (possibly -dense) baseline.
+                                                //   Constant density: nodes ×F (GX,GY ×√F), minifils ×F, FIL_CAP ×F,
+                                                //   box AREA ×F (BOX_XY ×√F, BOX_Z + spacing fixed). Applied after the arg loop.
+    static boolean sweep = false;               // -sweep : one short GPU window (profiler-on for kernel%) + VRAM + sanity + capped CPU
+    static int cpuCap = 400;                    // -cpucap N : CPU comparison window (0 ⇒ skip CPU; small at large scale, extrapolate)
+
     static double pForm(double conc, double dtCheck) { return 1.0 - Math.exp(-XLINK_ON_RATE * conc * dtCheck); }
 
     public static void main(String[] args) {
@@ -190,10 +197,24 @@ public final class FullSystemDemoHarness {
                 case "-planreset" -> planResetEvery = Integer.parseInt(args[++i]);
                 case "-planresetmode" -> planResetMode = args[++i];
                 case "-filidcheck" -> filidCheck = true;
+                case "-scale" -> SCALE = Double.parseDouble(args[++i]);
+                case "-sweep" -> { sweep = true; gpuScale = true; }
+                case "-cpucap" -> cpuCap = Integer.parseInt(args[++i]);
                 case "-smoke" -> { smoke = true; STEPS = 1500; }
                 case "-3js" -> vizDir = args[++i];
                 default -> {}
             }
+        }
+        // ---- density/scale sweep: clean SIZE-scaling at ~constant density (box law: AREA ∝ F, depth + node spacing fixed)
+        if (SCALE != 1.0) {
+            double lin = Math.sqrt(SCALE);
+            GX = Math.max(1, (int) Math.round(GX * lin));
+            GY = Math.max(1, (int) Math.round(GY * lin));
+            N_MINI = Math.max(1, (int) Math.round(N_MINI * SCALE));
+            FIL_CAP = Math.max(64, (int) Math.round(FIL_CAP * SCALE));
+            BOX_XY *= lin;                       // node grid extent ∝√F and the box ∝√F ⇒ wall margin preserved
+            System.out.printf("[scale] ×%.2f size-scaling (constant density): %dx%d nodes, %d minifils, FIL_CAP %d, box %.2f µm%n",
+                    SCALE, GX, GY, N_MINI, FIL_CAP, BOX_XY);
         }
         BOX_VOL = BOX_XY * BOX_XY * BOX_Z;
         uMper = 1e21 / (BOX_VOL * Constants.AvogadroNum);
@@ -216,6 +237,7 @@ public final class FullSystemDemoHarness {
                 s.nNodes, s.nNodes * FORMINS, activeSegments(s.fil), s.nMini, s.mot2.nMotors, s.xl == null ? 0 : s.xl.nLinks, s.grow.pool.conc(), totalActinUM(s));
 
         if (filidCheck) { filIDCheck(s, dt); return; }
+        if (sweep) { sweepRun(s, dt); return; }
         if (profile) { profileRun(s, dt); return; }
         if (overnight) { overnightRun(s, dt); return; }
         if (vizDir != null) { runViz(s, dt); return; }
@@ -1077,6 +1099,100 @@ public final class FullSystemDemoHarness {
                     M, activeLinks(g.xl), activeLinks(c.xl), gpuShrink, cpuShrink, sameChainLinks(g));
     }
     static double filRms0gpu = 0;
+
+    static int vramUsedMB() {
+        try { return Integer.parseInt(vramMB().replace("MiB", "").trim()); } catch (Throwable e) { return -1; }
+    }
+
+    /** Density/scale-sweep point (MEASUREMENT-ONLY). One SHORT GPU window on the device-resident split — profiler-on
+     *  (SILENT + clearProfiles, so kernel-compute fraction is read AND the production-faithful per-step device wall
+     *  pStepWall = Σ exec-wall + host is reported, EXCLUDING the profiler-read overhead) — plus VRAM, physical-sanity,
+     *  and a capped CPU comparison window. Prints one parseable SWEEP_ROW. Short window keeps the §8 per-execute creep
+     *  out of the per-step rate (this is the rate AT this fixed scale, not a long run). No physics/kernel/order edit. */
+    static void sweepRun(Scene s, double dt) {
+        int nNodes = s.nNodes, nMini = s.nMini, heads = s.mot.nMotors + s.mot2.nMotors;
+        System.out.printf("%n=== SCALE-SWEEP POINT (scale ×%.2f) — short device-resident window ===%n", SCALE);
+        System.out.printf("  scene: %d nodes, %d minifils, FIL_CAP %d, %d active segs, %d heads, %d xlink slots, box %.2f×%.2f×%.2f µm%n",
+                nNodes, nMini, FIL_CAP, activeSegments(s.fil), heads, s.xl == null ? 0 : s.xl.nLinks, BOX_XY, BOX_XY, BOX_Z);
+
+        Scene g = build(dt);                       // fresh scene for the device run (build() mutates store device buffers)
+        double rms0 = filRms(g.fil);
+        TornadoExecutionPlan plan;
+        try { plan = buildPlanSplit(g); }
+        catch (Throwable e) {
+            String msg = String.valueOf(e);
+            if (msg.contains("Graph resize"))
+                System.out.println("  *** CAPACITY EVENT: Graph-resize at scale ×" + SCALE + " — a sub-graph exceeds TornadoVM capacity (a scaling finding). ***");
+            else System.out.println("  GPU SPLIT plan build FAILED at scale ×" + SCALE + ": " + e);
+            e.printStackTrace();
+            return;
+        }
+        plan = plan.withProfiler(ProfilerMode.SILENT);
+        int nG = N_SPLIT, W = profWarm, M = gpuSteps;
+
+        // warmup (FIRST_EXECUTION uploads + PTX JIT), then peak VRAM baseline
+        try { for (int t = 0; t < W; t++) profStep(g, t, dt, plan, null); }
+        catch (Throwable e) {
+            String msg = String.valueOf(e);
+            if (msg.contains("memory") || msg.contains("OOM") || msg.contains("CL_OUT") || msg.contains("CUDA"))
+                System.out.println("  *** CAPACITY EVENT: device-memory/launch failure at scale ×" + SCALE + " during warmup (a scaling finding): " + e);
+            else System.out.println("  GPU SPLIT warmup threw at scale ×" + SCALE + ": " + e);
+            e.printStackTrace(); return;
+        }
+        int vramWarm = vramUsedMB();
+
+        // measured window — profiler-on for the kernel fraction; pStepWall excludes the profiler reads (faithful)
+        Acc a = new Acc(nG);
+        int vramPeak = vramWarm;
+        long t0 = System.nanoTime();
+        try {
+            for (int i = 0; i < M; i++) {
+                profStep(g, W + i, dt, plan, a);
+                if ((i + 1) % Math.max(1, M / 3) == 0) vramPeak = Math.max(vramPeak, vramUsedMB());
+            }
+        } catch (Throwable e) { System.out.println("  GPU SPLIT measured window threw at scale ×" + SCALE + ": " + e); e.printStackTrace(); return; }
+        double gpuLoopSecs = (System.nanoTime() - t0) / 1e9;
+
+        long sumKern=0, sumWall=0, sumIn=0, sumOut=0;
+        for (int gi=0; gi<nG; gi++) { sumKern+=a.gKern[gi]; sumWall+=a.gWall[gi]; sumIn+=a.gIn[gi]; sumOut+=a.gOut[gi]; }
+        double pStepWall = (sumWall + a.hostBkkp + a.hostPull) / 1e6 / M;   // ms — production-faithful device step
+        double pKern = sumKern / 1e6 / M;                                   // ms — GPU kernel-compute
+        double gpuSps = 1000.0 / pStepWall;
+        double kernPct = 100.0 * pKern / pStepWall;
+        double copyKB = (sumIn + sumOut) / 1024.0 / M;
+
+        pullRenderState(g);
+        boolean cons = conservationCheck(g); int phantom = phantomCount(g.fil); int esc = wallEscapes(g); boolean nan = anyNaN(g);
+        double gpuShrink = 100.0 * (rms0 - filRms(g.fil)) / rms0;
+        int active = activeSegments(g.fil), xlinks = g.xl == null ? 0 : activeLinks(g.xl);
+        boolean broken = !cons || phantom > 0 || nan;
+
+        // capped CPU comparison (serial ∝ N; small window at large scale, extrapolate the linear curve)
+        double cpuSps = Double.NaN;
+        if (cpuCap > 0 && !broken) {
+            Scene c = build(dt);
+            long c0 = System.nanoTime();
+            for (int t = 0; t < cpuCap; t++) cpuStep(c, t);
+            double csecs = (System.nanoTime() - c0) / 1e9;
+            cpuSps = cpuCap / csecs;
+        }
+        double ratio = Double.isNaN(cpuSps) ? Double.NaN : gpuSps / cpuSps;
+
+        System.out.printf("  GPU window: %d warmup + %d measured steps in %.1f s (raw loop %.0f steps/s incl. profiler reads)%n", W, M, gpuLoopSecs, M / gpuLoopSecs);
+        System.out.printf("  VRAM: warmup %d MiB, peak %d MiB%n", vramWarm, vramPeak);
+        System.out.printf("  sanity: conservation=%s phantoms=%d wall-escapes=%d NaN=%b active=%d xlinks=%d shrink=%.2f%%%n",
+                cons ? "EXACT" : "*** FAIL ***", phantom, esc, nan, active, xlinks, gpuShrink);
+        if (broken) System.out.println("  *** HARD BAIL: physically broken at this scale — perf numbers NOT reported for a broken trajectory. ***");
+        else {
+            System.out.printf("  GPU %.1f steps/s (faithful per-step device wall %.3f ms); kernel-compute %.1f%% of step; per-step copy %.2f KB%n",
+                    gpuSps, pStepWall, kernPct, copyKB);
+            if (cpuCap > 0) System.out.printf("  CPU %.1f steps/s (%d-step cap) ⇒ GPU/CPU ratio %.2fx%n", cpuSps, cpuCap, ratio);
+        }
+        // one machine-parseable row for the sweep table
+        System.out.printf("SWEEP_ROW scale=%.2f nodes=%d minifils=%d cap=%d active=%d heads=%d boxxy=%.2f gpuSPS=%.1f cpuSPS=%.1f ratio=%.2f kernPct=%.1f vramMiB=%d copyKB=%.2f cons=%s phantom=%d esc=%d nan=%b xlinks=%d shrinkPct=%.2f broken=%b%n",
+                SCALE, nNodes, nMini, FIL_CAP, active, heads, BOX_XY, gpuSps, cpuSps, ratio, kernPct, vramPeak, copyKB,
+                cons ? "EXACT" : "FAIL", phantom, esc, nan, xlinks, gpuShrink, broken);
+    }
 
     /** Device-resident graph: turnover + nucleation + node shell + free minifilaments (xlinks: CPU-side formation,
      *  device force omitted from this probe — the xlink device path is validated in DenseContractile/XlinkFormation).

@@ -2,6 +2,30 @@
 
 Last updated: 2026-06-23
 
+## 2026-06-23 — density/scale sweep: where the maximal composition goes compute-bound + LARGE-scale headline (MEASUREMENT-ONLY)
+Branch `cadence-gate-fdturn`. Report: `SCALE_SWEEP_FINDINGS.md`. Added `-scale F` (clean SIZE-scaling at constant
+density: box AREA ∝F, spacing/depth fixed; nodes/minifils/cap ∝F) + a `-sweep` short-window probe (profiler-on for
+kernel%, +VRAM +sanity +capped CPU) + `run_scalesweep.sh`. **No physics/kernel/order edit;** `stepSplit`/`cpuStep`/
+constituents/`BoA-v1ref` byte-clean. Swept default + dense 0.5×→16× (672→16,800 segs, 2.2k→89k heads). **Crossover:
+kernel-compute hits ~50 % at ~1.5× the dense scene** (43.9 %→57.1 % across 1×→2×); the dense baseline sits right at
+the launch-bound→compute-bound knee. **GPU weak-scales linearly** (per-step wall ∝N, 2×-ratios 1.42→1.91→2.0 — the
+DenseContractile signature, no serial kernel left). **GPU/CPU ratio climbs 1.1×→17× and never plateaus** (GPU linear
+÷ CPU super-linear-serial); the conservative warm-up-excluded read is a steady **~5× compute-bound speedup** (enters
+the 5–7× regime by ~4×; measured 9–17× at 8×/16× is the collapsing CPU baseline + short-cap warm-start, disclosed).
+**LARGE-scale headline (16×: 400 nodes, 89k heads):** 7.4 steps/s, **VRAM 1.09 GB of 12 GB (9 %)**, conservation
+EXACT, 0 phantoms. **steps/s — not VRAM — binds:** usability floor (~5/s) at ~24×, VRAM 75 % not until ~200×. Sim-time
+0.27 s-sim/hr at 16× ⇒ an overnight reaches ~2 s sim. **Ring-scale MORPHOLOGY is GPU-viable (hundreds of nodes,
+seconds of sim, overnight); biological DURATION (minutes) is NOT — a dt/timescale-compression problem, not throughput.**
+**Creep at scale:** the §8 `fdNuc` per-execute creep is fixed ≈0.11 µs/step (scale-INDEPENDENT, task-count-bound —
+2× probe 2.99→3.86 ms confirms), so its relative bite shrinks ∝1/F: ~76 % throughput loss over a 1 s-sim run at dense
+→ **~10 % at 16×** ⇒ **density softens the deferred decay ~8×**, making long LARGE runs far more practical than long
+dense ones.
+
+## 2026-06-23 — CLAUDE.md residency law: cadence-gated graphs must sit at a chain END (source/sink), never the middle
+Branch `cadence-gate-fdturn` (docs-only, separate commit). Added the §9.3.0 finding as a standing residency rule: a
+skipped MIDDLE graph breaks the consume forward-chain (stale producer→buffer association → `executeAlloc` NPE on the
+skip step); SOURCE (`fdTurnFire`) and SINK (`fdXForm`) placement are skip-safe. `BoA-v1ref` byte-clean.
+
 ## 2026-06-23 — filID→GPU Part 1b: crosslinker pipeline wired into the device plan — LIVE BUNDLING ON THE GPU
 Branch `cadence-gate-fdturn`. Report: `TASKGRAPH_SPLIT_FINDINGS.md` §9.3. **The §5.1/§6 gap is CLOSED** — the maximal
 device-resident run now does **live crosslinker formation + bundling + contraction on the GPU** (the device path
