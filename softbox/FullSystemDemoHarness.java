@@ -149,6 +149,11 @@ public final class FullSystemDemoHarness {
     static boolean sweep = false;               // -sweep : one short GPU window (profiler-on for kernel%) + VRAM + sanity + capped CPU
     static int cpuCap = 400;                    // -cpucap N : CPU comparison window (0 ⇒ skip CPU; small at large scale, extrapolate)
 
+    // ---- MEGAKERNEL PROBE (MEASUREMENT-ONLY; two independent, separately-toggleable levers) ----
+    static boolean MEGAKERNEL = false;          // -megakernel : fuse zero+Brownian (forceBuild) + confine+integrate+derive (integDerive) per store
+    static boolean CSRHOST = false;             // -csrhost    : run the single-GPU-thread per-step gather CSR scans host-side (round-trip tradeoff)
+    static boolean validate = false;            // -validate   : fused-CPU≡unfused-CPU bit-exact + CPU≡GPU aggregate + conservation, then exit
+
     static double pForm(double conc, double dtCheck) { return 1.0 - Math.exp(-XLINK_ON_RATE * conc * dtCheck); }
 
     public static void main(String[] args) {
@@ -200,6 +205,9 @@ public final class FullSystemDemoHarness {
                 case "-scale" -> SCALE = Double.parseDouble(args[++i]);
                 case "-sweep" -> { sweep = true; gpuScale = true; }
                 case "-cpucap" -> cpuCap = Integer.parseInt(args[++i]);
+                case "-megakernel" -> MEGAKERNEL = true;
+                case "-csrhost" -> CSRHOST = true;
+                case "-validate" -> { validate = true; gpuScale = true; }
                 case "-smoke" -> { smoke = true; STEPS = 1500; }
                 case "-3js" -> vizDir = args[++i];
                 default -> {}
@@ -237,6 +245,7 @@ public final class FullSystemDemoHarness {
                 s.nNodes, s.nNodes * FORMINS, activeSegments(s.fil), s.nMini, s.mot2.nMotors, s.xl == null ? 0 : s.xl.nLinks, s.grow.pool.conc(), totalActinUM(s));
 
         if (filidCheck) { filIDCheck(s, dt); return; }
+        if (validate) { validateRun(s, dt); return; }
         if (sweep) { sweepRun(s, dt); return; }
         if (profile) { profileRun(s, dt); return; }
         if (overnight) { overnightRun(s, dt); return; }
@@ -371,7 +380,7 @@ public final class FullSystemDemoHarness {
         // ---------------- shallow containment box ----------------
         int checkInt = Math.max(1, (int) Math.round(1.0e-4 / dt));
         s.boxParams = FloatArray.fromElements(1.0e-4f, (float) BOX_XY, (float) BOX_XY, (float) BOX_Z,
-                (float) Constants.radius, 0.5f, (float) checkInt);
+                (float) Constants.radius, 0.5f, (float) checkInt, (float) dt);   // [7]=dt for the confined integrate megakernel
         return s;
     }
 
@@ -709,16 +718,24 @@ public final class FullSystemDemoHarness {
         }
 
         // === FORCES — zero all accumulators, then every coupling accumulates into f.forceSum ===
-        ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
-        ChainBendingForceSystem.zeroAccumulators(nb.forceSum, nb.torqueSum, nd.nodeBodyCounts);
-        ChainBendingForceSystem.zeroAccumulators(b2.forceSum, b2.torqueSum, mot2.counts);
-        ChainBendingForceSystem.zeroAccumulators(bb.forceSum, bb.torqueSum, mini.bbCounts);
-        ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
-        BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
-        BrownianForceSystem.brownianForce(nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams, nd.nodeBodyCounts);
-        BrownianForceSystem.brownianForce(b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, b2.brownTransScale, b2.brownRotScale, mot2.bodyParams, mot2.counts);
-        BrownianForceSystem.brownianForce(bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams, mini.bbCounts);
-        BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        if (MEGAKERNEL) {   // megakernel 1: zero+Brownian fused per store (bit-identical to the two-kernel pair)
+            MechanicsFusion.forceBuild(b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
+            MechanicsFusion.forceBuild(nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams, nd.nodeBodyCounts);
+            MechanicsFusion.forceBuild(b2.forceSum, b2.torqueSum, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, b2.brownTransScale, b2.brownRotScale, mot2.bodyParams, mot2.counts);
+            MechanicsFusion.forceBuild(bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams, mini.bbCounts);
+            MechanicsFusion.forceBuild(f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        } else {
+            ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
+            ChainBendingForceSystem.zeroAccumulators(nb.forceSum, nb.torqueSum, nd.nodeBodyCounts);
+            ChainBendingForceSystem.zeroAccumulators(b2.forceSum, b2.torqueSum, mot2.counts);
+            ChainBendingForceSystem.zeroAccumulators(bb.forceSum, bb.torqueSum, mini.bbCounts);
+            ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+            BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
+            BrownianForceSystem.brownianForce(nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams, nd.nodeBodyCounts);
+            BrownianForceSystem.brownianForce(b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, b2.brownTransScale, b2.brownRotScale, mot2.bodyParams, mot2.counts);
+            BrownianForceSystem.brownianForce(bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams, mini.bbCounts);
+            BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        }
 
         // node-shell structure: joints + dimer + radial tether + node gather + cross-bridge
         MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
@@ -777,19 +794,27 @@ public final class FullSystemDemoHarness {
         CrossBridgeSystem.registerForceDot(s.bondData2, mot2.boundSeg, mot2.forceDotFil, mot2.forceMag, mot2.forceDotHist, mot2.forceDotPlace, mot2.counts);
 
         // === CONTAINMENT + INTEGRATE ===
-        ContainmentSystem.confine(nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, s.boxParams, nd.nodeBodyCounts);
-        RigidRodLangevinIntegrationSystem.integrate(nb.coord, nb.uVec, nb.yVec, nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nd.nodeBodyParams, nd.nodeBodyCounts);
-        DerivedGeometrySystem.derive(nb.coord, nb.uVec, nb.yVec, nb.zVec, nb.end1, nb.end2, nb.segLength, nd.nodeBodyCounts);
-        RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
-        DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
-        RigidRodLangevinIntegrationSystem.integrate(b2.coord, b2.uVec, b2.yVec, b2.forceSum, b2.torqueSum, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, mot2.bodyParams, mot2.counts);
-        DerivedGeometrySystem.derive(b2.coord, b2.uVec, b2.yVec, b2.zVec, b2.end1, b2.end2, b2.segLength, mot2.counts);
-        ContainmentSystem.confine(bb.coord, bb.uVec, bb.segLength, bb.bTransGam, bb.forceSum, bb.torqueSum, s.boxParams, mini.bbCounts);
-        RigidRodLangevinIntegrationSystem.integrate(bb.coord, bb.uVec, bb.yVec, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, mini.bbBodyParams, mini.bbCounts);
-        DerivedGeometrySystem.derive(bb.coord, bb.uVec, bb.yVec, bb.zVec, bb.end1, bb.end2, bb.segLength, mini.bbCounts);
-        ContainmentSystem.confine(f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, s.boxParams, f.counts);
-        RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
-        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        if (MEGAKERNEL) {   // megakernel 2: confine+integrate+derive fused (node/bb/fil); integrate+derive (motors)
+            MechanicsFusion.integDeriveConfined(nb.coord, nb.uVec, nb.yVec, nb.zVec, nb.segLength, nb.end1, nb.end2, nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, s.boxParams, nd.nodeBodyCounts);
+            MechanicsFusion.integDerive(b.coord, b.uVec, b.yVec, b.zVec, b.segLength, b.end1, b.end2, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams);
+            MechanicsFusion.integDerive(b2.coord, b2.uVec, b2.yVec, b2.zVec, b2.segLength, b2.end1, b2.end2, b2.forceSum, b2.torqueSum, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, mot2.bodyParams);
+            MechanicsFusion.integDeriveConfined(bb.coord, bb.uVec, bb.yVec, bb.zVec, bb.segLength, bb.end1, bb.end2, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, s.boxParams, mini.bbCounts);
+            MechanicsFusion.integDeriveConfined(f.coord, f.uVec, f.yVec, f.zVec, f.segLength, f.end1, f.end2, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, s.boxParams, f.counts);
+        } else {
+            ContainmentSystem.confine(nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, s.boxParams, nd.nodeBodyCounts);
+            RigidRodLangevinIntegrationSystem.integrate(nb.coord, nb.uVec, nb.yVec, nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nd.nodeBodyParams, nd.nodeBodyCounts);
+            DerivedGeometrySystem.derive(nb.coord, nb.uVec, nb.yVec, nb.zVec, nb.end1, nb.end2, nb.segLength, nd.nodeBodyCounts);
+            RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+            DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+            RigidRodLangevinIntegrationSystem.integrate(b2.coord, b2.uVec, b2.yVec, b2.forceSum, b2.torqueSum, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, mot2.bodyParams, mot2.counts);
+            DerivedGeometrySystem.derive(b2.coord, b2.uVec, b2.yVec, b2.zVec, b2.end1, b2.end2, b2.segLength, mot2.counts);
+            ContainmentSystem.confine(bb.coord, bb.uVec, bb.segLength, bb.bTransGam, bb.forceSum, bb.torqueSum, s.boxParams, mini.bbCounts);
+            RigidRodLangevinIntegrationSystem.integrate(bb.coord, bb.uVec, bb.yVec, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, mini.bbBodyParams, mini.bbCounts);
+            DerivedGeometrySystem.derive(bb.coord, bb.uVec, bb.yVec, bb.zVec, bb.end1, bb.end2, bb.segLength, mini.bbCounts);
+            ContainmentSystem.confine(f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, s.boxParams, f.counts);
+            RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+            DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        }
     }
 
     /** O(N) crosslinker formation on the host (the grid build + fused per-segment query + the pipeline). */
@@ -1109,6 +1134,67 @@ public final class FullSystemDemoHarness {
      *  pStepWall = Σ exec-wall + host is reported, EXCLUDING the profiler-read overhead) — plus VRAM, physical-sanity,
      *  and a capped CPU comparison window. Prints one parseable SWEEP_ROW. Short window keeps the §8 per-execute creep
      *  out of the per-step rate (this is the rate AT this fixed scale, not a long run). No physics/kernel/order edit. */
+    // ====================================================================== MEGAKERNEL PROBE — Stage 2 validation
+    /** -validate : the bit-exactness gate for the recomposition.
+     *   #1  fused-CPU ≡ unfused-CPU, BIT-EXACT (same -cpu transcendentals, pure kernel regrouping) over a short
+     *       horizon — the decisive proof the megakernel preserves arithmetic (the "`-cpu` arithmetically unchanged"
+     *       requirement). max|Δ| over all stores' coord/uVec/yVec must be 0.0.
+     *   #2  CPU(fused) ≡ GPU(fused) AGGREGATE-within-tolerance + conservation EXACT, 0 phantoms, no NaN — the §8
+     *       chaotic-many-body standard (PTX vs JVM transcendentals decorrelate the float32 microstate; bit-identity
+     *       is not the test here, matching the existing FullSystemDemo CPU≡GPU posture). */
+    static void validateRun(Scene s0, double dt) {
+        int H = STEPS > 0 ? Math.min(STEPS, 400) : 200;
+        System.out.printf("%n=== MEGAKERNEL PROBE — VALIDATION (megakernel=%b csrhost=%b; node-centric scene, %d steps) ===%n", true, CSRHOST, H);
+        boolean savedMega = MEGAKERNEL, savedCsr = CSRHOST;
+
+        // ---- #1 fused-CPU vs unfused-CPU, BIT-EXACT ----
+        MEGAKERNEL = false; Scene cu = build(dt); for (int t = 0; t < H; t++) cpuStep(cu, t);
+        MEGAKERNEL = true;  Scene cf = build(dt); for (int t = 0; t < H; t++) cpuStep(cf, t);
+        double dmax = maxPoseDiff(cf, cu);
+        System.out.printf("  #1 fused-CPU vs unfused-CPU: max|Δ pose| = %.3e over %d steps ⇒ %s%n",
+                dmax, H, dmax == 0.0 ? "BIT-EXACT (recomposition preserves arithmetic)" : "*** NOT bit-exact — fusion changed physics ***");
+
+        // ---- #2 CPU(fused) vs GPU(fused), AGGREGATE + sanity ----
+        MEGAKERNEL = true; CSRHOST = savedCsr;     // GPU run uses the fused path (the probe target)
+        Scene g = build(dt);
+        TornadoExecutionPlan plan;
+        try { plan = buildPlanSplit(g); }
+        catch (Throwable e) { System.out.println("  #2 GPU split build FAILED: " + e); e.printStackTrace(); MEGAKERNEL = savedMega; CSRHOST = savedCsr; return; }
+        plan = plan.withProfiler(ProfilerMode.SILENT);
+        try { for (int t = 0; t < H; t++) profStep(g, t, dt, plan, null); }
+        catch (Throwable e) { System.out.println("  #2 GPU split run THREW: " + e); e.printStackTrace(); MEGAKERNEL = savedMega; CSRHOST = savedCsr; return; }
+        pullRenderState(g);
+        boolean cons = conservationCheck(g); int phantom = phantomCount(g.fil); boolean nan = anyNaN(g);
+        int aG = activeSegments(g.fil), aC = activeSegments(cf.fil);
+        int bG = boundTotal(g.mot), bC = boundTotal(cf.mot);
+        int xG = g.xl == null ? 0 : activeLinks(g.xl), xC = cf.xl == null ? 0 : activeLinks(cf.xl);
+        boolean agree = Math.abs(aG - aC) <= Math.max(8, (int)(0.2 * aC))
+                && Math.abs(bG - bC) <= Math.max(10, (int)(0.5 * Math.max(1, bC)))
+                && Math.abs(xG - xC) <= Math.max(10, (int)(0.5 * Math.max(1, xC)));
+        System.out.printf("  #2 CPU(fused) vs GPU(fused) @ %d steps: active C=%d G=%d, node-bound C=%d G=%d, xlinks C=%d G=%d ⇒ %s%n",
+                H, aC, aG, bC, bG, xC, xG, agree ? "AGREE (chaotic-many-body, within tolerance)" : "*DIFFER — investigate*");
+        System.out.printf("  #2 sanity (GPU): conservation=%s phantoms=%d NaN=%b%n", cons ? "EXACT" : "*** FAIL ***", phantom, nan);
+        boolean ok = (dmax == 0.0) && agree && cons && phantom == 0 && !nan;
+        System.out.printf("  VALIDATION: %s%n", ok ? "PASS — recomposition is bit-exact on CPU and physics-preserving on GPU" : "*** REVIEW (see above) ***");
+        MEGAKERNEL = savedMega; CSRHOST = savedCsr;
+    }
+
+    /** Max abs difference across all stores' canonical pose arrays (coord/uVec/yVec) between two scenes. */
+    static double maxPoseDiff(Scene a, Scene b) {
+        double d = 0;
+        d = Math.max(d, arrMax(a.fil.coord, b.fil.coord)); d = Math.max(d, arrMax(a.fil.uVec, b.fil.uVec)); d = Math.max(d, arrMax(a.fil.yVec, b.fil.yVec));
+        d = Math.max(d, arrMax(a.mot.body.coord, b.mot.body.coord)); d = Math.max(d, arrMax(a.mot.body.uVec, b.mot.body.uVec)); d = Math.max(d, arrMax(a.mot.body.yVec, b.mot.body.yVec));
+        d = Math.max(d, arrMax(a.node.node.coord, b.node.node.coord)); d = Math.max(d, arrMax(a.node.node.uVec, b.node.node.uVec));
+        if (a.mot2.nMotors > 0) { d = Math.max(d, arrMax(a.mot2.body.coord, b.mot2.body.coord)); d = Math.max(d, arrMax(a.mot2.body.uVec, b.mot2.body.uVec)); }
+        if (a.mini.backbone.n > 0) { d = Math.max(d, arrMax(a.mini.backbone.coord, b.mini.backbone.coord)); d = Math.max(d, arrMax(a.mini.backbone.uVec, b.mini.backbone.uVec)); }
+        return d;
+    }
+    static double arrMax(FloatArray a, FloatArray b) {
+        double d = 0; int n = Math.min(a.getSize(), b.getSize());
+        for (int i = 0; i < n; i++) { double e = Math.abs((double) a.get(i) - (double) b.get(i)); if (e > d) d = e; }
+        return d;
+    }
+
     static void sweepRun(Scene s, double dt) {
         int nNodes = s.nNodes, nMini = s.nMini, heads = s.mot.nMotors + s.mot2.nMotors;
         System.out.printf("%n=== SCALE-SWEEP POINT (scale ×%.2f) — short device-resident window ===%n", SCALE);
@@ -1178,7 +1264,10 @@ public final class FullSystemDemoHarness {
         }
         double ratio = Double.isNaN(cpuSps) ? Double.NaN : gpuSps / cpuSps;
 
+        double[] launch = launchStats(dt);
         System.out.printf("  GPU window: %d warmup + %d measured steps in %.1f s (raw loop %.0f steps/s incl. profiler reads)%n", W, M, gpuLoopSecs, M / gpuLoopSecs);
+        System.out.printf("  device launches/step: %.0f always-run (+%d on a fire step) ⇒ cadence-avg %.1f  [megakernel=%b csrhost=%b]%n",
+                launch[0], (int) (launch[1] - launch[0]), launch[2], MEGAKERNEL, CSRHOST);
         System.out.printf("  VRAM: warmup %d MiB, peak %d MiB%n", vramWarm, vramPeak);
         System.out.printf("  sanity: conservation=%s phantoms=%d wall-escapes=%d NaN=%b active=%d xlinks=%d shrink=%.2f%%%n",
                 cons ? "EXACT" : "*** FAIL ***", phantom, esc, nan, active, xlinks, gpuShrink);
@@ -1189,8 +1278,8 @@ public final class FullSystemDemoHarness {
             if (cpuCap > 0) System.out.printf("  CPU %.1f steps/s (%d-step cap) ⇒ GPU/CPU ratio %.2fx%n", cpuSps, cpuCap, ratio);
         }
         // one machine-parseable row for the sweep table
-        System.out.printf("SWEEP_ROW scale=%.2f nodes=%d minifils=%d cap=%d active=%d heads=%d boxxy=%.2f gpuSPS=%.1f cpuSPS=%.1f ratio=%.2f kernPct=%.1f vramMiB=%d copyKB=%.2f cons=%s phantom=%d esc=%d nan=%b xlinks=%d shrinkPct=%.2f broken=%b%n",
-                SCALE, nNodes, nMini, FIL_CAP, active, heads, BOX_XY, gpuSps, cpuSps, ratio, kernPct, vramPeak, copyKB,
+        System.out.printf("SWEEP_ROW scale=%.2f mega=%b csrhost=%b nodes=%d minifils=%d cap=%d active=%d heads=%d boxxy=%.2f gpuSPS=%.1f cpuSPS=%.1f ratio=%.2f kernPct=%.1f launchAlways=%.0f launchAvg=%.1f vramMiB=%d copyKB=%.2f cons=%s phantom=%d esc=%d nan=%b xlinks=%d shrinkPct=%.2f broken=%b%n",
+                SCALE, MEGAKERNEL, CSRHOST, nNodes, nMini, FIL_CAP, active, heads, BOX_XY, gpuSps, cpuSps, ratio, kernPct, launch[0], launch[2], vramPeak, copyKB,
                 cons ? "EXACT" : "FAIL", phantom, esc, nan, xlinks, gpuShrink, broken);
     }
 
@@ -1762,17 +1851,27 @@ public final class FullSystemDemoHarness {
         MotorStore mot = s.mot; DimerStore dim = s.dim; NodeStore nd = s.node;
         MotorStore mot2 = s.mot2; DimerStore dim2 = s.dim2; MiniFilamentStore mini = s.mini; FilamentStore f = s.fil;
         RigidRodBody b = mot.body, nb = nd.node, b2 = mot2.body, bb = mini.backbone;
+        if (MEGAKERNEL) {   // megakernel 1: fuse each store's zero+Brownian into one forceBuild launch (10 tasks -> 5)
+            tg = tg
+                .task("fbMot", MechanicsFusion::forceBuild, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
+                .task("fbNode", MechanicsFusion::forceBuild, nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams, nd.nodeBodyCounts)
+                .task("fbMot2", MechanicsFusion::forceBuild, b2.forceSum, b2.torqueSum, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, b2.brownTransScale, b2.brownRotScale, mot2.bodyParams, mot2.counts)
+                .task("fbBb", MechanicsFusion::forceBuild, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams, mini.bbCounts)
+                .task("fbFil", MechanicsFusion::forceBuild, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        } else {
+            tg = tg
+                .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
+                .task("zeroNode", ChainBendingForceSystem::zeroAccumulators, nb.forceSum, nb.torqueSum, nd.nodeBodyCounts)
+                .task("zeroMot2", ChainBendingForceSystem::zeroAccumulators, b2.forceSum, b2.torqueSum, mot2.counts)
+                .task("zeroBb", ChainBendingForceSystem::zeroAccumulators, bb.forceSum, bb.torqueSum, mini.bbCounts)
+                .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
+                .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
+                .task("brownNode", BrownianForceSystem::brownianForce, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams, nd.nodeBodyCounts)
+                .task("brownMot2", BrownianForceSystem::brownianForce, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, b2.brownTransScale, b2.brownRotScale, mot2.bodyParams, mot2.counts)
+                .task("brownBb", BrownianForceSystem::brownianForce, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams, mini.bbCounts)
+                .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        }
         return tg
-            .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
-            .task("zeroNode", ChainBendingForceSystem::zeroAccumulators, nb.forceSum, nb.torqueSum, nd.nodeBodyCounts)
-            .task("zeroMot2", ChainBendingForceSystem::zeroAccumulators, b2.forceSum, b2.torqueSum, mot2.counts)
-            .task("zeroBb", ChainBendingForceSystem::zeroAccumulators, bb.forceSum, bb.torqueSum, mini.bbCounts)
-            .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
-            .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
-            .task("brownNode", BrownianForceSystem::brownianForce, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams, nd.nodeBodyCounts)
-            .task("brownMot2", BrownianForceSystem::brownianForce, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, b2.brownTransScale, b2.brownRotScale, mot2.bodyParams, mot2.counts)
-            .task("brownBb", BrownianForceSystem::brownianForce, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, bb.brownTransScale, bb.brownRotScale, mini.bbBodyParams, mini.bbCounts)
-            .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
             .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
             .task("dimer", DimerCouplingSystem::couple, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg)
             .task("tether", NodeSystem::tether, b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum, nb.coord, nb.uVec, nb.yVec, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams)
@@ -1836,6 +1935,14 @@ public final class FullSystemDemoHarness {
     static TaskGraph blkInteg(TaskGraph tg, Scene s) {
         MotorStore mot = s.mot; NodeStore nd = s.node; MotorStore mot2 = s.mot2; MiniFilamentStore mini = s.mini; FilamentStore f = s.fil;
         RigidRodBody b = mot.body, nb = nd.node, b2 = mot2.body, bb = mini.backbone;
+        if (MEGAKERNEL) {   // megakernel 2: confine+integrate+derive fused (node/bb/fil); integrate+derive (motors). 13 tasks -> 5
+            return tg
+                .task("idNode", MechanicsFusion::integDeriveConfined, nb.coord, nb.uVec, nb.yVec, nb.zVec, nb.segLength, nb.end1, nb.end2, nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, s.boxParams, nd.nodeBodyCounts)
+                .task("idM", MechanicsFusion::integDerive, b.coord, b.uVec, b.yVec, b.zVec, b.segLength, b.end1, b.end2, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams)
+                .task("idM2", MechanicsFusion::integDerive, b2.coord, b2.uVec, b2.yVec, b2.zVec, b2.segLength, b2.end1, b2.end2, b2.forceSum, b2.torqueSum, b2.randForce, b2.randTorque, b2.bTransGam, b2.bRotGam, mot2.bodyParams)
+                .task("idBb", MechanicsFusion::integDeriveConfined, bb.coord, bb.uVec, bb.yVec, bb.zVec, bb.segLength, bb.end1, bb.end2, bb.forceSum, bb.torqueSum, bb.randForce, bb.randTorque, bb.bTransGam, bb.bRotGam, s.boxParams, mini.bbCounts)
+                .task("idFil", MechanicsFusion::integDeriveConfined, f.coord, f.uVec, f.yVec, f.zVec, f.segLength, f.end1, f.end2, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, s.boxParams, f.counts);
+        }
         return tg
             .task("confineNode", ContainmentSystem::confine, nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, s.boxParams, nd.nodeBodyCounts)
             .task("integNode", RigidRodLangevinIntegrationSystem::integrate, nb.coord, nb.uVec, nb.yVec, nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nd.nodeBodyParams, nd.nodeBodyCounts)
@@ -1862,6 +1969,7 @@ public final class FullSystemDemoHarness {
         int nM2 = mot2.nMotors, nMB2 = b2.n, nD2 = dim2.nDimers, nBb = bb.n, nA = nd.nAttach, cap = s.viewCap, totalCells = s.totalCells;
         int numScan = (totalCells + SpatialGrid.GRID_SCAN_CHUNK - 1) / SpatialGrid.GRID_SCAN_CHUNK;
         sched = new GridScheduler();
+        taskCounts.clear();   // launch-count instrument: recount this plan's scheduled tasks per graph
         // G0 fdTurnFire — turnover (fire-gated; all C-sized except the single-thread CSR scans)
         for (String t : new String[]{ "age","depoly","applyDeath","grow","growthAtp","cofAcc","cofDis","severDeath","markSplits",
                 "gFreeFlags","gFreeScatter","gAllocate","splitWire","splitInherit","splitCof","recomputeDrag" }) addW("fdTurnFire." + t, pad(C));
@@ -1878,26 +1986,40 @@ public final class FullSystemDemoHarness {
         addW("fdBind.chunkHist", pad(s.numBodyChunks)); addW("fdBind.chunkReduce", pad(totalCells));
         addW("fdBind.chunkScatter", pad(s.numBodyChunks)); addW("fdBind.gScanLocal", pad(numScan)); addW("fdBind.gScanAdd", pad(numScan));
         addS("fdBind.gScanChunks");
-        // G2 fdStruct
-        for (String t : new String[]{ "zeroMot","brownMot","joints" }) addW("fdStruct." + t, pad(nMB));
+        // G2 fdStruct — force-build: megakernel 1 (fb*, one per store) OR the separate zero/brown pair per store
+        if (MEGAKERNEL) {
+            addW("fdStruct.fbMot", pad(nMB)); addW("fdStruct.fbNode", pad(nN)); addW("fdStruct.fbMot2", pad(nMB2));
+            addW("fdStruct.fbBb", pad(nBb)); addW("fdStruct.fbFil", pad(C));
+        } else {
+            for (String t : new String[]{ "zeroMot","brownMot" }) addW("fdStruct." + t, pad(nMB));
+            for (String t : new String[]{ "zeroNode","brownNode" }) addW("fdStruct." + t, pad(nN));
+            for (String t : new String[]{ "zeroMot2","brownMot2" }) addW("fdStruct." + t, pad(nMB2));
+            for (String t : new String[]{ "zeroBb","brownBb" }) addW("fdStruct." + t, pad(nBb));
+            for (String t : new String[]{ "zeroFil","brownFil" }) addW("fdStruct." + t, pad(C));
+        }
+        for (String t : new String[]{ "joints" }) addW("fdStruct." + t, pad(nMB));
         for (String t : new String[]{ "bond","applyHead" }) addW("fdStruct." + t, pad(nM));
-        for (String t : new String[]{ "zeroNode","brownNode","ndGather" }) addW("fdStruct." + t, pad(nN));
-        for (String t : new String[]{ "zeroMot2","brownMot2","joints2" }) addW("fdStruct." + t, pad(nMB2));
+        for (String t : new String[]{ "ndGather" }) addW("fdStruct." + t, pad(nN));
+        for (String t : new String[]{ "joints2" }) addW("fdStruct." + t, pad(nMB2));
         for (String t : new String[]{ "bond2","applyHead2" }) addW("fdStruct." + t, pad(nM2));
-        for (String t : new String[]{ "zeroBb","brownBb","bbGather" }) addW("fdStruct." + t, pad(nBb));
-        for (String t : new String[]{ "zeroFil","brownFil" }) addW("fdStruct." + t, pad(C));
+        for (String t : new String[]{ "bbGather" }) addW("fdStruct." + t, pad(nBb));
         addW("fdStruct.dimer", pad(nD)); addW("fdStruct.tether", pad(nA)); addW("fdStruct.dimer2", pad(nD2)); addW("fdStruct.tether2", pad(nD2));
         for (String t : new String[]{ "ndHist","ndScan","ndScatter","bbHist","bbScan","bbScatter" }) addS("fdStruct." + t);
         // G3 fdFil
         for (String t : new String[]{ "chain","seedTether","filGather","filGather2" }) addW("fdFil." + t, pad(C));
         addW("fdFil.seedReact", pad(nN)); addW("fdFil.register", pad(nM)); addW("fdFil.register2", pad(nM2));
         for (String t : new String[]{ "filHist","filScan","filScatter","filHist2","filScan2","filScatter2" }) addS("fdFil." + t);
-        // G4 fdInteg
-        for (String t : new String[]{ "confineNode","integNode","deriveNode" }) addW("fdInteg." + t, pad(nN));
-        for (String t : new String[]{ "integM","deriveM" }) addW("fdInteg." + t, pad(nMB));
-        for (String t : new String[]{ "integM2","deriveM2" }) addW("fdInteg." + t, pad(nMB2));
-        for (String t : new String[]{ "confineBb","integBb","deriveBb" }) addW("fdInteg." + t, pad(nBb));
-        for (String t : new String[]{ "confineFil","integFil","deriveFil" }) addW("fdInteg." + t, pad(C));
+        // G4 fdInteg — megakernel 2 (id*, one per store) OR the separate confine/integrate/derive tasks
+        if (MEGAKERNEL) {
+            addW("fdInteg.idNode", pad(nN)); addW("fdInteg.idM", pad(nMB)); addW("fdInteg.idM2", pad(nMB2));
+            addW("fdInteg.idBb", pad(nBb)); addW("fdInteg.idFil", pad(C));
+        } else {
+            for (String t : new String[]{ "confineNode","integNode","deriveNode" }) addW("fdInteg." + t, pad(nN));
+            for (String t : new String[]{ "integM","deriveM" }) addW("fdInteg." + t, pad(nMB));
+            for (String t : new String[]{ "integM2","deriveM2" }) addW("fdInteg." + t, pad(nMB2));
+            for (String t : new String[]{ "confineBb","integBb","deriveBb" }) addW("fdInteg." + t, pad(nBb));
+            for (String t : new String[]{ "confineFil","integFil","deriveFil" }) addW("fdInteg." + t, pad(C));
+        }
         // fdXForm (filID + crosslinker formation) + fdFil's appended crosslinker FORCE — only when xlinkers are wired.
         // FormationGrid grid kernels are keyed to ITS OWN dims (fg.totalCells/numBodyChunks, NOT the binding grid — the
         // GridScheduler trap). filID jumps + the RNG/trig formation kernels get localWork=64 (addW); CSR scans single.
@@ -2367,6 +2489,25 @@ public final class FullSystemDemoHarness {
     }
 
     static int pad(int n) { return ((n + B - 1) / B) * B; }
-    static void addW(String n, int g) { WorkerGrid w = new WorkerGrid1D(Math.max(B, g)); w.setLocalWork(B, 1, 1); sched.addWorkerGrid(n, w); }
-    static void addS(String n) { WorkerGrid w = new WorkerGrid1D(1); w.setLocalWork(1, 1, 1); sched.addWorkerGrid(n, w); }
+    // launch-count instrument (MEASUREMENT-ONLY): every scheduled task == one device launch; count per graph prefix.
+    static final java.util.Map<String,Integer> taskCounts = new java.util.LinkedHashMap<>();
+    static void addW(String n, int g) { WorkerGrid w = new WorkerGrid1D(Math.max(B, g)); w.setLocalWork(B, 1, 1); sched.addWorkerGrid(n, w); bumpTask(n); }
+    static void addS(String n) { WorkerGrid w = new WorkerGrid1D(1); w.setLocalWork(1, 1, 1); sched.addWorkerGrid(n, w); bumpTask(n); }
+    static void bumpTask(String key) { String g = key.substring(0, key.indexOf('.')); taskCounts.merge(g, 1, Integer::sum); }
+
+    /** Cadence-averaged device launches/step: always-run graphs every step + the cadence-gated turnover/formation
+     *  graphs amortized by their fire cadence (fdTurnFire = biochem cadence; fdXForm = XL_CHECK_INT). Returns
+     *  {alwaysRunPerStep, fireStepTotal, cadenceAvg}. */
+    static double[] launchStats(double dt) {
+        int always = 0, fire = 0;
+        int turnCad = Math.max(1, (int) Math.round(Constants.biochemDeltaT / dt));   // fdTurnFire fire cadence
+        for (var e : taskCounts.entrySet()) {
+            String g = e.getKey(); int c = e.getValue();
+            boolean gated = g.equals("fdTurnFire") || g.equals("fdXForm");
+            if (!gated) always += c; else fire += c;
+        }
+        // both gated graphs fire on the same ~100-step cadence ⇒ amortize the gated total by it
+        double avg = always + (double) fire / turnCad;
+        return new double[]{ always, always + fire, avg };
+    }
 }
