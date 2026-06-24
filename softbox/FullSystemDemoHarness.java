@@ -210,7 +210,7 @@ public final class FullSystemDemoHarness {
             double lin = Math.sqrt(SCALE);
             GX = Math.max(1, (int) Math.round(GX * lin));
             GY = Math.max(1, (int) Math.round(GY * lin));
-            N_MINI = Math.max(1, (int) Math.round(N_MINI * SCALE));
+            N_MINI = N_MINI == 0 ? 0 : Math.max(1, (int) Math.round(N_MINI * SCALE));   // node-centric (-mini 0) stays 0 across scales
             FIL_CAP = Math.max(64, (int) Math.round(FIL_CAP * SCALE));
             BOX_XY *= lin;                       // node grid extent ∝√F and the box ∝√F ⇒ wall margin preserved
             System.out.printf("[scale] ×%.2f size-scaling (constant density): %dx%d nodes, %d minifils, FIL_CAP %d, box %.2f µm%n",

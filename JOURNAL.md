@@ -2,6 +2,25 @@
 
 Last updated: 2026-06-23
 
+## 2026-06-23 — v1 (BoA) vs v2 maximal node-centric composition on GPU: matched curve + ceilings (MEASUREMENT-ONLY)
+Branch `cadence-gate-fdturn`. Report: `V1_MAXIMAL_BENCHMARK_FINDINGS.md`. Tested (not assumed) whether v1 can carry the
+biologically-typical node-centric SCPR maximal composition (nodes + node-formin actin nucleation + node myosins + crosslinkers
++ full turnover; NO free minifilaments) on GPU, matched scene-for-scene vs v2. Stage 0: v1 has no PACKAGED node-centric maximal
+config (its dense series is node-FREE; node configs are single-node/turnover-off) but `BoxOfActin` is universal ⇒ assembled a
+NEW `/tmp` ParameterFile (config, not a code harness); v1 HAS a GPU node path (`RULE_NODE`). Makeup signed off by jba (6 formins
++ 6 singlet + 6 dimer myo/node, 25 nodes @1×). `BoA-v1ref` byte-clean (read-only, .class gitignored); v1 in /tmp; only v2 code
+change = a 1-line `-scale` measurement-flag fix (`N_MINI=0` survives scaling). **FOUR FINDINGS:** (1) **v1 CAN carry it and does
+NOT wall** — clean 1×→**64×** (1600 nodes, ~48k segs, RSS 6.0/31 GB); the "v1 walls early on the full composition" premise is
+**refuted** (node-centric is far lighter than the dense gliding that walled v1 at 16×). (2) **Counter-narrative: v1-GPU is
+1.3–2.5× FASTER per-step than v2-GPU** (1×→16×: v1 78.8/69.8/55.8/37.4/19.9 vs v2 62.1/43.3/26.7/15.1/7.8) — because v2's maximal
+device path is launch-bound (~74–106 small kernels, kernel% 43→80%) AND v2 does crosslinker+node-tether work v1's sparse scene
+skips. (3) **Host-RAM: v2 uses 2.1–3.8× less (NOT the 7.6× of the dense workload), and the ratio SHRINKS with scale** — the light
+node-centric scene is dominated by v1's fixed ~3.4 GB static-array floor (gliding cap-raises), not the per-element OOP graph that
+drives 7.6× at dense ⇒ the SoA host-RAM win is workload-dependent. (4) **Neither memory-walls in range; both compute(steps/s)-bound**
+(v1 practical floor ~40–64×, v2 ~24×). **LOAD-BEARING CAVEAT:** scene DEFINITION matched but v1 forms 0 crosslinks + 0 binding
+(sparse SCPR layout, node tethers CPU-side) while v2 forms 29–374 ⇒ v1's per-step is lighter actual work; a percolating/dense scene
+is the `DENSE_CONTRACTILE` regime where v2-GPU wins 5–7×. v2's throughput advantage is workload-dependent, not universal.
+
 ## 2026-06-23 — density/scale sweep: where the maximal composition goes compute-bound + LARGE-scale headline (MEASUREMENT-ONLY)
 Branch `cadence-gate-fdturn`. Report: `SCALE_SWEEP_FINDINGS.md`. Added `-scale F` (clean SIZE-scaling at constant
 density: box AREA ∝F, spacing/depth fixed; nodes/minifils/cap ∝F) + a `-sweep` short-window probe (profiler-on for
