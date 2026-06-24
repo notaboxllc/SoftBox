@@ -168,18 +168,25 @@ public final class V2OneXHarness {
         FilamentStore f = new FilamentStore(nSeg, Math.max(1, nSeg));   // reqCap for crosslinker formation request arrays
         double L = (FIL_MONO + 1) * Constants.actinMonoRadius;          // segment length
         for (int fi = 0; fi < N_FIL; fi++) {
-            // random orientation (uniform on the sphere) + a random chain centre, then march the chain
-            double z = 2.0 * rng.nextDouble() - 1.0, phi = 2.0 * Math.PI * rng.nextDouble();
-            double r = Math.sqrt(Math.max(0.0, 1.0 - z * z));
-            double ux = r * Math.cos(phi), uy = r * Math.sin(phi), uz = z;
+            // v1-faithful IC placement (FilSegment.makeRandomFilament, BoA-v1ref FilSegment.java:3242):
+            // pick TWO random points in the box at chain-contour separation, axis = unit(p2-p1), centre =
+            // midpoint. In the thin z-slab (halfZ=0.25) this biases the axis IN-PLANE exactly as v1 — the two
+            // endpoints land inside the box, so the fixed-length chain FITS the slab (fixes the prior
+            // uniform-orientation z-poke) and reproduces v1's filament-crossing statistics (→ crosslink work).
+            double span = SEG_PER_FIL * L;
+            double ux, uy, uz, cx, cy, cz;
+            while (true) {
+                double ax = (rng.nextDouble() - 0.5) * 2 * half, ay = (rng.nextDouble() - 0.5) * 2 * half, az = (rng.nextDouble() - 0.5) * 2 * halfZ;
+                double bx = (rng.nextDouble() - 0.5) * 2 * half, by = (rng.nextDouble() - 0.5) * 2 * half, bz = (rng.nextDouble() - 0.5) * 2 * halfZ;
+                double dx = bx - ax, dy = by - ay, dz = bz - az, d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                if (d < 0.90 * span || d > 1.10 * span) continue;   // reject until separation ≈ contour (v1's minL..maxL window)
+                ux = dx / d; uy = dy / d; uz = dz / d;
+                cx = 0.5 * (ax + bx); cy = 0.5 * (ay + by); cz = 0.5 * (az + bz);
+                break;
+            }
             double yx = -uy, yy = ux, yz = 0; double yn = Math.sqrt(yx * yx + yy * yy + yz * yz);
             if (yn < 1e-9) { yx = 0; yy = -uz; yz = uy; yn = Math.sqrt(yy * yy + yz * yz); }
             yx /= yn; yy /= yn; yz /= yn;
-            // place the chain so it stays inside the box: pick end1 of segment 0 within an inset region
-            double span = SEG_PER_FIL * L;
-            double cx = (rng.nextDouble() - 0.5) * 2 * Math.max(0.0, half - 0.5 * span);
-            double cy = (rng.nextDouble() - 0.5) * 2 * Math.max(0.0, half - 0.5 * span);
-            double cz = (rng.nextDouble() - 0.5) * 2 * Math.max(0.0, halfZ - 0.05);
             double e1x = cx - 0.5 * span * ux, e1y = cy - 0.5 * span * uy, e1z = cz - 0.5 * span * uz;
             int base = fi * SEG_PER_FIL;
             for (int i = 0; i < SEG_PER_FIL; i++) {
