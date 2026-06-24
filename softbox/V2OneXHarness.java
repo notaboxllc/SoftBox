@@ -67,7 +67,7 @@ public final class V2OneXHarness {
 
     // ---- myosin / binding (shared, v1 contractility defaults) ----
     static final double MYO_SPRING = 1.0e-9, J1_FMT = 0.4;
-    static double REACH = 0.025, ALIGN_TOL = -0.4, KOFF = 100.0;
+    static double REACH = 0.006, ALIGN_TOL = -0.4, KOFF = 100.0;   // PARITY: v1 Env.myoColTol = 0.006 µm (was 0.025 — 4.2× over-reach)
     static double BROWN_TRANS = 1.0, BROWN_ROT = 0.3;
     static double NODE_BROWN = 0.03;
 
@@ -80,7 +80,7 @@ public final class V2OneXHarness {
     static final double MIN_SEP = 5.0 * Constants.actinMonoDiam;
     static final double MIN_FILLINK_SEP = 2.0 * Constants.actinMonoDiam;
     static final int    MAX_LINKS_ON_SEG = 10;
-    static final double XLINK_ON_RATE = 10.0;       // Env xLinkOnRate
+    static double XLINK_ON_RATE = 40.0;             // PARITY: v1 pf_1x xLinkOnRate = 40.0 (was 10.0 — 4× low pForm)
     static double XLINK_CONC = 1.0;                 // µM (the v1 dense fixture; -xlconc)
     static final double XL_MAX_ANGLE = 0.6;         // rad (dense-config aperture)
     static int XL_CHECK_INT = 100;                  // formation cadence (steps) ⇒ pForm = 1-exp(-kon*conc*dt*checkInt)
@@ -109,6 +109,8 @@ public final class V2OneXHarness {
                 case "-nfil" -> N_FIL = Integer.parseInt(args[++i]);
                 case "-nsing" -> N_SING = Integer.parseInt(args[++i]);
                 case "-xlconc" -> XLINK_CONC = Double.parseDouble(args[++i]);
+                case "-reach" -> REACH = Double.parseDouble(args[++i]);
+                case "-xlonrate" -> XLINK_ON_RATE = Double.parseDouble(args[++i]);
                 case "-noxlink" -> XLINK_ON = false;
                 case "-box" -> BOX_XY = Double.parseDouble(args[++i]);
                 case "-3js" -> vizDir = args[++i];
