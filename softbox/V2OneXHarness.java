@@ -52,8 +52,10 @@ public final class V2OneXHarness {
     static final double GOLDEN = 2.399963229728653;
     static final double SIN80 = Math.sin(Math.toRadians(80.0)), COS80 = Math.cos(Math.toRadians(80.0));
 
-    // ---- seeds ----
-    static final int SEED = 0x310501, SEED_NODE = 0x315C2F;
+    // ---- seeds (non-final: -seed salts BOTH the per-step Brownian RNG and the IC placement RNG so each
+    //      seed is an INDEPENDENT chaotic trajectory — needed for the dt-convergence chaotic envelope) ----
+    static int SEED = 0x310501, SEED_NODE = 0x315C2F;
+    static long IC_SALT = 0L;                        // -seed: XOR'd into the IC placement RNG seed
 
     // ---- the 1× scene (the v1 contractility standard) ----
     static double BOX_XY = 7.071;            // square side (µm) ⇒ 7.071² × 0.5 ≈ 25 µm³
@@ -90,6 +92,8 @@ public final class V2OneXHarness {
     static boolean brownOff = false;                // -brownoff : zero all Brownian scales (deterministic bit-check IC)
     static int STEPS = 200;
     static String vizDir = null;                    // -3js <dir>: host-side Three.js frame output (off by default)
+    static boolean DTCONV = false;                  // -dtconv : MEASUREMENT-ONLY dt-convergence readout (extended per-checkpoint row)
+    static boolean NOCAP = false;                    // -nocap  : MEASUREMENT-ONLY control — disable the 12 pN break cap (isolate its causal role)
 
     static final String[] STATE_NAME = { "NONE", "ATP", "ADPPi", "ADP" };
 
@@ -105,6 +109,13 @@ public final class V2OneXHarness {
                 case "-brownoff" -> brownOff = true;
                 case "-devicecsr" -> CSRHOST = false;
                 case "-pergraph" -> PERGRAPH = true;
+                case "-dt" -> dt = Double.parseDouble(args[++i]);   // exploration: single-source dt (Brownian/chain params derive from it)
+                                                                    // NOTE: non-default dt changes INTEGRATION ACCURACY (not just speed) —
+                                                                    // validate convergence (see DT_CONVERGENCE_FINDINGS.md) before trusting a value.
+                case "-dtconv" -> DTCONV = true;                    // MEASUREMENT-ONLY extended dt-convergence readout
+                case "-nocap" -> NOCAP = true;                      // MEASUREMENT-ONLY cap-off control (isolate the 12 pN cap's causal role)
+                case "-seed" -> { int sd = Integer.parseInt(args[++i]); long salt = 0x9E3779B97F4A7C15L * (sd + 1);
+                                  SEED ^= (int) salt; SEED_NODE ^= (int) (salt >>> 17); IC_SALT = salt; }
                 case "-steps" -> STEPS = Integer.parseInt(args[++i]);
                 case "-nodes" -> N_NODES = Integer.parseInt(args[++i]);
                 case "-nfil" -> N_FIL = Integer.parseInt(args[++i]);
@@ -128,6 +139,7 @@ public final class V2OneXHarness {
                 XLINK_ON ? "ON" : "off", XLINK_CONC, pForm(XLINK_CONC, dt * XL_CHECK_INT), XL_CHECK_INT, Constants.aeta);
 
         Scene s = build(dt);
+        if (NOCAP) { s.mot.setFaithfulRelease(false, 0.0); System.out.println("  -nocap: 12 pN break cap DISABLED (control — isolating the cap's causal role)"); }
         if (brownOff) zeroBrownian(s);
         System.out.printf("scene built: %d nodes, %d filament segments, %d myosins, %d crosslink slots%n%n",
                 s.nNodes, activeSegments(s.fil), s.mot.nMotors, s.xl == null ? 0 : s.xl.nLinks);
@@ -160,7 +172,7 @@ public final class V2OneXHarness {
         Scene s = new Scene();
         s.nNodes = N_NODES;
         double half = 0.5 * BOX_XY, halfZ = 0.5 * BOX_Z;
-        java.util.Random rng = new java.util.Random(0x31AC7E5L ^ (((long) N_NODES << 20) ^ N_FIL));
+        java.util.Random rng = new java.util.Random(0x31AC7E5L ^ (((long) N_NODES << 20) ^ N_FIL) ^ IC_SALT);
 
         // random node centres in the box (a margin off the walls so the radial brush sits inside)
         double[][] centers = new double[N_NODES][3];
@@ -492,6 +504,7 @@ public final class V2OneXHarness {
             if (t % every == 0 || t == M - 1) {
                 System.out.printf("  step %-7d  bound=%-6d  links=%-6d  maxF=%.3g N%n",
                         t, boundHeads(s.mot), s.xl == null ? 0 : activeLinks(s.xl), maxAbs(s.fil.forceSum));
+                if (DTCONV) dtRow(s, dt, t);   // matched-sim-time observable record (all host arrays current on CPU)
             }
             if (!finite(s.fil) || !finite(s.mot.body) || !finite(s.node.node)) {
                 System.out.println("  *** NON-FINITE at step " + t + " — BLOW-UP ***"); stable = false; break;
@@ -687,7 +700,8 @@ public final class V2OneXHarness {
 
         // host pulls (UNDER_DEMAND): fdBind → boundSeg (CSR-host trigger) + nucleotideState (render); fdFil → crosslink
         // render state (always-run, current); fdInteg → derived geometry for the renderer.
-        Object[] host0 = { mot.boundSeg, mot.nucleotideState };
+        Object[] host0 = DTCONV ? new Object[]{ mot.boundSeg, mot.nucleotideState, mot.forceMag, mot.capStats }
+                                : new Object[]{ mot.boundSeg, mot.nucleotideState };
         Object[] host2 = { nb.coord, f.coord, f.end1, f.end2, b.end1, b.end2 };
         Object[] hostXl = xlDev ? new Object[]{ s.xl.linkState, s.xl.linkFilA, s.xl.linkFilB, s.xl.loc1, s.xl.loc2, s.xl.linkOrientSame } : null;
 
@@ -1000,8 +1014,13 @@ public final class V2OneXHarness {
             stepSplit(s, t, dt, plan);
             if ((t % every == 0 || t == M - 1) || (viz && t % vizEvery == 0)) {
                 pullRenderState(s);
-                if (t % every == 0 || t == M - 1)
+                if (t % every == 0 || t == M - 1) {
                     System.out.printf("  step %-7d  bound=%-6d  links=%-6d%n", t, boundHeads(s.mot), s.xl == null ? 0 : activeLinks(s.xl));
+                    if (DTCONV) {   // pull the cross-bridge tension + cap stats (UNDER_DEMAND, only at checkpoints)
+                        if (splitResBind != null) splitResBind.transferToHost(s.mot.forceMag, s.mot.capStats);
+                        dtRow(s, dt, t);
+                    }
+                }
                 if (viz && (t % vizEvery == 0 || t == M - 1)) writeFrame(vizDir, frames++, t, t * dt, s);
                 if (!finite(s.fil) || !finite(s.mot.body) || !finite(s.node.node)) {
                     System.out.println("  *** NON-FINITE at step " + t + " — BLOW-UP ***"); stable = false; break;
@@ -1044,6 +1063,54 @@ public final class V2OneXHarness {
                 stable ? "stable (finite, bounded)" : "*BLEW UP*", boundHeads(s.mot), s.xl == null ? 0 : activeLinks(s.xl));
         System.out.printf("  containment: in-plane %d/%d seg-centres outside ±%.3f µm (max |x,y| = %.3f µm); z-poke %d/%d outside ±%.3f µm (max |z| = %.3f µm — slab-thin geometry, bounded)%n",
                 outXY, n, half, maxXY, outZ, n, halfZ, maxZ);
+    }
+
+    // ============================================================== dt-convergence readouts (MEASUREMENT-ONLY)
+    static final double BREAK_PN = 12.0;   // the v1 cross-bridge break-force cap (pN) — the suspected dt ceiling
+
+    /** In-plane radius of gyration of the filament segment centres (µm) — the CONTRACTION signal (shrinks as
+     *  the contractile network pulls the filaments together; z is slab-constrained ⇒ x,y only). */
+    static double rgXY(FilamentStore f) {
+        int n = f.n; double sx = 0, sy = 0;
+        for (int i = 0; i < n; i++) { sx += f.coordX(i); sy += f.coordY(i); }
+        double mx = sx / n, my = sy / n, s2 = 0;
+        for (int i = 0; i < n; i++) { double dx = f.coordX(i) - mx, dy = f.coordY(i) - my; s2 += dx * dx + dy * dy; }
+        return Math.sqrt(s2 / n);
+    }
+
+    /** Cross-bridge tension distribution over the CURRENTLY-BOUND motors (the quantity v1's 12 pN cap compares).
+     *  Returns {meanPN, maxPN, fracNearCap(≥0.8·cap), fracOverCap(>cap)}; the mechanistic dt-limiter readout. */
+    static double[] tensionStats(MotorStore m) {
+        int n = m.nMotors, nb = 0; double sum = 0, mx = 0; int near = 0, over = 0;
+        for (int i = 0; i < n; i++) {
+            if (m.boundSeg.get(i) < 0) continue;
+            double pN = m.forceMag.get(i) * 1.0e12;   // forceMag is in N ⇒ ×1e12 → pN
+            nb++; sum += pN; if (pN > mx) mx = pN;
+            if (pN >= 0.8 * BREAK_PN) near++;
+            if (pN > BREAK_PN) over++;
+        }
+        if (nb == 0) return new double[]{ 0, 0, 0, 0 };
+        return new double[]{ sum / nb, mx, (double) near / nb, (double) over / nb };
+    }
+
+    /** Cumulative # of break-force-cap release events across all motors (capStats accumulates over the run). */
+    static long capHitsTotal(MotorStore m) { long c = 0; for (int i = 0; i < m.nMotors; i++) c += m.capStats.get(i); return c; }
+
+    /** # filament seg-centres outside the in-plane box (escape — a stability signal distinct from NaN). */
+    static int escapeXY(FilamentStore f) {
+        int n = f.n, out = 0; double half = 0.5 * BOX_XY + 0.05;
+        for (int i = 0; i < n; i++) if (Math.abs(f.coordX(i)) > half || Math.abs(f.coordY(i)) > half) out++;
+        return out;
+    }
+
+    /** Emit one matched-sim-time DTROW (the dt-convergence observable record; grepped by the sweep script). */
+    static void dtRow(Scene s, double dt, int t) {
+        double[] ts = tensionStats(s.mot);
+        System.out.printf(java.util.Locale.US,
+            "DTROW dt=%.0e simT=%.4f step=%-6d bound=%-5d links=%-5d RgXY=%.4f maxF=%.3e fmgMeanPN=%.3f fmgMaxPN=%.3f fracNearCap=%.4f fracOverCap=%.4f capHits=%d escXY=%d nan=%b%n",
+            dt, (t + 1) * dt, t, boundHeads(s.mot), s.xl == null ? 0 : activeLinks(s.xl), rgXY(s.fil),
+            maxAbs(s.fil.forceSum), ts[0], ts[1], ts[2], ts[3], capHitsTotal(s.mot), escapeXY(s.fil),
+            !(finite(s.fil) && finite(s.mot.body) && finite(s.node.node)));
     }
 
     // ====================================================================== utilities
