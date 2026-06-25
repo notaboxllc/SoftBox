@@ -104,6 +104,7 @@ public final class V2OneXHarness {
                 case "-cmp" -> cmpMode = true;
                 case "-brownoff" -> brownOff = true;
                 case "-devicecsr" -> CSRHOST = false;
+                case "-pergraph" -> PERGRAPH = true;
                 case "-steps" -> STEPS = Integer.parseInt(args[++i]);
                 case "-nodes" -> N_NODES = Integer.parseInt(args[++i]);
                 case "-nfil" -> N_FIL = Integer.parseInt(args[++i]);
@@ -584,6 +585,11 @@ public final class V2OneXHarness {
     //   G3 fdInteg  — containment + integrate + derive (node/mot/fil)                          (≈9 tasks)
     //   G4 fdXForm  — device filID + crosslinker FORMATION (cadence-gated SINK)                (≈26 tasks)
     static TornadoExecutionResult splitResBind, splitResFil, splitResInteg, splitResL;
+    // ==== MEASUREMENT-ONLY per-graph timing (CROSSOVER_DIAGNOSIS, -pergraph). Uncommitted instrumentation. ====
+    static boolean PERGRAPH = false;            // -pergraph : accumulate per-graph execute() wall + host-CSR wall
+    static final long[] pgWall = new long[6];   // ns accumulated per graph index (0..4) + [5]=host CSR
+    static long pgSteps = 0;
+    // ===========================================================================================================
     static int GI_BIND, GI_STRUCT, GI_FIL, GI_INTEG, GI_XFORM = -1;
     static int N_SPLIT;
     static String[] GNAME;
@@ -891,12 +897,19 @@ public final class V2OneXHarness {
         if (g.xl != null && XLINK_ON) g.xl.setCounts(t, SEED);
         for (int gi = 0; gi < N_SPLIT; gi++) {
             if (gi == GI_XFORM && !formFires) continue;   // CADENCE GATE — skip formation off-cadence (the SINK)
+            long pg0 = PERGRAPH ? System.nanoTime() : 0L;
             TornadoExecutionResult r = plan.withGraph(gi).withGridScheduler(gsched).execute();
-            if (gi == GI_BIND)      { splitResBind = r; if (CSRHOST) { r.transferToHost(mot.boundSeg); hostSegCSR(g); } }
+            if (PERGRAPH) pgWall[gi] += System.nanoTime() - pg0;
+            if (gi == GI_BIND)      { splitResBind = r; if (CSRHOST) {
+                long h0 = PERGRAPH ? System.nanoTime() : 0L;
+                r.transferToHost(mot.boundSeg); hostSegCSR(g);
+                if (PERGRAPH) pgWall[5] += System.nanoTime() - h0;
+            } }
             else if (gi == GI_FIL)  splitResFil = r;
             if (gi == GI_INTEG) splitResInteg = r;
             if (gi == N_SPLIT - 1) splitResL = r;
         }
+        if (PERGRAPH) pgSteps++;
     }
 
     static void pullRenderState(Scene g) {
@@ -980,6 +993,7 @@ public final class V2OneXHarness {
             for (int t = 0; t < warm; t++) stepSplit(s, t, dt, plan);
         } catch (Throwable e) { System.out.println("  *** GPU warmup FAILED at lowering/launch: " + e); e.printStackTrace(); throw new RuntimeException(e); }
         // pull state after warmup so the periodic reports are current
+        if (PERGRAPH) { java.util.Arrays.fill(pgWall, 0L); pgSteps = 0; }   // reset accumulators post-warmup
         long t0 = System.nanoTime();
         boolean stable = true; int every = Math.max(1, M / 10);
         for (int t = warm; t < M; t++) {
@@ -998,6 +1012,17 @@ public final class V2OneXHarness {
         int measured = M - warm;
         pullRenderState(s);
         System.out.printf("%n  GPU: %d measured steps (warm %d excluded) in %.2fs = %.1f steps/s%n", measured, warm, secs, measured / secs);
+        if (PERGRAPH && pgSteps > 0) {
+            System.out.printf("%n  [PERGRAPH] per-graph execute() wall, mean ms/step over %d measured steps:%n", pgSteps);
+            double tot = 0;
+            for (int gi = 0; gi < N_SPLIT; gi++) {
+                double ms = pgWall[gi] / 1e6 / pgSteps; tot += ms;
+                System.out.printf("    %-9s %.4f ms/step%n", GNAME[gi], ms);
+            }
+            double hms = pgWall[5] / 1e6 / pgSteps; tot += hms;
+            System.out.printf("    %-9s %.4f ms/step%n", "hostCSR", hms);
+            System.out.printf("    %-9s %.4f ms/step  (Σ graphs+hostCSR)%n", "TOTAL", tot);
+        }
         if (viz) System.out.printf("  -3js: wrote %d frames to %s%n", frames, vizDir);
         report(s, stable);
     }
