@@ -22,7 +22,24 @@ run_one() {  # dt seed
     | sed "s/^/[dt=$dt seed=$seed] /" | tee -a "$RAW"
 }
 
+# --- BELOW-1e-5 wing (the binding-formulation investigation, 2026-06-25): matched SIM-TIME 0.2 s,
+#     steps(dt)=0.2/dt. Sweeps dt below the 1e-5 reference to characterize the LOWER (search) wing and
+#     test whether 1e-5 is a converged fixed point. Writes its own raw log. ---
+BELOW_RAW=RUN_LOGS/2026-06-25_dt_below.txt
+below_steps() { case "$1" in 2e-6) echo 100000;; 5e-6) echo 40000;; 1e-5) echo 20000;; 2e-5) echo 10000;; esac; }
+run_below() {  # dt seed
+  local dt="$1" seed="$2" M; M=$(below_steps "$dt")
+  status "BELOW dt=$dt seed=$seed ($M steps, simT 0.2)"
+  echo "=== BELOW dt=$dt seed=$seed steps=$M simT=0.2  ($(date +%H:%M)) ===" | tee -a "$BELOW_RAW"
+  ./run_1x.sh $RUNNER -dtconv $SCENE -dt "$dt" -seed "$seed" -steps "$M" 2>&1 \
+    | grep -E "DTROW|steps/s|BLOW|NON-FINITE|FAIL|STABILITY" \
+    | sed "s/^/[dt=$dt seed=$seed] /" | tee -a "$BELOW_RAW"
+}
+
 case "${1:-1}" in
+  below) : > "$BELOW_RAW"; echo "dt BELOW-1e-5 wing (matched simT 0.2 s) — started $(date)" | tee -a "$BELOW_RAW"
+        for dt in 2e-5 1e-5 5e-6 2e-6; do run_below "$dt" 1; done
+        status "DONE below"; echo "dt below done $(date)" | tee -a "$BELOW_RAW"; exit 0 ;;
   1)    : > "$RAW"; echo "dt-convergence STAGE 1 (coarse, 1 seed × 4 dt) — started $(date)" | tee -a "$RAW"
         for dt in 1e-5 2e-5 5e-5 1e-4; do run_one "$dt" 1; done ;;
   env)  echo "dt-convergence ENVELOPE seeds @ 1e-5 — $(date)" | tee -a "$RAW"
