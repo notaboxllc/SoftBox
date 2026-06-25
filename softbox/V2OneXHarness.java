@@ -1111,6 +1111,35 @@ public final class V2OneXHarness {
             dt, (t + 1) * dt, t, boundHeads(s.mot), s.xl == null ? 0 : activeLinks(s.xl), rgXY(s.fil),
             maxAbs(s.fil.forceSum), ts[0], ts[1], ts[2], ts[3], capHitsTotal(s.mot), escapeXY(s.fil),
             !(finite(s.fil) && finite(s.mot.body) && finite(s.node.node)));
+        dtHist(s.mot, dt, t);
+    }
+
+    /** Emit the cross-bridge-stretch (|F8| = myoSpring·dist) DISTRIBUTION over the bound motors — the
+     *  trajectory-robust proxy for "at what reach / geometry the binds sit" (the Part-2 hack count-vs-distribution
+     *  test). Host-side over the already-pulled mot.forceMag; NO kernel change, no production-path change (only
+     *  emitted when -dtconv set, alongside DTROW). Bins in pN; also median + p90. */
+    static void dtHist(MotorStore m, double dt, int t) {
+        // pN bin upper edges: <1,1-2,2-3,3-4,4-5,5-6,6-8,8-10,10-12,>=12
+        double[] edge = { 1, 2, 3, 4, 5, 6, 8, 10, 12 };
+        int[] h = new int[edge.length + 1];
+        int nb = 0; double sum = 0;
+        java.util.ArrayList<Double> vals = new java.util.ArrayList<>();
+        for (int i = 0; i < m.nMotors; i++) {
+            if (m.boundSeg.get(i) < 0) continue;
+            double pN = m.forceMag.get(i) * 1.0e12;
+            nb++; sum += pN; vals.add(pN);
+            int b = edge.length; for (int e = 0; e < edge.length; e++) if (pN < edge[e]) { b = e; break; }
+            h[b]++;
+        }
+        java.util.Collections.sort(vals);
+        double med = nb == 0 ? 0 : vals.get(nb / 2);
+        double p90 = nb == 0 ? 0 : vals.get((int) (0.90 * (nb - 1)));
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format(java.util.Locale.US,
+            "DTHIST dt=%.0e simT=%.4f bound=%d mean=%.3f median=%.3f p90=%.3f bins[<1,1-2,2-3,3-4,4-5,5-6,6-8,8-10,10-12,>=12]=",
+            dt, (t + 1) * dt, nb, nb == 0 ? 0 : sum / nb, med, p90));
+        for (int b = 0; b < h.length; b++) sb.append(h[b]).append(b < h.length - 1 ? "," : "");
+        System.out.println(sb);
     }
 
     // ====================================================================== utilities

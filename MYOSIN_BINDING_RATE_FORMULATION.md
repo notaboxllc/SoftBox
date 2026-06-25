@@ -26,11 +26,16 @@ Instrument: `V2OneXHarness -dtconv` (flag-gated, default-off; production byte-un
    implicit / sub-stepped cross-bridge (faithful to v1's force-integrated model) OR a kinetic, rate-based motor
    (no stiff spring — **fully dt-insensitive but a different model class than v1**, a faithfulness decision for jba).
 
-3. **Where is the converged binding rate (dt→0 limit)?** **Not reached even at 2e-6.** Binding is monotone-rising
-   and un-plateaued through the smallest dt measured (bound 1244 and still climbing at simT 0.2, dt = 2e-6). The
-   converged value is **≳ 1244 — roughly ≥ 2.9× the calibrated 1e-5 value (~450)**. So **1e-5 is a CALIBRATION
-   point (matched to v1, which also runs the per-step geometric bind at ~1e-5), NOT a converged physical limit.**
-   The per-step geometric test **under-counts** encounters at coarse dt and converges *from below*.
+3. **Where is the converged binding rate (dt→0 limit)?** **The search CONVERGES — a finite plateau B\* ≈ 1050 (at
+   matched simT 0.10), reached by dt ≈ 2e-6** (sub-2e-6 sweep §Part 4: bound 1093 / 1050 / 970 at dt 2e-6 / 1e-6 /
+   5e-7 — flat within the ±3% chaotic envelope; the monotone rise has stopped). So the per-step geometric capture is
+   **correct-but-UNDER-RESOLVED at 1e-5** (under-counts capture ~2.6×: 400 → ~1050), **NOT ill-posed** — it has a
+   continuum limit. **1e-5 is a CALIBRATION point (matched to v1, which also runs the per-step geometric bind at
+   ~1e-5), NOT the converged physical value.** The test under-counts encounters at coarse dt and converges from
+   below. **BUT a cheap per-dt reach-multiplier hack does NOT recover the converged behavior** (§Part 4, Part 2):
+   widening the 1e-5 reach to ~2.8× to match B\*'s COUNT binds an **over-stretched, fat-tailed geometric set**
+   (stretch mean 4.7 vs the fine-dt 2.9 pN; ~23% of bonds >6 pN vs ~1%; cap-churn 6.5/step vs ~0.02) — **matched
+   count, WRONG distribution** ⇒ the fix is a principled **swept-volume / reaction-rate** capture, not a radius fudge.
 
 4. **Next-stiffest constraint after the cross-bridge is fixed?** **There is no next raw stiff spring.** The
    cross-bridge F8 (`fmag = myoSpring·dist`) is the **ONLY** explicit Hookean spring in the model; **every other
@@ -135,11 +140,83 @@ Two disjoint dt-fragile mechanisms, crossing near 1e-5:
   so binding would remain dt-sloped above 1e-5 until the search is also a rate. This is the honest cost of the ~5×.
 
 ### Standing caveats (carried from the original, now measured)
-- **1e-5 is NOT a converged binding reference** — confirmed by measurement (binding ≳2.9× higher, un-plateaued, at
-  2e-6). All project binding statistics carry an "at dt=1e-5" asterisk; absolute bound-motor counts are dt-specific.
+- **1e-5 is NOT a converged binding reference** — confirmed (binding plateaus ~2.6× higher by 2e-6; §Part 4). All
+  project binding statistics carry an "at dt=1e-5" asterisk; absolute bound-motor counts are dt-specific.
 - **This does NOT change any v1↔v2 (or v2-CPU≡v2-GPU) comparison** — those were at **matched dt**, so the
   dt-dependence cancels in the ratio. Only the *absolute* numbers carry the asterisk. v1 itself runs the per-step
   geometric bind at ~1e-5, so v1 and v2 under-count encounters identically at the calibration point.
+
+---
+
+## Part 4 — does the geometric search CONVERGE? (sub-2e-6 plateau) + the hack-factor count-vs-distribution test (2026-06-25)
+
+Follow-on measurement deciding "under-resolved-but-fine" vs "ill-posed", and whether a 1e-5 calibration can recover
+the converged behavior. Same 0.5× scene, **matched sim-time 0.10 s** (1e-5 is already steady by 0.10, so the
+checkpoint is representative and the lowest-dt runs stay overnight-feasible; the dt-curve at a FIXED simT is the
+clean convergence test). New host-side **DTHIST** instrument (the cross-bridge-stretch |F8|=myoSpring·dist
+distribution over bound motors — the trajectory-robust "at what reach/geometry" proxy; no kernel change, emitted
+only under `-dtconv`). Raw: `RUN_LOGS/2026-06-25_dt_below2.txt` (Part 1) + `RUN_LOGS/2026-06-25_dt_hack.txt` (Part 2).
+Drivers `run_dtconv.sh below2` / `run_dtconv.sh hack <reach…>`. All runs stable/finite, no NaN.
+
+### Part 4.1 — the search CONVERGES (B\* ≈ 1050; NOT ill-posed)
+
+| dt | steps | bound @simT 0.10 | bound/1e-5 | fmgMean (pN) | fmgMax | fracOverCap | stretch dist mean/median/p90 (pN) | %>6 pN |
+|---|---|---|---|---|---|---|---|---|
+| 1e-5 | 10000 | 400 | 1.00× | 4.68 | ~12 | 0.000 | 4.68 / 4.63 / 7.43 | ~26% |
+| 5e-6 | 20000 | 918 | 2.30× | ~3.3 | ~9 | 0.000 | — | — |
+| 2e-6 | 50000 | 1093 | 2.73× | 3.02 | 8.7 | 0.000 | 3.02 / 2.89 / 4.77 | ~2.4% |
+| 1e-6 | 100000 | 1050 | 2.63× | 2.92 | 10.7 | 0.000 | 2.92 / 2.75 / 4.63 | ~1.0% |
+| 5e-7 | 200000 | 970 | 2.43× | 2.76 | 11.6 | 0.000 | 2.76 / 2.62 / 4.36 | ~0.7% |
+
+- **PLATEAU.** Bound rises (400 → 918 → 1093) then **flattens by ~2e-6**: 2e-6 / 1e-6 / 5e-7 = 1093 / 1050 / 970,
+  flat within the ±3% chaotic envelope (the slight non-monotone wiggle is single-seed scatter; the monotone rise has
+  unambiguously stopped). **The per-step geometric capture has a finite continuum limit B\* ≈ 1050 (at simT 0.10).**
+  ⇒ the search is **correct-but-under-resolved at 1e-5** (under-counts ~2.6×), **NOT ill-posed**. (The earlier §Part 2
+  read "still rising at 2e-6" was at simT 0.20, where the slower-saturating fine-dt *trajectories* are still climbing
+  in time; the dt-curve at the fixed earlier simT 0.10 — the proper convergence test — plateaus.)
+- **Wing separation holds to the bottom.** fmgMean falls to a **~2.8 pN floor and stays** (3.0 → 2.9 → 2.8),
+  fmgMax < cap, **fracOverCap = 0** at every dt ≤ 2e-6. So the entire below-1e-5 binding change happens at the flat
+  tension floor ⇒ it is **pure search resolution**, fully decoupled from the force-release wing, all the way down.
+- **The fine-dt distribution also converges** and is **tight**: peaked at 2–3 pN, p90 ≈ 4.5 pN, **~1% of bonds above
+  6 pN**, essentially nothing above 8 pN. This is the true converged bind geometry (low stretch, close approach).
+
+### Part 4.2 — the hack: matched COUNT, WRONG DISTRIBUTION
+
+At dt=1e-5, widen the bind reach (`-reach`, default = v1 myoColTol 0.006 µm) to recover B\*, then compare the stretch
+distribution to the fine-dt reference (1e-6, B\*≈1050).
+
+| reach (µm) | ×true | bound | fmgMean | p90 | %>6 pN | fmgMax | capHits/step |
+|---|---|---|---|---|---|---|---|
+| **fine-dt ref (1e-6 @ 0.006)** | 1× | **1050** | **2.92** | **4.63** | **~1%** | 10.7 | **~0.02** |
+| 0.006 (1e-5 default) | 1× | 400 | 4.68 | 7.43 | ~26% | 12.0 | 0.33 |
+| 0.008 | 1.33× | 575 | 4.55 | 7.28 | ~22% | 10.7 | 0.52 |
+| 0.010 | 1.67× | 682 | 4.47 | 6.91 | ~22% | 16.6 | 0.77 |
+| 0.012 | 2.0× | 877 | 4.60 | 7.46 | ~25% | 13.1 | 1.07 |
+| 0.015 | 2.5× | 951 | 4.65 | 7.35 | ~24% | 14.7 | 3.6 |
+| 0.020 | 3.33× | 1217 | 4.69 | 7.47 | ~23% | 19.5 | 6.5 |
+
+- **Count is recoverable** — reach ≈ 0.016–0.017 µm (**≈ 2.8× the true 0.006**) interpolates to B\*≈1050.
+- **Distribution is NOT.** Every hacked-1e-5 distribution sits at **mean ≈ 4.5–4.7 pN / p90 ≈ 7.3 / ~22–25% of bonds
+  above 6 pN / fmgMax to 19.5 pN**, vs the fine-dt reference **mean 2.92 / p90 4.63 / ~1% above 6 pN / fmgMax 10.7**.
+  The hack binds a **systematically over-stretched, fat-tailed geometric population** — segments that are far (within
+  the fattened instantaneous radius) bound in a single coarse step at large stretch, which the true fine-dt capture
+  only binds at a closer swept approach (or never). **Matched count, ~1.6× higher-tension distribution with a heavy
+  high-stretch tail.**
+- **Two stacked distortions, both visible:** (i) the bulk is already shifted up (mean ~4.7 vs the 2.9 floor) by the
+  **force-wing overshoot at 1e-5** — present even at the *default* reach (a dt effect, not a reach effect); (ii) the
+  widened reach **fattens the high tail and explodes the cap-release churn** (capHits/step 0.33 → 6.5, fmgMax 12 →
+  19.5) — a different binding/unbinding KINETIC regime, not just a different snapshot.
+
+### Part 4 verdict
+- **The geometric search is convergent (B\*≈1050), so a per-dt calibration is conceptually possible — but a reach
+  multiplier is the WRONG one:** it recovers the count with a wrong, over-stretched, high-churn distribution. The
+  count match is cosmetic. ⇒ the principled fix is a **swept-volume capture** (capture along the head's per-step
+  motion at the true tight geometry) or a **reaction-rate `1−exp(−k_on·dt)`** capture — **both deferred to the
+  reformulation task** (do NOT implement here).
+- **Independently, the cross-bridge force integration must also be fixed** for the bound-bond tension distribution to
+  match the continuum: even at the true reach, 1e-5 already inflates the stretch distribution via the F8 overshoot
+  (the upper wing). So a faithful, dt-robust binding *and* tension distribution needs **both** levers (search→rate
+  AND implicit/sub-step cross-bridge) — consistent with Part 3.
 
 ---
 
