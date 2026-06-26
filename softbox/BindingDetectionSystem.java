@@ -388,6 +388,229 @@ public final class BindingDetectionSystem {
         }
     }
 
+    // ============================================================================================
+    // BINDING-SEARCH REFORMULATION (flag-gated, default-off; the geometric bindNearest stays the
+    // default v1-faithful comparator). The geometric search is a per-STEP geometric event — it
+    // under-resolves binding at coarse dt (a head Brownian-jumps THROUGH the tight reach shell between
+    // step boundaries, ∝√dt, never tested in-reach ⇒ binding/sim-time rises ~2.6× as dt→0; B*≈1050 at
+    // the continuum). This reformulation makes the SEARCH a physical per-sim-time ENCOUNTER RATE at the
+    // SAME tight capture geometry (NOT a fattened radius — see MYOSIN_BINDING_RATE_FORMULATION.md §4.2,
+    // the fat-radius hack matched count but bound an over-stretched fat-tailed set). Borrowed from the
+    // model-class-agnostic SEARCH kinetics of Cytosim (binding_rate·capture-volume) and MEDYAN
+    // (k_on·Δl over the filament chord through the capture zone): P_bind = 1 − exp(−k_on·Δl·dt), Δl the
+    // chord of filament through a small capture sphere (radius = myoColTol, fine-dt-tight). dt-invariance
+    // is by construction: halving dt halves per-step P and doubles attempts ⇒ binding/sim-time is flat.
+    //
+    // SWEPT capture (formulation B): the instantaneous chord at the step-END head misses fast fly-bys
+    // (the very encounters the coarse-dt geometric test drops). bindRate therefore uses the path-AVERAGE
+    // chord over the head's swept segment [headPrev → head] this step — a Riemann sub-integral of the
+    // continuous ∫chord(t)dt, so the per-encounter exposure is dt-INVARIANT even when the head crosses
+    // the zone within one step. Formulation A (instantaneous) is the headPrev≡head special case (zero
+    // sweep ⇒ point chord). NO atomics / KernelContext (race-free, per-motor-owned slot; bit-reproducible
+    // RNG on both runners — CPU≡GPU aggregate-within-SEM like the stochastic catch-slip release).
+
+    /** Snapshot the head pose into headPrev (the swept-search formulation B needs the PREVIOUS step's
+     *  published head). Parallel copy of the 3·nMotors planar head buffer; no physics. */
+    public static void snapshotHead(FloatArray head, FloatArray headPrev, IntArray counts) {
+        int n = 3 * counts.get(0);
+        for (@Parallel int i = 0; i < n; i++) headPrev.set(i, head.get(i));
+    }
+
+    /** gridReachable with the WIDENED candidate-gather radius kinParams[15] (the swept rate search needs
+     *  segments the head's path may have crossed, not just those in-reach at the step end). IDENTICAL to
+     *  gridReachable except the distance threshold (candReach instead of myoColTol[7]); the chord PHYSICS
+     *  in bindRate keeps the tight myoColTol. Inlined reach test (the deep-nest helper-call PTX trap). */
+    public static void gridReachableWide(
+            FloatArray head, FloatArray uVec, FloatArray rodUVec,
+            FloatArray segEnd1, FloatArray segEnd2,
+            FloatArray gridParams, IntArray gridDims,
+            IntArray gridCellOffsets, IntArray gridCellContents,
+            IntArray ownerStore, IntArray ownerSlot,
+            IntArray motorReachSeg, IntArray motorReachCount,
+            FloatArray kinParams, IntArray counts) {
+
+        int nM   = counts.get(0);
+        int nSeg = segEnd1.getSize() / 3;
+        int MAXC = SpatialGrid.MAX_CAND;
+        float candReach = kinParams.get(15), alignTol = kinParams.get(8);
+        if (candReach < kinParams.get(7)) candReach = kinParams.get(7);   // never tighter than myoColTol
+        float xMin = gridParams.get(0), yMin = gridParams.get(1), zMin = gridParams.get(2);
+        float invCell = gridParams.get(4);
+        int nX = gridDims.get(0), nY = gridDims.get(1), nZ = gridDims.get(2);
+        int nXY = nX * nY;
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
+            float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
+            float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
+
+            int cx = (int) ((mx - xMin) * invCell);
+            int cy = (int) ((my - yMin) * invCell);
+            int cz = (int) ((mz - zMin) * invCell);
+            if (cx < 0) cx = 0; if (cx >= nX) cx = nX - 1;
+            if (cy < 0) cy = 0; if (cy >= nY) cy = nY - 1;
+            if (cz < 0) cz = 0; if (cz >= nZ) cz = nZ - 1;
+            int x0 = cx - 1; if (x0 < 0) x0 = 0;
+            int x1 = cx + 1; if (x1 >= nX) x1 = nX - 1;
+            int y0 = cy - 1; if (y0 < 0) y0 = 0;
+            int y1 = cy + 1; if (y1 >= nY) y1 = nY - 1;
+            int z0 = cz - 1; if (z0 < 0) z0 = 0;
+            int z1 = cz + 1; if (z1 >= nZ) z1 = nZ - 1;
+
+            int out = 0;
+            for (int zz = z0; zz <= z1; zz++) {
+                int zOff = zz * nXY;
+                for (int yy = y0; yy <= y1; yy++) {
+                    int yOff = yy * nX;
+                    for (int xx = x0; xx <= x1; xx++) {
+                        int cc = xx + yOff + zOff;
+                        int start = gridCellOffsets.get(cc);
+                        int end   = gridCellOffsets.get(cc + 1);
+                        for (int idx = start; idx < end; idx++) {
+                            int j = gridCellContents.get(idx);
+                            if (ownerStore.get(j) == SpatialBodyView.STORE_FILAMENT) {
+                                int s = ownerSlot.get(j);
+                                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                                float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                                float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                                boolean reach = false;
+                                if (denom > 0f) {
+                                    float r2x = mx - e1x, r2y = my - e1y, r2z = mz - e1z;
+                                    float alpha = (r2x * r1x + r2y * r1y + r2z * r1z) / denom;
+                                    if (alpha >= 0f && alpha <= 1f) {
+                                        float cpx = e1x + alpha * r1x, cpy = e1y + alpha * r1y, cpz = e1z + alpha * r1z;
+                                        float dx = cpx - mx, dy = cpy - my, dz = cpz - mz;
+                                        float conDistSq = dx * dx + dy * dy + dz * dz;
+                                        if (conDistSq < candReach * candReach) {
+                                            float inv = 1.0f / (float) Math.sqrt(denom);
+                                            float fux = r1x * inv, fuy = r1y * inv, fuz = r1z * inv;
+                                            float motDotFil = mux * fux + muy * fuy + muz * fuz;
+                                            if (motDotFil >= alignTol) {
+                                                float rodDotFil = rux * fux + ruy * fuy + ruz * fuz;
+                                                if (rodDotFil >= 0f) reach = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                if (reach) { if (out < MAXC) motorReachSeg.set(m * MAXC + out, s); out++; }
+                            }
+                        }
+                    }
+                }
+            }
+            motorReachCount.set(m, out);
+        }
+    }
+
+    /**
+     * The RATE-BASED stochastic capture (binding-search reformulation). A FREE_BINDABLE motor binds with
+     * P = 1 − exp(−k_on·Δl_eff·dt), where Δl_eff is the path-AVERAGE chord of filament through the tight
+     * capture sphere (radius = myoColTol) over the head's swept segment [headPrev → head] this step
+     * (formulation B; formulation A = headPrev≡head ⇒ point chord at the step-end head). k_on = kinParams[14]
+     * (µm^-1 s^-1), the physical encounter-rate handle. The capture GEOMETRY stays fine-dt-tight (the chord
+     * uses myoColTol, NOT a fattened radius) ⇒ the bind site is a close approach (low cross-bridge stretch),
+     * not the hack's over-stretched far pair. If binding fires, the segment is chosen ∝ its rate (a second
+     * independent draw) and the bond site is the perpendicular foot of the CURRENT head. Per-motor-owned
+     * slot, no atomics; wang-hash keyed (motor, step, seed) with the "BRAT" salt (distinct from the MOTOR
+     * bind salt 0x4D54 and the catch-slip salt) ⇒ reproducible on both runners.
+     */
+    public static void bindRate(
+            FloatArray head, FloatArray headPrev, FloatArray uVec, FloatArray rodUVec,
+            FloatArray segEnd1, FloatArray segEnd2,
+            IntArray motorCandSeg, IntArray motorCandCount,
+            IntArray boundSeg, FloatArray bindArc,
+            FloatArray kinParams, IntArray counts) {
+        int nM = counts.get(0);
+        int nSeg = segEnd1.getSize() / 3;
+        int step = counts.get(1), seed = counts.get(2);
+        int MAXC = SpatialGrid.MAX_CAND;
+        float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        float dt = kinParams.get(6);
+        float kOn = kinParams.get(14);
+        float r2 = myoColTol * myoColTol;
+        final int NSAMP = 8;                              // swept-path quadrature samples (point chord when sweep=0)
+        for (@Parallel int m = 0; m < nM; m++) {
+            if (boundSeg.get(m) != MotorStore.FREE_BINDABLE) continue;
+            float p1x = head.get(m), p1y = head.get(nM + m), p1z = head.get(2 * nM + m);
+            float p0x = headPrev.get(m), p0y = headPrev.get(nM + m), p0z = headPrev.get(2 * nM + m);
+            float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
+            float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
+            int cnt = motorCandCount.get(m); if (cnt > MAXC) cnt = MAXC;
+
+            // pass 1: total effective encounter rate over the candidate segments (path-average chord)
+            float totalRate = 0f;
+            for (int k = 0; k < cnt; k++) {
+                int s = motorCandSeg.get(m * MAXC + k);
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                if (denom <= 0f) continue;
+                float inv = 1.0f / (float) Math.sqrt(denom);
+                float fux = r1x * inv, fuy = r1y * inv, fuz = r1z * inv;
+                float motDotFil = mux * fux + muy * fuy + muz * fuz;
+                if (motDotFil < alignTol) continue;
+                float rodDotFil = rux * fux + ruy * fuy + ruz * fuz;
+                if (rodDotFil < 0f) continue;
+                float chordSum = 0f;
+                for (int i = 0; i < NSAMP; i++) {
+                    float lam = (i + 0.5f) / NSAMP;
+                    float px = p0x + lam * (p1x - p0x), py = p0y + lam * (p1y - p0y), pz = p0z + lam * (p1z - p0z);
+                    float alpha = ((px - e1x) * r1x + (py - e1y) * r1y + (pz - e1z) * r1z) / denom;
+                    if (alpha < 0f || alpha > 1f) continue;
+                    float cpx = e1x + alpha * r1x, cpy = e1y + alpha * r1y, cpz = e1z + alpha * r1z;
+                    float dx = cpx - px, dy = cpy - py, dz = cpz - pz;
+                    float cds = dx * dx + dy * dy + dz * dz;
+                    if (cds < r2) chordSum += 2.0f * (float) Math.sqrt(r2 - cds);
+                }
+                totalRate += kOn * (chordSum / NSAMP);
+            }
+            if (totalRate <= 0f) continue;
+            float pBind = 1.0f - (float) Math.exp(-totalRate * dt);
+            int base = (m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x42524154;   // "BRAT" salt
+            int h = wangHash(base);
+            float u = (h >>> 1) / 2147483647.0f;
+            if (u >= pBind) continue;
+
+            // pass 2: select the segment ∝ its rate (second independent draw), bind at the CURRENT-head foot
+            int h2 = wangHash(base ^ 0x5A5A5A5A);
+            float target = (h2 >>> 1) / 2147483647.0f * totalRate;
+            float acc = 0f; int chosen = -1; float chosenArc = 0f;
+            for (int k = 0; k < cnt; k++) {
+                int s = motorCandSeg.get(m * MAXC + k);
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                if (denom <= 0f) continue;
+                float inv = 1.0f / (float) Math.sqrt(denom);
+                float fux = r1x * inv, fuy = r1y * inv, fuz = r1z * inv;
+                float motDotFil = mux * fux + muy * fuy + muz * fuz;
+                if (motDotFil < alignTol) continue;
+                float rodDotFil = rux * fux + ruy * fuy + ruz * fuz;
+                if (rodDotFil < 0f) continue;
+                float chordSum = 0f;
+                for (int i = 0; i < NSAMP; i++) {
+                    float lam = (i + 0.5f) / NSAMP;
+                    float px = p0x + lam * (p1x - p0x), py = p0y + lam * (p1y - p0y), pz = p0z + lam * (p1z - p0z);
+                    float alpha = ((px - e1x) * r1x + (py - e1y) * r1y + (pz - e1z) * r1z) / denom;
+                    if (alpha < 0f || alpha > 1f) continue;
+                    float cpx = e1x + alpha * r1x, cpy = e1y + alpha * r1y, cpz = e1z + alpha * r1z;
+                    float dx = cpx - px, dy = cpy - py, dz = cpz - pz;
+                    float cds = dx * dx + dy * dy + dz * dz;
+                    if (cds < r2) chordSum += 2.0f * (float) Math.sqrt(r2 - cds);
+                }
+                acc += kOn * (chordSum / NSAMP);
+                if (chosen < 0 && acc >= target && chordSum > 0f) {
+                    chosen = s;
+                    chosenArc = ((p1x - e1x) * r1x + (p1y - e1y) * r1y + (p1z - e1z) * r1z) * inv;
+                }
+            }
+            if (chosen >= 0) { boundSeg.set(m, chosen); bindArc.set(m, chosenArc); }
+        }
+    }
+
     /**
      * Increment 6c (faithfulness fix): the v1 NODE-HELD binding exclusion, ported from
      * MyoMotor.checkFilSegCollision (BoA-v1ref boxOfActin/MyoMotor.java:391-392):

@@ -30,6 +30,7 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
 public final class GlidingHarness {
 
     static double DT = 1.0e-5;                   // gliding dt; -dt overrides (dt-convergence test)
+    static double MYO_SPRING = 1.0e-9;           // cross-bridge stiffness, N/µm (= 1 pN/nm). MEASUREMENT-ONLY override -myospring <pN/nm>; default UNCHANGED.
     static boolean FRESH_READ = false;           // -freshread: catch-slip + cycle read THIS step's forceDotFil
                                                  // (compute force+register BEFORE release/cycle, matching v1's
                                                  // reconciled order) vs the default one-step-stale read.
@@ -80,6 +81,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-boxall")) { BOX = true; BOX_ALL = true; }  // + over every motor sub-body (load upper bound)
             else if (args[i].equals("-seed")) SEED = 0x6111D + 7919 * Integer.parseInt(args[++i]);
             else if (args[i].equals("-dt")) DT = Double.parseDouble(args[++i]);   // dt-convergence test
+            else if (args[i].equals("-myospring")) MYO_SPRING = Double.parseDouble(args[++i]) * 1.0e-9;  // MEASUREMENT-ONLY: cross-bridge stiffness in pN/nm (1 = default). Hookean F8 unchanged; production default unchanged.
             else if (args[i].equals("-freshread")) FRESH_READ = true;             // release-read reorder A/B
             else if (args[i].equals("-norefractory")) NO_REFRACTORY = true;        // rebind-refractory OFF bracket
             else if (args[i].equals("-faithfulrelease")) FAITHFUL_RELEASE = true;   // §6.10 v1 force-cap release branch
@@ -171,7 +173,7 @@ public final class GlidingHarness {
 
         int MAXC = SpatialGrid.MAX_CAND;
         sc.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
-        sc.xbParams = FloatArray.fromElements((float) 1.0e-9, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS);
+        sc.xbParams = FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS);
         sc.segMotorCount = new IntArray(nSeg); sc.segMotorOffsets = new IntArray(nSeg + 1); sc.segMotorMyo = new IntArray(nMot);
         sc.reachSeg = new IntArray(nMot * MAXC); sc.reachSeg.init(-1); sc.reachCount = new IntArray(nMot);
         // in-vitro chamber matching the bed (v1 MyoMiniFilament.checkOuterBugCollision law): [tau, boxX, boxY, boxZ, R, coeff, checkInt]

@@ -68,7 +68,8 @@ public final class V2OneXHarness {
     static final int FIL_MONO = 64;          // monomers / segment ⇒ segLen = 65*actinMonoRadius ≈ 0.1755 µm
 
     // ---- myosin / binding (shared, v1 contractility defaults) ----
-    static final double MYO_SPRING = 1.0e-9, J1_FMT = 0.4;
+    static double MYO_SPRING = 1.0e-9;            // cross-bridge stiffness, N/µm (= 1.0e-9 N/µm = 1 pN/nm). MEASUREMENT-ONLY override: -myospring <pN/nm>. Default UNCHANGED.
+    static final double J1_FMT = 0.4;
     static double REACH = 0.006, ALIGN_TOL = -0.4, KOFF = 100.0;   // PARITY: v1 Env.myoColTol = 0.006 µm (was 0.025 — 4.2× over-reach)
     static double BROWN_TRANS = 1.0, BROWN_ROT = 0.3;
     static double NODE_BROWN = 0.03;
@@ -94,10 +95,22 @@ public final class V2OneXHarness {
     static String vizDir = null;                    // -3js <dir>: host-side Three.js frame output (off by default)
     static boolean DTCONV = false;                  // -dtconv : MEASUREMENT-ONLY dt-convergence readout (extended per-checkpoint row)
     static boolean NOCAP = false;                    // -nocap  : MEASUREMENT-ONLY control — disable the 12 pN break cap (isolate its causal role)
+    static double TAU_AVG = 0.0;                      // -tauavg <s> : MEASUREMENT-ONLY — feed the catch-slip release a TIME-AVERAGED cross-bridge force (EMA window τ_avg). 0 ⇒ instantaneous (HEAD/production).
+    static boolean BOND_CORR = false;                 // -bondcorr <alpha> : MEASUREMENT-ONLY — constraint-aware thermal forcing (correlate the bound head's Brownian kick to its filament contact's). default-off.
+    static double BOND_CORR_ALPHA = 0.0;              // the correlation coefficient α ∈ [0,1] (BondThermalCorrelationSystem)
+    // ---- binding-SEARCH reformulation (flag-gated; geometric bindNearest stays the default comparator) ----
+    static boolean RATESEARCH = false;               // -ratesearch : per-sim-time encounter-rate capture (BindingDetectionSystem.bindRate)
+    static boolean SWEPT = true;                      // formulation B (swept path-average chord); -pointsearch ⇒ A (instantaneous)
+    static double KON = 0.0;                          // -kon <µm^-1 s^-1> : the encounter-rate handle (0 ⇒ a built-in calibrated default)
+    static double CAND_MARGIN = 0.03;                 // -candmargin <µm> : widened candidate-gather radius beyond myoColTol (swept fly-bys)
 
     static final String[] STATE_NAME = { "NONE", "ATP", "ADPPi", "ADP" };
 
     static double pForm(double conc, double dtCheck) { return 1.0 - Math.exp(-XLINK_ON_RATE * conc * dtCheck); }
+    // Built-in calibrated kOn default (µm^-1 s^-1) — set after the calibration sweep so -ratesearch with no
+    // -kon recovers the converged plateau B*≈1050 at dt=1e-5 on the 0.5× dt-study scene. See
+    // BINDING_SEARCH_REFORMULATION_FINDINGS.md. (Placeholder until calibrated; override with -kon.)
+    static double KON_DEFAULT = 1.0e8;
 
     public static void main(String[] args) {
         double dt = 1.0e-5;
@@ -114,6 +127,13 @@ public final class V2OneXHarness {
                                                                     // validate convergence (see DT_CONVERGENCE_FINDINGS.md) before trusting a value.
                 case "-dtconv" -> DTCONV = true;                    // MEASUREMENT-ONLY extended dt-convergence readout
                 case "-nocap" -> NOCAP = true;                      // MEASUREMENT-ONLY cap-off control (isolate the 12 pN cap's causal role)
+                case "-tauavg" -> TAU_AVG = Double.parseDouble(args[++i]);  // MEASUREMENT-ONLY: time-averaged release force, EMA window τ_avg (s)
+                case "-bondcorr" -> { BOND_CORR = true; BOND_CORR_ALPHA = Double.parseDouble(args[++i]); }  // MEASUREMENT-ONLY: bound-head↔filament thermal-noise correlation α
+                case "-myospring" -> MYO_SPRING = Double.parseDouble(args[++i]) * 1.0e-9;  // MEASUREMENT-ONLY: cross-bridge stiffness in pN/nm (1 pN/nm = 1.0e-9 N/µm = default). Hookean F8 unchanged; production default unchanged.
+                case "-ratesearch" -> RATESEARCH = true;            // binding-search reformulation: per-sim-time encounter rate
+                case "-pointsearch" -> SWEPT = false;               // formulation A (instantaneous chord) instead of B (swept)
+                case "-kon" -> KON = Double.parseDouble(args[++i]);  // encounter-rate handle (µm^-1 s^-1)
+                case "-candmargin" -> CAND_MARGIN = Double.parseDouble(args[++i]);
                 case "-seed" -> { int sd = Integer.parseInt(args[++i]); long salt = 0x9E3779B97F4A7C15L * (sd + 1);
                                   SEED ^= (int) salt; SEED_NODE ^= (int) (salt >>> 17); IC_SALT = salt; }
                 case "-steps" -> STEPS = Integer.parseInt(args[++i]);
@@ -135,11 +155,25 @@ public final class V2OneXHarness {
         System.out.printf("nodes: %d × %d singlet + %d dimer myosins; filaments: %d × %d seg (%d mono/seg, segLen≈%.4f µm, contour≈%.3f µm)%n",
                 N_NODES, N_SING, N_DIM, N_FIL, SEG_PER_FIL, FIL_MONO,
                 (FIL_MONO + 1) * Constants.actinMonoRadius, SEG_PER_FIL * (FIL_MONO + 1) * Constants.actinMonoRadius);
-        System.out.printf("crosslinkers: %s (xLinkConc=%.2g µM, pForm=%.5g, checkInt=%d); aeta=%.2g (default, no rescale)%n%n",
+        System.out.printf("crosslinkers: %s (xLinkConc=%.2g µM, pForm=%.5g, checkInt=%d); aeta=%.2g (default, no rescale)%n",
                 XLINK_ON ? "ON" : "off", XLINK_CONC, pForm(XLINK_CONC, dt * XL_CHECK_INT), XL_CHECK_INT, Constants.aeta);
+        if (RATESEARCH) {
+            if (KON <= 0.0) KON = KON_DEFAULT;       // built-in calibrated default (recovers B*≈1050 @ 1e-5, 0.5× scene)
+            System.out.printf("BINDING SEARCH: RATE reformulation (%s) — kOn=%.4g µm^-1 s^-1, capture radius=%.4f µm (tight=myoColTol)%s%n%n",
+                    SWEPT ? "B: swept path-average chord" : "A: instantaneous chord", KON, REACH,
+                    SWEPT ? String.format(", candReach=%.4f µm", REACH + CAND_MARGIN) : "");
+        } else {
+            System.out.printf("BINDING SEARCH: geometric (v1-faithful bindNearest; default comparator)%n%n");
+        }
 
         Scene s = build(dt);
         if (NOCAP) { s.mot.setFaithfulRelease(false, 0.0); System.out.println("  -nocap: 12 pN break cap DISABLED (control — isolating the cap's causal role)"); }
+        if (TAU_AVG > 0.0) { s.mot.setReleaseForceAvg(TAU_AVG, dt);
+            System.out.printf("  -tauavg: catch-slip release reads TIME-AVERAGED force, EMA τ_avg=%.3g s (%.1f steps), alpha=%.4g%n",
+                    TAU_AVG, TAU_AVG / dt, s.mot.kinParams.get(17)); }
+        if (BOND_CORR) { s.mot.corrParams.set(0, (float) BOND_CORR_ALPHA);
+            System.out.printf("  -bondcorr: constraint-aware thermal forcing ON — bound head↔filament noise correlation alpha=%.4g (sqrt(1-a^2)=%.4g, translational/isotropic)%n",
+                    BOND_CORR_ALPHA, Math.sqrt(1.0 - BOND_CORR_ALPHA * BOND_CORR_ALPHA)); }
         if (brownOff) zeroBrownian(s);
         System.out.printf("scene built: %d nodes, %d filament segments, %d myosins, %d crosslink slots%n%n",
                 s.nNodes, activeSegments(s.fil), s.mot.nMotors, s.xl == null ? 0 : s.xl.nLinks);
@@ -161,6 +195,7 @@ public final class V2OneXHarness {
         IntArray bodyCell, cellCount, chunkSum, gridCellOffsets, gridCellContents, chunkParams, chunkCellCount;
         int numBodyChunks, totalCells, viewCap;
         IntArray reachSeg, reachCount;
+        FloatArray headPrev;     // swept rate-search (formulation B): the PREVIOUS step's published head
         // crosslinkers
         CrosslinkerStore xl; FormationGrid fg; IntArray filID, filIDScratch; int filIDRounds;
         IntArray segCountA, segOffsetsA, segIdxA, segCountB, segOffsetsB, segIdxB;
@@ -294,6 +329,7 @@ public final class V2OneXHarness {
         node.initNodeDrag();
         mot.setBodyParams(dt); mot.setJointParams(dt); mot.setKinParams(REACH, ALIGN_TOL, dt); mot.setNucParams(dt);
         mot.kinParams.set(0, (float) KOFF);
+        if (RATESEARCH) mot.setSearchParams(KON, SWEPT ? REACH + CAND_MARGIN : REACH);
         mot.setFaithfulRelease(true, 0.0);             // inherit the v1 12 pN break-force cap (faithful)
         mot.nucleotideState.init(MotorStore.NUC_NONE);
         dim.setDimerParams(dt);
@@ -305,6 +341,7 @@ public final class V2OneXHarness {
         s.xbParams = FloatArray.fromElements((float) MYO_SPRING, 90f, (float) J1_FMT, (float) dt, (float) MotorStore.HEAD_LEN, 0f);
         int MAXC = SpatialGrid.MAX_CAND;
         s.reachSeg = new IntArray(nMot * MAXC); s.reachSeg.init(-1); s.reachCount = new IntArray(nMot);
+        s.headPrev = new FloatArray(3 * nMot); s.headPrev.init(0f);
         s.node = node; s.mot = mot; s.dim = dim;
     }
 
@@ -370,6 +407,8 @@ public final class V2OneXHarness {
         mot.setCounts(t, SEED, nSeg); nd.setNodeBodyCounts(t, SEED_NODE); f.setCounts(t, SEED);
 
         // === BINDING — node shell via the parallel spatial grid (IC fils are seedNode=-1 ⇒ plain grid path) ===
+        // swept rate-search (formulation B): snapshot the PREVIOUS step's head BEFORE publishHead overwrites it.
+        if (RATESEARCH && SWEPT) BindingDetectionSystem.snapshotHead(mot.head, s.headPrev, mot.counts);
         MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
         FilamentStore.publishToBodyView(f.coord, f.segLength, s.view.center, s.view.boundingRadius, s.view.ownerStore, s.view.ownerSlot, s.viewParams, s.gridCounts);
         MotorStore.publishToBodyView(mot.head, mot.reach, s.view.center, s.view.boundingRadius, s.view.ownerStore, s.view.ownerSlot, mot.publishParams, mot.counts);
@@ -381,10 +420,21 @@ public final class V2OneXHarness {
         SpatialGrid.gridScanChunks(s.gridDims, s.chunkSum);
         SpatialGrid.gridScanAdd(s.gridDims, s.gridCellOffsets, s.gridCellContents, s.cellCount, s.chunkSum);
         SpatialGrid.gridChunkScatter(s.bodyCell, s.gridCounts, s.chunkParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, s.chunkCellCount);
-        BindingDetectionSystem.gridReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims,
-                s.gridCellOffsets, s.gridCellContents, s.view.ownerStore, s.view.ownerSlot, s.reachSeg, s.reachCount, mot.kinParams, mot.counts);
-        NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
-        BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.reachSeg, s.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        if (RATESEARCH && SWEPT)
+            BindingDetectionSystem.gridReachableWide(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims,
+                    s.gridCellOffsets, s.gridCellContents, s.view.ownerStore, s.view.ownerSlot, s.reachSeg, s.reachCount, mot.kinParams, mot.counts);
+        else
+            BindingDetectionSystem.gridReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims,
+                    s.gridCellOffsets, s.gridCellContents, s.view.ownerStore, s.view.ownerSlot, s.reachSeg, s.reachCount, mot.kinParams, mot.counts);
+        if (TAU_AVG > 0.0)
+            NucleotideCycleSystem.catchSlipReleaseAvg(mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+        else
+            NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+        if (RATESEARCH)
+            BindingDetectionSystem.bindRate(mot.head, SWEPT ? s.headPrev : mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2,
+                    s.reachSeg, s.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        else
+            BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.reachSeg, s.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
         NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
 
         // === CROSSLINKER FORMATION (O(N) grid, at the formation cadence) + UNBIND ===
@@ -403,6 +453,10 @@ public final class V2OneXHarness {
         BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
         BrownianForceSystem.brownianForce(nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams, nd.nodeBodyCounts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        // BOUND_THERMAL_CORRELATION (measurement, default-off): overwrite bound heads' translational
+        // Brownian with the α-correlated draw (reads boundSeg + the filament's RNG keying via f.counts).
+        if (BOND_CORR)
+            BondThermalCorrelationSystem.correlateBoundHead(mot.boundSeg, b.randForce, b.bTransGam, b.brownTransScale, mot.bodyParams, mot.counts, f.counts, mot.corrParams);
 
         // filament chain (F3/F4)
         ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
@@ -653,6 +707,8 @@ public final class V2OneXHarness {
                 s.reachSeg, s.reachCount, s.viewParams, s.gridParams, s.gridDims, s.gridCounts, s.bodyCell, s.chunkParams, s.chunkCellCount,
                 s.cellCount, s.gridCellOffsets, s.chunkSum, s.gridCellContents,
                 v.center, v.boundingRadius, v.ownerStore, v.ownerSlot };
+        if (RATESEARCH && SWEPT) u0 = cat(u0, new Object[]{ s.headPrev });
+        if (TAU_AVG > 0.0) u0 = cat(u0, new Object[]{ mot.forceDotAvg, mot.avgInit });   // EMA state, read+written entirely within the fdBind release kernel
         Object[] u1 = {   // G1 fdStruct — zero/Brownian + node-shell structure forces
                 b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, b.coord, b.uVec, b.segLength, b.yVec,
                 mot.bodyParams, mot.nucleotideState, mot.jointParams, mot.boundSeg, mot.bindArc,
@@ -662,6 +718,7 @@ public final class V2OneXHarness {
                 dim.motorA, dim.motorB, dim.parallel, dim.dimerParams,
                 f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.coord, f.uVec, f.yVec, f.segLength,
                 s.bondData, s.xbParams };
+        if (BOND_CORR) u1 = cat(u1, new Object[]{ mot.corrParams });   // BOUND_THERMAL_CORRELATION: α buffer for the bondCorr task
         Object[] u2 = {   // G2 fdFil — chain + node-shell seg-gather + crosslinker force/torsion/2-pass
                 f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams,
                 mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace,
@@ -700,8 +757,11 @@ public final class V2OneXHarness {
 
         // host pulls (UNDER_DEMAND): fdBind → boundSeg (CSR-host trigger) + nucleotideState (render); fdFil → crosslink
         // render state (always-run, current); fdInteg → derived geometry for the renderer.
-        Object[] host0 = DTCONV ? new Object[]{ mot.boundSeg, mot.nucleotideState, mot.forceMag, mot.capStats }
+        Object[] host0 = DTCONV ? new Object[]{ mot.boundSeg, mot.nucleotideState, mot.forceMag, mot.capStats, mot.stats, mot.forceDotFil }
                                 : new Object[]{ mot.boundSeg, mot.nucleotideState };
+        // NOTE: forceDotAvg is NOT host-pulled (it is written in fdFil but read in fdBind; pulling it from
+        // fdBind's UNDER_DEMAND set trips a TornadoVM device-buffer-state NPE). The empirical off-rate (stats)
+        // is the ground-truth Stage-2 observable; the averaged-force distribution is inspected via the CPU runner.
         Object[] host2 = { nb.coord, f.coord, f.end1, f.end2, b.end1, b.end2 };
         Object[] hostXl = xlDev ? new Object[]{ s.xl.linkState, s.xl.linkFilA, s.xl.linkFilB, s.xl.loc1, s.xl.loc2, s.xl.linkOrientSame } : null;
 
@@ -737,7 +797,9 @@ public final class V2OneXHarness {
     // ---- the task blocks (verbatim methods + order from cpuStep) ----
     static TaskGraph blkBind(TaskGraph tg, Scene s) {
         MotorStore mot = s.mot; RigidRodBody b = mot.body; FilamentStore f = s.fil; SpatialBodyView v = s.view;
-        return tg
+        if (RATESEARCH && SWEPT)   // snapshot the previous head BEFORE publishHead overwrites it (swept formulation B)
+            tg = tg.task("snapHead", BindingDetectionSystem::snapshotHead, mot.head, s.headPrev, mot.counts);
+        tg = tg
             .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
             .task("filPublish", FilamentStore::publishToBodyView, f.coord, f.segLength, v.center, v.boundingRadius, v.ownerStore, v.ownerSlot, s.viewParams, s.gridCounts)
             .task("motPublish", MotorStore::publishToBodyView, mot.head, mot.reach, v.center, v.boundingRadius, v.ownerStore, v.ownerSlot, mot.publishParams, mot.counts)
@@ -748,23 +810,35 @@ public final class V2OneXHarness {
             .task("gScanLocal", SpatialGrid::gridScanLocal, s.gridDims, s.cellCount, s.gridCellOffsets, s.chunkSum)
             .task("gScanChunks", SpatialGrid::gridScanChunks, s.gridDims, s.chunkSum)
             .task("gScanAdd", SpatialGrid::gridScanAdd, s.gridDims, s.gridCellOffsets, s.gridCellContents, s.cellCount, s.chunkSum)
-            .task("chunkScatter", SpatialGrid::gridChunkScatter, s.bodyCell, s.gridCounts, s.chunkParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, s.chunkCellCount)
-            .task("gridReach", BindingDetectionSystem::gridReachable, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, v.ownerStore, v.ownerSlot, s.reachSeg, s.reachCount, mot.kinParams, mot.counts)
-            .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts)
-            .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.reachSeg, s.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts)
-            .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
+            .task("chunkScatter", SpatialGrid::gridChunkScatter, s.bodyCell, s.gridCounts, s.chunkParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, s.chunkCellCount);
+        if (RATESEARCH && SWEPT)
+            tg = tg.task("gridReach", BindingDetectionSystem::gridReachableWide, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, v.ownerStore, v.ownerSlot, s.reachSeg, s.reachCount, mot.kinParams, mot.counts);
+        else
+            tg = tg.task("gridReach", BindingDetectionSystem::gridReachable, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, v.ownerStore, v.ownerSlot, s.reachSeg, s.reachCount, mot.kinParams, mot.counts);
+        if (TAU_AVG > 0.0)
+            tg = tg.task("release", NucleotideCycleSystem::catchSlipReleaseAvg, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+        else
+            tg = tg.task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+        if (RATESEARCH)
+            tg = tg.task("bind", BindingDetectionSystem::bindRate, mot.head, SWEPT ? s.headPrev : mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.reachSeg, s.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        else
+            tg = tg.task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.reachSeg, s.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        return tg.task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
     }
 
     static TaskGraph blkStruct(TaskGraph tg, Scene s) {
         MotorStore mot = s.mot; DimerStore dim = s.dim; NodeStore nd = s.node; FilamentStore f = s.fil;
         RigidRodBody b = mot.body, nb = nd.node;
-        return tg
+        tg = tg
             .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
             .task("zeroNode", ChainBendingForceSystem::zeroAccumulators, nb.forceSum, nb.torqueSum, nd.nodeBodyCounts)
             .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
             .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
             .task("brownNode", BrownianForceSystem::brownianForce, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams, nd.nodeBodyCounts)
-            .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
+            .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        if (BOND_CORR)   // overwrite bound heads' translational Brownian with the α-correlated draw
+            tg = tg.task("bondCorr", BondThermalCorrelationSystem::correlateBoundHead, mot.boundSeg, b.randForce, b.bTransGam, b.brownTransScale, mot.bodyParams, mot.counts, f.counts, mot.corrParams);
+        return tg
             .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
             .task("dimer", DimerCouplingSystem::couple, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, dim.motorA, dim.motorB, dim.parallel, dim.dimerParams, mot.boundSeg)
             .task("tether", NodeSystem::tether, b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum, nb.coord, nb.uVec, nb.yVec, nd.nodeInvTransY, nd.attachKey, nd.radial, nd.attachCoeffK, nd.nodeData, nd.nodeParams)
@@ -862,6 +936,7 @@ public final class V2OneXHarness {
         gsched = new GridScheduler();
         // G0 fdBind
         for (String t : new String[]{ "publishHead","gridReach","release","bind","cycle","motPublish" }) addW("fdBind." + t, padW(nM));
+        if (RATESEARCH && SWEPT) addW("fdBind.snapHead", padW(3 * nM));
         addW("fdBind.filPublish", padW(C));
         addW("fdBind.bodyCell", padW(cap)); addW("fdBind.chunkZero", padW(s.numBodyChunks * totalCells));
         addW("fdBind.chunkHist", padW(s.numBodyChunks)); addW("fdBind.chunkReduce", padW(totalCells));
@@ -1016,8 +1091,8 @@ public final class V2OneXHarness {
                 pullRenderState(s);
                 if (t % every == 0 || t == M - 1) {
                     System.out.printf("  step %-7d  bound=%-6d  links=%-6d%n", t, boundHeads(s.mot), s.xl == null ? 0 : activeLinks(s.xl));
-                    if (DTCONV) {   // pull the cross-bridge tension + cap stats (UNDER_DEMAND, only at checkpoints)
-                        if (splitResBind != null) splitResBind.transferToHost(s.mot.forceMag, s.mot.capStats);
+                    if (DTCONV) {   // pull the cross-bridge tension + cap/turnover stats (UNDER_DEMAND, only at checkpoints)
+                        if (splitResBind != null) splitResBind.transferToHost(s.mot.forceMag, s.mot.capStats, s.mot.stats, s.mot.forceDotFil);
                         dtRow(s, dt, t);
                     }
                 }
@@ -1096,6 +1171,12 @@ public final class V2OneXHarness {
     /** Cumulative # of break-force-cap release events across all motors (capStats accumulates over the run). */
     static long capHitsTotal(MotorStore m) { long c = 0; for (int i = 0; i < m.nMotors; i++) c += m.capStats.get(i); return c; }
 
+    /** Cumulative catch-slip release events (stats[2m+1]) across all motors. At steady state the total
+     *  turnover (catch-slip + cap) ≈ the total BIND events ⇒ binds/sim-time = the SEARCH's clean
+     *  capture-process flux, decoupled from the bound LIFETIME (the force wing). The geometric search's
+     *  flux rises as dt→0 (more encounters detected); the rate search's should be ~flat (dt-invariant). */
+    static long releasesTotal(MotorStore m) { long c = 0; for (int i = 0; i < m.nMotors; i++) c += m.stats.get(2 * i + 1); return c; }
+
     /** # filament seg-centres outside the in-plane box (escape — a stability signal distinct from NaN). */
     static int escapeXY(FilamentStore f) {
         int n = f.n, out = 0; double half = 0.5 * BOX_XY + 0.05;
@@ -1106,12 +1187,114 @@ public final class V2OneXHarness {
     /** Emit one matched-sim-time DTROW (the dt-convergence observable record; grepped by the sweep script). */
     static void dtRow(Scene s, double dt, int t) {
         double[] ts = tensionStats(s.mot);
+        double simT = (t + 1) * dt;
+        long turnover = releasesTotal(s.mot) + capHitsTotal(s.mot);
+        double bindFlux = simT > 0 ? turnover / simT : 0;   // binds/sim-time (the SEARCH's capture flux; dt-invariance test)
         System.out.printf(java.util.Locale.US,
-            "DTROW dt=%.0e simT=%.4f step=%-6d bound=%-5d links=%-5d RgXY=%.4f maxF=%.3e fmgMeanPN=%.3f fmgMaxPN=%.3f fracNearCap=%.4f fracOverCap=%.4f capHits=%d escXY=%d nan=%b%n",
-            dt, (t + 1) * dt, t, boundHeads(s.mot), s.xl == null ? 0 : activeLinks(s.xl), rgXY(s.fil),
-            maxAbs(s.fil.forceSum), ts[0], ts[1], ts[2], ts[3], capHitsTotal(s.mot), escapeXY(s.fil),
+            "DTROW dt=%.0e simT=%.4f step=%-6d bound=%-5d links=%-5d RgXY=%.4f maxF=%.3e fmgMeanPN=%.3f fmgMaxPN=%.3f fracNearCap=%.4f fracOverCap=%.4f capHits=%d bindFlux=%.4g escXY=%d nan=%b%n",
+            dt, simT, t, boundHeads(s.mot), s.xl == null ? 0 : activeLinks(s.xl), rgXY(s.fil),
+            maxAbs(s.fil.forceSum), ts[0], ts[1], ts[2], ts[3], capHitsTotal(s.mot), bindFlux, escapeXY(s.fil),
             !(finite(s.fil) && finite(s.mot.body) && finite(s.node.node)));
         dtHist(s.mot, dt, t);
+        relRow(s, dt, t);
+        slHist(s, dt, t);
+    }
+
+    /** BOUND_THERMAL_CORRELATION target readout: the SIGNED bound-head load (forceDotFil) DISTRIBUTION,
+     *  NEGATIVE TAIL RESOLVED — what the catch exponential e^(−F·xCatch) reads. Two histograms over the
+     *  bound population (host-side over the already-pulled forceDotFil; no kernel change):
+     *   (1) POPULATION: each bound motor counts 1 (the load distribution the bond geometry produces);
+     *   (2) RELEASE-WEIGHTED: each bound motor weighted by its catch-slip rate(F) (the distribution of
+     *       loads AT WHICH releases occur — the negative excursions the convex catch term rectifies).
+     *  This is the Stage-1/Stage-2 decisive comparison: an α at coarse dt must reproduce the fine-dt
+     *  reference's negative TAIL (shape), not just the mean/off-rate. Bins in pN. */
+    static void slHist(Scene s, double dt, int t) {
+        MotorStore m = s.mot;
+        float kOff = m.kinParams.get(0), aC = m.kinParams.get(1), aS = m.kinParams.get(2);
+        float xC = m.kinParams.get(3), xS = m.kinParams.get(4), kT = m.kinParams.get(5);
+        // signed-load bin upper edges (pN): negative tail resolved
+        double[] edge = { -8, -6, -4, -3, -2, -1, 0, 1, 2, 3, 4, 6, 8 };
+        long[] hp = new long[edge.length + 1];      // population counts
+        double[] hr = new double[edge.length + 1];  // release-weighted (Σ rate)
+        int nb = 0; double sumF = 0, sumNeg = 0; int nNeg = 0;
+        java.util.ArrayList<Double> vals = new java.util.ArrayList<>();
+        for (int i = 0; i < m.nMotors; i++) {
+            if (m.boundSeg.get(i) < 0) continue;
+            double Fn = m.forceDotFil.get(i);     // N (instantaneous signed load)
+            double FpN = Fn * 1.0e12;
+            double rate = kOff * (aC * Math.exp(-Fn * xC / kT) + aS * Math.exp(Fn * xS / kT));
+            nb++; sumF += FpN; vals.add(FpN);
+            if (FpN < 0) { nNeg++; sumNeg += FpN; }
+            int b = edge.length; for (int e = 0; e < edge.length; e++) if (FpN < edge[e]) { b = e; break; }
+            hp[b]++; hr[b] += rate;
+        }
+        java.util.Collections.sort(vals);
+        double med = nb == 0 ? 0 : vals.get(nb / 2);
+        double p10 = nb == 0 ? 0 : vals.get((int) (0.10 * (nb - 1)));   // the negative tail
+        double p90 = nb == 0 ? 0 : vals.get((int) (0.90 * (nb - 1)));
+        double meanNeg = nNeg > 0 ? sumNeg / nNeg : 0;
+        double rTot = 0; for (double r : hr) rTot += r;
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format(java.util.Locale.US,
+            "SLHIST dt=%.0e simT=%.4f alpha=%.3g bound=%d meanF=%.3f med=%.3f p10=%.3f p90=%.3f fracNeg=%.3f meanNeg=%.3f " +
+            "edges_pN[-8,-6,-4,-3,-2,-1,0,1,2,3,4,6,8] popBins=",
+            dt, (t + 1) * dt, BOND_CORR ? BOND_CORR_ALPHA : 0.0, nb,
+            nb == 0 ? 0 : sumF / nb, med, p10, p90, nb == 0 ? 0 : (double) nNeg / nb, meanNeg));
+        for (int b = 0; b < hp.length; b++) sb.append(hp[b]).append(b < hp.length - 1 ? "," : "");
+        sb.append(" relWtFrac=");   // release-weighted (rate-normalized) — the load distribution at release
+        for (int b = 0; b < hr.length; b++) sb.append(String.format(java.util.Locale.US, "%.3f", rTot > 0 ? hr[b] / rTot : 0)).append(b < hr.length - 1 ? "," : "");
+        System.out.println(sb);
+    }
+
+    // RELEASE_FORCE_INPUT Stage-1 state: previous-checkpoint cumulative stats (per-run statics; the dt sweep
+    // runs each dt in its own JVM ⇒ these reset per run, giving a clean INTERVAL off-rate decoupled from the
+    // bind-up transient).
+    static long prevRel = 0, prevCap = 0, prevBoundSteps = 0; static double prevSimT = 0;
+
+    /** RELEASE_FORCE_INPUT Stage-1: characterize the lumped catch-slip release. Emits, per checkpoint:
+     *  - the per-bound-motor catch-slip off-RATE (interval Δreleases / Δ(bound-motor-seconds)) and the total
+     *    off-rate incl. the cap channel — the quantity that must CONVERGE (plateau) as dt→0 if the release is
+     *    well-posed (the lifetime distribution is then pinned: a per-step Bernoulli(rate·dt) ⇒ exponential
+     *    lifetime with mean 1/rate);
+     *  - the bound-population signed-load (forceDotFil) mean and the rate-weighted "force at release"
+     *    ⟨F·rate(F)⟩/⟨rate(F)⟩ — the effective force the release samples;
+     *  - the catch vs slip DECOMPOSITION at that effective force (catchFrac), and the analytic population
+     *    mean off-rate ⟨rate(F)⟩ (the dt→0 reference the empirical off-rate should approach).
+     *  Host-side over the already-pulled boundSeg/stats/capStats/forceDotFil; no kernel change. */
+    static void relRow(Scene s, double dt, int t) {
+        MotorStore m = s.mot;
+        float kOff = m.kinParams.get(0), aC = m.kinParams.get(1), aS = m.kinParams.get(2);
+        float xC = m.kinParams.get(3), xS = m.kinParams.get(4), kT = m.kinParams.get(5);
+        boolean avg = m.kinParams.get(16) > 0.5f;
+        long rel = 0, cap = 0, bsteps = 0;
+        for (int i = 0; i < m.nMotors; i++) { rel += m.stats.get(2 * i + 1); bsteps += m.stats.get(2 * i); cap += m.capStats.get(i); }
+        double simT = (t + 1) * dt;
+        long dRel = rel - prevRel, dCap = cap - prevCap, dB = bsteps - prevBoundSteps;
+        double boundSec = dB * dt;
+        double offRateCS = boundSec > 0 ? dRel / boundSec : 0;     // catch-slip off-rate (per bound-motor-second)
+        double offRateTot = boundSec > 0 ? (dRel + dCap) / boundSec : 0;
+        prevRel = rel; prevCap = cap; prevBoundSteps = bsteps; prevSimT = simT;
+        // Bound-population INSTANTANEOUS signed-load (forceDotFil, always host-current) stats + the analytic
+        // off-rate it implies. In -tauavg mode the release actually reads the EMA forceDotAvg, so the EMPIRICAL
+        // offRate (from stats) is the truth; popRateAnalytic here is the INSTANTANEOUS-F reference, and the
+        // gap offRateCS vs popRateAnalytic directly exposes the averaging effect. (forceDotAvg is not GPU-pulled.)
+        int nb = 0; double sumF = 0, sumRate = 0, sumFrate = 0, sumCatch = 0, sumSlip = 0;
+        for (int i = 0; i < m.nMotors; i++) {
+            if (m.boundSeg.get(i) < 0) continue;
+            double Fn = m.forceDotFil.get(i);   // N (instantaneous signed load)
+            double FpN = Fn * 1.0e12;
+            double cterm = aC * Math.exp(-Fn * xC / kT), sterm = aS * Math.exp(Fn * xS / kT);
+            double rate = kOff * (cterm + sterm);
+            nb++; sumF += FpN; sumRate += rate; sumFrate += FpN * rate; sumCatch += kOff * cterm; sumSlip += kOff * sterm;
+        }
+        double meanF = nb > 0 ? sumF / nb : 0;
+        double fAtRelease = sumRate > 0 ? sumFrate / sumRate : 0;       // rate-weighted force (effective release force)
+        double popRate = nb > 0 ? sumRate / nb : 0;                     // analytic population mean off-rate (the dt→0 ref)
+        double catchFrac = (sumCatch + sumSlip) > 0 ? sumCatch / (sumCatch + sumSlip) : 0;
+        System.out.printf(java.util.Locale.US,
+            "RELROW dt=%.0e simT=%.4f bound=%d offRateCS=%.3f offRateTot=%.3f popRateAnalytic=%.3f " +
+            "meanF_pN=%.3f fAtRelease_pN=%.3f catchFrac=%.3f forceMode=%s%n",
+            dt, simT, nb, offRateCS, offRateTot, popRate, meanF, fAtRelease, catchFrac, avg ? "avg" : "inst");
     }
 
     /** Emit the cross-bridge-stretch (|F8| = myoSpring·dist) DISTRIBUTION over the bound motors — the

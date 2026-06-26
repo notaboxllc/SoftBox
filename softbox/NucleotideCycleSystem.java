@@ -132,4 +132,73 @@ public final class NucleotideCycleSystem {
             }
         }
     }
+
+    /**
+     * RELEASE_FORCE_INPUT (measurement, flag-gated, default-off): identical to catchSlipRelease EXCEPT the
+     * catch-slip rate reads F from a per-head TIME-AVERAGED cross-bridge force (an EMA over window τ_avg)
+     * instead of the instantaneous overshot forceDotFil. The EMA is updated IN-KERNEL from the (last-step,
+     * persisted) forceDotFil this release already has in hand — so forceDotAvg/avgInit live only in this
+     * fdBind kernel, no cross-graph buffer plumbing. Seeded at bind (avgInit 0→1, avg=F) so a fresh bond does
+     * NOT read avg≈0 (which on the catch wing would over-release). The rate FORMULA, the break-force cap
+     * (still on the instantaneous |F8| forceMag), the refractory, and the RNG keying are byte-for-byte the
+     * same as catchSlipRelease — ONLY the F fed into the rate changes (the task scope). The original
+     * catchSlipRelease stays byte-identical (the production path); V2OneXHarness calls THIS only with -tauavg.
+     * kinParams[17] = avgAlpha = dt/τ_avg.
+     */
+    public static void catchSlipReleaseAvg(IntArray boundSeg, FloatArray forceDotFil, FloatArray forceDotAvg, IntArray avgInit,
+                                           FloatArray forceMag, IntArray cooldown,
+                                           IntArray stats, IntArray capStats, FloatArray kinParams, IntArray counts) {
+        int nM = boundSeg.getSize();
+        int step = counts.get(1), seed = counts.get(2);
+        float kOff = kinParams.get(0), aCatch = kinParams.get(1), aSlip = kinParams.get(2);
+        float xCatch = kinParams.get(3), xSlip = kinParams.get(4), kT = kinParams.get(5), dt = kinParams.get(6);
+        int refractorySteps = (int) kinParams.get(10);
+        float breakForceN = kinParams.get(11);
+        boolean capOn = kinParams.get(12) > 0.5f;
+        float blockProb = kinParams.get(13);
+        float alpha = kinParams.get(17);
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            int bs = boundSeg.get(m);
+            if (bs >= 0) {
+                // EMA update from the last-step force this kernel already reads (in-kernel; no extra buffers downstream)
+                float Finst = forceDotFil.get(m);
+                float Favg;
+                if (avgInit.get(m) == 0) { Favg = Finst; forceDotAvg.set(m, Finst); avgInit.set(m, 1); }
+                else { Favg = forceDotAvg.get(m) + alpha * (Finst - forceDotAvg.get(m)); forceDotAvg.set(m, Favg); }
+
+                stats.set(2 * m, stats.get(2 * m) + 1);
+                boolean enterRefractory = refractorySteps > 0;
+                if (blockProb < 1.0f) {
+                    int rh = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x52465241);
+                    float ru = (rh >>> 1) / 2147483647.0f;
+                    enterRefractory = enterRefractory && (ru < blockProb);
+                }
+                if (capOn && forceMag.get(m) > breakForceN) {
+                    capStats.set(m, capStats.get(m) + 1);
+                    forceDotAvg.set(m, 0f); avgInit.set(m, 0);
+                    if (enterRefractory) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                    continue;
+                }
+                float F = Favg;   // <-- the ONLY rate change: time-averaged F (vs instantaneous forceDotFil)
+                float rate = kOff * (aCatch * (float) Math.exp(-F * xCatch / kT) + aSlip * (float) Math.exp(F * xSlip / kT));
+                int h = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4D54);  // release salt
+                float u = (h >>> 1) / 2147483647.0f;
+                if (u < rate * dt) {
+                    stats.set(2 * m + 1, stats.get(2 * m + 1) + 1);
+                    forceDotAvg.set(m, 0f); avgInit.set(m, 0);
+                    if (enterRefractory) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                }
+            } else {
+                forceDotAvg.set(m, 0f); avgInit.set(m, 0);   // free (incl. cooldown): reset the EMA seed
+                if (bs == MotorStore.FREE_COOLDOWN) {
+                    int c = cooldown.get(m) - 1;
+                    if (c <= 0) { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                    else { cooldown.set(m, c); }
+                }
+            }
+        }
+    }
 }

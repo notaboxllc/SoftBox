@@ -48,6 +48,9 @@ public final class MotorStore {
     // bodyParams (float): [0]=dt [1]=brownianForceMag (= sqrt(2kT/dt)), for the shared
     //   Brownian + integration systems over the articulated sub-bodies.
     public final FloatArray bodyParams;
+    /** BOUND_THERMAL_CORRELATION (measurement, flag-gated, default-off): [0]=alpha — the bound-head↔
+     *  filament thermal-noise correlation coefficient (BondThermalCorrelationSystem). 0 ⇒ no correlation. */
+    public final FloatArray corrParams;
     // jointParams (float): [0]=dt; J1(lever-motor) [1]=fracMove [2]=fracR [3]=fracMoveTorq
     //   [4]=restAngleDeg; J2(rod-lever) [5]=fracMove [6]=fracR [7]=fracMoveTorq [8]=restAngleDeg;
     //   [9]=anchorFracMove [10]=stallForcePN. Motor-SPECIFIC physics (localized, not shared).
@@ -121,6 +124,8 @@ public final class MotorStore {
                                                //          the quantity v1's break-force release compares — §6.10)
     public final FloatArray forceDotHist;      // 10*nMotors (v1 ValueTracker(10); the ADP→NONE gate average)
     public final IntArray   forceDotPlace;     // nMotors (ring index)
+    public final FloatArray forceDotAvg;       // nMotors (RELEASE_FORCE_INPUT: EMA of forceDotFil over τ_avg; default-off)
+    public final IntArray   avgInit;           // nMotors (0 = EMA needs seeding at bind; reset on free)
     // nucParams (float): [0]=dt [1]=atpOnMyo [2]=onFilATP_ADPPi [3]=offFilATP_ADPPi
     //   [4]=onFilADPPi_ADP [5]=offFilADPPi_ADP [6]=onFilADP_None [7]=offFilADP_None  (Env.java:836-855)
     public final FloatArray nucParams;
@@ -131,12 +136,18 @@ public final class MotorStore {
         this.nMotors = nMotors;
         body = new RigidRodBody(3 * nMotors);
         bodyParams  = new FloatArray(2);
+        corrParams  = new FloatArray(2);   // BOUND_THERMAL_CORRELATION (measurement, default-off): [0]=alpha
         jointParams = new FloatArray(11);
         nucleotideState = new IntArray(nMotors);   nucleotideState.init(NUC_NONE);
         forceDotFil   = new FloatArray(nMotors);   forceDotFil.init(0f);
         forceMag      = new FloatArray(nMotors);   forceMag.init(0f);
         forceDotHist  = new FloatArray(10 * nMotors); forceDotHist.init(0f);
         forceDotPlace = new IntArray(nMotors);     forceDotPlace.init(0);
+        // RELEASE_FORCE_INPUT (measurement, default-off): a per-head EMA of forceDotFil over a window
+        // τ_avg, fed to the catch-slip release IN PLACE OF the instantaneous overshot F when enabled.
+        // avgInit seeds the EMA at bind (else a new bond reads avg≈0 → huge catch rate → instant release).
+        forceDotAvg   = new FloatArray(nMotors);   forceDotAvg.init(0f);
+        avgInit       = new IntArray(nMotors);     avgInit.init(0);
         nucParams = new FloatArray(8);
         head    = new FloatArray(3 * nMotors);
         uVec    = new FloatArray(3 * nMotors);
@@ -147,7 +158,7 @@ public final class MotorStore {
         bindArc  = new FloatArray(nMotors);
         stats    = new IntArray(2 * nMotors);
         capStats = new IntArray(nMotors);          // §6.10 break-force release fires per motor (measurement only)
-        kinParams = new FloatArray(14);
+        kinParams = new FloatArray(18);
         cooldown  = new IntArray(nMotors);
         counts    = new IntArray(4);
         publishParams = new IntArray(1);
@@ -210,6 +221,40 @@ public final class MotorStore {
         // §6.11 rate-faithful refractory: default 1.0 ⇒ every release enters the 1-step block
         // (HEAD's deterministic behavior; bit-identical). -faithfulrefractory lowers it to 0.31.
         kinParams.set(13, 1.0f);
+        // Binding-SEARCH REFORMULATION (default OFF; only the flag-gated rate search reads these):
+        //   [14] = kOn — the per-unit-length per-time encounter rate (µm^-1 s^-1; the physical,
+        //          optical-trap-calibratable binding-search handle). 0 ⇒ unused (geometric search).
+        //   [15] = candReach — the WIDENED candidate-gather radius for the swept rate search (µm); the
+        //          chord PHYSICS still uses the tight [7]=myoColTol. 0/≤[7] ⇒ tight (formulation A).
+        kinParams.set(14, 0.0f);
+        kinParams.set(15, 0.0f);
+        // RELEASE_FORCE_INPUT (measurement, default OFF): the force the catch-slip release READS.
+        //   [16] = avgMode  (0 = instantaneous forceDotFil = HEAD/production; 1 = time-averaged forceDotAvg)
+        //   [17] = avgAlpha (the per-step EMA weight = dt/τ_avg; forceDotAvg += avgAlpha·(F − forceDotAvg))
+        kinParams.set(16, 0.0f);
+        kinParams.set(17, 0.0f);
+    }
+    /** RELEASE_FORCE_INPUT (measurement, flag-gated, default off): feed the catch-slip release a per-head
+     *  TIME-AVERAGED cross-bridge force (EMA over window τ_avg, seconds) instead of the instantaneous
+     *  overshot F. τ_avg ≤ 0 ⇒ instantaneous (HEAD/production). The spring force law and catch-slip rate
+     *  formula are UNTOUCHED — only the F fed to the rate changes. See RELEASE_FORCE_INPUT_FINDINGS.md. */
+    public void setReleaseForceAvg(double tauAvgSec, double dt) {
+        if (tauAvgSec > 0.0) {
+            kinParams.set(16, 1.0f);
+            float alpha = (float) (dt / tauAvgSec);
+            if (alpha > 1.0f) alpha = 1.0f;        // τ_avg < dt ⇒ no smoothing (alpha=1 ≡ instantaneous)
+            kinParams.set(17, alpha);
+        } else {
+            kinParams.set(16, 0.0f);
+            kinParams.set(17, 0.0f);
+        }
+    }
+    /** Binding-SEARCH reformulation (flag-gated, default off): set the per-unit-length encounter rate kOn
+     *  (µm^-1 s^-1) and the widened candidate-gather radius candReach (µm, for the swept formulation B; the
+     *  chord physics keeps the tight myoColTol). See BINDING_SEARCH_REFORMULATION_FINDINGS.md. */
+    public void setSearchParams(double kOn, double candReach) {
+        kinParams.set(14, (float) kOn);
+        kinParams.set(15, (float) candReach);
     }
     /** §6.11: enable the rate-faithful (probabilistic) rebind refractory — match v1's GPU-oracle
      *  effective block rate (FAITHFUL_BLOCK_PROB) instead of HEAD's 100%/1-step block. Default off
