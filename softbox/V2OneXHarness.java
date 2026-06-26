@@ -98,6 +98,10 @@ public final class V2OneXHarness {
     static double TAU_AVG = 0.0;                      // -tauavg <s> : MEASUREMENT-ONLY — feed the catch-slip release a TIME-AVERAGED cross-bridge force (EMA window τ_avg). 0 ⇒ instantaneous (HEAD/production).
     static boolean BOND_CORR = false;                 // -bondcorr <alpha> : MEASUREMENT-ONLY — constraint-aware thermal forcing (correlate the bound head's Brownian kick to its filament contact's). default-off.
     static double BOND_CORR_ALPHA = 0.0;              // the correlation coefficient α ∈ [0,1] (BondThermalCorrelationSystem)
+    // ---- SATURATED_CROSSBRIDGE_DIAGNOSTIC (flag-gated; default-off ⇒ size-6 xbParams ⇒ plain Hookean) ----
+    static int    XBSAT_MODE  = 0;                    // -xbsat <mode> <Fmax_pN> <onset_pN>: 1 sym-tanh, 2 sym-hardclip, 3 asym(comp)-tanh, 4 asym-hardclip
+    static double XBSAT_FMAX  = 0.0;                  // ceiling (N; entered in pN)
+    static double XBSAT_ONSET = 0.0;                  // onset  (N; entered in pN)
     // ---- binding-SEARCH reformulation (flag-gated; geometric bindNearest stays the default comparator) ----
     static boolean RATESEARCH = false;               // -ratesearch : per-sim-time encounter-rate capture (BindingDetectionSystem.bindRate)
     static boolean SWEPT = true;                      // formulation B (swept path-average chord); -pointsearch ⇒ A (instantaneous)
@@ -130,6 +134,7 @@ public final class V2OneXHarness {
                 case "-tauavg" -> TAU_AVG = Double.parseDouble(args[++i]);  // MEASUREMENT-ONLY: time-averaged release force, EMA window τ_avg (s)
                 case "-bondcorr" -> { BOND_CORR = true; BOND_CORR_ALPHA = Double.parseDouble(args[++i]); }  // MEASUREMENT-ONLY: bound-head↔filament thermal-noise correlation α
                 case "-myospring" -> MYO_SPRING = Double.parseDouble(args[++i]) * 1.0e-9;  // MEASUREMENT-ONLY: cross-bridge stiffness in pN/nm (1 pN/nm = 1.0e-9 N/µm = default). Hookean F8 unchanged; production default unchanged.
+                case "-xbsat" -> { XBSAT_MODE = Integer.parseInt(args[++i]); XBSAT_FMAX = Double.parseDouble(args[++i]) * 1.0e-12; XBSAT_ONSET = Double.parseDouble(args[++i]) * 1.0e-12; }  // MEASUREMENT-ONLY saturating F8 (default-off)
                 case "-ratesearch" -> RATESEARCH = true;            // binding-search reformulation: per-sim-time encounter rate
                 case "-pointsearch" -> SWEPT = false;               // formulation A (instantaneous chord) instead of B (swept)
                 case "-kon" -> KON = Double.parseDouble(args[++i]);  // encounter-rate handle (µm^-1 s^-1)
@@ -174,6 +179,12 @@ public final class V2OneXHarness {
         if (BOND_CORR) { s.mot.corrParams.set(0, (float) BOND_CORR_ALPHA);
             System.out.printf("  -bondcorr: constraint-aware thermal forcing ON — bound head↔filament noise correlation alpha=%.4g (sqrt(1-a^2)=%.4g, translational/isotropic)%n",
                     BOND_CORR_ALPHA, Math.sqrt(1.0 - BOND_CORR_ALPHA * BOND_CORR_ALPHA)); }
+        if (XBSAT_MODE != 0) {
+            String[] mname = { "off", "sym-tanh", "sym-hardclip", "asym(comp)-tanh", "asym(comp)-hardclip" };
+            System.out.printf(java.util.Locale.US,
+                "  -xbsat: SATURATING F8 ON — mode=%d (%s), Fmax=%.3f pN, onset=%.3f pN, myoSpring=%.2f pN/nm%n",
+                XBSAT_MODE, XBSAT_MODE < mname.length ? mname[XBSAT_MODE] : "?", XBSAT_FMAX * 1e12, XBSAT_ONSET * 1e12, MYO_SPRING * 1e9);
+        }
         if (brownOff) zeroBrownian(s);
         System.out.printf("scene built: %d nodes, %d filament segments, %d myosins, %d crosslink slots%n%n",
                 s.nNodes, activeSegments(s.fil), s.mot.nMotors, s.xl == null ? 0 : s.xl.nLinks);
@@ -338,7 +349,10 @@ public final class V2OneXHarness {
                 node.node.end1, node.node.end2, node.node.segLength, node.nodeBodyCounts);
 
         s.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); s.bondData.init(0f);
-        s.xbParams = FloatArray.fromElements((float) MYO_SPRING, 90f, (float) J1_FMT, (float) dt, (float) MotorStore.HEAD_LEN, 0f);
+        s.xbParams = XBSAT_MODE != 0
+            ? FloatArray.fromElements((float) MYO_SPRING, 90f, (float) J1_FMT, (float) dt, (float) MotorStore.HEAD_LEN, 0f,
+                                      (float) XBSAT_MODE, (float) XBSAT_FMAX, (float) XBSAT_ONSET)
+            : FloatArray.fromElements((float) MYO_SPRING, 90f, (float) J1_FMT, (float) dt, (float) MotorStore.HEAD_LEN, 0f);
         int MAXC = SpatialGrid.MAX_CAND;
         s.reachSeg = new IntArray(nMot * MAXC); s.reachSeg.init(-1); s.reachCount = new IntArray(nMot);
         s.headPrev = new FloatArray(3 * nMot); s.headPrev.init(0f);

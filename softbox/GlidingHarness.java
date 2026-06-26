@@ -41,6 +41,9 @@ public final class GlidingHarness {
                                                  // GPU-oracle effective rate (0.31) vs HEAD's 100%/1-step (default off).
     static double FORCE_BIAS = 0.0;              // -forcebias <eps>: inject a uniform −x seg-side force bias per bound
                                                  // motor (§6.8 susceptibility pre-filter). 0 = production (bit-identical).
+    // ---- SATURATED_CROSSBRIDGE_DIAGNOSTIC secondary confirm (flag-gated; default-off ⇒ size-6 ⇒ plain Hookean) ----
+    static int    XBSAT_MODE  = 0;               // -xbsat <mode> <Fmax_pN> <onset_pN>: saturating F8 (1 sym-tanh/2 sym-clip/3 asym-tanh/4 asym-clip)
+    static double XBSAT_FMAX  = 0.0, XBSAT_ONSET = 0.0;  // ceiling / onset in N (entered pN)
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static final double DENSITY = 500.0;        // motors / µm²
@@ -87,6 +90,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-faithfulrelease")) FAITHFUL_RELEASE = true;   // §6.10 v1 force-cap release branch
             else if (args[i].equals("-faithfulrefractory")) FAITHFUL_REFRACTORY = true;  // §6.11 rate-faithful rebind refractory
             else if (args[i].equals("-forcebias")) FORCE_BIAS = Double.parseDouble(args[++i]);  // §6.8 susceptibility pre-filter
+            else if (args[i].equals("-xbsat")) { XBSAT_MODE = Integer.parseInt(args[++i]); XBSAT_FMAX = Double.parseDouble(args[++i]) * 1.0e-12; XBSAT_ONSET = Double.parseDouble(args[++i]) * 1.0e-12; }  // MEASUREMENT-ONLY saturating F8
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
         }
@@ -173,7 +177,10 @@ public final class GlidingHarness {
 
         int MAXC = SpatialGrid.MAX_CAND;
         sc.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
-        sc.xbParams = FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS);
+        sc.xbParams = XBSAT_MODE != 0
+            ? FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS,
+                                      (float) XBSAT_MODE, (float) XBSAT_FMAX, (float) XBSAT_ONSET)
+            : FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS);
         sc.segMotorCount = new IntArray(nSeg); sc.segMotorOffsets = new IntArray(nSeg + 1); sc.segMotorMyo = new IntArray(nMot);
         sc.reachSeg = new IntArray(nMot * MAXC); sc.reachSeg.init(-1); sc.reachCount = new IntArray(nMot);
         // in-vitro chamber matching the bed (v1 MyoMiniFilament.checkOuterBugCollision law): [tau, boxX, boxY, boxZ, R, coeff, checkInt]

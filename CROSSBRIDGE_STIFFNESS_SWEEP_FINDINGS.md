@@ -9,11 +9,18 @@ committed benchmark. `BoA-v1ref` untouched. Sole occupant of aorus; **v2-GPU dev
 `run_xbstiff.sh`; raw `RUN_LOGS/2026-06-26_xbstiff_gliding.txt`, `_contractile.txt`. Companions:
 `DT_CONVERGENCE_FINDINGS.md`, `RELEASE_FORCE_INPUT_FINDINGS.md`, `BOUND_THERMAL_CORRELATION_FINDINGS.md`.
 
+> **Reference-posture note (2026-06-26, added with `SATURATED_CROSSBRIDGE_DIAGNOSTIC_FINDINGS.md`):** the
+> "right" myoSpring (≈1 pN/nm) here is the value that reproduces **v1's gliding behavior** (avgBound ≈7.5,
+> the gliding velocity) — an **unpublished, internal v1 reference** (a conference-poster comparison), **NOT
+> experimentally validated ground truth**. The **sensitivity** finding below — the motor is sharply, not
+> loosely, constrained by its emergent gliding behavior — **stands** regardless. Only the framing that 1 pN/nm
+> is *experimentally* calibrated was an overclaim and has been softened to "v1-reference" throughout.
+
 ## VERDICT — NOT a free win. 0.5 pN/nm is DECISIVELY distinguishable from 1 pN/nm in BOTH scenes ⇒ keep 1 pN/nm; the PAIRS-saturation build is the dt lever.
 The motor is **highly sensitive** to cross-bridge stiffness across the measured 0.5–2 pN/nm range — far
 outside any seed scatter. Halving `myoSpring` does buy the cross-bridge a 2× reduction in the `k·dt` overshoot
 (§3) — exactly as the linear `r = k·dt/γ` algebra predicts — but it **does not preserve behavior**: it
-over-binds 3.5×, drops the glide velocity 36 %, and breaks the experiment-calibrated operating point. The
+over-binds 3.5×, drops the glide velocity 36 %, and breaks the v1-reference operating point. The
 softer spring is not a different-but-equal myosin; it is a **detuned** one. ⇒ the cheap "adopt 0.5, run plain
 Hookean at 1e-4" path is **rejected**; the cross-bridge stiffness genuinely matters, so the lever for a larger
 faithful dt is a **PAIRS-saturation element** (preserve the 1-pN/nm force up to threshold, saturate the
@@ -31,7 +38,7 @@ v1's exact `GlidingAssayEvaluator` (`-grid`): **NET** = net-centroid-displacemen
 | myoSpring | NET velocity µm/s (mean ± SEM, n=4) | avgBound | note |
 |---|---|---|---|
 | **0.5 pN/nm** | **2.45 ± 0.11** | **24.4** | over-binds 3.5×; **−36 % velocity** |
-| **1.0 pN/nm (default)** | **3.80 ± 0.17** | **6.9** | the calibrated peak; avgBound ≈ v1's 7.5 |
+| **1.0 pN/nm (default)** | **3.80 ± 0.17** | **6.9** | the v1-reference peak; avgBound ≈ v1's 7.5 |
 | **2.0 pN/nm** | **0.53** (netX **positive** → no directed glide) | **0.25** | binding collapses; glide gone |
 
 Per-seed (netXY µm/s | avgBound): 0.5 → (2.23|21.9)(2.42|22.3)(2.75|26.6)(2.38|26.7); 1.0 →
@@ -42,7 +49,7 @@ Per-seed (netXY µm/s | avgBound): 0.5 → (2.23|21.9)(2.42|22.3)(2.75|26.6)(2.3
   collapse at 1e-5 (§2) ⇒ essentially no sustained binding (avgBound 0.25) and **no directed glide** (netX
   flips positive — pure wander, not a −x glide).
 - **avgBound is tightly pinned to the stiffness:** 24.4 / 6.9 / 0.25 across 0.5 / 1.0 / 2.0. Only the default
-  reproduces v1's experimentally-calibrated avgBound (≈7.5) and the committed v2 baseline (4×1 net 4.02 ± 0.15,
+  reproduces v1's avgBound (≈7.5 — an unpublished internal v1 reference, NOT experimentally validated) and the committed v2 baseline (4×1 net 4.02 ± 0.15,
   avgBound 7.20, `GLIDING_4biv_FINDINGS.md`). **`-myospring 1.0` lands in that committed envelope (3.80 ± 0.17,
   avgBound 6.9) — the default-unchanged confirmation.**
 
@@ -111,7 +118,7 @@ stiffness, at matched `k·dt`.** Confirmed:
 So **softening `myoSpring` 2× is numerically equivalent to halving dt** for the cross-bridge — which is exactly
 why it looked like a candidate free win. The catch is that the dt-converged target (`B*≈1050`, off-rate ~160 at
 k=1.0) is reached at fine dt **without changing the force the motor exerts**, whereas softening k reaches a
-similar-looking bound population by **halving that force** — and the force is what the experiment-calibrated
+similar-looking bound population by **halving that force** — and the force is what the v1-reference
 gliding behavior depends on. Same overshoot reduction, different physics.
 
 ---
@@ -122,8 +129,9 @@ A tempting misread: in the contractile scene, k=0.5 @ 1e-5 (bound 1116, off-rate
 over-cap) sits **closer to the dt-converged k=1.0 reference** (bound ~1050, off-rate ~160) than the default
 k=1.0 @ 1e-5 (bound 418, off-rate 422, the overshoot) does. So isn't the softer spring "more converged"?
 
-**No — that is the `k·dt` coincidence, not a calibration.** The gliding assay is the arbiter because it is
-calibrated to **experiment** (v1's avgBound ≈ 7.5, the gliding velocity), and there k=1.0 matches (avgBound 6.9,
+**No — that is the `k·dt` coincidence, not a calibration.** The gliding assay is the arbiter because it is the
+**v1-reference observable** (v1's avgBound ≈ 7.5, the gliding velocity — an unpublished internal v1 comparison,
+NOT experimentally validated ground truth), and there k=1.0 matches (avgBound 6.9,
 velocity peak) while k=0.5 over-binds to **avgBound 24.4** and glides 36 % slower. The reason: the motor's other
 parameters (kOff, the catch-slip α/x constants, the reach) were **jointly calibrated with k=1.0 @ 1e-5** so that
 the (overshot) cross-bridge yields the right emergent gliding. Softening k breaks that joint calibration —
@@ -139,7 +147,7 @@ Across the measured 0.5–2 pN/nm range, the motor is **sharply, not loosely, co
 
 - **Glide velocity** is **non-monotonic, peaked at 1.0 pN/nm**: 2.45 / 3.80 / 0.53 µm/s at 0.5 / 1.0 / 2.0
   (0.64× / 1.0× / collapse). A ~10–15 % stiffness error moves velocity by ≫ the ±5 % seed SEM.
-- **avgBound** is monotone-decreasing and steep: 24.4 / 6.9 / 0.25. Only k≈1.0 reproduces v1's calibrated 7.5.
+- **avgBound** is monotone-decreasing and steep: 24.4 / 6.9 / 0.25. Only k≈1.0 reproduces v1's reference 7.5 (unpublished).
 - **Contractile bound count** spans 100× (1116 / 418 / 11); **off-rate** spans 280× (141 / 422 / 39 000).
 - The qualitative "myoSpring ≈ 1 pN/nm gives about-right behavior" choice is therefore **tightly pinned by the
   gliding calibration** — the behavior constrains the parameter far more sharply than the "chosen by
@@ -175,7 +183,7 @@ Raw: `RUN_LOGS/2026-06-26_xbstiff_gliding.txt`, `_contractile.txt`.
 ## Bottom line for the thesis (§9 — the cross-bridge dt ceiling)
 A softer-but-still-measured-valid cross-bridge stiffness is **not** a free route to a larger faithful dt. The
 `k·dt` overshoot scaling means halving `myoSpring` halves the overshoot (≈ halving dt) — but it **detunes the
-motor** (gliding velocity −36 %, avgBound +250 %, breaking the experiment-calibrated operating point) and still
+motor** (gliding velocity −36 %, avgBound +250 %, breaking the v1-reference operating point) and still
 does not reach 1e-4 (deterministic instability at r=2.65 + the catch-explosion collapse at ~2–4e-5). The
 behavior tightly constrains `myoSpring ≈ 1 pN/nm`. ⇒ the dt headroom must come from a **PAIRS-saturation
 cross-bridge** that preserves the 1-pN/nm force up to a stretch threshold and saturates above it (capping the

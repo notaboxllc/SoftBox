@@ -29,7 +29,8 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
  *
  * bondData stride 13: [0..2]=head force [3..5]=head torque [6..8]=seg force [9..11]=seg torque
  *   [12]=forceDotFil. xbParams: [0]=myoSpring [1]=(unused, F9 rest is state-dependent) [2]=j1FracMoveTorq
- *   [3]=dt [4]=HEAD_LEN.
+ *   [3]=dt [4]=HEAD_LEN [5]=forcebias. OPTIONAL (size>6, -xbsat diagnostic): [6]=satMode [7]=satFmax(N)
+ *   [8]=satOnset(N) — the saturating-F8 measurement (default size-6 ⇒ plain Hookean, byte-identical).
  */
 public final class CrossBridgeSystem {
     private CrossBridgeSystem() {}
@@ -69,6 +70,16 @@ public final class CrossBridgeSystem {
         double DEG2RAD = Math.PI / 180.0, RAD2DEG = 180.0 / Math.PI;
         int nM = nB / 3;
 
+        // ---- MEASUREMENT-ONLY saturating F8 (SATURATED_CROSSBRIDGE_DIAGNOSTIC). Flag-gated by xbParams SIZE:
+        //   size 6 (production + every other harness)  ⇒ satMode=0 ⇒ plain Hookean, BYTE-IDENTICAL.
+        //   size 9 (V2OneX/Gliding -xbsat)             ⇒ [6]=mode [7]=Fmax(N) [8]=onset(N).
+        // Caps the |F8| spring magnitude above onset to bound the k·dt overshoot's spurious load excursions
+        // WITHOUT softening the in-range spring. The force DIRECTION is unchanged ⇒ F, both torques, and
+        // forceDotFil all rescale consistently. modes: 1 sym-tanh, 2 sym-hardclip, 3 asym(compression-only)-tanh,
+        // 4 asym-hardclip (compression = forceDotFil<0, the side the catch exponential e^(−F·xCatch) detonates on).
+        int satMode = 0; double satFmax = 0.0, satOnset = 0.0;
+        if (xbParams.getSize() > 6) { satMode = (int) xbParams.get(6); satFmax = xbParams.get(7); satOnset = xbParams.get(8); }
+
         for (@Parallel int m = 0; m < nM; m++) {
             int d = m * STRIDE;
             for (int k = 0; k < STRIDE; k++) bondData.set(d + k, 0f);
@@ -94,6 +105,20 @@ public final class CrossBridgeSystem {
             double dx = apx - htipx, dy = apy - htipy, dz = apz - htipz;
             double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
             double fmag = myoSpring * dist;
+            // saturating-F8 diagnostic (satMode==0 in production ⇒ skipped, byte-identical)
+            if (satMode != 0) {
+                boolean compressive = (dx * sux + dy * suy + dz * suz) < 0.0;  // forceDotFil<0
+                if (satMode < 3 || compressive) {                             // 1,2 symmetric; 3,4 compression-only
+                    if (satMode == 2 || satMode == 4) {                       // hard clip: min(fmag, Fmax)
+                        if (fmag > satFmax) fmag = satFmax;
+                    } else if (fmag > satOnset && satFmax > satOnset) {       // smooth tanh: Hookean below onset, →Fmax asymptote
+                        double span = satFmax - satOnset;
+                        double z = (fmag - satOnset) / span;                  // >0
+                        double e = Math.exp(-2.0 * z);                        // stable for z>0; Math.exp lowers on PTX
+                        fmag = satOnset + span * (1.0 - e) / (1.0 + e);
+                    }
+                }
+            }
             double Fx = 0, Fy = 0, Fz = 0;
             if (dist > 0.0) { double inv = fmag / dist; Fx = inv * dx; Fy = inv * dy; Fz = inv * dz; }
             double RHx = (htipx - hcx) * 1e-6, RHy = (htipy - hcy) * 1e-6, RHz = (htipz - hcz) * 1e-6;
