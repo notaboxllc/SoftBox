@@ -107,6 +107,8 @@ public final class V2OneXHarness {
     static boolean DASH_ON = false;                   // -xbdash <gammaMult>
     static double  XBDASH_MULT = 0.0;                 // γ_xb = gammaMult · γ_head
     static boolean DASH_MECH = false;                 // -xbdashmech: dashpot mechanical force only (catch reads spring load)
+    // ---- IMPLICIT_CROSSBRIDGE (flag-gated; default-off ⇒ explicit Hookean, byte-identical) ----
+    static boolean XB_IMPLICIT = false;               // -xbimplicit : locally-implicit cross-bridge spring on the bound head's translational stretch
     // ---- binding-SEARCH reformulation (flag-gated; geometric bindNearest stays the default comparator) ----
     static boolean RATESEARCH = false;               // -ratesearch : per-sim-time encounter-rate capture (BindingDetectionSystem.bindRate)
     static boolean SWEPT = true;                      // formulation B (swept path-average chord); -pointsearch ⇒ A (instantaneous)
@@ -142,6 +144,7 @@ public final class V2OneXHarness {
                 case "-xbsat" -> { XBSAT_MODE = Integer.parseInt(args[++i]); XBSAT_FMAX = Double.parseDouble(args[++i]) * 1.0e-12; XBSAT_ONSET = Double.parseDouble(args[++i]) * 1.0e-12; }  // MEASUREMENT-ONLY saturating F8
                 case "-xbdash" -> { XBDASH_MULT = Double.parseDouble(args[++i]); DASH_ON = XBDASH_MULT != 0.0; }  // MEASUREMENT-ONLY parallel dashpot (CPU runner only)
                 case "-xbdashmech" -> DASH_MECH = true;  // dashpot mechanical force only (catch reads spring load) (default-off)
+                case "-xbimplicit" -> XB_IMPLICIT = true;  // IMPLICIT_CROSSBRIDGE: locally-implicit bound-head cross-bridge spring
                 case "-ratesearch" -> RATESEARCH = true;            // binding-search reformulation: per-sim-time encounter rate
                 case "-pointsearch" -> SWEPT = false;               // formulation A (instantaneous chord) instead of B (swept)
                 case "-kon" -> KON = Double.parseDouble(args[++i]);  // encounter-rate handle (µm^-1 s^-1)
@@ -200,6 +203,12 @@ public final class V2OneXHarness {
                 "  -xbdash: PARALLEL DASHPOT ON (CPU)%s — γ_xb = %.2f·γ_head ⇒ γ_eff = %.2f·γ_head; r=k·dt/γ_eff ≈ %.3f (Hookean r=%.3f)%n",
                 DASH_MECH ? " mech-only" : " literal",
                 XBDASH_MULT, 1.0 + XBDASH_MULT, kSI * dt / ((1.0 + XBDASH_MULT) * 1.885e-8), kSI * dt / 1.885e-8);
+        }
+        if (XB_IMPLICIT) {
+            double kSI = MYO_SPRING * 1.0e6;
+            System.out.printf(java.util.Locale.US,
+                "  -xbimplicit: LOCALLY-IMPLICIT cross-bridge spring ON — bound-head translation advanced as c_imp=(c_exp+r·c_n)/(1+r), r=k·dt/γ_head ≈ %.3f at dt=%.0e (explicit overshoot 1−r=%.3f; implicit 1/(1+r)=%.3f). Thermal explicit/FDT; site+couplings explicit; torque explicit.%n",
+                kSI * dt / 1.885e-8, dt, 1.0 - kSI * dt / 1.885e-8, 1.0 / (1.0 + kSI * dt / 1.885e-8));
         }
         if (brownOff) zeroBrownian(s);
         System.out.printf("scene built: %d nodes, %d filament segments, %d myosins, %d crosslink slots%n%n",
@@ -358,6 +367,7 @@ public final class V2OneXHarness {
         mot.kinParams.set(0, (float) KOFF);
         if (RATESEARCH) mot.setSearchParams(KON, SWEPT ? REACH + CAND_MARGIN : REACH);
         mot.setFaithfulRelease(true, 0.0);             // inherit the v1 12 pN break-force cap (faithful)
+        mot.setImplicit(MYO_SPRING, dt);               // IMPLICIT_CROSSBRIDGE params (only consumed when -xbimplicit wired)
         mot.nucleotideState.init(MotorStore.NUC_NONE);
         dim.setDimerParams(dt);
         node.setNodeParams(dt); node.setNodeBodyParams(dt);
@@ -531,7 +541,9 @@ public final class V2OneXHarness {
         ContainmentSystem.confine(nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, s.boxParams, nd.nodeBodyCounts);
         RigidRodLangevinIntegrationSystem.integrate(nb.coord, nb.uVec, nb.yVec, nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nd.nodeBodyParams, nd.nodeBodyCounts);
         DerivedGeometrySystem.derive(nb.coord, nb.uVec, nb.yVec, nb.zVec, nb.end1, nb.end2, nb.segLength, nd.nodeBodyCounts);
+        if (XB_IMPLICIT) CrossBridgeSystem.snapshotHeadCenter(b.coord, mot.xbImplPrev);
         RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+        if (XB_IMPLICIT) CrossBridgeSystem.implicitCorrect(b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, mot.xbImplParams);
         DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
         ContainmentSystem.confine(f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, s.boxParams, f.counts);
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
@@ -765,6 +777,7 @@ public final class V2OneXHarness {
                 b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.zVec, b.end1, b.end2, b.segLength, mot.bodyParams,
                 f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, f.yVec, f.randForce, f.randTorque, f.bRotGam, f.params, f.zVec, f.end1, f.end2,
                 s.boxParams };
+        if (XB_IMPLICIT) u3 = cat(u3, new Object[]{ mot.xbImplPrev, mot.xbImplParams });   // IMPLICIT_CROSSBRIDGE scratch + params
         // G4 fdXForm (cadence-gated SINK) — device filID + the WHOLE crosslinker FORMATION pipeline. First-use = filID +
         // the FormationGrid's OWN grid + formation-only request/allocator scratch + formParams (NOT the shared link state,
         // uploaded by always-run fdFil; NOT f.end1/end2, uploaded by fdBind/fdFil).
@@ -913,11 +926,14 @@ public final class V2OneXHarness {
     static TaskGraph blkInteg(TaskGraph tg, Scene s) {
         MotorStore mot = s.mot; NodeStore nd = s.node; FilamentStore f = s.fil;
         RigidRodBody b = mot.body, nb = nd.node;
-        return tg
+        tg = tg
             .task("confineNode", ContainmentSystem::confine, nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, s.boxParams, nd.nodeBodyCounts)
             .task("integNode", RigidRodLangevinIntegrationSystem::integrate, nb.coord, nb.uVec, nb.yVec, nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nd.nodeBodyParams, nd.nodeBodyCounts)
-            .task("deriveNode", DerivedGeometrySystem::derive, nb.coord, nb.uVec, nb.yVec, nb.zVec, nb.end1, nb.end2, nb.segLength, nd.nodeBodyCounts)
-            .task("integM", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
+            .task("deriveNode", DerivedGeometrySystem::derive, nb.coord, nb.uVec, nb.yVec, nb.zVec, nb.end1, nb.end2, nb.segLength, nd.nodeBodyCounts);
+        if (XB_IMPLICIT) tg = tg.task("xbSnap", CrossBridgeSystem::snapshotHeadCenter, b.coord, mot.xbImplPrev);
+        tg = tg.task("integM", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+        if (XB_IMPLICIT) tg = tg.task("xbImpl", CrossBridgeSystem::implicitCorrect, b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, mot.xbImplParams);
+        return tg
             .task("deriveM", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts)
             .task("confineFil", ContainmentSystem::confine, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, s.boxParams, f.counts)
             .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
@@ -986,6 +1002,7 @@ public final class V2OneXHarness {
         // G3 fdInteg
         for (String t : new String[]{ "confineNode","integNode","deriveNode" }) addW("fdInteg." + t, padW(nN));
         for (String t : new String[]{ "integM","deriveM" }) addW("fdInteg." + t, padW(nMB));
+        if (XB_IMPLICIT) { addW("fdInteg.xbSnap", padW(nM)); addW("fdInteg.xbImpl", padW(nM)); }
         for (String t : new String[]{ "confineFil","integFil","deriveFil" }) addW("fdInteg." + t, padW(C));
         // crosslinker FORCE (fdFil) + FORMATION (fdXForm)
         if (s.xl != null && XLINK_ON) {

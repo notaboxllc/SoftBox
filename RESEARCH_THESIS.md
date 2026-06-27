@@ -122,6 +122,14 @@ neither suffices alone.
   stiff emergent mechanics are the model's reason to exist. Our levers stay inside the explicit-mechanics
   paradigm.
 - Large-scale emergence (the flagship) remains the end goal and resumes once the motor constituent is validated.
+- **The cheap integrator lever has now been TRIED (the locally-implicit cross-bridge spring) — partial, not
+  sufficient (`IMPLICIT_CROSSBRIDGE_FINDINGS.md`).** It is unconditionally stable and at 1e-5 halves the dt-error and
+  recovers the signed-load tail (a clean win over explicit), but it is **stable-but-unfaithful above ~1e-5** (binding
+  still collapses by 2e-5) and buys only a **~2× finer-dt-equivalent**, NOT an order of magnitude. The catch reads a
+  load inflated by the *explicit site + start-of-step staleness + thermal under-resolution*, of which head-only
+  implicit fixes only the head. So the remaining cross-bridge dt headroom lives in the **fully-coupled implicit solve**
+  (head+site+chain together) and/or **sub-stepping the cross-bridge+release inner loop** — the next attempt starts
+  there, not from another local closed form. The reduced-pair (head+site, needs the seg-gather) is the intermediate.
 
 ## 10. The cross-bridge dt-ceiling: a methods contribution, and the Cytosim comparison it grounds
 
@@ -179,3 +187,23 @@ The cross-bridge-local dashpot was the *targeted* version — drag on the stretc
 search diffusion untouched — which is why it was worth testing even though global viscosity is not. Its failure
 (10a) is specific to the explicit finite-difference on a thermal coordinate, and is the reason the surviving form is
 a *semi-implicit* local damper (an integrator change), not an explicit local force.
+
+### 10e. The integrator lever, TRIED — the cheap locally-implicit cross-bridge spring (the 6th attempt, first INSIDE the integrator)
+The five force-law/noise levers (§10a) all converged on "go implicit." We then built the **cheapest implicit form**: a
+closed-form, one-division-per-bound-head **locally-implicit cross-bridge spring** — the head (a Stokes sphere ⇒ isotropic γ)
+advanced as `c_imp=(c_exp+r·c_n)/(1+r)`, `r=k·dt/γ_head`, with `site` + all couplings + the thermal kick held EXPLICIT (no
+velocity ⇒ it sidesteps the dashpot's `√(2D/dt)` flaw). Unconditionally stable, never overshoots, for any dt
+(`IMPLICIT_CROSSBRIDGE_FINDINGS.md`). **Outcome — STABLE-BUT-UNFAITHFUL, with a real sub-order-of-magnitude benefit:**
+- At **1e-5** it is decisively more faithful to the fine-dt converged motor than explicit (bound 727 vs 400 toward ~1050;
+  signed-load negative tail p10 −2.73 vs −4.13, fine −2.2; off-rate 259 vs 427, fine ~170) — it **halves the dt-error and
+  recovers the distribution SHAPE** (the predicted mechanism: kill the head overshoot ⇒ narrow the spurious negative-load
+  excursions the catch detonates on; the AR(1) stretch variance is `σ²/(r(2+r))` vs explicit `σ²/(r(2−r))`, ~0.58× colder).
+- Above **1e-5** it is **stable but unfaithful**: binding still collapses (bound 42/23/20 at 2e-5/5e-5/1e-4 vs ~1050), ~2×
+  better than explicit but ≪ converged. **Largest faithful dt: implicit ≈5e-6 vs explicit ≈2–3e-6 — a ~2× win, not 10×.**
+- **Why the cheap form caps out:** the catch reads a load inflated by THREE dt-error sources — the explicit **site** motion
+  (operator-split), start-of-step **staleness**, and **thermal** under-resolution — of which head-only implicit fixes only the
+  head's share. Proven scene-dependent by the **gliding↔contractile contrast** (gliding's fast-gliding site ⇒ implicit
+  collapses at 2e-5 *like explicit*; contractile's slow dense sites ⇒ implicit helps most). **This SHARPENS §10b/§10c:** the
+  bottom-up arc not only re-derives "go implicit," it shows the *cheap local* implicit is insufficient — the headroom needs the
+  **fully-coupled implicit solve** (Cytosim's stiff-bond-as-constraint, exactly) and/or **release sub-stepping**. We reached
+  Cytosim's *specific* design (not merely "implicit" but *coupled* implicit) by exhausting the cheaper rung too.

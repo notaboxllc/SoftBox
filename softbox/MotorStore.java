@@ -130,6 +130,11 @@ public final class MotorStore {
     public final FloatArray xbPrevStretch;     // 3*nMotors (planar) — previous-step bond vector b=(site−head_tip), µm
     public final IntArray   xbDashInit;        // nMotors (0 = needs seeding at bind / unbound; reset on free)
     public final FloatArray dashParams;        // [0]=gammaMult [1]=dt [2]=HEAD_LEN
+    // IMPLICIT_CROSSBRIDGE (measurement, default-off): locally-implicit cross-bridge spring on the bound head's
+    // translational stretch. xbImplPrev = the pre-integration head center c_n (snapshotHeadCenter); the
+    // correction blends c_imp=(c_exp+r·c_n)/(1+r), r=myoSpring·dt·1e6/γ_head. NO velocity (≠ the dashpot).
+    public final FloatArray xbImplPrev;        // 3*nMotors (planar) — pre-integration head center c_n, µm
+    public final FloatArray xbImplParams;      // [0]=myoSpring (N/µm) [1]=dt (s)
     // nucParams (float): [0]=dt [1]=atpOnMyo [2]=onFilATP_ADPPi [3]=offFilATP_ADPPi
     //   [4]=onFilADPPi_ADP [5]=offFilADPPi_ADP [6]=onFilADP_None [7]=offFilADP_None  (Env.java:836-855)
     public final FloatArray nucParams;
@@ -155,6 +160,8 @@ public final class MotorStore {
         xbPrevStretch = new FloatArray(3 * nMotors); xbPrevStretch.init(0f);
         xbDashInit    = new IntArray(nMotors);     xbDashInit.init(0);
         dashParams    = FloatArray.fromElements(0f, (float) Constants.deltaT, (float) HEAD_LEN, 0f);   // [0]gammaMult=0⇒off [3]mechOnly
+        xbImplPrev    = new FloatArray(3 * nMotors); xbImplPrev.init(0f);
+        xbImplParams  = FloatArray.fromElements(1.0e-9f, (float) Constants.deltaT);   // [0]myoSpring (set by setImplicit) [1]dt
         nucParams = new FloatArray(8);
         head    = new FloatArray(3 * nMotors);
         uVec    = new FloatArray(3 * nMotors);
@@ -264,6 +271,13 @@ public final class MotorStore {
         dashParams.set(1, (float) dt);
         dashParams.set(2, (float) HEAD_LEN);
         dashParams.set(3, mechOnly ? 1f : 0f);
+    }
+    /** IMPLICIT_CROSSBRIDGE (flag-gated, default off): set the locally-implicit cross-bridge spring's params
+     *  (the cross-bridge stiffness myoSpring N/µm + the stepping dt). The overshoot factor r=myoSpring·dt·1e6/γ_head
+     *  is recomputed per bound head in the kernel from these + the head's own γ. See IMPLICIT_CROSSBRIDGE_FINDINGS.md. */
+    public void setImplicit(double myoSpring, double dt) {
+        xbImplParams.set(0, (float) myoSpring);
+        xbImplParams.set(1, (float) dt);
     }
     /** Binding-SEARCH reformulation (flag-gated, default off): set the per-unit-length encounter rate kOn
      *  (µm^-1 s^-1) and the widened candidate-gather radius candReach (µm, for the swept formulation B; the

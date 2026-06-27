@@ -48,6 +48,8 @@ public final class GlidingHarness {
     static boolean DASH_ON = false;              // -xbdash <gammaMult>: parallel Kelvin-Voigt dashpot on F8
     static double  XBDASH_MULT = 0.0;            // γ_xb = gammaMult · γ_head (head bTransGam)
     static boolean DASH_MECH = false;            // -xbdashmech: dashpot mechanical force only (catch reads spring load)
+    // ---- IMPLICIT_CROSSBRIDGE (flag-gated; default-off ⇒ explicit Hookean, byte-identical) ----
+    static boolean XB_IMPLICIT = false;          // -xbimplicit: locally-implicit bound-head cross-bridge spring (c_imp=(c_exp+r·c_n)/(1+r))
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static final double DENSITY = 500.0;        // motors / µm²
@@ -97,6 +99,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-xbsat")) { XBSAT_MODE = Integer.parseInt(args[++i]); XBSAT_FMAX = Double.parseDouble(args[++i]) * 1.0e-12; XBSAT_ONSET = Double.parseDouble(args[++i]) * 1.0e-12; }  // MEASUREMENT-ONLY saturating F8
             else if (args[i].equals("-xbdash")) { XBDASH_MULT = Double.parseDouble(args[++i]); DASH_ON = XBDASH_MULT != 0.0; }  // MEASUREMENT-ONLY parallel dashpot (γ_xb = mult·γ_head)
             else if (args[i].equals("-xbdashmech")) DASH_MECH = true;  // dashpot mechanical force only (catch reads spring load)
+            else if (args[i].equals("-xbimplicit")) XB_IMPLICIT = true;  // IMPLICIT_CROSSBRIDGE locally-implicit bound-head spring
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
         }
@@ -116,6 +119,12 @@ public final class GlidingHarness {
                     kSI * DT / ((1.0 + XBDASH_MULT) * 1.885e-8), kSI * DT / 1.885e-8);
         }
 
+        if (XB_IMPLICIT) {
+            double kSI = MYO_SPRING * 1.0e6, r = kSI * DT / 1.885e-8;
+            System.out.printf(java.util.Locale.US,
+                "  -xbimplicit: LOCALLY-IMPLICIT cross-bridge spring ON — bound-head translation c_imp=(c_exp+r·c_n)/(1+r), r=k·dt/γ_head ≈ %.3f at dt=%.0e (explicit 1−r=%.3f; implicit 1/(1+r)=%.3f). Thermal explicit/FDT; site+couplings+torque explicit.%n",
+                r, DT, 1.0 - r, 1.0 / (1.0 + r));
+        }
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
         if (diag) { diagnose(sc, Math.max(M, 8000)); return; }
         if (cycldiag) { cyclediag(sc, Math.max(M, 8000)); return; }
@@ -187,6 +196,7 @@ public final class GlidingHarness {
         mot.setFaithfulRelease(FAITHFUL_RELEASE, 0.0);  // §6.10 default off (v1 12 pN threshold)
         mot.setFaithfulRefractory(FAITHFUL_REFRACTORY); // §6.11 default off (HEAD 100%/1-step block)
         mot.setDashpot(XBDASH_MULT, DT, DASH_MECH);     // CROSSBRIDGE_DASHPOT: γ_xb = mult·γ_head (mult=0 ⇒ off)
+        mot.setImplicit(MYO_SPRING, DT);                // IMPLICIT_CROSSBRIDGE params (only consumed when -xbimplicit wired)
         mot.nucleotideState.init(MotorStore.NUC_NONE);
 
         int MAXC = SpatialGrid.MAX_CAND;
@@ -227,7 +237,9 @@ public final class GlidingHarness {
         if (DASH_ON) CrossBridgeSystem.dashpotForces(b.coord, b.uVec, b.bTransGam, f.coord, f.uVec, f.segLength,
                 mot.boundSeg, mot.bindArc, sc.bondData, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
         CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+        if (XB_IMPLICIT) CrossBridgeSystem.snapshotHeadCenter(b.coord, mot.xbImplPrev);
         RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+        if (XB_IMPLICIT) CrossBridgeSystem.implicitCorrect(b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, mot.xbImplParams);
         DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
         CrossBridgeSystem.registerForceDot(sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts);
         // --- filament dynamics: chain + Brownian + the gathered cross-bridge, then integrate ---
@@ -278,7 +290,9 @@ public final class GlidingHarness {
         BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
         NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
         // --- integrate all bodies (forces from the start-of-step state) ---
+        if (XB_IMPLICIT) CrossBridgeSystem.snapshotHeadCenter(b.coord, mot.xbImplPrev);
         RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+        if (XB_IMPLICIT) CrossBridgeSystem.implicitCorrect(b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, mot.xbImplParams);
         DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
@@ -304,6 +318,7 @@ public final class GlidingHarness {
                     f.params, f.chainParams, f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide, sc.boxParams)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, f.counts);
         if (DASH_ON) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
+        if (XB_IMPLICIT) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.xbImplPrev, mot.xbImplParams);
         // reach (common)
         tg = tg
             .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
@@ -329,8 +344,11 @@ public final class GlidingHarness {
                 .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
                 .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts)
                 .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts)
-                .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts)
-                .task("integMot", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
+                .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
+            if (XB_IMPLICIT) tg = tg.task("xbSnap", CrossBridgeSystem::snapshotHeadCenter, b.coord, mot.xbImplPrev);
+            tg = tg.task("integMot", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+            if (XB_IMPLICIT) tg = tg.task("xbImpl", CrossBridgeSystem::implicitCorrect, b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, mot.xbImplParams);
+            tg = tg
                 .task("deriveMot", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts)
                 .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
                 .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
@@ -348,8 +366,11 @@ public final class GlidingHarness {
             if (DASH_ON) tg = tg.task("dash", CrossBridgeSystem::dashpotForces, b.coord, b.uVec, b.bTransGam, f.coord, f.uVec, f.segLength, mot.boundSeg, mot.bindArc, sc.bondData, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
             tg = tg.task("applyHead", CrossBridgeSystem::applyHeadForce, sc.bondData, b.forceSum, b.torqueSum, mot.counts);
             if (BOX_ALL) tg = tg.task("confineMot", ContainmentSystem::confine, b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum, sc.boxParams, mot.counts);
+            if (XB_IMPLICIT) tg = tg.task("xbSnap", CrossBridgeSystem::snapshotHeadCenter, b.coord, mot.xbImplPrev);
             tg = tg
-                .task("integMot", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts)
+                .task("integMot", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+            if (XB_IMPLICIT) tg = tg.task("xbImpl", CrossBridgeSystem::implicitCorrect, b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, mot.xbImplParams);
+            tg = tg
                 .task("deriveMot", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts)
                 .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
                 .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
@@ -373,6 +394,7 @@ public final class GlidingHarness {
         sched = new GridScheduler();
         for (String t : new String[]{ "publishHead","reach","release","bind","cycle","anchor","bond","applyHead","register" }) addW("gliding." + t, pad(nM));
         if (DASH_ON) addW("gliding.dash", pad(nM));
+        if (XB_IMPLICIT) { addW("gliding.xbSnap", pad(nM)); addW("gliding.xbImpl", pad(nM)); }
         for (String t : new String[]{ "zeroMot","brownMot","joints","integMot","deriveMot" }) addW("gliding." + t, pad(nB));
         for (String t : new String[]{ "zeroFil","brownFil","chain","gather","integFil","deriveFil" }) addW("gliding." + t, pad(nSeg));
         for (String t : new String[]{ "csrHist","csrScan","csrScatter" }) addS("gliding." + t);

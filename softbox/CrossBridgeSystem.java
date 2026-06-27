@@ -245,6 +245,64 @@ public final class CrossBridgeSystem {
         }
     }
 
+    /** LOCALLY-IMPLICIT cross-bridge spring — STEP 1: snapshot each motor head's CENTER (pre-integration c_n).
+     *  Cheap (one planar write per motor); the correction below reads it. Writes ALL heads; only bound heads
+     *  are corrected (the snapshot is overwritten every step, so writing free heads is harmless). headPrev
+     *  planar 3·nM. ADDITIVE/flag-gated (IMPLICIT_CROSSBRIDGE_FINDINGS) ⇒ unused in the default path. */
+    public static void snapshotHeadCenter(FloatArray bodyCoord, FloatArray headPrev) {
+        int nB = bodyCoord.getSize() / 3;
+        int nM = nB / 3;
+        for (@Parallel int m = 0; m < nM; m++) {
+            int h = 3 * m + 2;
+            headPrev.set(m,          bodyCoord.get(h));
+            headPrev.set(nM + m,     bodyCoord.get(nB + h));
+            headPrev.set(2 * nM + m, bodyCoord.get(2 * nB + h));
+        }
+    }
+
+    /** LOCALLY-IMPLICIT cross-bridge spring — STEP 2: advance the BOUND head's translational stretch IMPLICITLY.
+     *  The convergent lever the five force-law/noise failures pointed at: make the stiff cross-bridge SPRING
+     *  implicit (evaluate it at the NEW head position) so it is unconditionally stable and never overshoots,
+     *  while leaving the noise EXPLICIT and FDT-correct.
+     *
+     *  Closed form. The head is a Stokes SPHERE ⇒ ISOTROPIC translational drag γ_head (sphereDragSI) ⇒ the
+     *  linearly-implicit overdamped step on the head CENTER is the scalar blend
+     *        c_imp = (c_exp + r·c_n) / (1 + r),     r = myoSpring·dt·1e6 / γ_head  ( = k·dt/γ, the overshoot factor)
+     *  where c_n is the pre-integration center (snapshotHeadCenter) and c_exp is the EXPLICIT-integrator result
+     *  (which carries the explicit spring + joints + cross-bridge torque + THERMAL, all at x_n). Derivation: the
+     *  linearly-implicit Euler solve of the central spring F=k(site−tip), with `site` and every other coupling
+     *  held EXPLICIT (at x_n), gives Δc_imp = Δc_exp/(1+r) about the spring's force-free point; the `site` term
+     *  cancels, leaving the c_n↔c_exp blend (no `site`, no orientation needed — isotropy makes r a scalar).
+     *
+     *  WHY THIS ≠ THE DASHPOT (CROSSBRIDGE_DASHPOT, which failed): no velocity is computed. The (1+r) denominator
+     *  is the spring's own resistance to ALL motion this step — the correct implicit behaviour. The thermal force
+     *  enters c_exp at its standard explicit √(2kT/dt) amplitude (NOT damped at source, NOT cooled); it is the
+     *  spring that resists it, exactly as a stiff bond should — not a spurious anti-thermal finite-difference force.
+     *
+     *  SCOPE: bound-head TRANSLATION only. Torque/rotation (the R×F8 positional torque + F9/F10 alignment) stay
+     *  EXPLICIT (already dt-robust). `site` + the chain + crosslinkers + the segment stay EXPLICIT ⇒ this is the
+     *  cheap "head-implicit, site-explicit" operator split (one division per bound head; the O(dt) split error at
+     *  the head↔site boundary is what Stage 2 characterizes). Runs AFTER integrate(b), BEFORE derive(b).
+     *  xbImplParams: [0]=myoSpring (N/µm) [1]=dt (s). ADDITIVE/flag-gated ⇒ byte-identical default. */
+    public static void implicitCorrect(FloatArray bodyCoord, IntArray boundSeg, FloatArray bodyBTransGam,
+                                       FloatArray headPrev, FloatArray xbImplParams) {
+        int nB = bodyCoord.getSize() / 3;
+        int nM = nB / 3;
+        double myoSpring = xbImplParams.get(0), dt = xbImplParams.get(1);
+        for (@Parallel int m = 0; m < nM; m++) {
+            if (boundSeg.get(m) < 0) continue;
+            int h = 3 * m + 2;
+            double gh = bodyBTransGam.get(h);                 // head sphere drag (SI N·s/m; isotropic ⇒ scalar)
+            double r = myoSpring * dt * 1.0e6 / gh;            // = k·dt/γ, the explicit overshoot factor
+            double inv = 1.0 / (1.0 + r);
+            double cnx = headPrev.get(m), cny = headPrev.get(nM + m), cnz = headPrev.get(2 * nM + m);
+            double cex = bodyCoord.get(h), cey = bodyCoord.get(nB + h), cez = bodyCoord.get(2 * nB + h);
+            bodyCoord.set(h,          (float) ((cex + r * cnx) * inv));
+            bodyCoord.set(nB + h,     (float) ((cey + r * cny) * inv));
+            bodyCoord.set(2 * nB + h, (float) ((cez + r * cnz) * inv));
+        }
+    }
+
     /** Head self-write: apply the head-side force+torque to the head sub-body (3m+2), += (race-free). */
     public static void applyHeadForce(FloatArray bondData, FloatArray bodyForceSum, FloatArray bodyTorqueSum, IntArray counts) {
         int nB = bodyForceSum.getSize() / 3;
