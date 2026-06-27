@@ -166,6 +166,85 @@ public final class CrossBridgeSystem {
         }
     }
 
+    /** MEASUREMENT-ONLY parallel DASHPOT on F8 (CROSSBRIDGE_DASHPOT_FINDINGS). Kelvin-Voigt = spring ∥ dashpot:
+     *  adds F_dash = γ_xb·(b_n − b_{n-1})/dt to the head-side force, where b = (site − head_tip) is the bond vector
+     *  (so F_dash opposes the head's velocity RELATIVE to the site — a stretch-velocity, history-aware drag, NOT a
+     *  magnitude law). The stretch-mode effective drag becomes γ_eff = γ_head + γ_xb ⇒ r = k·dt/γ_eff drops without
+     *  softening the spring and without slowing the FREE head's diffusion (a free head has no site ⇒ no dashpot).
+     *  γ_xb = gammaMult · (head's own bTransGam, SI N·s/m), read per-head ⇒ unit-consistent with the integrator.
+     *  EXPLICIT (finite-difference velocity from a per-bond stored previous b); may itself be fragile at coarse dt
+     *  (a semi-implicit dashpot is the flagged follow-on). Runs AFTER bondForces, BEFORE applyHeadForce/segGather/
+     *  registerForceDot, so the head/seg force, the torque, forceMag (the cap) AND forceDotFil (the catch) all pick
+     *  up the dashpot load. dashInit[m]=0 ⇒ seed (fresh bond / unbound, no velocity yet). prevStretch planar 3·nM.
+     *  ADDITIVE: only V2OneX/Gliding wire it (when -xbdash set); never called elsewhere ⇒ byte-identical default.
+     *  dashParams: [0]=gammaMult [1]=dt [2]=HEAD_LEN [3]=mechOnly. mechOnly=1 (-xbdashmech): the dashpot adds its
+     *  MECHANICAL force/torque (head+seg) but does NOT feed forceDotFil (the catch reads the SPRING load only) —
+     *  isolates the overshoot-suppression mechanism from the catch-detonation artifact of the explicit dashpot's
+     *  thermal-velocity transient (≈γ_xb·√(2D/dt), which dominates at fine dt). */
+    public static void dashpotForces(
+            FloatArray motorCoord, FloatArray motorUVec, FloatArray motorBTransGam,
+            FloatArray filCoord, FloatArray filUVec, FloatArray filSegLength,
+            IntArray boundSeg, FloatArray bindArc,
+            FloatArray bondData, FloatArray prevStretch, IntArray dashInit, FloatArray dashParams) {
+        int nB = motorCoord.getSize() / 3;
+        int nSeg = filCoord.getSize() / 3;
+        int nM = nB / 3;
+        double gammaMult = dashParams.get(0), dt = dashParams.get(1), headLen = dashParams.get(2);
+        int mechOnly = (int) dashParams.get(3);   // 1 ⇒ dashpot omitted from forceDotFil (catch reads spring only)
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            int s = boundSeg.get(m);
+            if (s < 0) { dashInit.set(m, 0); continue; }   // unbound ⇒ tracker stale (mirrors registerForceDot reset)
+
+            int h = 3 * m + 2;
+            double hcx = motorCoord.get(h), hcy = motorCoord.get(nB + h), hcz = motorCoord.get(2 * nB + h);
+            double hux = motorUVec.get(h), huy = motorUVec.get(nB + h), huz = motorUVec.get(2 * nB + h);
+            double htipx = hcx + 0.5 * headLen * hux, htipy = hcy + 0.5 * headLen * huy, htipz = hcz + 0.5 * headLen * huz;
+
+            double scx = filCoord.get(s), scy = filCoord.get(nSeg + s), scz = filCoord.get(2 * nSeg + s);
+            double sux = filUVec.get(s), suy = filUVec.get(nSeg + s), suz = filUVec.get(2 * nSeg + s);
+            double slen = filSegLength.get(s);
+            double aOff = bindArc.get(m) - 0.5 * slen;
+            double apx = scx + aOff * sux, apy = scy + aOff * suy, apz = scz + aOff * suz;
+
+            // bond vector b = site − head_tip (same convention as the spring's d), µm
+            double bx = apx - htipx, by = apy - htipy, bz = apz - htipz;
+
+            if (dashInit.get(m) == 0) {                    // fresh bond: seed, no velocity this step
+                prevStretch.set(m, (float) bx); prevStretch.set(nM + m, (float) by); prevStretch.set(2 * nM + m, (float) bz);
+                dashInit.set(m, 1);
+                continue;
+            }
+            double pbx = prevStretch.get(m), pby = prevStretch.get(nM + m), pbz = prevStretch.get(2 * nM + m);
+            prevStretch.set(m, (float) bx); prevStretch.set(nM + m, (float) by); prevStretch.set(2 * nM + m, (float) bz);
+
+            // γ_xb = gammaMult · head bTransGam (SI N·s/m); Δb in µm → ·1e-6 m ⇒ F_dash in N
+            double gxb = gammaMult * motorBTransGam.get(h);
+            double k = gxb * 1.0e-6 / dt;
+            double Fdx = k * (bx - pbx), Fdy = k * (by - pby), Fdz = k * (bz - pbz);
+
+            int d = m * STRIDE;
+            // head-side += F_dash ; positional torque RH × F_dash (RH = tip−center, ·1e-6 m)
+            double RHx = (htipx - hcx) * 1e-6, RHy = (htipy - hcy) * 1e-6, RHz = (htipz - hcz) * 1e-6;
+            bondData.set(d,     (float) (bondData.get(d)     + Fdx));
+            bondData.set(d + 1, (float) (bondData.get(d + 1) + Fdy));
+            bondData.set(d + 2, (float) (bondData.get(d + 2) + Fdz));
+            bondData.set(d + 3, (float) (bondData.get(d + 3) + (RHy * Fdz - RHz * Fdy)));
+            bondData.set(d + 4, (float) (bondData.get(d + 4) + (RHz * Fdx - RHx * Fdz)));
+            bondData.set(d + 5, (float) (bondData.get(d + 5) + (RHx * Fdy - RHy * Fdx)));
+            // seg-side += −F_dash ; positional torque RS × (−F_dash)
+            double RSx = (apx - scx) * 1e-6, RSy = (apy - scy) * 1e-6, RSz = (apz - scz) * 1e-6;
+            bondData.set(d + 6, (float) (bondData.get(d + 6) - Fdx));
+            bondData.set(d + 7, (float) (bondData.get(d + 7) - Fdy));
+            bondData.set(d + 8, (float) (bondData.get(d + 8) - Fdz));
+            bondData.set(d + 9,  (float) (bondData.get(d + 9)  + (RSy * (-Fdz) - RSz * (-Fdy))));
+            bondData.set(d + 10, (float) (bondData.get(d + 10) + (RSz * (-Fdx) - RSx * (-Fdz))));
+            bondData.set(d + 11, (float) (bondData.get(d + 11) + (RSx * (-Fdy) - RSy * (-Fdx))));
+            // forceDotFil += Dot(F_dash, seg.uVec) — the dashpot's along-filament load (feeds the catch); skipped in mechOnly
+            if (mechOnly == 0) bondData.set(d + 12, (float) (bondData.get(d + 12) + (Fdx * sux + Fdy * suy + Fdz * suz)));
+        }
+    }
+
     /** Head self-write: apply the head-side force+torque to the head sub-body (3m+2), += (race-free). */
     public static void applyHeadForce(FloatArray bondData, FloatArray bodyForceSum, FloatArray bodyTorqueSum, IntArray counts) {
         int nB = bodyForceSum.getSize() / 3;

@@ -102,6 +102,11 @@ public final class V2OneXHarness {
     static int    XBSAT_MODE  = 0;                    // -xbsat <mode> <Fmax_pN> <onset_pN>: 1 sym-tanh, 2 sym-hardclip, 3 asym(comp)-tanh, 4 asym-hardclip
     static double XBSAT_FMAX  = 0.0;                  // ceiling (N; entered in pN)
     static double XBSAT_ONSET = 0.0;                  // onset  (N; entered in pN)
+    // ---- CROSSBRIDGE_DASHPOT (flag-gated; default-off). NOTE: wired into the CPU runner ONLY here
+    //      (the secondary signed-load check runs -cpu); the 5-graph GPU split is NOT dash-wired. ----
+    static boolean DASH_ON = false;                   // -xbdash <gammaMult>
+    static double  XBDASH_MULT = 0.0;                 // γ_xb = gammaMult · γ_head
+    static boolean DASH_MECH = false;                 // -xbdashmech: dashpot mechanical force only (catch reads spring load)
     // ---- binding-SEARCH reformulation (flag-gated; geometric bindNearest stays the default comparator) ----
     static boolean RATESEARCH = false;               // -ratesearch : per-sim-time encounter-rate capture (BindingDetectionSystem.bindRate)
     static boolean SWEPT = true;                      // formulation B (swept path-average chord); -pointsearch ⇒ A (instantaneous)
@@ -134,7 +139,9 @@ public final class V2OneXHarness {
                 case "-tauavg" -> TAU_AVG = Double.parseDouble(args[++i]);  // MEASUREMENT-ONLY: time-averaged release force, EMA window τ_avg (s)
                 case "-bondcorr" -> { BOND_CORR = true; BOND_CORR_ALPHA = Double.parseDouble(args[++i]); }  // MEASUREMENT-ONLY: bound-head↔filament thermal-noise correlation α
                 case "-myospring" -> MYO_SPRING = Double.parseDouble(args[++i]) * 1.0e-9;  // MEASUREMENT-ONLY: cross-bridge stiffness in pN/nm (1 pN/nm = 1.0e-9 N/µm = default). Hookean F8 unchanged; production default unchanged.
-                case "-xbsat" -> { XBSAT_MODE = Integer.parseInt(args[++i]); XBSAT_FMAX = Double.parseDouble(args[++i]) * 1.0e-12; XBSAT_ONSET = Double.parseDouble(args[++i]) * 1.0e-12; }  // MEASUREMENT-ONLY saturating F8 (default-off)
+                case "-xbsat" -> { XBSAT_MODE = Integer.parseInt(args[++i]); XBSAT_FMAX = Double.parseDouble(args[++i]) * 1.0e-12; XBSAT_ONSET = Double.parseDouble(args[++i]) * 1.0e-12; }  // MEASUREMENT-ONLY saturating F8
+                case "-xbdash" -> { XBDASH_MULT = Double.parseDouble(args[++i]); DASH_ON = XBDASH_MULT != 0.0; }  // MEASUREMENT-ONLY parallel dashpot (CPU runner only)
+                case "-xbdashmech" -> DASH_MECH = true;  // dashpot mechanical force only (catch reads spring load) (default-off)
                 case "-ratesearch" -> RATESEARCH = true;            // binding-search reformulation: per-sim-time encounter rate
                 case "-pointsearch" -> SWEPT = false;               // formulation A (instantaneous chord) instead of B (swept)
                 case "-kon" -> KON = Double.parseDouble(args[++i]);  // encounter-rate handle (µm^-1 s^-1)
@@ -184,6 +191,15 @@ public final class V2OneXHarness {
             System.out.printf(java.util.Locale.US,
                 "  -xbsat: SATURATING F8 ON — mode=%d (%s), Fmax=%.3f pN, onset=%.3f pN, myoSpring=%.2f pN/nm%n",
                 XBSAT_MODE, XBSAT_MODE < mname.length ? mname[XBSAT_MODE] : "?", XBSAT_FMAX * 1e12, XBSAT_ONSET * 1e12, MYO_SPRING * 1e9);
+        }
+        if (DASH_ON) {
+            s.mot.setDashpot(XBDASH_MULT, dt, DASH_MECH);
+            if (!cpu) { System.out.println("  -xbdash on V2OneX requires -cpu (the 5-graph GPU split is not dash-wired); use the gliding harness for the GPU dashpot. Forcing -cpu."); cpu = true; }
+            double kSI = MYO_SPRING * 1.0e6;
+            System.out.printf(java.util.Locale.US,
+                "  -xbdash: PARALLEL DASHPOT ON (CPU)%s — γ_xb = %.2f·γ_head ⇒ γ_eff = %.2f·γ_head; r=k·dt/γ_eff ≈ %.3f (Hookean r=%.3f)%n",
+                DASH_MECH ? " mech-only" : " literal",
+                XBDASH_MULT, 1.0 + XBDASH_MULT, kSI * dt / ((1.0 + XBDASH_MULT) * 1.885e-8), kSI * dt / 1.885e-8);
         }
         if (brownOff) zeroBrownian(s);
         System.out.printf("scene built: %d nodes, %d filament segments, %d myosins, %d crosslink slots%n%n",
@@ -486,6 +502,8 @@ public final class V2OneXHarness {
         MiniFilamentSystem.backboneGather(nd.nodeAttachOffsets, nd.nodeAttachList, nd.nodeData, nb.forceSum, nb.torqueSum, nd.nodeCounts4);
         CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
                 mot.boundSeg, mot.bindArc, mot.nucleotideState, s.bondData, s.xbParams);
+        if (DASH_ON) CrossBridgeSystem.dashpotForces(b.coord, b.uVec, b.bTransGam, f.coord, f.uVec, f.segLength,
+                mot.boundSeg, mot.bindArc, s.bondData, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
         CrossBridgeSystem.applyHeadForce(s.bondData, b.forceSum, b.torqueSum, mot.counts);
 
         // node-shell motor → segment gather

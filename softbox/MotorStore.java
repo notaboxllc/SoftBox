@@ -126,6 +126,10 @@ public final class MotorStore {
     public final IntArray   forceDotPlace;     // nMotors (ring index)
     public final FloatArray forceDotAvg;       // nMotors (RELEASE_FORCE_INPUT: EMA of forceDotFil over τ_avg; default-off)
     public final IntArray   avgInit;           // nMotors (0 = EMA needs seeding at bind; reset on free)
+    // CROSSBRIDGE_DASHPOT (measurement, default-off): parallel dashpot on F8 (Kelvin-Voigt)
+    public final FloatArray xbPrevStretch;     // 3*nMotors (planar) — previous-step bond vector b=(site−head_tip), µm
+    public final IntArray   xbDashInit;        // nMotors (0 = needs seeding at bind / unbound; reset on free)
+    public final FloatArray dashParams;        // [0]=gammaMult [1]=dt [2]=HEAD_LEN
     // nucParams (float): [0]=dt [1]=atpOnMyo [2]=onFilATP_ADPPi [3]=offFilATP_ADPPi
     //   [4]=onFilADPPi_ADP [5]=offFilADPPi_ADP [6]=onFilADP_None [7]=offFilADP_None  (Env.java:836-855)
     public final FloatArray nucParams;
@@ -148,6 +152,9 @@ public final class MotorStore {
         // avgInit seeds the EMA at bind (else a new bond reads avg≈0 → huge catch rate → instant release).
         forceDotAvg   = new FloatArray(nMotors);   forceDotAvg.init(0f);
         avgInit       = new IntArray(nMotors);     avgInit.init(0);
+        xbPrevStretch = new FloatArray(3 * nMotors); xbPrevStretch.init(0f);
+        xbDashInit    = new IntArray(nMotors);     xbDashInit.init(0);
+        dashParams    = FloatArray.fromElements(0f, (float) Constants.deltaT, (float) HEAD_LEN, 0f);   // [0]gammaMult=0⇒off [3]mechOnly
         nucParams = new FloatArray(8);
         head    = new FloatArray(3 * nMotors);
         uVec    = new FloatArray(3 * nMotors);
@@ -248,6 +255,15 @@ public final class MotorStore {
             kinParams.set(16, 0.0f);
             kinParams.set(17, 0.0f);
         }
+    }
+    /** CROSSBRIDGE_DASHPOT (flag-gated, default off): set the parallel-dashpot strength as a MULTIPLE of the
+     *  head's own translational drag γ_head (γ_xb = gammaMult·γ_head ⇒ stretch-mode γ_eff = (1+gammaMult)·γ_head).
+     *  gammaMult=0 ⇒ off (the dashpot kernel is also simply not wired). See CROSSBRIDGE_DASHPOT_FINDINGS.md. */
+    public void setDashpot(double gammaMult, double dt, boolean mechOnly) {
+        dashParams.set(0, (float) gammaMult);
+        dashParams.set(1, (float) dt);
+        dashParams.set(2, (float) HEAD_LEN);
+        dashParams.set(3, mechOnly ? 1f : 0f);
     }
     /** Binding-SEARCH reformulation (flag-gated, default off): set the per-unit-length encounter rate kOn
      *  (µm^-1 s^-1) and the widened candidate-gather radius candReach (µm, for the swept formulation B; the
