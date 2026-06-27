@@ -207,3 +207,65 @@ velocity ⇒ it sidesteps the dashpot's `√(2D/dt)` flaw). Unconditionally stab
   bottom-up arc not only re-derives "go implicit," it shows the *cheap local* implicit is insufficient — the headroom needs the
   **fully-coupled implicit solve** (Cytosim's stiff-bond-as-constraint, exactly) and/or **release sub-stepping**. We reached
   Cytosim's *specific* design (not merely "implicit" but *coupled* implicit) by exhausting the cheaper rung too.
+
+## 11. The cross-bridge dt ceiling: RESOLUTION & banked state (the operating decision)
+
+The dt-headroom arc is **complete as a characterization**. This section records the operating decision and the
+two validated-but-deferred options, so a future self knows exactly what was decided and why.
+
+**Operating decision: benchmark and validate on the EXPLICIT Hookean cross-bridge at dt = 1e-5.**
+- Rationale: it is the **simplest, most trustworthy** integrator — fewest moving parts, no multirate assumptions,
+  no interpolation residual, no unverified artifact surface. For constituent-validation work (the methods-paper
+  foundation), a silent integration artifact is the worst failure mode; explicit 1e-5 has none of that surface.
+- It **preserves the v2≡v1 parity oracle**, which is still needed for the remaining validation ladder
+  (crosslinkers next). Switching integrators now would break the oracle mid-ladder.
+- The cross-bridge spring (`myoSpring`, default ~1 pN/nm, measured range 0.5–2) is a **direct, sharp tuning knob**
+  (the stiffness sweep: binding spans ~100×, glide velocity non-monotonic peaked at ~1 pN/nm). Tune the spring
+  directly on this system. NOTE: ~1 pN/nm reproduces **v1** (an unpublished internal reference, **not**
+  experimentally validated); the *right* stiffness awaits experimental calibration, and the sharp sensitivity
+  means that calibration will pin it precisely.
+- jba settled on dt=1e-5 by **qualitative visual observation** years ago; it coincides with the quantitative
+  convergence boundary — qualitative observation validated as a method (a methods-paper line).
+
+**Banked option A — IMPLICIT cross-bridge (validated, deferred to calibration time).**
+- Validated (`IMPLICIT_CROSSBRIDGE_FINDINGS`): closed-form `x_{n+1}=x_n/(1+r)`, thermal force left explicit/FDT-
+  correct; **unconditionally stable**, kills the overshoot detonation, and at 1e-5 **halves the dt-error** and
+  recovers the signed-load negative tail (bound 727 vs explicit 400 → conv ~1050; p10 −2.73 vs −4.13 → ref −2.21).
+- **Stable-but-unfaithful above ~1e-5** (bound collapses to ~42 at 2e-5): only ~2× finer-dt-equivalent, because the
+  cross-bridge load is a **collective** coupling (head + explicit site + staleness + thermal), of which head-only
+  implicit fixes only the head's share.
+- **Deferred, not adopted:** adopting it now re-baselines the v1 calibration (implicit@1e-5 ≠ explicit@1e-5) and
+  breaks the parity oracle. The clean moment to adopt is **experimental-calibration time** — when the v1-matched
+  calibration is being replaced anyway, calibrate *on* implicit and get the more-faithful integrator under a real
+  calibration for free.
+
+**Banked option B — SUB-STEPPING the bound cross-bridge + catch-slip inner loop (validated POC, deferred to
+when wall-clock demands).**
+- Feasibility-validated (`SUBSTEP_FEASIBILITY_FINDINGS`): the repeated slice is only X ≈ 0.012–0.024 of the
+  per-step CPU work ⇒ **~8.5× ceiling, scale-invariant** (holds at the dense flagship scale; rises toward 10× at
+  larger scale). Uniquely resolves the **catch's fast load fluctuations** the implicit solve could not.
+- Site-handling tier = **INTERPOLATED-SITE** (measured uniformly across scenes): the site moves ~3 nm/outer-dt
+  (net/|stretch| ≈ 0.7–1.0 ⇒ frozen-site unfaithful) but is **93–95% directed** ⇒ a linear predictor captures
+  most of it, leaving a ~1.2 nm (~1.2 pN) diffusive residual ⇒ the co-stepped/coupled solve is not required.
+- **Two build gates (both unverified — do before any build):** (1) **GPU inner-kernel fusion is mandatory** —
+  unfused GPU ceiling is only ~2.7× (launch-bound); fusing the ~7 inner kernels to ~2–3 over the bound set
+  recovers ~5–7×. (2) **The 1e-4-outer-dt premise is UNTESTED** — nothing in the arc ever ran at a 1e-4 outer
+  step; the scheme assumes the non-cross-bridge subsystems (filaments, chains, crosslinkers, search) are faithful
+  at 1e-4, which has never been measured. A standalone "everything-but-the-cross-bridge faithful at 1e-4?" check
+  is the required first gate — it can cheaply invalidate the whole approach if some other subsystem also needs
+  fine dt.
+- **Discipline:** sub-stepping is a pure SPEED play on an already-faithful 1e-5 motor. Build only when a real
+  large-scale run is actually blocked by 1e-5 wall-clock — and then it must **reproduce the explicit-1e-5
+  benchmarks** (the benchmarks are the fixed point; the optimization proves it matches them, never the reverse).
+
+**The dt-ceiling characterization (methods-paper contribution).** The cross-bridge F8 is the only raw Hookean
+spring in the model; its `k·dt/γ` explicit ceiling is intrinsic. **Six levers were eliminated by measurement** —
+softer spring (detunes), release-force averaging (Jensen/timescale), constraint-aware thermal correlation
+(deterministic ≠ thermal), static saturation (magnitude overlap), explicit dashpot (thermal-velocity catastrophe),
+and the cheap local-implicit head (collective-coupling, stable-but-unfaithful, ~2×). All converge on: **the
+cross-bridge force magnitude is load-bearing and entangled with the overshoot in the instantaneous domain, so the
+fix lives in the INTEGRATION, not the force law.** This bottom-up re-derives why the field-standard engine
+(Cytosim) uses implicit integration + stiff-bond-as-constraint — and it sits alongside the thesis point (§10) that
+Cytosim's *prescribed* detachment buys timestep freedom precisely by **decoupling** the emergent
+stiffness→load→detachment coupling the mechanically-resolved motor has (the stiffness-sensitivity result is the
+concrete demonstration; experimental superiority remains calibration-gated).
