@@ -269,3 +269,25 @@ fix lives in the INTEGRATION, not the force law.** This bottom-up re-derives why
 Cytosim's *prescribed* detachment buys timestep freedom precisely by **decoupling** the emergent
 stiffness→load→detachment coupling the mechanically-resolved motor has (the stiffness-sensitivity result is the
 concrete demonstration; experimental superiority remains calibration-gated).
+
+## 12. The canonical motor re-rig (2026-06-27) + its phase-2 banked state
+The powerstroke read-out + arm-length sweep found the default (and v1) motor **non-canonical**: the head pivots on
+actin (F9), the stroke is read at the F8 tip, the J1 converter is silent ⇒ step ∝ HEAD_LEN. jba decided the motor
+**deliberately diverges from v1** to the canonical lever-arm mechanism — head anchored to actin at TWO points
+(orientation pinned by geometry, F9 removed), the J1 swing drives the LEVER+tail (step ∝ LEVER, slope ~1.0 = the
+60° chord), the catch reads LEVER STRAIN. Built flag-gated (`-canonical`), characterized, default byte-identical;
+the motor cross-bridge is now **exempt from v1 bit-parity** (v2-canonical is the reference; v1 stays the oracle for
+the actin PAIRS layer + crosslinkers). dt=1e-5 is *gentler* than the default single-tip cross-bridge (the
+geometrically-pinned head barely stretches) — a phase-1 result to re-test under thermal load. See
+`CANONICAL_MOTOR_FINDINGS.md`.
+
+**Phase-2 (deferred) banked decisions.** (i) **Binder = Version B** (immediate collapse to two-point): on
+single-point tip capture, if the along-filament pose is formable, snap the head + register both bonds in the SAME
+step (no single-point dwell that could leak the old head-pivot back in, no new roll-in timescale); else the bind
+fails and the search continues. Version A (single-point → roll-in → rear binds) is the parked fallback, adopted
+ONLY if measurement shows the weak-bound single-point dwell matters (binding-rate roll-in, load-biased completion,
+or a duty ratio B collapses away) — and then the J1 swing must be guarded off during the transient. (ii) **Open
+ordering question:** the Version-B binder and the deferred **kOn reaction-limited calibration** are BOTH the
+binding search ⇒ rebuild the search once (canonical two-point capture + reaction-limited rate together), THEN
+re-calibrate the catch against the new lever-strain `forceDotFil`; plus promote `-canonical` to default and re-run
+gliding/contractile WITH thermal forces. Decide the ordering fresh at phase-2 start. (See JOURNAL 2026-06-27.)
