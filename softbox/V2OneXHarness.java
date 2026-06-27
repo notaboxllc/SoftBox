@@ -115,6 +115,16 @@ public final class V2OneXHarness {
     static double KON = 0.0;                          // -kon <µm^-1 s^-1> : the encounter-rate handle (0 ⇒ a built-in calibrated default)
     static double CAND_MARGIN = 0.03;                 // -candmargin <µm> : widened candidate-gather radius beyond myoColTol (swept fly-bys)
 
+    // ---- SUBSTEP_FEASIBILITY (MEASUREMENT-ONLY, CPU runner): bound fraction + bound-cross-bridge slice
+    //      CPU-time fraction X (Measure 1) + per-bound-motor SITE motion over the outer dt (Measure 2). ----
+    static boolean SUBSTEP = false;                   // -substep : enable the sub-stepping feasibility readout
+    static double  OUTER_DT = 1.0e-4;                 // -outerdt <s> : the candidate sub-stepping OUTER dt (site-motion window)
+    static final int BOND = 0, APPLY = 1, GATHER = 2, REGISTER = 3, RELEASE = 4, MOTADV = 5, STEP = 6;
+    static final long[] sliceNs = new long[7];        // ns accumulated per slice category over the measured steps
+    static long sliceSteps = 0, boundAccum = 0;       // measured-step count + Σ bound heads (time-avg bound fraction)
+    static SiteMotionTracker SMT = null;
+    static long tns() { return SUBSTEP ? System.nanoTime() : 0L; }   // 0 (no nanoTime) when the readout is off
+
     static final String[] STATE_NAME = { "NONE", "ATP", "ADPPi", "ADP" };
 
     static double pForm(double conc, double dtCheck) { return 1.0 - Math.exp(-XLINK_ON_RATE * conc * dtCheck); }
@@ -145,6 +155,8 @@ public final class V2OneXHarness {
                 case "-xbdash" -> { XBDASH_MULT = Double.parseDouble(args[++i]); DASH_ON = XBDASH_MULT != 0.0; }  // MEASUREMENT-ONLY parallel dashpot (CPU runner only)
                 case "-xbdashmech" -> DASH_MECH = true;  // dashpot mechanical force only (catch reads spring load) (default-off)
                 case "-xbimplicit" -> XB_IMPLICIT = true;  // IMPLICIT_CROSSBRIDGE: locally-implicit bound-head cross-bridge spring
+                case "-substep" -> SUBSTEP = true;                  // SUBSTEP_FEASIBILITY measurement readout (bound frac + slice X + site motion)
+                case "-outerdt" -> OUTER_DT = Double.parseDouble(args[++i]);   // candidate sub-stepping outer dt (site-motion window)
                 case "-ratesearch" -> RATESEARCH = true;            // binding-search reformulation: per-sim-time encounter rate
                 case "-pointsearch" -> SWEPT = false;               // formulation A (instantaneous chord) instead of B (swept)
                 case "-kon" -> KON = Double.parseDouble(args[++i]);  // encounter-rate handle (µm^-1 s^-1)
@@ -466,10 +478,12 @@ public final class V2OneXHarness {
         else
             BindingDetectionSystem.gridReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims,
                     s.gridCellOffsets, s.gridCellContents, s.view.ownerStore, s.view.ownerSlot, s.reachSeg, s.reachCount, mot.kinParams, mot.counts);
+        long _rel = tns();
         if (TAU_AVG > 0.0)
             NucleotideCycleSystem.catchSlipReleaseAvg(mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
         else
             NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+        sliceNs[RELEASE] += tns() - _rel;
         if (RATESEARCH)
             BindingDetectionSystem.bindRate(mot.head, SWEPT ? s.headPrev : mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2,
                     s.reachSeg, s.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
@@ -490,7 +504,9 @@ public final class V2OneXHarness {
         ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
         ChainBendingForceSystem.zeroAccumulators(nb.forceSum, nb.torqueSum, nd.nodeBodyCounts);
         ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+        long _mb = tns();
         BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
+        sliceNs[MOTADV] += tns() - _mb;   // motor-body Brownian (the head's share is re-drawn per inner step)
         BrownianForceSystem.brownianForce(nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nb.brownTransScale, nb.brownRotScale, nd.nodeBodyParams, nd.nodeBodyCounts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
         // BOUND_THERMAL_CORRELATION (measurement, default-off): overwrite bound heads' translational
@@ -510,17 +526,23 @@ public final class V2OneXHarness {
         CrossBridgeSystem.csrScan(nd.nodeCounts4, nd.nodeAttachCount, nd.nodeAttachOffsets);
         CrossBridgeSystem.csrScatter(nd.attachNode, nd.nodeCounts4, nd.nodeAttachOffsets, nd.nodeAttachCount, nd.nodeAttachList);
         MiniFilamentSystem.backboneGather(nd.nodeAttachOffsets, nd.nodeAttachList, nd.nodeData, nb.forceSum, nb.torqueSum, nd.nodeCounts4);
+        long _bf = tns();
         CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
                 mot.boundSeg, mot.bindArc, mot.nucleotideState, s.bondData, s.xbParams);
         if (DASH_ON) CrossBridgeSystem.dashpotForces(b.coord, b.uVec, b.bTransGam, f.coord, f.uVec, f.segLength,
                 mot.boundSeg, mot.bindArc, s.bondData, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
+        sliceNs[BOND] += tns() - _bf;
+        long _ah = tns();
         CrossBridgeSystem.applyHeadForce(s.bondData, b.forceSum, b.torqueSum, mot.counts);
+        sliceNs[APPLY] += tns() - _ah;
 
         // node-shell motor → segment gather
+        long _g = tns();
         CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, s.segMotorCount);
         CrossBridgeSystem.csrScan(mot.counts, s.segMotorCount, s.segMotorOffsets);
         CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, s.segMotorOffsets, s.segMotorCount, s.segMotorMyo);
         CrossBridgeSystem.segGather(s.segMotorOffsets, s.segMotorMyo, s.bondData, f.forceSum, f.torqueSum, mot.counts);
+        sliceNs[GATHER] += tns() - _g;
 
         // crosslinker force + torsion + 2-pass gather
         if (xl != null) {
@@ -535,16 +557,20 @@ public final class V2OneXHarness {
             CrossBridgeSystem.csrScatter(xl.linkFilB, xl.counts, s.segOffsetsB, s.segCountB, s.segIdxB);
             CrosslinkerSystem.segGatherB(s.segOffsetsB, s.segIdxB, xl.xlinkData, xl.linkState, f.forceSum, f.torqueSum, xl.counts);
         }
+        long _rf = tns();
         CrossBridgeSystem.registerForceDot(s.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts);
+        sliceNs[REGISTER] += tns() - _rf;
 
         // === CONTAINMENT + INTEGRATE + DERIVE ===
         ContainmentSystem.confine(nb.coord, nb.uVec, nb.segLength, nb.bTransGam, nb.forceSum, nb.torqueSum, s.boxParams, nd.nodeBodyCounts);
         RigidRodLangevinIntegrationSystem.integrate(nb.coord, nb.uVec, nb.yVec, nb.forceSum, nb.torqueSum, nb.randForce, nb.randTorque, nb.bTransGam, nb.bRotGam, nd.nodeBodyParams, nd.nodeBodyCounts);
         DerivedGeometrySystem.derive(nb.coord, nb.uVec, nb.yVec, nb.zVec, nb.end1, nb.end2, nb.segLength, nd.nodeBodyCounts);
         if (XB_IMPLICIT) CrossBridgeSystem.snapshotHeadCenter(b.coord, mot.xbImplPrev);
+        long _mi = tns();
         RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
         if (XB_IMPLICIT) CrossBridgeSystem.implicitCorrect(b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, mot.xbImplParams);
         DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        sliceNs[MOTADV] += tns() - _mi;   // motor-body integrate + derive (head's share re-run per inner step)
         ContainmentSystem.confine(f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, s.boxParams, f.counts);
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
@@ -593,11 +619,24 @@ public final class V2OneXHarness {
         // a couple of warm-up steps (JIT) excluded from the rate
         int warm = Math.min(5, M);
         for (int t = 0; t < warm; t++) cpuStep(s, t);
+        // SUBSTEP_FEASIBILITY: accumulate over the SETTLED 2nd half only (skip the bind-up transient).
+        int substepStart = SUBSTEP ? Math.max(warm, M / 2) : Integer.MAX_VALUE;
+        if (SUBSTEP) { SMT = new SiteMotionTracker(s.mot.nMotors, dt, OUTER_DT);
+            System.out.printf("  -substep: site-motion window W=%d steps (outer dt %.0e s); measuring over the settled 2nd half [%d,%d)%n",
+                    (int) Math.max(1, Math.round(OUTER_DT / dt)), OUTER_DT, substepStart, M); }
         long t0 = System.nanoTime();
         boolean stable = true;
         int every = Math.max(1, M / 10);
         for (int t = warm; t < M; t++) {
+            if (t == substepStart) java.util.Arrays.fill(sliceNs, 0L);   // reset slice timers to the measured window
+            boolean meas = SUBSTEP && t >= substepStart;
+            long _st = meas ? System.nanoTime() : 0L;
             cpuStep(s, t);
+            if (meas) {
+                sliceNs[STEP] += System.nanoTime() - _st;
+                sliceSteps++; boundAccum += boundHeads(s.mot);
+                SMT.observe(t, s.mot.boundSeg, s.mot.bindArc, s.fil.coord, s.fil.uVec, s.fil.segLength);
+            }
             if (viz && (t % vizEvery == 0 || t == M - 1)) writeFrame(vizDir, frames++, t, t * dt, s);
             if (t % every == 0 || t == M - 1) {
                 System.out.printf("  step %-7d  bound=%-6d  links=%-6d  maxF=%.3g N%n",
@@ -613,6 +652,58 @@ public final class V2OneXHarness {
         System.out.printf("%n  CPU: %d measured steps in %.2fs = %.1f steps/s%n", measured, secs, measured / secs);
         if (viz) System.out.printf("  -3js: wrote %d frames to %s%n", frames, vizDir);
         report(s, stable);
+        if (SUBSTEP) substepReport(s, dt, "V2OneX contractile (" + N_NODES + " nodes, " + N_FIL + " fil, box " + BOX_XY + ")");
+    }
+
+    /** SUBSTEP_FEASIBILITY report — Measure 1 (speedup ceiling: bound fraction × bound-cross-bridge slice
+     *  CPU-time fraction X ⇒ implied net speedup at a 10× inner ratio) + Measure 2 (per-outer-dt SITE motion,
+     *  via SiteMotionTracker). MEASUREMENT-ONLY, host-side over the already-current CPU arrays. */
+    static void substepReport(Scene s, double dt, String scene) {
+        MotorStore m = s.mot;
+        int total = m.nMotors;
+        double boundFrac = sliceSteps > 0 ? (double) boundAccum / sliceSteps / total : 0;
+        double avgBound = sliceSteps > 0 ? (double) boundAccum / sliceSteps : 0;
+        // mean |stretch| over the currently-bound motors: dist = forceMag(N)/myoSpring(N/µm) → µm → nm
+        double sumStretch = 0; int nb = 0;
+        for (int i = 0; i < total; i++) { if (m.boundSeg.get(i) < 0) continue; sumStretch += m.forceMag.get(i) / MYO_SPRING; nb++; }
+        double meanStretchNm = nb > 0 ? sumStretch / nb * 1.0e3 : 0;
+        double tolNm = REACH * 1.0e3;
+
+        // ---- Measure 1: the bound-cross-bridge slice CPU-time fraction X ----
+        double stepMs = sliceSteps > 0 ? sliceNs[STEP] / 1e6 / sliceSteps : 0;
+        double bondMs = sliceNs[BOND] / 1e6 / Math.max(1, sliceSteps);
+        double applyMs = sliceNs[APPLY] / 1e6 / Math.max(1, sliceSteps);
+        double gatherMs = sliceNs[GATHER] / 1e6 / Math.max(1, sliceSteps);
+        double regMs = sliceNs[REGISTER] / 1e6 / Math.max(1, sliceSteps);
+        double relMs = sliceNs[RELEASE] / 1e6 / Math.max(1, sliceSteps);
+        double motMs = sliceNs[MOTADV] / 1e6 / Math.max(1, sliceSteps);
+        // CORE (frozen-site): the inner loop repeats bondForces + applyHeadForce + register + release (each an
+        // O(nMotors) kernel, reused verbatim) + a BOUND-HEAD-ONLY translational advance (Brownian re-drawn +
+        // integrate + derive on the bound heads only — boundFrac/3 of the motor-body advance, since a bound head
+        // is 1 of 3·nMotors sub-bodies). The motor→seg GATHER to the filament is NOT repeated under a frozen site.
+        double headAdvMs = motMs * boundFrac / 3.0;
+        double coreMs = bondMs + applyMs + regMs + relMs + headAdvMs;
+        double fullMs = coreMs + gatherMs;   // co-stepped site: also re-gather the cross-bridge onto the filament
+        double X = stepMs > 0 ? coreMs / stepMs : 0;
+        double Xfull = stepMs > 0 ? fullMs / stepMs : 0;
+        double speedup = 10.0 / (1.0 + 9.0 * X);
+        double speedupFull = 10.0 / (1.0 + 9.0 * Xfull);
+
+        System.out.println("\n================ SUBSTEP_FEASIBILITY readout ================");
+        System.out.println("  scene: " + scene + "; dt=" + String.format("%.0e", dt) + "; measured steps=" + sliceSteps);
+        System.out.printf(java.util.Locale.US,
+            "  MEASURE 1 — bound fraction: avgBound=%.1f / %d motors = %.4f (%.2f%%)%n", avgBound, total, boundFrac, boundFrac * 100);
+        System.out.printf(java.util.Locale.US,
+            "  MEASURE 1 — per-step CPU wall: %.4f ms/step. Bound-cross-bridge slice (ms/step):%n", stepMs);
+        System.out.printf(java.util.Locale.US,
+            "      bond=%.4f apply=%.4f register=%.4f release=%.4f motorAdv(all bodies)=%.4f headAdv(bound only)=%.4f gather=%.4f%n",
+            bondMs, applyMs, regMs, relMs, motMs, headAdvMs, gatherMs);
+        System.out.printf(java.util.Locale.US,
+            "      CORE slice (frozen-site)  = %.4f ms ⇒ X=%.4f ⇒ implied net speedup @10× inner = %.2f×%n", coreMs, X, speedup);
+        System.out.printf(java.util.Locale.US,
+            "      FULL slice (+re-gather)   = %.4f ms ⇒ X=%.4f ⇒ implied net speedup @10× inner = %.2f× (lower bound)%n", fullMs, Xfull, speedupFull);
+        System.out.print(SMT.summary(meanStretchNm, tolNm));
+        System.out.println("=============================================================");
     }
 
     // ============================================================== viewer frame output (-3js)

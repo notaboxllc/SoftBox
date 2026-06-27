@@ -61,6 +61,14 @@ public final class GlidingHarness {
     static int SEED = 0x6111D;   // varied across an ensemble (placement + RNG)
     static boolean BOX = false;      // -box: wire the ContainmentSystem chamber over the gliding filament (v1-faithful: anchored motors un-boxed)
     static boolean BOX_ALL = false;  // -boxall: additionally confine every motor sub-body (upper-bound box-check load at 3·nMotors bodies)
+    // ---- SUBSTEP_FEASIBILITY (MEASUREMENT-ONLY): bound fraction + bound-cross-bridge slice X + per-outer-dt site motion ----
+    static boolean SUBSTEP = false;              // -substep
+    static double  OUTER_DT = 1.0e-4;            // -outerdt <s>
+    static final int BOND = 0, APPLY = 1, GATHER = 2, REGISTER = 3, RELEASE = 4, MOTADV = 5, STEP = 6;
+    static final long[] sliceNs = new long[7];
+    static long sliceSteps = 0, boundAccum = 0;
+    static SiteMotionTracker SMT = null;
+    static long tns() { return SUBSTEP ? System.nanoTime() : 0L; }
 
     public static void main(String[] args) {
         int M = 2000;
@@ -100,6 +108,8 @@ public final class GlidingHarness {
             else if (args[i].equals("-xbdash")) { XBDASH_MULT = Double.parseDouble(args[++i]); DASH_ON = XBDASH_MULT != 0.0; }  // MEASUREMENT-ONLY parallel dashpot (γ_xb = mult·γ_head)
             else if (args[i].equals("-xbdashmech")) DASH_MECH = true;  // dashpot mechanical force only (catch reads spring load)
             else if (args[i].equals("-xbimplicit")) XB_IMPLICIT = true;  // IMPLICIT_CROSSBRIDGE locally-implicit bound-head spring
+            else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
+            else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
         }
@@ -224,32 +234,46 @@ public final class GlidingHarness {
         // --- binding (dynamic) ---
         MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
         BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
+        long _rel = tns();
         NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+        sliceNs[RELEASE] += tns() - _rel;
         BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
         // --- motor nucleotide cycle + dynamics ---
         NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
         ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
+        long _mb = tns();
         BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
+        sliceNs[MOTADV] += tns() - _mb;
         MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
         TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts);
+        long _bf = tns();
         CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
                 mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
         if (DASH_ON) CrossBridgeSystem.dashpotForces(b.coord, b.uVec, b.bTransGam, f.coord, f.uVec, f.segLength,
                 mot.boundSeg, mot.bindArc, sc.bondData, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
+        sliceNs[BOND] += tns() - _bf;
+        long _ah = tns();
         CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+        sliceNs[APPLY] += tns() - _ah;
         if (XB_IMPLICIT) CrossBridgeSystem.snapshotHeadCenter(b.coord, mot.xbImplPrev);
+        long _mi = tns();
         RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
         if (XB_IMPLICIT) CrossBridgeSystem.implicitCorrect(b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, mot.xbImplParams);
         DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        sliceNs[MOTADV] += tns() - _mi;
+        long _rf = tns();
         CrossBridgeSystem.registerForceDot(sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts);
+        sliceNs[REGISTER] += tns() - _rf;
         // --- filament dynamics: chain + Brownian + the gathered cross-bridge, then integrate ---
         ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
         ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        long _g = tns();
         CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sc.segMotorCount);
         CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
         CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
         CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
+        sliceNs[GATHER] += tns() - _g;
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
     }
@@ -419,9 +443,21 @@ public final class GlidingHarness {
         double cx0 = centroidX(sc.fil), cxHalf = cx0; double boundSumHalf = 0; long sampleHalf = 0;
         long sample = 0; double boundSum = 0; boolean nan = false;
         int report = Math.max(1, M / 10);
+        int substepStart = SUBSTEP ? M / 2 : Integer.MAX_VALUE;
+        if (SUBSTEP) { SMT = new SiteMotionTracker(sc.mot.nMotors, DT, OUTER_DT);
+            System.out.printf("  -substep: site-motion window W=%d steps (outer dt %.0e s); measuring over [%d,%d)%n",
+                    (int) Math.max(1, Math.round(OUTER_DT / DT)), OUTER_DT, substepStart, M); }
         System.out.printf("  %-8s %-12s %-12s %-10s%n", "step", "centroidX", "centroidZ", "avgBound(inst)");
         for (int t = 0; t < M; t++) {
+            if (t == substepStart) java.util.Arrays.fill(sliceNs, 0L);
+            boolean meas = SUBSTEP && t >= substepStart;
+            long _st = meas ? System.nanoTime() : 0L;
             step(sc, t);
+            if (meas) {
+                sliceNs[STEP] += System.nanoTime() - _st;
+                sliceSteps++; boundAccum += bound(sc.mot);
+                SMT.observe(t, sc.mot.boundSeg, sc.mot.bindArc, sc.fil.coord, sc.fil.uVec, sc.fil.segLength);
+            }
             boundSum += bound(sc.mot); sample++;
             if (t == M / 2) cxHalf = centroidX(sc.fil);
             if (t >= M / 2) { boundSumHalf += bound(sc.mot); sampleHalf++; }
@@ -454,6 +490,41 @@ public final class GlidingHarness {
         System.out.printf("  avgBound(all) = %.2f   filament z drift = %.4f µm   y-spread = %.3f µm (rotation)   NaN=%s%n",
                 avgB, centroidZ(sc.fil) - FIL_Z, ySpread(sc.fil), nan);
         System.out.println("\n  [probe is diagnostic — not the fixture gate; the converged ensemble follows if this looks right]");
+        if (SUBSTEP) substepReport(sc);
+    }
+
+    /** SUBSTEP_FEASIBILITY report (gliding) — Measure 1 (bound fraction × bound-cross-bridge slice CPU-time
+     *  fraction X ⇒ implied net speedup) + Measure 2 (per-outer-dt site motion). MEASUREMENT-ONLY, host-side. */
+    static void substepReport(Scene sc) {
+        MotorStore m = sc.mot;
+        int total = m.nMotors;
+        double avgBound = sliceSteps > 0 ? (double) boundAccum / sliceSteps : 0;
+        double boundFrac = total > 0 ? avgBound / total : 0;
+        double sumStretch = 0; int nb = 0;
+        for (int i = 0; i < total; i++) { if (m.boundSeg.get(i) < 0) continue; sumStretch += m.forceMag.get(i) / MYO_SPRING; nb++; }
+        double meanStretchNm = nb > 0 ? sumStretch / nb * 1.0e3 : 0;
+        double tolNm = 0.006 * 1.0e3;   // myoColTol (gliding reach)
+        double stepMs = sliceSteps > 0 ? sliceNs[STEP] / 1e6 / sliceSteps : 0;
+        double bondMs = sliceNs[BOND] / 1e6 / Math.max(1, sliceSteps);
+        double applyMs = sliceNs[APPLY] / 1e6 / Math.max(1, sliceSteps);
+        double gatherMs = sliceNs[GATHER] / 1e6 / Math.max(1, sliceSteps);
+        double regMs = sliceNs[REGISTER] / 1e6 / Math.max(1, sliceSteps);
+        double relMs = sliceNs[RELEASE] / 1e6 / Math.max(1, sliceSteps);
+        double motMs = sliceNs[MOTADV] / 1e6 / Math.max(1, sliceSteps);
+        double headAdvMs = motMs * boundFrac / 3.0;
+        double coreMs = bondMs + applyMs + regMs + relMs + headAdvMs;
+        double fullMs = coreMs + gatherMs;
+        double X = stepMs > 0 ? coreMs / stepMs : 0, Xfull = stepMs > 0 ? fullMs / stepMs : 0;
+        double speedup = 10.0 / (1.0 + 9.0 * X), speedupFull = 10.0 / (1.0 + 9.0 * Xfull);
+        System.out.println("\n================ SUBSTEP_FEASIBILITY readout ================");
+        System.out.printf(java.util.Locale.US, "  scene: gliding (%d motors, %d-seg filament); dt=%.0e; measured steps=%d%n", total, sc.fil.n, DT, sliceSteps);
+        System.out.printf(java.util.Locale.US, "  MEASURE 1 — bound fraction: avgBound=%.2f / %d motors = %.5f (%.3f%%)%n", avgBound, total, boundFrac, boundFrac * 100);
+        System.out.printf(java.util.Locale.US, "  MEASURE 1 — per-step CPU wall: %.4f ms/step. Slice (ms/step): bond=%.4f apply=%.4f register=%.4f release=%.4f motorAdv(all)=%.4f headAdv(bound)=%.4f gather=%.4f%n",
+                stepMs, bondMs, applyMs, regMs, relMs, motMs, headAdvMs, gatherMs);
+        System.out.printf(java.util.Locale.US, "      CORE slice (frozen-site) = %.4f ms ⇒ X=%.4f ⇒ implied net speedup @10× inner = %.2f×%n", coreMs, X, speedup);
+        System.out.printf(java.util.Locale.US, "      FULL slice (+re-gather)  = %.4f ms ⇒ X=%.4f ⇒ implied net speedup @10× inner = %.2f× (lower bound)%n", fullMs, Xfull, speedupFull);
+        System.out.print(SMT.summary(meanStretchNm, tolNm));
+        System.out.println("=============================================================");
     }
 
     /** Localize the velocity shortfall: bound-state distribution, the forceDotFil load sign (catch vs
