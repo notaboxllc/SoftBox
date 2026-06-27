@@ -34,10 +34,23 @@ public final class MotorStrokeHarness {
     static final double MYO_SPRING = 1.0e-9, J1_FMT = 0.4;
     static GridScheduler sched;
 
+    // ===== STROKE_VS_ARMLENGTH measurement (flag-gated, default = production constants ⇒ byte-identical) =====
+    // The lever/head arm lengths used to build the motor body. Default to the production constants; the
+    // -leverlen/-headlen flags override ONLY the geometry (swing angles / rates / myoSpring / binding all fixed).
+    static double leverLen = MotorStore.LEVER_LEN;   // µm
+    static double headLen  = MotorStore.HEAD_LEN;    // µm
+    // Isolation cross-check: 0 = both rotations (production), 1 = J1-only (F9 rest frozen 90°),
+    // 2 = F9-only (J1 rest frozen 0°). Drives the size-guarded xbParams[9]/jointParams[11] flags.
+    static int    isolate  = 0;
+
     public static void main(String[] args) {
         double dt = 1.0e-5;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("-3js")) { runViz(dt, args[++i]); return; }
+            else if (args[i].equals("-armsweep")) { runArmSweep(dt); return; }
+            else if (args[i].equals("-leverlen")) leverLen = Double.parseDouble(args[++i]);
+            else if (args[i].equals("-headlen"))  headLen  = Double.parseDouble(args[++i]);
+            else if (args[i].equals("-isolate"))  isolate  = Integer.parseInt(args[++i]);
         }
         System.out.println("=== Soft Box increment 4b-iii — power-stroke checkpoint (pinned filament) ===");
         System.out.println("Nucleotide cycle + rest-angle switch ⇒ the stroke. No unpinning, no gliding.\n");
@@ -173,9 +186,9 @@ public final class MotorStrokeHarness {
         RigidRodBody b = sc.mot.body; double sx = 0, sy = 0, sz = 0; int nM = sc.mot.nMotors;
         for (int m = 0; m < nM; m++) {
             int h = 3 * m + 2;
-            sx += b.coordX(h) + 0.5 * MotorStore.HEAD_LEN * b.uVecX(h);
-            sy += b.coordY(h) + 0.5 * MotorStore.HEAD_LEN * b.uVecY(h);
-            sz += b.coordZ(h) + 0.5 * MotorStore.HEAD_LEN * b.uVecZ(h);
+            sx += b.coordX(h) + 0.5 * headLen * b.uVecX(h);
+            sy += b.coordY(h) + 0.5 * headLen * b.uVecY(h);
+            sz += b.coordZ(h) + 0.5 * headLen * b.uVecZ(h);
         }
         return new double[]{ sx / nM, sy / nM, sz / nM };
     }
@@ -209,10 +222,141 @@ public final class MotorStrokeHarness {
         return s;
     }
 
+    // ===================== STROKE_VS_ARMLENGTH (measurement-only) ==================================
+    /** Harness-local body assembly with overridable lever/head lengths. Mirrors MotorStore.assembleArticulated
+     *  EXACTLY (same float casts) so it is bit-identical when leverLen=LEVER_LEN, headLen=HEAD_LEN. Rod stays
+     *  ROD_LEN (only the lever neck + head reorient in the stroke). */
+    static void assembleLen(MotorStore mot, int m, float ax, float ay, float az,
+                            float dx, float dy, float dz, float brownScale, double leverLen, double headLen) {
+        float px = -dy, py = dx, pz = 0f;
+        float pm = (float) Math.sqrt(px * px + py * py + pz * pz);
+        if (pm < 1.0e-4f) { px = 1f; py = 0f; pz = 0f; pm = 1f; }
+        px /= pm; py /= pm; pz /= pm;
+        RigidRodBody b = mot.body;
+        int rod = mot.rodIdx(m), lever = mot.leverIdx(m), head = mot.headIdx(m);
+        float rOff = 0.5f * (float) MotorStore.ROD_LEN;
+        float lOff = (float) MotorStore.ROD_LEN + 0.5f * (float) leverLen;
+        float hOff = (float) (MotorStore.ROD_LEN + leverLen) + 0.5f * (float) headLen;
+        b.setCoord(rod,   ax + rOff * dx, ay + rOff * dy, az + rOff * dz);
+        b.setCoord(lever, ax + lOff * dx, ay + lOff * dy, az + lOff * dz);
+        b.setCoord(head,  ax + hOff * dx, ay + hOff * dy, az + hOff * dz);
+        b.setUVec(rod, dx, dy, dz); b.setUVec(lever, dx, dy, dz); b.setUVec(head, dx, dy, dz);
+        b.setYVec(rod, px, py, pz); b.setYVec(lever, px, py, pz); b.setYVec(head, px, py, pz);
+        mot.setAnchor(m, ax, ay, az);
+        b.brownTransScale.set(rod, brownScale);   b.brownRotScale.set(rod, brownScale);
+        b.brownTransScale.set(lever, 0f);         b.brownRotScale.set(lever, 0f);
+        b.brownTransScale.set(head, brownScale);  b.brownRotScale.set(head, brownScale);
+    }
+
+    /** Override the lever/head sub-body segLength (the data-driven arm lengths the J1/F9/stall systems read) and
+     *  recompute the LEVER rod-drag for its swept length. The HEAD drag is Stokes-sphere(HEAD_R) — independent of
+     *  HEAD_LEN — so only the head segLength changes. No-op (bit-identical) at the default lengths. The drag only
+     *  sets the relaxation SPEED, not the unloaded equilibrium endpoint; recomputed here for physical honesty. */
+    static void overrideMotorGeom(MotorStore mot, double leverLen, double headLen) {
+        RigidRodBody b = mot.body;
+        double kT = Constants.kT;
+        for (int m = 0; m < mot.nMotors; m++) {
+            int lever = 3 * m + 1, head = 3 * m + 2;
+            b.segLength.set(lever, (float) leverLen);
+            b.segLength.set(head,  (float) headLen);
+            double[] g = DragTensorSystem.rodDragSI(leverLen, MotorStore.LEVER_R);
+            int lx = b.planeX(lever), ly = b.planeY(lever), lz = b.planeZ(lever);
+            b.bTransGam.set(lx, (float) g[0]); b.bTransGam.set(ly, (float) g[1]); b.bTransGam.set(lz, (float) g[2]);
+            b.bRotGam.set(lx,   (float) g[3]); b.bRotGam.set(ly,   (float) g[4]); b.bRotGam.set(lz,   (float) g[5]);
+            b.bTransDiff.set(lx, (float) (kT / g[0])); b.bTransDiff.set(ly, (float) (kT / g[1])); b.bTransDiff.set(lz, (float) (kT / g[2]));
+            b.bRotDiff.set(lx,   (float) (kT / g[3])); b.bRotDiff.set(ly,   (float) (kT / g[4])); b.bRotDiff.set(lz,   (float) (kT / g[5]));
+        }
+    }
+
+    /** ISOMETRIC stall force per motor: F8 ON, head bound to the pinned filament, held at `state`, Brownian off,
+     *  relaxed to equilibrium; returns {mean |F8| (pN), mean F8_x (pN, signed along the filament), nBound}.
+     *  At the cocked state this is the per-motor stall force the converter rotation generates (≈ myoSpring·stroke). */
+    static double[] strokeIsometricForce(double dt, int state) {
+        Scene sc = buildScene(dt, 12);            // F8 ON (xbParams[0]=MYO_SPRING)
+        sc.mot.setAllStates(state);
+        Runnable step = cpuStep(sc, false);       // held state, no cycle, no release (cpuStep never unbinds)
+        for (int t = 0; t < 8000; t++) { sc.mot.setCounts(t, 0x57A0E, sc.fil.n); step.run(); }
+        int nM = sc.mot.nMotors, nb = 0; double sumMag = 0, sumFx = 0;
+        for (int m = 0; m < nM; m++) {
+            if (sc.mot.boundSeg.get(m) < 0) continue;
+            int d = m * CrossBridgeSystem.STRIDE;
+            double fx = sc.bondData.get(d), fy = sc.bondData.get(d + 1), fz = sc.bondData.get(d + 2);
+            sumMag += Math.sqrt(fx * fx + fy * fy + fz * fz); sumFx += fx; nb++;
+        }
+        double toPN = 1e12;   // F8 is in Newtons (myoSpring N/µm · dist µm)
+        return new double[]{ nb > 0 ? sumMag / nb * toPN : 0, nb > 0 ? sumFx / nb * toPN : 0, nb };
+    }
+
+    /** One config: unloaded stroke (nm, signed components) + isometric stall force (pN). */
+    static double[] measureConfig(double dt) {
+        double[] tu = strokeEquilibriumTip(dt, MotorStore.NUC_ADPPI);  // uncocked
+        double[] tc = strokeEquilibriumTip(dt, MotorStore.NUC_ATP);    // cocked (≠ADPPi ⇒ J1 60°, F9 120°)
+        double dxn = (tc[0] - tu[0]) * 1e3, dyn = (tc[1] - tu[1]) * 1e3, dzn = (tc[2] - tu[2]) * 1e3;
+        double stroke = Math.sqrt(dxn * dxn + dyn * dyn + dzn * dzn);
+        double[] fc = strokeIsometricForce(dt, MotorStore.NUC_ATP);    // cocked isometric (stall) force
+        double[] fu = strokeIsometricForce(dt, MotorStore.NUC_ADPPI);  // uncocked baseline (≈0)
+        // {stroke, dxn, dyn, dzn, stallMagPN, stallFxPN, baselineMagPN, nBound}
+        return new double[]{ stroke, dxn, dyn, dzn, fc[0], fc[1], fu[0], fc[2] };
+    }
+
+    static void runArmSweep(double dt) {
+        double dl = MotorStore.LEVER_LEN, dh = MotorStore.HEAD_LEN;   // production defaults (8 nm / 20 nm)
+        System.out.println("=== STROKE vs ARM-LENGTH SWEEP (measurement-only, flag-gated; default byte-identical) ===");
+        System.out.println("RUNNER: -cpu sequential debug runner. Single motor near a pinned filament, no external load.");
+        System.out.println("        Brownian OFF on the motor body ⇒ DETERMINISTIC equilibrium (no seed scatter); 12 motors/config");
+        System.out.println("        give identical results. dt=1e-5, explicit Hookean F8 (myoSpring=1 pN/nm). Held fixed: swing");
+        System.out.println("        angles (J1 0°↔60°, F9 90°↔120°), all nucleotide rates, myoSpring, binding. Only geometry varies.\n");
+
+        // ---- Sweep 1: LEVER_LEN (head fixed at default) ----
+        double[] levers = { 0.004, 0.008, 0.016, 0.024, 0.032 };
+        System.out.println("--- Sweep 1: LEVER_LEN swept, HEAD_LEN fixed at " + (dh * 1e3) + " nm ---");
+        System.out.printf("  %-11s %-11s %-22s %-13s %-13s %-11s %-7s%n",
+                "lever(nm)", "stroke(nm)", "strokeVec(dx,dy,dz nm)", "k*stroke(pN)", "isoForce(pN)", "base(pN)", "nBound");
+        for (double L : levers) {
+            leverLen = L; headLen = dh; isolate = 0;
+            double[] r = measureConfig(dt);
+            System.out.printf("  %-11.1f %-11.3f (%6.2f,%6.2f,%6.2f)      %-13.3f %-13.3f %-11.4f %-7.0f%n",
+                    L * 1e3, r[0], r[1], r[2], r[3], r[0], r[4], r[6], r[7]);
+        }
+        System.out.println();
+
+        // ---- Sweep 2: HEAD_LEN (lever fixed at default) ----
+        double[] heads = { 0.010, 0.020, 0.030, 0.040 };
+        System.out.println("--- Sweep 2: HEAD_LEN swept, LEVER_LEN fixed at " + (dl * 1e3) + " nm ---");
+        System.out.printf("  %-11s %-11s %-22s %-13s %-13s %-11s %-7s%n",
+                "head(nm)", "stroke(nm)", "strokeVec(dx,dy,dz nm)", "k*stroke(pN)", "isoForce(pN)", "base(pN)", "nBound");
+        for (double H : heads) {
+            leverLen = dl; headLen = H; isolate = 0;
+            double[] r = measureConfig(dt);
+            System.out.printf("  %-11.1f %-11.3f (%6.2f,%6.2f,%6.2f)      %-13.3f %-13.3f %-11.4f %-7.0f%n",
+                    H * 1e3, r[0], r[1], r[2], r[3], r[0], r[4], r[6], r[7]);
+        }
+        System.out.println();
+
+        // ---- Sweep 3: isolation cross-check at DEFAULT geometry (attribute lever-swing vs head-reorientation) ----
+        System.out.println("--- Sweep 3: rotation isolation at default geometry (lever " + (dl * 1e3) + " nm, head " + (dh * 1e3) + " nm) ---");
+        System.out.printf("  %-22s %-11s %-22s%n", "mode", "stroke(nm)", "strokeVec(dx,dy,dz nm)");
+        String[] modeName = { "both (J1+F9)", "J1-only (F9 frozen)", "F9-only (J1 frozen)" };
+        double[] isoStroke = new double[3];
+        for (int iso = 0; iso < 3; iso++) {
+            leverLen = dl; headLen = dh; isolate = iso;
+            double[] tu = strokeEquilibriumTip(dt, MotorStore.NUC_ADPPI);
+            double[] tc = strokeEquilibriumTip(dt, MotorStore.NUC_ATP);
+            double dxn = (tc[0] - tu[0]) * 1e3, dyn = (tc[1] - tu[1]) * 1e3, dzn = (tc[2] - tu[2]) * 1e3;
+            isoStroke[iso] = Math.sqrt(dxn * dxn + dyn * dyn + dzn * dzn);
+            System.out.printf("  %-22s %-11.3f (%6.2f,%6.2f,%6.2f)%n", modeName[iso], isoStroke[iso], dxn, dyn, dzn);
+        }
+        System.out.printf("  ⇒ J1-swing %.1f%% of both, F9-reorient %.1f%% of both (sum %.1f%%)%n",
+                100 * isoStroke[1] / isoStroke[0], 100 * isoStroke[2] / isoStroke[0],
+                100 * (isoStroke[1] + isoStroke[2]) / isoStroke[0]);
+        leverLen = dl; headLen = dh; isolate = 0;   // restore
+        System.out.println("\n=== ARM-LENGTH SWEEP COMPLETE ===");
+    }
+
     // ===================== scene (pinned filament + articulated motors, bonds established) ==========
     static final class Scene {
         FilamentStore fil; MotorStore mot;
-        FloatArray bondData, xbParams;
+        FloatArray bondData, xbParams, jointParams;
         IntArray segMotorCount, segMotorOffsets, segMotorMyo;
         FloatArray bruteReachSeg2; IntArray bruteReachCount2;
     }
@@ -220,7 +364,7 @@ public final class MotorStrokeHarness {
         Scene sc = new Scene();
         int nSeg = 2;
         double L = (Constants.stdSegLength + 1) * Constants.actinMonoRadius;
-        double headTipZ = ANCHOR_Z + MotorStore.ROD_LEN + MotorStore.LEVER_LEN + MotorStore.HEAD_LEN;
+        double headTipZ = ANCHOR_Z + MotorStore.ROD_LEN + leverLen + headLen;
         double zFil = headTipZ + Z_OFFSET;
         FilamentStore fil = new FilamentStore(nSeg);
         double x0 = -0.5 * (nSeg - 1) * L;
@@ -237,14 +381,29 @@ public final class MotorStrokeHarness {
         double span = nSeg * L;
         for (int m = 0; m < nMot; m++) {
             double fx = x0 - 0.5 * L + (m + 0.5) / nMot * span;       // spread under the filament
-            mot.assembleArticulated(m, (float) fx, 0f, (float) ANCHOR_Z, 0f, 0f, 1f, 0f);   // Brownian off
+            assembleLen(mot, m, (float) fx, 0f, (float) ANCHOR_Z, 0f, 0f, 1f, 0f, leverLen, headLen);   // Brownian off
         }
         DragTensorSystem.run(mot);
+        overrideMotorGeom(mot, leverLen, headLen);   // lever/head segLength + lever drag for the swept lengths (no-op at defaults)
         mot.setBodyParams(dt); mot.setJointParams(dt); mot.setKinParams(0.006, -0.4, dt); mot.setNucParams(dt);
+
+        // jointParams: size 11 (production) unless -isolate 2, which adds [11]=1 to freeze the J1 rest (F9-only stroke).
+        if (isolate == 2) {
+            FloatArray jp = new FloatArray(12);
+            for (int k = 0; k < 11; k++) jp.set(k, mot.jointParams.get(k));
+            jp.set(11, 1f);
+            sc.jointParams = jp;
+        } else {
+            sc.jointParams = mot.jointParams;
+        }
 
         int MAXC = SpatialGrid.MAX_CAND;
         sc.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
-        sc.xbParams = FloatArray.fromElements((float) MYO_SPRING, 90f, (float) J1_FMT, (float) dt, (float) MotorStore.HEAD_LEN, 0f);   // [5]=forcebias (0 = no bias)
+        // xbParams: size 6 (production) unless -isolate 1, which extends to size 10 with [6..8]=0 (satMode off,
+        // byte-identical) and [9]=1 to freeze the F9 rest at 90° (J1-only stroke).
+        sc.xbParams = (isolate == 1)
+            ? FloatArray.fromElements((float) MYO_SPRING, 90f, (float) J1_FMT, (float) dt, (float) headLen, 0f, 0f, 0f, 0f, 1f)
+            : FloatArray.fromElements((float) MYO_SPRING, 90f, (float) J1_FMT, (float) dt, (float) headLen, 0f);   // [5]=forcebias (0 = no bias)
         sc.segMotorCount = new IntArray(nSeg); sc.segMotorOffsets = new IntArray(nSeg + 1); sc.segMotorMyo = new IntArray(nMot);
         sc.bruteReachSeg2 = new FloatArray(nMot * MAXC); sc.bruteReachCount2 = new IntArray(nMot);
         IntArray reachSeg = new IntArray(nMot * MAXC); reachSeg.init(-1);
@@ -265,8 +424,8 @@ public final class MotorStrokeHarness {
         return () -> {
             if (withCycle) NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
             ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
-            MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
-            TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts);
+            MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, sc.jointParams, mot.counts);
+            TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, sc.jointParams, mot.counts);
             CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
                     mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
             CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);

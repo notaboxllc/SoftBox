@@ -79,6 +79,10 @@ public final class CrossBridgeSystem {
         // 4 asym-hardclip (compression = forceDotFil<0, the side the catch exponential e^(−F·xCatch) detonates on).
         int satMode = 0; double satFmax = 0.0, satOnset = 0.0;
         if (xbParams.getSize() > 6) { satMode = (int) xbParams.get(6); satFmax = xbParams.get(7); satOnset = xbParams.get(8); }
+        // MEASUREMENT-ONLY (STROKE_VS_ARMLENGTH isolation cross-check). Flag-gated by xbParams SIZE:
+        //   size ≤9 (production + -xbsat) ⇒ f9Frozen=0 ⇒ the F9 rest still switches, BYTE-IDENTICAL.
+        //   size 10 (MotorStrokeHarness -isolate 1) ⇒ [9]=1 freezes the F9 rest at 90° (uncocked) so only J1 strokes.
+        int f9Frozen = (xbParams.getSize() > 9) ? (int) xbParams.get(9) : 0;
 
         for (@Parallel int m = 0; m < nM; m++) {
             int d = m * STRIDE;
@@ -128,7 +132,7 @@ public final class CrossBridgeSystem {
             double TSx = RSy * nFz - RSz * nFy, TSy = RSz * nFx - RSx * nFz, TSz = RSx * nFy - RSy * nFx;
 
             // F9 uVec alignment torque — STATE-DEPENDENT rest angle (the stroke switch)
-            double restF9 = (nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? 120.0 : 90.0;
+            double restF9 = (f9Frozen != 0) ? 90.0 : ((nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? 120.0 : 90.0);
             double t9x = suy * huz - suz * huy, t9y = suz * hux - sux * huz, t9z = sux * huy - suy * hux;
             double m9 = t9x * t9x + t9y * t9y + t9z * t9z;
             double T9x = 0, T9y = 0, T9z = 0;
@@ -163,6 +167,121 @@ public final class CrossBridgeSystem {
             bondData.set(d + 11, (float) (TSz + T9z + T10z));
             // forceDotFil = Dot(F, seg.uVec) — the along-filament load (motor-side force)
             bondData.set(d + 12, (float) (Fx * sux + Fy * suy + Fz * suz));
+        }
+    }
+
+    /**
+     * CANONICAL_MOTOR (flag-gated; deliberately DIVERGES from v1 — see CANONICAL_MOTOR_FINDINGS.md).
+     * The lever-arm cross-bridge: the head is rigidly anchored to actin at TWO points (the existing F8
+     * tip site AND a second spring at the head's J1-pivot end), so the head orientation is pinned by
+     * GEOMETRY rather than by the F9 alignment torque. With the head pinned, the J1 converter swing
+     * (MotorJointSystem's 0°↔60° rest switch, UNCHANGED) drives the LEVER + tail against the anchored
+     * head ⇒ the working stroke is delivered at the tail/load end and scales with the lever length
+     * (the canonical lever-arm law), not the head-tip reorientation the default bondForces produces.
+     *
+     * The three canonical changes vs the default bondForces:
+     *   (1) TWO-POINT F8.  F8a: tip (head.end2) → site A (bindArc). F8b: rear (head.end1, the J1 pivot)
+     *       → site B (bindArc2). Both are toward FIXED material points on the bound segment, so the two
+     *       springs form a couple that pins the head's position AND axis. Both sites are on the SAME bound
+     *       segment (the rear-on-a-neighbour case is a gliding-assay concern, out of scope for the
+     *       characterization; flagged).
+     *   (2) NO F9.  The head-vs-actin alignment torque (the default stroke driver) is REMOVED — the head
+     *       no longer reorients against actin. (F10, the roll/yVec alignment toward a CONSTANT 0° rest, is
+     *       KEPT: two point-springs do not constrain roll about the head axis, and F10 is not a stroke
+     *       driver — its rest never switches with nucleotide state.)
+     *   (3) LEVER-STRAIN load.  forceDotFil = Dot(F8a + F8b, seg.uVec) — the NET along-filament load the
+     *       two-point cross-bridge transmits = the resistance the converter swing develops, reacted through
+     *       the pinned head into actin (the "lever-tail tension projected appropriately"), NOT the single
+     *       tip-bond stretch the default reads. Non-degenerate under load; ≈0 unloaded (head freely pinned).
+     *
+     * Same bondData stride-13 layout / head-self-write / seg-side gather as bondForces (the gather is reused
+     * VERBATIM). xbParams: [0]=myoSpring [2]=j1FMT(F10 torque coeff) [3]=dt [4]=HEAD_LEN. Default path
+     * untouched ⇒ byte-identical for every non-canonical caller.
+     */
+    public static void bondForcesCanonical(
+            FloatArray motorCoord, FloatArray motorUVec, FloatArray motorYVec, FloatArray motorBRotGam,
+            FloatArray filCoord, FloatArray filUVec, FloatArray filYVec, FloatArray filBRotGam, FloatArray filSegLength,
+            IntArray boundSeg, FloatArray bindArc, FloatArray bindArc2, IntArray nucleotideState,
+            FloatArray bondData, FloatArray xbParams) {
+
+        int nB = motorCoord.getSize() / 3;
+        int nSeg = filCoord.getSize() / 3;
+        double myoSpring = xbParams.get(0), j1FMT = xbParams.get(2);
+        double dt = xbParams.get(3), headLen = xbParams.get(4);
+        double DEG2RAD = Math.PI / 180.0, RAD2DEG = 180.0 / Math.PI;
+        int nM = nB / 3;
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            int d = m * STRIDE;
+            for (int k = 0; k < STRIDE; k++) bondData.set(d + k, 0f);
+            int s = boundSeg.get(m);
+            if (s < 0) continue;
+
+            int h = 3 * m + 2;
+            double hcx = motorCoord.get(h), hcy = motorCoord.get(nB + h), hcz = motorCoord.get(2 * nB + h);
+            double hux = motorUVec.get(h), huy = motorUVec.get(nB + h), huz = motorUVec.get(2 * nB + h);
+            double hyx = motorYVec.get(h), hyy = motorYVec.get(nB + h), hyz = motorYVec.get(2 * nB + h);
+            double hbRGx = motorBRotGam.get(h);
+            double tipx = hcx + 0.5 * headLen * hux, tipy = hcy + 0.5 * headLen * huy, tipz = hcz + 0.5 * headLen * huz;   // head.end2
+            double rearx = hcx - 0.5 * headLen * hux, reary = hcy - 0.5 * headLen * huy, rearz = hcz - 0.5 * headLen * huz; // head.end1 (J1 pivot)
+
+            double scx = filCoord.get(s), scy = filCoord.get(nSeg + s), scz = filCoord.get(2 * nSeg + s);
+            double sux = filUVec.get(s), suy = filUVec.get(nSeg + s), suz = filUVec.get(2 * nSeg + s);
+            double syx = filYVec.get(s), syy = filYVec.get(nSeg + s), syz = filYVec.get(2 * nSeg + s);
+            double sbRGx = filBRotGam.get(s);
+            double slen = filSegLength.get(s);
+
+            // ---- F8a: tip (head.end2) → site A (the existing bindArc material point) ----
+            double aOffA = bindArc.get(m) - 0.5 * slen;
+            double apAx = scx + aOffA * sux, apAy = scy + aOffA * suy, apAz = scz + aOffA * suz;
+            double dAx = apAx - tipx, dAy = apAy - tipy, dAz = apAz - tipz;
+            double distA = Math.sqrt(dAx * dAx + dAy * dAy + dAz * dAz);
+            double FAx = 0, FAy = 0, FAz = 0;
+            if (distA > 0.0) { double inv = myoSpring; FAx = inv * dAx; FAy = inv * dAy; FAz = inv * dAz; }   // myoSpring·dist·(unit) = myoSpring·d
+
+            // ---- F8b: rear (head.end1 = J1 pivot) → site B (bindArc2 material point) ----
+            double aOffB = bindArc2.get(m) - 0.5 * slen;
+            double apBx = scx + aOffB * sux, apBy = scy + aOffB * suy, apBz = scz + aOffB * suz;
+            double dBx = apBx - rearx, dBy = apBy - reary, dBz = apBz - rearz;
+            double distB = Math.sqrt(dBx * dBx + dBy * dBy + dBz * dBz);
+            double FBx = 0, FBy = 0, FBz = 0;
+            if (distB > 0.0) { double inv = myoSpring; FBx = inv * dBx; FBy = inv * dBy; FBz = inv * dBz; }
+
+            // ---- head-side positional torques (R in metres) ----
+            double RtAx = (tipx - hcx) * 1e-6, RtAy = (tipy - hcy) * 1e-6, RtAz = (tipz - hcz) * 1e-6;
+            double THAx = RtAy * FAz - RtAz * FAy, THAy = RtAz * FAx - RtAx * FAz, THAz = RtAx * FAy - RtAy * FAx;
+            double RrBx = (rearx - hcx) * 1e-6, RrBy = (reary - hcy) * 1e-6, RrBz = (rearz - hcz) * 1e-6;
+            double THBx = RrBy * FBz - RrBz * FBy, THBy = RrBz * FBx - RrBx * FBz, THBz = RrBx * FBy - RrBy * FBx;
+            // ---- seg-side positional torques (reaction −F at each site) ----
+            double RSAx = (apAx - scx) * 1e-6, RSAy = (apAy - scy) * 1e-6, RSAz = (apAz - scz) * 1e-6;
+            double TSAx = RSAy * (-FAz) - RSAz * (-FAy), TSAy = RSAz * (-FAx) - RSAx * (-FAz), TSAz = RSAx * (-FAy) - RSAy * (-FAx);
+            double RSBx = (apBx - scx) * 1e-6, RSBy = (apBy - scy) * 1e-6, RSBz = (apBz - scz) * 1e-6;
+            double TSBx = RSBy * (-FBz) - RSBz * (-FBy), TSBy = RSBz * (-FBx) - RSBx * (-FBz), TSBz = RSBx * (-FBy) - RSBy * (-FBx);
+
+            // ---- F10 roll/yVec alignment torque toward CONSTANT 0° (NOT a stroke driver; F9 removed) ----
+            double t10x = syy * hyz - syz * hyy, t10y = syz * hyx - syx * hyz, t10z = syx * hyy - syy * hyx;
+            double m10 = t10x * t10x + t10y * t10y + t10z * t10z;
+            double T10x = 0, T10y = 0, T10z = 0;
+            if (m10 > 1.0e-30) {
+                double im = 1.0 / Math.sqrt(m10); t10x *= im; t10y *= im; t10z *= im;
+                double dot = syx * hyx + syy * hyy + syz * hyz; if (dot > 1) dot = 1; if (dot < -1) dot = -1;
+                double ang = accurateAcos(dot) * RAD2DEG;
+                double tm = j1FMT * DEG2RAD * ang / ((1.0 / hbRGx + 1.0 / sbRGx) * dt);
+                T10x = tm * t10x; T10y = tm * t10y; T10z = tm * t10z;
+            }
+
+            // head-side: +F8a +F8b, torque (THA + THB − T10)
+            bondData.set(d,     (float) (FAx + FBx)); bondData.set(d + 1, (float) (FAy + FBy)); bondData.set(d + 2, (float) (FAz + FBz));
+            bondData.set(d + 3, (float) (THAx + THBx - T10x));
+            bondData.set(d + 4, (float) (THAy + THBy - T10y));
+            bondData.set(d + 5, (float) (THAz + THBz - T10z));
+            // seg-side: −F8a −F8b, torque (TSA + TSB + T10)
+            bondData.set(d + 6, (float) (-(FAx + FBx))); bondData.set(d + 7, (float) (-(FAy + FBy))); bondData.set(d + 8, (float) (-(FAz + FBz)));
+            bondData.set(d + 9,  (float) (TSAx + TSBx + T10x));
+            bondData.set(d + 10, (float) (TSAy + TSBy + T10y));
+            bondData.set(d + 11, (float) (TSAz + TSBz + T10z));
+            // forceDotFil = Dot(F8a + F8b, seg.uVec) — the LEVER-STRAIN load (net two-point along-filament load)
+            bondData.set(d + 12, (float) ((FAx + FBx) * sux + (FAy + FBy) * suy + (FAz + FBz) * suz));
         }
     }
 

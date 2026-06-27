@@ -83,12 +83,16 @@ public final class MotorJointSystem {
         double j2FracMoveTorq = jointParams.get(7), j2Rest = jointParams.get(8);
         double stallPN = jointParams.get(10);
         double DEG2RAD = Math.PI / 180.0, RAD2DEG = 180.0 / Math.PI;
+        // MEASUREMENT-ONLY (STROKE_VS_ARMLENGTH isolation cross-check). Flag-gated by jointParams SIZE:
+        //   size 11 (production + every other harness) ⇒ j1Frozen=0 ⇒ the J1 rest still switches, BYTE-IDENTICAL.
+        //   size 12 (MotorStrokeHarness -isolate 2)    ⇒ [11]=1 freezes J1 rest at 0° (uncocked) so only F9 strokes.
+        int j1Frozen = (jointParams.getSize() > 11) ? (int) jointParams.get(11) : 0;
 
         for (@Parallel int s = 0; s < nB; s++) {
             int m = s / 3;
             int role = s - 3 * m;
             // J1 lever-motor rest angle switches by nucleotide state (the stroke): cocked (≠ADPPi) 60°, uncocked 0°.
-            double j1Rest = (nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? 60.0 : 0.0;
+            double j1Rest = (j1Frozen != 0) ? 0.0 : ((nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? 60.0 : 0.0);
             int rod = 3 * m, lever = 3 * m + 1, head = 3 * m + 2;
 
             // sub-body poses (double, like the chain)

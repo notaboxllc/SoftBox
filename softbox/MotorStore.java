@@ -73,6 +73,11 @@ public final class MotorStore {
     // ---- Bound-state (source of truth) ----
     public final IntArray   boundSeg; // nMotors; see encoding above
     public final FloatArray bindArc;  // nMotors; arc position (µm) of the bind site on the segment
+    // CANONICAL_MOTOR (flag-gated, default unused): the REAR (J1-pivot / head.end1) actin site arc
+    // position (µm) for the two-point attachment. Set at bind alongside bindArc (the tip site). Read
+    // ONLY by CrossBridgeSystem.bondForcesCanonical (the -canonical path); the default bondForces never
+    // touches it ⇒ allocating it is byte-identical for every existing harness. See CANONICAL_MOTOR_FINDINGS.md.
+    public final FloatArray bindArc2; // nMotors; rear-site arc position (µm)
 
     // ---- Per-motor cumulative stats (race-free; host sums for the off-rate gate) ----
     //   stats[2m]   = # steps this motor began the step bound
@@ -170,6 +175,7 @@ public final class MotorStore {
         reach   = new FloatArray(nMotors);
         boundSeg = new IntArray(nMotors);
         bindArc  = new FloatArray(nMotors);
+        bindArc2 = new FloatArray(nMotors);        // CANONICAL_MOTOR rear-site (default unused)
         stats    = new IntArray(2 * nMotors);
         capStats = new IntArray(nMotors);          // §6.10 break-force release fires per motor (measurement only)
         kinParams = new FloatArray(18);
@@ -180,6 +186,7 @@ public final class MotorStore {
         head.init(0f); uVec.init(0f); rodUVec.init(0f); anchor.init(0f); reach.init(0f);
         boundSeg.init(FREE_BINDABLE);
         bindArc.init(0f);
+        bindArc2.init(0f);
         stats.init(0);
         capStats.init(0);
         cooldown.init(0);

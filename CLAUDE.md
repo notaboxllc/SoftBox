@@ -523,6 +523,17 @@ without a >0.1% systematic signal.**
   emergent mismatch where v2 is physics-correct (e.g. v2 at Boltzmann equilibrium, §8) is **v1's deviation, not a
   v2 bug** — do NOT chase it, do NOT import v1 artifacts to close it. (This posture is crosslinker-specific so
   far; filament/motor emergent behavior WAS frozen-fixture-validated through inc 4.)
+- **MOTOR CROSS-BRIDGE is EXEMPT from v1 bit-parity (2026-06-27; jba decision; `CANONICAL_MOTOR_FINDINGS.md`).**
+  The powerstroke read-out + arm-length sweep showed the default motor is **non-canonical** — the head pivots on
+  actin (F9 90°→120°), the stroke is read at the F8 **tip**, and the **J1 converter swing is silent** for the tip
+  ⇒ step ∝ HEAD_LEN, not lever length. **v1 (BoA-v1ref) implements this same non-canonical geometry.** Per jba, v2's
+  motor **deliberately DIVERGES from v1** to implement the canonical lever-arm mechanism (head anchored to actin at
+  TWO points ⇒ orientation pinned by geometry; the J1 swing drives the LEVER+tail; the catch reads LEVER STRAIN).
+  **Scope of the divergence:** v1 stays the measured oracle for the **actin PAIRS layer** and the **crosslinkers**;
+  v1 is **NO LONGER the parity oracle for the motor cross-bridge** — **v2's canonical motor is the new reference**
+  (`-canonical`: `CrossBridgeSystem.bondForcesCanonical` + `MotorStore.bindArc2` + `CanonicalMotorHarness`; flag-gated,
+  **default byte-identical**, calibration deferred to phase 2). `BoA-v1ref` stays **byte-clean/read-only** (we do NOT
+  "fix" the frozen oracle).
 
 **Increment 5 (crosslinkers / Arp2/3) — ACTIVE.** Recon: `INC5_CROSSLINKER_RECON.md`.
 
