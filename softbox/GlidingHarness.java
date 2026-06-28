@@ -61,9 +61,11 @@ public final class GlidingHarness {
     static double  TAU_AVG = 0.0;                // -tauavg <ms>: time-averaged catch input (EMA window τ); 0 ⇒ instantaneous (byte-identical). PHASE-2 step-4a Jensen fix.
     static double  F_EXT = 0.0;                  // -fext <pN>: sustained external load injected into the catch input (force-response guard)
     static boolean ACORR = false;                // -acorr: measure the J1-strain autocorrelation (τ_thermal) in the single-molecule assay
+    static double  XCATCH = 0.0;                 // -xcatch <nm>: catch distance d override (Veigel calibration); 0 ⇒ v1 default 2.5 nm
+    static boolean DCALIB = false;               // -dcalib: catch force-sensitivity calibration (rate vs load sweep at fixed kOn/τ)
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
-    static final double DENSITY = 500.0;        // motors / µm²
+    static double DENSITY = 500.0;              // motors / µm² (-density overrides for the speed-density trend)
     static final int    FIL_SEGS = 11;          // ~2 µm of 64-monomer segments
     static final int    FIL_MONO = 64;          // filSegLength (gliding override)
     // bed geometry: bX0 = filament +x end; the bed spans x∈[bXlo,bXhi], y∈[-bYhalf,bYhalf].
@@ -130,6 +132,9 @@ public final class GlidingHarness {
             else if (args[i].equals("-tauavg")) TAU_AVG = Double.parseDouble(args[++i]) * 1.0e-3;       // time-averaged catch window τ (ms → s)
             else if (args[i].equals("-fext")) F_EXT = Double.parseDouble(args[++i]);                    // sustained external load (pN)
             else if (args[i].equals("-acorr")) ACORR = true;                                            // J1-strain autocorrelation diagnostic
+            else if (args[i].equals("-xcatch")) XCATCH = Double.parseDouble(args[++i]);                  // catch distance d override (nm)
+            else if (args[i].equals("-density")) DENSITY = Double.parseDouble(args[++i]);                // motor density (speed-density trend)
+            else if (args[i].equals("-dcalib")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; DCALIB = true; }  // catch force-sensitivity calibration
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
@@ -159,6 +164,7 @@ public final class GlidingHarness {
                 r, DT, 1.0 - r, 1.0 / (1.0 + r));
         }
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
+        if (DCALIB) { dCalib(Math.max(M, 25000)); return; }
         if (SINGLE) { singleMolecule(sc, Math.max(M, 30000)); return; }
         if (CANON_DIAG) { canonDiag(sc, Math.max(M, 12000)); return; }
         if (diag) { diagnose(sc, Math.max(M, 8000)); return; }
@@ -250,6 +256,7 @@ public final class GlidingHarness {
         if (KON > 0) mot.setSearchParams(KON, 0);        // PHASE-2 step-3: reaction-limited attachment rate kОn (kinParams[14])
         if (TAU_AVG > 0) mot.setReleaseForceAvg(TAU_AVG, DT);   // PHASE-2 step-4a: time-averaged catch input (EMA window τ)
         if (F_EXT != 0) mot.setExtLoad(F_EXT);           // sustained-load injection (force-response guard)
+        if (XCATCH > 0) mot.setXCatch(XCATCH);           // PHASE-2 step-4b: catch distance d (Veigel calibration)
         if (NO_REFRACTORY) mot.kinParams.set(10, 0f);   // §6.6 OFF bracket: no rebind refractory
         mot.setFaithfulRelease(FAITHFUL_RELEASE, 0.0);  // §6.10 default off (v1 12 pN threshold)
         mot.setFaithfulRefractory(FAITHFUL_REFRACTORY); // §6.11 default off (HEAD 100%/1-step block)
@@ -839,6 +846,64 @@ public final class GlidingHarness {
             }
             System.out.printf("  ⇒ τ_thermal ≈ %.3f ms (1/e of the J1-strain autocorr); var = %.3f pN²%n", tauTherm, var * 1e24);
         }
+    }
+
+    // ===================== PHASE-2 step-4b: catch force-sensitivity calibration (rate vs load) =====================
+    /** Run the single-molecule assay at the current statics and return {t_on (ms), duty, attachRate /s, fdMean pN}. */
+    static double[] singleRun(int M) {
+        Scene sc = buildScene();
+        MotorStore mot = sc.mot; int nM = mot.nMotors; int warm = M / 4;
+        long boundSteps = 0, releaseEvents = 0; double fdSum = 0; long fdN = 0;
+        int[] prevBound = new int[nM];
+        for (int m = 0; m < nM; m++) prevBound[m] = mot.boundSeg.get(m);
+        for (int t = 0; t < M; t++) {
+            singleStep(sc, t);
+            if (t >= warm) {
+                for (int m = 0; m < nM; m++) {
+                    int bs = mot.boundSeg.get(m); boolean nowBound = bs >= 0;
+                    if (nowBound) { boundSteps++; fdSum += mot.forceDotFil.get(m); fdN++; }
+                    if (!nowBound && prevBound[m] >= 0) releaseEvents++;
+                    prevBound[m] = bs;
+                }
+            } else for (int m = 0; m < nM; m++) prevBound[m] = mot.boundSeg.get(m);
+        }
+        double duty = boundSteps / (double) ((long) (M - warm) * nM);
+        double tOnMs = releaseEvents > 0 ? boundSteps * DT / releaseEvents * 1e3 : 0;
+        double fdMean = fdN > 0 ? fdSum / fdN * 1e12 : 0;
+        return new double[]{ tOnMs, duty, fdMean };
+    }
+
+    /** Catch force-sensitivity calibration: detachment RATE (1/t_on) vs sustained load F_ext on the AVERAGED
+     *  catch (τ held). Effective d from the 0→+1 pN halving (Veigel: 1 pN resisting halves ⇒ d≈2.7 nm). */
+    static void dCalib(int M) {
+        double tau = TAU_AVG > 0 ? TAU_AVG : 0.5e-3; TAU_AVG = tau;     // τ held (default 0.5 ms)
+        double[] loads = { -1, 0, 1, 2 };
+        System.out.printf("%n=== PHASE-2 step-4b catch force-sensitivity calibration (Config-1 single-molecule, τ=%.2f ms, kOn=%.2g) ===%n", tau * 1e3, KON);
+        System.out.println("  detachment rate (1/t_on) vs sustained load F_ext; effective d from the 0→+1 pN halving (Veigel d≈2.7 nm).");
+        double kT = Constants.kT;
+        double[] dGrid = (XCATCH > 0) ? new double[]{ XCATCH } : new double[]{ 2.5, 3.0, 3.5 };
+        for (double dnm : dGrid) {
+            XCATCH = dnm;
+            System.out.printf("%n  --- xCatch (d) = %.2f nm ---%n", dnm);
+            System.out.printf("    %-10s %-12s %-12s %-12s%n", "F_ext(pN)", "t_on(ms)", "rate(/s)", "rate/rate0");
+            double rate0 = 0; double rateP1 = 0;
+            double[] rates = new double[loads.length];
+            for (int i = 0; i < loads.length; i++) {
+                F_EXT = loads[i];
+                double[] r = singleRun(M);
+                double rate = r[0] > 0 ? 1000.0 / r[0] : 0;
+                rates[i] = rate;
+                if (loads[i] == 0) rate0 = rate;
+                if (loads[i] == 1) rateP1 = rate;
+            }
+            for (int i = 0; i < loads.length; i++)
+                System.out.printf("    %-10.1f %-12.2f %-12.1f %-12.3f%n", loads[i], rates[i] > 0 ? 1000.0 / rates[i] : 0, rates[i], rate0 > 0 ? rates[i] / rate0 : 0);
+            // effective d from the resisting half-load slope: ln(rate(+1)/rate(0)) = −1pN·d/kT
+            double halving = rate0 > 0 ? rateP1 / rate0 : 0;
+            double dEff = rate0 > 0 && rateP1 > 0 ? -kT * Math.log(rateP1 / rate0) / 1.0e-12 * 1e9 : 0;
+            System.out.printf("    ⇒ rate(+1 pN)/rate(0) = %.3f  (Veigel target 0.50)   effective d = %.2f nm  (Veigel 2.7 nm)%n", halving, dEff);
+        }
+        F_EXT = 0;
     }
 
     static void probe(Scene sc, int M) {

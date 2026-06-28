@@ -61,7 +61,7 @@ public final class CanonicalMotorHarness {
         System.out.println("Two-point head pin + J1-carried stroke at the tail + lever-strain load. Explicit Hookean F8 @ dt=1e-5.");
         System.out.println("v1-DIVERGENT (deliberate): the motor cross-bridge is exempt from v1 bit-parity; v2-canonical is the reference.\n");
 
-        if (CONFIG1) { charArmSweep(dt); System.out.println("\n=== CONFIG-1 step∝lever re-confirm done (other gates use the non-config1 GPU path; skipped) ==="); return; }
+        if (CONFIG1) { charArmSweep(dt); charLeverStrainSignal(dt); System.out.println("\n=== CONFIG-1 step∝lever + isometric J1-strain done (other gates use the non-config1 GPU path; skipped) ==="); return; }
         boolean g1 = charArmSweep(dt);                 // 1. step ∝ LEVER? J1 non-silent?
         boolean g2 = charLeverStrainSignal(dt);        // 2. the new load signal vs the old tip signal
         boolean g3 = charBindStrokeRelease(dt);        // 3. bind / stroke / release sanity + two-point reachability

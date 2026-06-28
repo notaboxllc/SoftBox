@@ -271,6 +271,9 @@ public final class MotorStore {
     /** PHASE-2 step-4a: impose a controlled SUSTAINED external load (pN, signed) on the catch input — the
      *  force-response guard for the time-averaged catch. Measurement only; 0 ⇒ off (byte-identical). */
     public void setExtLoad(double pN) { kinParams.set(18, (float) (pN * 1.0e-12)); }
+    /** PHASE-2 step-4b: override the catch distance parameter xCatch (the model's d, in nm) — calibrate the
+     *  force-sensitivity to Veigel d≈2.7 nm ("1 pN resisting halves detachment"). v1 default 2.5 nm. */
+    public void setXCatch(double nm) { kinParams.set(3, (float) (nm * 1.0e-9)); }
     /** RELEASE_FORCE_INPUT (measurement, flag-gated, default off): feed the catch-slip release a per-head
      *  TIME-AVERAGED cross-bridge force (EMA over window τ_avg, seconds) instead of the instantaneous
      *  overshot F. τ_avg ≤ 0 ⇒ instantaneous (HEAD/production). The spring force law and catch-slip rate
