@@ -15,6 +15,7 @@
 #   ./run_canongliding.sh -single -kon 5e5 -acorr 30000                         # step-4a τ_thermal autocorrelation
 #   ./run_canongliding.sh -dcalib -singlez -0.075 -kon 5e5 -xcatch 3.65 20000    # step-4b catch d-calibration (rate vs load → Veigel 2.7 nm)
 #   ./run_canongliding.sh -config1 -kon 2e5 -tauavg 0.5 -xcatch 3.65 -density 4000 -gpu 8000   # step-4b transferability (speed-density)
+#   ./run_canongliding.sh -csrecal -singlez -0.075 -kon 2e5 -xcatch 2.5 14000   # step-4c catch-slip recal (lifetime peak + peak≈stall)
 #   ./run_canongliding.sh -config1 -3js threejs_config1 20000          # viewer
 # (Just a convenience wrapper over GlidingHarness — equivalent to run_gliding.sh with -canonical/-canondiag.)
 TORNADOVM_HOME="$HOME/Code/TornadoVM/dist/tornadovm-4.0.1-dev-ptx-linux-amd64/tornadovm-4.0.1-dev-ptx"

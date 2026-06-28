@@ -63,6 +63,7 @@ public final class GlidingHarness {
     static boolean ACORR = false;                // -acorr: measure the J1-strain autocorrelation (τ_thermal) in the single-molecule assay
     static double  XCATCH = 0.0;                 // -xcatch <nm>: catch distance d override (Veigel calibration); 0 ⇒ v1 default 2.5 nm
     static boolean DCALIB = false;               // -dcalib: catch force-sensitivity calibration (rate vs load sweep at fixed kOn/τ)
+    static boolean CSRECAL = false;              // -csrecal: step-4c catch-slip recalibration (lifetime vs load PAST the peak + independent motor stall + peak≈stall)
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static double DENSITY = 500.0;              // motors / µm² (-density overrides for the speed-density trend)
@@ -135,6 +136,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-xcatch")) XCATCH = Double.parseDouble(args[++i]);                  // catch distance d override (nm)
             else if (args[i].equals("-density")) DENSITY = Double.parseDouble(args[++i]);                // motor density (speed-density trend)
             else if (args[i].equals("-dcalib")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; DCALIB = true; }  // catch force-sensitivity calibration
+            else if (args[i].equals("-csrecal")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; CSRECAL = true; }  // step-4c catch-slip recalibration
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
@@ -164,6 +166,7 @@ public final class GlidingHarness {
                 r, DT, 1.0 - r, 1.0 / (1.0 + r));
         }
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
+        if (CSRECAL) { catchSlipRecal(Math.max(M, 14000)); return; }
         if (DCALIB) { dCalib(Math.max(M, 25000)); return; }
         if (SINGLE) { singleMolecule(sc, Math.max(M, 30000)); return; }
         if (CANON_DIAG) { canonDiag(sc, Math.max(M, 12000)); return; }
@@ -904,6 +907,92 @@ public final class GlidingHarness {
             System.out.printf("    ⇒ rate(+1 pN)/rate(0) = %.3f  (Veigel target 0.50)   effective d = %.2f nm  (Veigel 2.7 nm)%n", halving, dEff);
         }
         F_EXT = 0;
+    }
+
+    /** PHASE-2 step-4c: independent motor STALL force (pN) — the J1 converter spring at FULL deflection. Build
+     *  one Config-1 motor bound to a pinned segment, lever held COLLINEAR with the head (θ=0, the uncocked
+     *  geometry), nucleotide state COCKED (rest 60°) ⇒ a single bond evaluation reads forceDotFil = (κ/L)·(60°),
+     *  the maximal lever-tip force the converter develops against a held tail. Independent of the catch (geometry
+     *  + κ only); no relaxation (a one-shot held-pose eval). */
+    static double motorStallPN() {
+        int nSeg = 1;
+        double L = (Constants.stdSegLength + 1) * Constants.actinMonoRadius;
+        FilamentStore fil = new FilamentStore(nSeg);
+        fil.monomerCount.set(0, Constants.stdSegLength);
+        fil.setUVec(0, 1f, 0f, 0f); fil.setYVec(0, 0f, 1f, 0f); fil.setCoord(0, 0f, 0f, 0f);
+        fil.brownTransScale.set(0, 0f); fil.brownRotScale.set(0, 0f);
+        DragTensorSystem.run(fil); fil.setParams(DT, 0); fil.setCounts(0, 0);
+        DerivedGeometrySystem.derive(fil.coord, fil.uVec, fil.yVec, fil.zVec, fil.end1, fil.end2, fil.segLength, fil.counts);
+        MotorStore mot = new MotorStore(1);
+        // head along +x just under the filament; lever COLLINEAR with the head (J1 angle θ=0)
+        RigidRodBody b = mot.body;
+        double zHead = -0.002;
+        int rod = 0, lever = 1, head = 2;
+        b.setCoord(head, 0f, 0f, (float) zHead); b.setUVec(head, 1f, 0f, 0f); b.setYVec(head, 0f, 1f, 0f);
+        double rearx = -0.5 * MotorStore.HEAD_LEN;     // head.end1 = J1 pivot
+        double lcx = rearx - 0.5 * MotorStore.LEVER_LEN; // lever collinear (+x) ⇒ J1 angle 0
+        b.setCoord(lever, (float) lcx, 0f, (float) zHead); b.setUVec(lever, 1f, 0f, 0f); b.setYVec(lever, 0f, 1f, 0f);
+        double rcx = lcx - 0.5 * MotorStore.LEVER_LEN - 0.5 * MotorStore.ROD_LEN;
+        b.setCoord(rod, (float) rcx, 0f, (float) zHead); b.setUVec(rod, 1f, 0f, 0f); b.setYVec(rod, 0f, 1f, 0f);
+        DragTensorSystem.run(mot);
+        mot.setBodyParams(DT); mot.setJointParams(DT); mot.setKinParams(0.006, -0.4, DT); mot.setNucParams(DT);
+        mot.enableConfig1(KAPPA);
+        // two-point bind: tip + rear feet on the segment
+        double e1x = fil.end1.get(0), sux = fil.uVec.get(0);
+        double tipx = 0.5 * MotorStore.HEAD_LEN, rearxF = -0.5 * MotorStore.HEAD_LEN;
+        mot.boundSeg.set(0, 0);
+        mot.bindArc.set(0, (float) ((tipx - e1x) * sux));
+        mot.bindArc2.set(0, (float) ((rearxF - e1x) * sux));
+        mot.setAllStates(MotorStore.NUC_ATP);   // cocked (≠ADPPi) ⇒ J1 rest 60°
+        FloatArray bondData = new FloatArray(CrossBridgeSystem.STRIDE); bondData.init(0f);
+        FloatArray xbC1 = FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) MotorStore.LEVER_LEN, (float) DT, (float) MotorStore.HEAD_LEN);
+        CrossBridgeSystem.bondForcesCanonicalConfig1(b.coord, b.uVec, b.bTransGam, b.bRotGam, fil.coord, fil.uVec, fil.segLength, fil.bTransGam, fil.bRotGam,
+                mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, bondData, xbC1);
+        return Math.abs(bondData.get(12)) * 1e12;   // |forceDotFil| at full 60° deflection = stall (pN)
+    }
+
+    /** PHASE-2 step-4c: recalibrate BOTH catch-slip pathways to Guo & Guilford (2006) bond data, then check the
+     *  EMERGENT "peak ≈ stall" tuning. Lifetime (t_on) vs sustained RESISTING load, swept PAST the peak (0→+10 pN)
+     *  on the averaged catch (τ held), to SEE the catch-slip rise→peak→fall. Reports the peak force/lifetime, the
+     *  loaded-regime range, the independent motor stall, and the peak≈stall verdict. */
+    static void catchSlipRecal(int M) {
+        double tau = TAU_AVG > 0 ? TAU_AVG : 0.5e-3; TAU_AVG = tau;
+        if (XCATCH <= 0) XCATCH = 2.5;   // Guo & Guilford ADP catch x_c
+        double kT = Constants.kT;
+        System.out.printf("%n=== PHASE-2 step-4c catch-slip RECALIBRATION to Guo & Guilford (Config-1 single-molecule, τ=%.2f ms, kOn=%.2g) ===%n", tau * 1e3, KON);
+        System.out.printf("  pathways: xCatch=%.2f nm (GG x_c 2.5), xSlip=0.40 nm (GG x_s 0.40), αCatch/αSlip=11.5 (GG k_c/k_s 11.7); kOff=100/s base.%n", XCATCH);
+        System.out.println("  lifetime (t_on) vs RESISTING load F_ext, swept PAST the peak — the catch-slip rise→peak→fall:");
+        double[] loads = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 10 };
+        double[] life = new double[loads.length];
+        System.out.printf("    %-12s %-12s %-12s%n", "F_ext(pN)", "t_on(ms)", "rate(/s)");
+        for (int i = 0; i < loads.length; i++) {
+            F_EXT = loads[i];
+            double[] r = singleRun(M);
+            life[i] = r[0];
+            System.out.printf("    %-12.1f %-12.2f %-12.1f%n", loads[i], r[0], r[0] > 0 ? 1000.0 / r[0] : 0);
+        }
+        F_EXT = 0;
+        // locate the peak (max lifetime)
+        int pk = 0; for (int i = 1; i < life.length; i++) if (life[i] > life[pk]) pk = i;
+        double peakF = loads[pk], peakLife = life[pk];
+        double stall = motorStallPN();
+        System.out.printf("%n  PEAK: lifetime %.1f ms at F ≈ %.1f pN  (Guo & Guilford: ~30 ms at ~6.4 pN; behavioral target)%n", peakLife, peakF);
+        System.out.printf("  shape: %s; loaded-regime (1.8–8 pN) lifetimes %.0f–%.0f ms (GG ~10–30 ms)%n",
+                (pk > 0 && pk < life.length - 1) ? "RISE→PEAK→FALL ✓ (non-monotonic catch-slip)" : (pk == 0 ? "monotonic-falling (peak at/below 0)" : "still rising at +10 pN"),
+                minOver(life, loads, 1.8, 8.0), maxOver(life, loads, 1.8, 8.0));
+        System.out.printf("%n  --- Piece 2: EMERGENT peak ≈ stall tuning (independent quantities) ---%n");
+        System.out.printf("    catch-slip PEAK force      = %.1f pN   (calibrated to GG bond data)%n", peakF);
+        System.out.printf("    motor STALL force          = %.1f pN   (independent: κ·60°/L, κ=%.2g, NOT touched)%n", stall, KAPPA);
+        double ratio = stall > 0 ? peakF / stall : 0;
+        System.out.printf("    ⇒ peak/stall = %.2f  %s%n", ratio,
+                (ratio > 0.5 && ratio < 2.0) ? "→ COINCIDE within ~2× experimental scatter — the mechanokinetic tuning EMERGES (peak ≈ stall)" : "→ OUTSIDE ~2× — report (tuning does not emerge / κ question; do NOT force-fit)");
+        System.out.printf("%n  SUMMARY  xCatch=%.2f xSlip=0.40 peakF=%.1fpN peakLife=%.0fms stall=%.1fpN peak/stall=%.2f%n", XCATCH, peakF, peakLife, stall, ratio);
+    }
+    static double minOver(double[] life, double[] loads, double lo, double hi) {
+        double mn = 1e9; for (int i = 0; i < loads.length; i++) if (loads[i] >= lo && loads[i] <= hi && life[i] > 0) mn = Math.min(mn, life[i]); return mn == 1e9 ? 0 : mn;
+    }
+    static double maxOver(double[] life, double[] loads, double lo, double hi) {
+        double mx = 0; for (int i = 0; i < loads.length; i++) if (loads[i] >= lo && loads[i] <= hi) mx = Math.max(mx, life[i]); return mx;
     }
 
     static void probe(Scene sc, int M) {
