@@ -78,6 +78,12 @@ public final class MotorStore {
     // ONLY by CrossBridgeSystem.bondForcesCanonical (the -canonical path); the default bondForces never
     // touches it ⇒ allocating it is byte-identical for every existing harness. See CANONICAL_MOTOR_FINDINGS.md.
     public final FloatArray bindArc2; // nMotors; rear-site arc position (µm)
+    // PHASE-2 CANONICAL Version-B binder: per-motor "snap the head along the filament THIS step" flag, set by
+    // bindCanonicalTwoPoint on a fresh two-point formation and consumed+cleared by snapCanonicalHead (a SEPARATE
+    // small kernel — the head-pose snap is split off the decision kernel because writing the body pose inside the
+    // large search kernel breaks the PTX-lowered bind; the small snap kernel lowers cleanly). Default-off path
+    // never sets it ⇒ allocating it is byte-identical for every existing harness.
+    public final IntArray   canonSnap; // nMotors
 
     // ---- Per-motor cumulative stats (race-free; host sums for the off-rate gate) ----
     //   stats[2m]   = # steps this motor began the step bound
@@ -176,9 +182,10 @@ public final class MotorStore {
         boundSeg = new IntArray(nMotors);
         bindArc  = new FloatArray(nMotors);
         bindArc2 = new FloatArray(nMotors);        // CANONICAL_MOTOR rear-site (default unused)
+        canonSnap = new IntArray(nMotors);         // PHASE-2 Version-B snap flag (default unused)
         stats    = new IntArray(2 * nMotors);
         capStats = new IntArray(nMotors);          // §6.10 break-force release fires per motor (measurement only)
-        kinParams = new FloatArray(18);
+        kinParams = new FloatArray(20);   // [0..17] kinetics; [18]=sustained-load injection F_ext (N, measurement); [19]=reserved
         cooldown  = new IntArray(nMotors);
         counts    = new IntArray(4);
         publishParams = new IntArray(1);
@@ -187,6 +194,7 @@ public final class MotorStore {
         boundSeg.init(FREE_BINDABLE);
         bindArc.init(0f);
         bindArc2.init(0f);
+        canonSnap.init(0);
         stats.init(0);
         capStats.init(0);
         cooldown.init(0);
@@ -254,7 +262,15 @@ public final class MotorStore {
         //   [17] = avgAlpha (the per-step EMA weight = dt/τ_avg; forceDotAvg += avgAlpha·(F − forceDotAvg))
         kinParams.set(16, 0.0f);
         kinParams.set(17, 0.0f);
+        // PHASE-2 step-4a: sustained-load injection F_ext (N) added to the catch input — the force-response GUARD
+        // (impose a controlled mean load on a bound motor, confirm the averaged catch still detaches faster).
+        // Measurement only, default 0 ⇒ byte-identical. [19] reserved.
+        if (kinParams.getSize() > 18) kinParams.set(18, 0.0f);
+        if (kinParams.getSize() > 19) kinParams.set(19, 0.0f);
     }
+    /** PHASE-2 step-4a: impose a controlled SUSTAINED external load (pN, signed) on the catch input — the
+     *  force-response guard for the time-averaged catch. Measurement only; 0 ⇒ off (byte-identical). */
+    public void setExtLoad(double pN) { kinParams.set(18, (float) (pN * 1.0e-12)); }
     /** RELEASE_FORCE_INPUT (measurement, flag-gated, default off): feed the catch-slip release a per-head
      *  TIME-AVERAGED cross-bridge force (EMA over window τ_avg, seconds) instead of the instantaneous
      *  overshot F. τ_avg ≤ 0 ⇒ instantaneous (HEAD/production). The spring force law and catch-slip rate
@@ -344,6 +360,17 @@ public final class MotorStore {
         nucParams.set(7, 1.0e3f);   // myoOffFilADP_None  (off fil)
     }
     public void setAllStates(int state) { for (int m = 0; m < nMotors; m++) nucleotideState.set(m, state); }
+
+    /** CONFIG 1 (PHASE2_CONFIG1): a size-14 jointParams that switches the J1 angular spring to pure HOOKEAN
+     *  (κ·deflection, no stall cap). [0..10] = the current setJointParams values; [11]=0 (j1Frozen off);
+     *  [12]=1 (config1 on); [13]=κ (N·m/rad). Call AFTER setJointParams. Default jointParams (size 11) is
+     *  byte-unchanged ⇒ every other harness is unaffected. */
+    public FloatArray jointParamsC1;
+    public void enableConfig1(double kappa) {
+        jointParamsC1 = new FloatArray(14);
+        for (int k = 0; k < 11; k++) jointParamsC1.set(k, jointParams.get(k));
+        jointParamsC1.set(11, 0f); jointParamsC1.set(12, 1f); jointParamsC1.set(13, (float) kappa);
+    }
 
     /**
      * Assemble motor m standing on the bed: rod tail (rod.end1) at the anchor point, all

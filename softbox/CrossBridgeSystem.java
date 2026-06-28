@@ -285,6 +285,130 @@ public final class CrossBridgeSystem {
         }
     }
 
+    /** v1 moveCoeff (VERBATIM MotorJointSystem.moveC / the PAIRS effective mobility along a link). */
+    private static double moveC(double ux, double uy, double uz,
+                               double lx, double ly, double lz,
+                               double bTGx, double bTGy, double bRGy, double lenUm) {
+        double cosB = ux * lx + uy * ly + uz * lz;
+        if (cosB > 1.0) cosB = 1.0; if (cosB < -1.0) cosB = -1.0;
+        double cosB2 = cosB * cosB;
+        double cosA2 = 1.0 - cosB2;
+        double lSq = 1.0e-12 * lenUm * lenUm;
+        return cosB2 / bTGx + cosA2 / bTGy + lSq * cosA2 / (4.0 * bRGy);
+    }
+
+    /**
+     * CANONICAL_MOTOR CONFIG 1 (flag-gated; the COMPLETE composed cross-bridge architecture, MOTOR_BENCHMARK_TARGETS
+     * §6; PHASE2_CONFIG1_FINDINGS.md). Division of labor that retires the two SOFT translational F8 springs (whose
+     * Brownian-head-vs-soft-spring wandering was the phase-2 thermal lever-strain tail):
+     *
+     *   (1) TIP + REAR ATTACHMENTS → PAIRS form. Each attachment (head.end2→siteA `bindArc`, head.end1→siteB
+     *       `bindArc2`) is the dt-robust DAMPING-LIMITED connection `fmag = fracMove·1e-6·strain/(dt·(mcHead+mcSeg))`
+     *       (the actin-layer PAIRS magnitude, VERBATIM moveC), applied at the attachment point with the full
+     *       positional torque R×F. Two such pins (HEAD_LEN apart on the head axis) hold the head RIGIDLY — position
+     *       AND orientation (the couple pins uVec ∥ filament; roll about uVec is a free decoupled DOF, so F9/F10 are
+     *       BOTH dropped). PAIRS reports NO load (it only maintains geometry, dt-robustly) ⇒ the gating question
+     *       (§6 "can PAIRS expose the load?") is SIDESTEPPED — the load is read from J1, not from these pins.
+     *   (2) J1 → Hookean torsional spring (in MotorJointSystem, config1 branch): rest still switches 0°↔60° with
+     *       nucleotide state (J1 still DRIVES the stroke) and its deflection under load IS the compliance.
+     *   (3) forceDotFil (the catch load) → the SIGNED J1 LEVER STRAIN: `(κ/L)·(θ_rest − θ)`, the lever-tip-
+     *       equivalent force of the J1 deflection, signed so resisting (held below the cocked rest) is POSITIVE
+     *       (the catch convention; matches the old +0.285 pN isometric sign). PAIRS pins, J1 reports.
+     *
+     * Same bondData stride-13 layout / head-self-write / seg-side gather (reused VERBATIM). Default path untouched.
+     * xbParams (config1): [0]=fracMove(PAIRS) [1]=κ(N·m/rad) [2]=leverLen(µm) [3]=dt [4]=HEAD_LEN(µm).
+     */
+    public static void bondForcesCanonicalConfig1(
+            FloatArray motorCoord, FloatArray motorUVec, FloatArray motorBTransGam, FloatArray motorBRotGam,
+            FloatArray filCoord, FloatArray filUVec, FloatArray filSegLength, FloatArray filBTransGam, FloatArray filBRotGam,
+            IntArray boundSeg, FloatArray bindArc, FloatArray bindArc2, IntArray nucleotideState,
+            FloatArray bondData, FloatArray xbParams) {
+
+        int nB = motorCoord.getSize() / 3;
+        int nSeg = filCoord.getSize() / 3;
+        int nM = nB / 3;
+        double fracMove = xbParams.get(0), kappa = xbParams.get(1), leverLenUm = xbParams.get(2);
+        double dt = xbParams.get(3), headLen = xbParams.get(4);
+        double DEG2RAD = Math.PI / 180.0, RAD2DEG = 180.0 / Math.PI;
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            int d = m * STRIDE;
+            for (int k = 0; k < STRIDE; k++) bondData.set(d + k, 0f);
+            int s = boundSeg.get(m);
+            if (s < 0) continue;
+
+            int h = 3 * m + 2, lv = 3 * m + 1;
+            double hcx = motorCoord.get(h), hcy = motorCoord.get(nB + h), hcz = motorCoord.get(2 * nB + h);
+            double hux = motorUVec.get(h), huy = motorUVec.get(nB + h), huz = motorUVec.get(2 * nB + h);
+            double hbTGx = motorBTransGam.get(h), hbTGy = motorBTransGam.get(nB + h), hbRGy = motorBRotGam.get(nB + h);
+            double tipx = hcx + 0.5 * headLen * hux, tipy = hcy + 0.5 * headLen * huy, tipz = hcz + 0.5 * headLen * huz;   // head.end2
+            double rearx = hcx - 0.5 * headLen * hux, reary = hcy - 0.5 * headLen * huy, rearz = hcz - 0.5 * headLen * huz; // head.end1 (J1 pivot)
+
+            double scx = filCoord.get(s), scy = filCoord.get(nSeg + s), scz = filCoord.get(2 * nSeg + s);
+            double sux = filUVec.get(s), suy = filUVec.get(nSeg + s), suz = filUVec.get(2 * nSeg + s);
+            double slen = filSegLength.get(s);
+            double sbTGx = filBTransGam.get(s), sbTGy = filBTransGam.get(nSeg + s), sbRGy = filBRotGam.get(nSeg + s);
+
+            // ---- PAIRS pin A: tip (head.end2) → site A (bindArc) ----
+            double aOffA = bindArc.get(m) - 0.5 * slen;
+            double apAx = scx + aOffA * sux, apAy = scy + aOffA * suy, apAz = scz + aOffA * suz;
+            double dAx = apAx - tipx, dAy = apAy - tipy, dAz = apAz - tipz;
+            double distA = Math.sqrt(dAx * dAx + dAy * dAy + dAz * dAz);
+            double FAx = 0, FAy = 0, FAz = 0;
+            if (distA > 0.0) {
+                double lAx = dAx / distA, lAy = dAy / distA, lAz = dAz / distA;
+                double mcH = moveC(hux, huy, huz, lAx, lAy, lAz, hbTGx, hbTGy, hbRGy, headLen);
+                double mcS = moveC(sux, suy, suz, lAx, lAy, lAz, sbTGx, sbTGy, sbRGy, slen);
+                double denom = dt * (mcH + mcS);
+                double fmag = (denom > 0.0) ? (fracMove * 1.0e-6 * distA / denom) : 0.0;
+                FAx = fmag * lAx; FAy = fmag * lAy; FAz = fmag * lAz;
+            }
+            // ---- PAIRS pin B: rear (head.end1) → site B (bindArc2) ----
+            double aOffB = bindArc2.get(m) - 0.5 * slen;
+            double apBx = scx + aOffB * sux, apBy = scy + aOffB * suy, apBz = scz + aOffB * suz;
+            double dBx = apBx - rearx, dBy = apBy - reary, dBz = apBz - rearz;
+            double distB = Math.sqrt(dBx * dBx + dBy * dBy + dBz * dBz);
+            double FBx = 0, FBy = 0, FBz = 0;
+            if (distB > 0.0) {
+                double lBx = dBx / distB, lBy = dBy / distB, lBz = dBz / distB;
+                double mcH = moveC(hux, huy, huz, lBx, lBy, lBz, hbTGx, hbTGy, hbRGy, headLen);
+                double mcS = moveC(sux, suy, suz, lBx, lBy, lBz, sbTGx, sbTGy, sbRGy, slen);
+                double denom = dt * (mcH + mcS);
+                double fmag = (denom > 0.0) ? (fracMove * 1.0e-6 * distB / denom) : 0.0;
+                FBx = fmag * lBx; FBy = fmag * lBy; FBz = fmag * lBz;
+            }
+
+            // ---- positional torques (R in metres) ----
+            double RtAx = (tipx - hcx) * 1e-6, RtAy = (tipy - hcy) * 1e-6, RtAz = (tipz - hcz) * 1e-6;
+            double THAx = RtAy * FAz - RtAz * FAy, THAy = RtAz * FAx - RtAx * FAz, THAz = RtAx * FAy - RtAy * FAx;
+            double RrBx = (rearx - hcx) * 1e-6, RrBy = (reary - hcy) * 1e-6, RrBz = (rearz - hcz) * 1e-6;
+            double THBx = RrBy * FBz - RrBz * FBy, THBy = RrBz * FBx - RrBx * FBz, THBz = RrBx * FBy - RrBy * FBx;
+            double RSAx = (apAx - scx) * 1e-6, RSAy = (apAy - scy) * 1e-6, RSAz = (apAz - scz) * 1e-6;
+            double TSAx = RSAy * (-FAz) - RSAz * (-FAy), TSAy = RSAz * (-FAx) - RSAx * (-FAz), TSAz = RSAx * (-FAy) - RSAy * (-FAx);
+            double RSBx = (apBx - scx) * 1e-6, RSBy = (apBy - scy) * 1e-6, RSBz = (apBz - scz) * 1e-6;
+            double TSBx = RSBy * (-FBz) - RSBz * (-FBy), TSBy = RSBz * (-FBx) - RSBx * (-FBz), TSBz = RSBx * (-FBy) - RSBy * (-FBx);
+
+            // ---- J1 lever strain → forceDotFil (the catch load; PAIRS pins, J1 reports) ----
+            double lux = motorUVec.get(lv), luy = motorUVec.get(nB + lv), luz = motorUVec.get(2 * nB + lv);
+            double dotV = lux * hux + luy * huy + luz * huz; if (dotV > 1) dotV = 1; if (dotV < -1) dotV = -1;
+            double angDeg = accurateAcos(dotV) * RAD2DEG;
+            double j1Rest = (nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? 60.0 : 0.0;
+            double deflRad = (angDeg - j1Rest) * DEG2RAD;
+            double leverM = leverLenUm * 1.0e-6;
+            double forceDot = (leverM > 0.0) ? (kappa / leverM) * (-deflRad) : 0.0;   // resisting (θ<rest) ⇒ +
+
+            bondData.set(d,     (float) (FAx + FBx)); bondData.set(d + 1, (float) (FAy + FBy)); bondData.set(d + 2, (float) (FAz + FBz));
+            bondData.set(d + 3, (float) (THAx + THBx));
+            bondData.set(d + 4, (float) (THAy + THBy));
+            bondData.set(d + 5, (float) (THAz + THBz));
+            bondData.set(d + 6, (float) (-(FAx + FBx))); bondData.set(d + 7, (float) (-(FAy + FBy))); bondData.set(d + 8, (float) (-(FAz + FBz)));
+            bondData.set(d + 9,  (float) (TSAx + TSBx));
+            bondData.set(d + 10, (float) (TSAy + TSBy));
+            bondData.set(d + 11, (float) (TSAz + TSBz));
+            bondData.set(d + 12, (float) forceDot);   // the J1 lever-strain load (NOT a pin tension)
+        }
+    }
+
     /** MEASUREMENT-ONLY parallel DASHPOT on F8 (CROSSBRIDGE_DASHPOT_FINDINGS). Kelvin-Voigt = spring ∥ dashpot:
      *  adds F_dash = γ_xb·(b_n − b_{n-1})/dt to the head-side force, where b = (site − head_tip) is the bond vector
      *  (so F_dash opposes the head's velocity RELATIVE to the site — a stretch-velocity, history-aware drag, NOT a

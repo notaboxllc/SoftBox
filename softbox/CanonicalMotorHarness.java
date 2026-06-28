@@ -41,6 +41,8 @@ public final class CanonicalMotorHarness {
 
     static final int B = 64;
     static final double MYO_SPRING = 1.0e-9, J1_FMT = 0.4;   // same locked benchmark foundation as the default stroke
+    static boolean CONFIG1 = false;                          // -config1: Config-1 architecture (PAIRS attachments + Hookean J1) for the step∝lever re-confirm
+    static final double KAPPA = 6.4e-20, PAIRS_FRACMOVE = 0.5;  // J1 torsional stiffness (N·m/rad), PAIRS pin strength (UNCALIBRATED)
     static final double FIL_Z = 0.0;          // pinned filament z
     static final double CON_DIST = 0.002;     // head sits 2 nm below the filament (< myoColTol 6 nm); sites at the feet
     static final double LEVER_TILT_DEG = 10.0;// initial lever tilt off the head axis (defines the x–z swing plane; F9 used to)
@@ -52,11 +54,14 @@ public final class CanonicalMotorHarness {
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("-3js")) { runViz(dt, args[++i]); return; }
             else if (args[i].equals("-cpu")) cpuOnly = true;
+            else if (args[i].equals("-config1")) CONFIG1 = true;
         }
+        if (CONFIG1) System.out.println("[CONFIG 1: PAIRS attachments + Hookean J1 (κ=" + KAPPA + " N·m/rad) — step∝lever re-confirm]\n");
         System.out.println("=== CANONICAL lever-arm motor — build + native-behavior characterization (NO calibration) ===");
         System.out.println("Two-point head pin + J1-carried stroke at the tail + lever-strain load. Explicit Hookean F8 @ dt=1e-5.");
         System.out.println("v1-DIVERGENT (deliberate): the motor cross-bridge is exempt from v1 bit-parity; v2-canonical is the reference.\n");
 
+        if (CONFIG1) { charArmSweep(dt); System.out.println("\n=== CONFIG-1 step∝lever re-confirm done (other gates use the non-config1 GPU path; skipped) ==="); return; }
         boolean g1 = charArmSweep(dt);                 // 1. step ∝ LEVER? J1 non-silent?
         boolean g2 = charLeverStrainSignal(dt);        // 2. the new load signal vs the old tip signal
         boolean g3 = charBindStrokeRelease(dt);        // 3. bind / stroke / release sanity + two-point reachability
@@ -371,6 +376,7 @@ public final class CanonicalMotorHarness {
         // jointParams: size 11 default; -isolate J1 freeze ⇒ size 12 with [11]=1
         FloatArray jp = mot.jointParams;
         if (freezeJ1) { FloatArray j = new FloatArray(12); for (int k = 0; k < 11; k++) j.set(k, jp.get(k)); j.set(11, 1f); jp = j; }
+        if (CONFIG1) { mot.enableConfig1(KAPPA); jp = mot.jointParamsC1; if (freezeJ1) jp.set(11, 1f); }
         sc.jointParamsRef = jp;
 
         // pre-establish the two-point bond directly (deterministic): tip → site A, rear → site B, on segment 0.
@@ -386,8 +392,11 @@ public final class CanonicalMotorHarness {
         }
 
         sc.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
-        // xbParams: [0]=myoSpring [1]=unused [2]=j1FMT(F10) [3]=dt [4]=HEAD_LEN
-        sc.xbParams = FloatArray.fromElements((float) MYO_SPRING, 0f, (float) J1_FMT, (float) dt, (float) headLen, 0f);
+        // xbParams: default canonical [0]=myoSpring [1]=unused [2]=j1FMT(F10) [3]=dt [4]=HEAD_LEN;
+        // config1 [0]=fracMove(PAIRS) [1]=κ [2]=leverLen [3]=dt [4]=HEAD_LEN
+        sc.xbParams = CONFIG1
+            ? FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) leverLen, (float) dt, (float) headLen)
+            : FloatArray.fromElements((float) MYO_SPRING, 0f, (float) J1_FMT, (float) dt, (float) headLen, 0f);
         sc.segMotorCount = new IntArray(nSeg); sc.segMotorOffsets = new IntArray(nSeg + 1); sc.segMotorMyo = new IntArray(nMot);
         sc.fil = fil; sc.mot = mot;
         return sc;
@@ -489,8 +498,12 @@ public final class CanonicalMotorHarness {
             ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
             MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, jp, mot.counts);
             if (sc.anchorTail) TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, jp, mot.counts);
-            CrossBridgeSystem.bondForcesCanonical(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
-                    mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParams);
+            if (CONFIG1)
+                CrossBridgeSystem.bondForcesCanonicalConfig1(b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam,
+                        mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParams);
+            else
+                CrossBridgeSystem.bondForcesCanonical(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                        mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParams);
             CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
             RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
             DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);

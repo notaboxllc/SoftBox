@@ -112,7 +112,8 @@ public final class NucleotideCycleSystem {
                     else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
                     continue;
                 }
-                float F = forceDotFil.get(m);
+                float fExt = kinParams.getSize() > 18 ? kinParams.get(18) : 0f;   // step-4a sustained-load injection (0 ⇒ byte-id)
+                float F = forceDotFil.get(m) + fExt;
                 float rate = kOff * (aCatch * (float) Math.exp(-F * xCatch / kT) + aSlip * (float) Math.exp(F * xSlip / kT));
                 int h = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4D54);  // release salt
                 float u = (h >>> 1) / 2147483647.0f;
@@ -181,7 +182,8 @@ public final class NucleotideCycleSystem {
                     else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
                     continue;
                 }
-                float F = Favg;   // <-- the ONLY rate change: time-averaged F (vs instantaneous forceDotFil)
+                float fExt = kinParams.getSize() > 18 ? kinParams.get(18) : 0f;   // step-4a sustained-load injection (DC, survives the EMA)
+                float F = Favg + fExt;   // <-- the rate input: time-averaged thermal F + the sustained mean load
                 float rate = kOff * (aCatch * (float) Math.exp(-F * xCatch / kT) + aSlip * (float) Math.exp(F * xSlip / kT));
                 int h = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4D54);  // release salt
                 float u = (h >>> 1) / 2147483647.0f;

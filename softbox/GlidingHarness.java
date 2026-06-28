@@ -50,6 +50,17 @@ public final class GlidingHarness {
     static boolean DASH_MECH = false;            // -xbdashmech: dashpot mechanical force only (catch reads spring load)
     // ---- IMPLICIT_CROSSBRIDGE (flag-gated; default-off ⇒ explicit Hookean, byte-identical) ----
     static boolean XB_IMPLICIT = false;          // -xbimplicit: locally-implicit bound-head cross-bridge spring (c_imp=(c_exp+r·c_n)/(1+r))
+    static boolean CANONICAL = false;            // -canonical: PHASE-2 Version-B two-point canonical motor (bindCanonicalTwoPoint + bondForcesCanonical). Default off ⇒ byte-identical.
+    static boolean CANON_DIAG = false;           // -canondiag: instrument the Version-B binder (formation rate, snap magnitude, legal-pose, lever-strain under thermal load). Implies -canonical.
+    static boolean CONFIG1 = false;              // -config1: PHASE-2 Config-1 composed architecture (PAIRS attachments + Hookean J1 load). Implies -canonical.
+    static double  KAPPA = 6.4e-20;              // J1 torsional stiffness (N·m/rad); κ = k_tip·L² ≈ 1e-3·(8e-9)². -kappa overrides. NOT calibrated.
+    static double  PAIRS_FRACMOVE = 0.5;         // PAIRS attachment fracMove (dt-robust pin strength); not calibrated
+    static double  KON = 0.0;                    // -kon: reaction-limited attachment rate (µm^-1 s^-1); 0 ⇒ saturated bind-on-contact. PHASE-2 step-3 calibration target.
+    static boolean SINGLE = false;               // -single: single-molecule duty assay (proximal motors on a fixed filament)
+    static double  SINGLE_Z = -0.090;            // -singlez: single-molecule anchor z (positions the cycling head's bob range at the filament)
+    static double  TAU_AVG = 0.0;                // -tauavg <ms>: time-averaged catch input (EMA window τ); 0 ⇒ instantaneous (byte-identical). PHASE-2 step-4a Jensen fix.
+    static double  F_EXT = 0.0;                  // -fext <pN>: sustained external load injected into the catch input (force-response guard)
+    static boolean ACORR = false;                // -acorr: measure the J1-strain autocorrelation (τ_thermal) in the single-molecule assay
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static final double DENSITY = 500.0;        // motors / µm²
@@ -108,6 +119,17 @@ public final class GlidingHarness {
             else if (args[i].equals("-xbdash")) { XBDASH_MULT = Double.parseDouble(args[++i]); DASH_ON = XBDASH_MULT != 0.0; }  // MEASUREMENT-ONLY parallel dashpot (γ_xb = mult·γ_head)
             else if (args[i].equals("-xbdashmech")) DASH_MECH = true;  // dashpot mechanical force only (catch reads spring load)
             else if (args[i].equals("-xbimplicit")) XB_IMPLICIT = true;  // IMPLICIT_CROSSBRIDGE locally-implicit bound-head spring
+            else if (args[i].equals("-canonical")) CANONICAL = true;     // PHASE-2 Version-B two-point canonical motor
+            else if (args[i].equals("-canondiag")) { CANONICAL = true; CANON_DIAG = true; }  // + instrument the binder
+            else if (args[i].equals("-config1")) { CANONICAL = true; CONFIG1 = true; }       // PHASE-2 Config-1 (PAIRS + Hookean J1)
+            else if (args[i].equals("-config1diag")) { CANONICAL = true; CONFIG1 = true; CANON_DIAG = true; }
+            else if (args[i].equals("-kappa")) KAPPA = Double.parseDouble(args[++i]);          // J1 torsional stiffness override (N·m/rad)
+            else if (args[i].equals("-kon")) KON = Double.parseDouble(args[++i]);              // reaction-limited attachment rate (µm^-1 s^-1)
+            else if (args[i].equals("-single")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; }  // single-molecule duty assay (Config-1)
+            else if (args[i].equals("-singlez")) SINGLE_Z = Double.parseDouble(args[++i]);             // single-molecule anchor z override
+            else if (args[i].equals("-tauavg")) TAU_AVG = Double.parseDouble(args[++i]) * 1.0e-3;       // time-averaged catch window τ (ms → s)
+            else if (args[i].equals("-fext")) F_EXT = Double.parseDouble(args[++i]);                    // sustained external load (pN)
+            else if (args[i].equals("-acorr")) ACORR = true;                                            // J1-strain autocorrelation diagnostic
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
@@ -117,7 +139,8 @@ public final class GlidingHarness {
 
         for (String a : args) if (a.equals("-forcetest")) { forceTest(); return; }
 
-        System.out.println("=== Soft Box increment 4b-iv — gliding assay (cheap probe) ===");
+        if (CANONICAL && FRESH_READ) { System.out.println("ERROR: -canonical is only wired for the default step order (not -freshread)."); System.exit(2); }
+        System.out.println("=== Soft Box increment 4b-iv — gliding assay (cheap probe)" + (CANONICAL ? " [PHASE-2 CANONICAL Version-B two-point motor]" : "") + " ===");
         Scene sc = buildScene();
         System.out.printf("config: %d-seg filament (%.2f µm) at z=%.3f, %d motors @ %.0f/µm² strip, dt=%.0e%n",
                 sc.fil.n, sc.fil.n * sc.segL, FIL_Z, sc.mot.nMotors, DENSITY, DT);
@@ -136,6 +159,8 @@ public final class GlidingHarness {
                 r, DT, 1.0 - r, 1.0 / (1.0 + r));
         }
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
+        if (SINGLE) { singleMolecule(sc, Math.max(M, 30000)); return; }
+        if (CANON_DIAG) { canonDiag(sc, Math.max(M, 12000)); return; }
         if (diag) { diagnose(sc, Math.max(M, 8000)); return; }
         if (cycldiag) { cyclediag(sc, Math.max(M, 8000)); return; }
         if (grid) { measureGrid(sc, M, gpu); return; }
@@ -148,6 +173,7 @@ public final class GlidingHarness {
     static final class Scene {
         FilamentStore fil; MotorStore mot;
         FloatArray bondData, xbParams, boxParams;
+        FloatArray xbParamsC1, jointParams;   // CONFIG 1: PAIRS+Hookean-J1 xbParams + the size-14 jointParams (= mot.jointParams when not config1)
         IntArray segMotorCount, segMotorOffsets, segMotorMyo;
         IntArray reachSeg; IntArray reachCount;
         double segL, x0;
@@ -192,16 +218,38 @@ public final class GlidingHarness {
         double bedXlo = bXlo, bedXhi = bXhi;          // explicit bed x-extent (matches v1's box)
         double bedYhalf = bYhalf;                     // y-width (boxYDim) → governs the finite-size effect
         double bedX = bedXhi - bedXlo, bedY = 2 * bedYhalf;
-        int nMot = (int) Math.round(DENSITY * bedX * bedY);
-        MotorStore mot = new MotorStore(nMot);
+        int nMot;
+        MotorStore mot;
+        if (SINGLE) {
+            // SINGLE-MOLECULE duty assay: N motors held in PROXIMITY directly under the (fixed) filament line,
+            // their head equilibrium AT the filament (anchor z so head-tip ≈ z=0) ⇒ frequently IN REACH ⇒ the duty
+            // is KINETICALLY gated (kOn vs catch), NOT geometry-confounded (the avgBound/2000 trap §1). Each motor
+            // is an independent single-molecule realization; the aggregate is the duty ratio.
+            nMot = 256;
+            double anchorZ = SINGLE_Z;                   // positions the cycling head's bob range at the filament (tuned for high in-reach)
+            double cx = x0 - 0.5 * (nSeg - 1) * L;       // filament centre x
+            mot = new MotorStore(nMot);
+            java.util.Random rngS = new java.util.Random(SEED);
+            for (int m = 0; m < nMot; m++) {
+                float ax = (float) (cx + (rngS.nextDouble() - 0.5) * 0.6);   // over the middle of the filament
+                float ay = (float) ((rngS.nextDouble() - 0.5) * 0.004);      // tight under the line
+                mot.assembleArticulated(m, ax, ay, (float) anchorZ, 0f, 0f, 1f, (float) Constants.BTransCoeff);
+            }
+        } else {
+        nMot = (int) Math.round(DENSITY * bedX * bedY);
+        mot = new MotorStore(nMot);
         java.util.Random rng = new java.util.Random(SEED);
         for (int m = 0; m < nMot; m++) {
             float ax = (float) (bedXlo + rng.nextDouble() * bedX);
             float ay = (float) (-bedYhalf + rng.nextDouble() * bedY);
             mot.assembleArticulated(m, ax, ay, (float) ANCHOR_Z, 0f, 0f, 1f, (float) Constants.BTransCoeff);
         }
+        }
         DragTensorSystem.run(mot);
         mot.setBodyParams(DT); mot.setJointParams(DT); mot.setKinParams(0.006, -0.4, DT); mot.setNucParams(DT);
+        if (KON > 0) mot.setSearchParams(KON, 0);        // PHASE-2 step-3: reaction-limited attachment rate kОn (kinParams[14])
+        if (TAU_AVG > 0) mot.setReleaseForceAvg(TAU_AVG, DT);   // PHASE-2 step-4a: time-averaged catch input (EMA window τ)
+        if (F_EXT != 0) mot.setExtLoad(F_EXT);           // sustained-load injection (force-response guard)
         if (NO_REFRACTORY) mot.kinParams.set(10, 0f);   // §6.6 OFF bracket: no rebind refractory
         mot.setFaithfulRelease(FAITHFUL_RELEASE, 0.0);  // §6.10 default off (v1 12 pN threshold)
         mot.setFaithfulRefractory(FAITHFUL_REFRACTORY); // §6.11 default off (HEAD 100%/1-step block)
@@ -215,6 +263,15 @@ public final class GlidingHarness {
             ? FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS,
                                       (float) XBSAT_MODE, (float) XBSAT_FMAX, (float) XBSAT_ONSET)
             : FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS);
+        // CONFIG 1: PAIRS attachments + Hookean J1. xbParamsC1 = [fracMove, κ, leverLen, dt, HEAD_LEN]; the
+        // size-14 jointParams (Hookean J1) via enableConfig1. Not config1 ⇒ jointParams = mot.jointParams (byte-id).
+        if (CONFIG1) {
+            mot.enableConfig1(KAPPA);
+            sc.xbParamsC1 = FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) MotorStore.LEVER_LEN, (float) DT, (float) MotorStore.HEAD_LEN);
+            sc.jointParams = mot.jointParamsC1;
+        } else {
+            sc.jointParams = mot.jointParams;
+        }
         sc.segMotorCount = new IntArray(nSeg); sc.segMotorOffsets = new IntArray(nSeg + 1); sc.segMotorMyo = new IntArray(nMot);
         sc.reachSeg = new IntArray(nMot * MAXC); sc.reachSeg.init(-1); sc.reachCount = new IntArray(nMot);
         // in-vitro chamber matching the bed (v1 MyoMiniFilament.checkOuterBugCollision law): [tau, boxX, boxY, boxZ, R, coeff, checkInt]
@@ -235,19 +292,33 @@ public final class GlidingHarness {
         MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
         BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
         long _rel = tns();
-        NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+        if (TAU_AVG > 0)
+            NucleotideCycleSystem.catchSlipReleaseAvg(mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+        else
+            NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
         sliceNs[RELEASE] += tns() - _rel;
-        BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        if (CANONICAL)
+            BindingDetectionSystem.bindCanonicalTwoPoint(b.coord, b.uVec, b.segLength, f.end1, f.end2, f.segLength,
+                    sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.kinParams, mot.counts);
+        else
+            BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
         // --- motor nucleotide cycle + dynamics ---
         NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
         ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
         long _mb = tns();
         BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
         sliceNs[MOTADV] += tns() - _mb;
-        MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
-        TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts);
+        MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, sc.jointParams, mot.counts);
+        TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, sc.jointParams, mot.counts);
         long _bf = tns();
-        CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+        if (CONFIG1)
+            CrossBridgeSystem.bondForcesCanonicalConfig1(b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam,
+                    mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParamsC1);
+        else if (CANONICAL)
+            CrossBridgeSystem.bondForcesCanonical(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                    mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParams);
+        else
+            CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
                 mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
         if (DASH_ON) CrossBridgeSystem.dashpotForces(b.coord, b.uVec, b.bTransGam, f.coord, f.uVec, f.segLength,
                 mot.boundSeg, mot.bindArc, sc.bondData, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
@@ -260,6 +331,10 @@ public final class GlidingHarness {
         RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
         if (XB_IMPLICIT) CrossBridgeSystem.implicitCorrect(b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, mot.xbImplParams);
         DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        // Version-B head snap (placed LATE to match the GPU graph — see buildPlan: an early body-write task
+        // breaks the PTX-lowered bind). Takes effect on the next step's bond ⇒ CPU/GPU snap timing identical.
+        if (CANONICAL) BindingDetectionSystem.snapCanonicalHead(b.coord, b.uVec, b.yVec, b.segLength, f.end1, f.uVec,
+                mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.counts);
         sliceNs[MOTADV] += tns() - _mi;
         long _rf = tns();
         CrossBridgeSystem.registerForceDot(sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts);
@@ -343,6 +418,9 @@ public final class GlidingHarness {
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, f.counts);
         if (DASH_ON) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
         if (XB_IMPLICIT) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.xbImplPrev, mot.xbImplParams);
+        if (CANONICAL) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.bindArc2, mot.canonSnap);
+        if (CONFIG1) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.xbParamsC1, sc.jointParams);
+        if (TAU_AVG > 0) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.forceDotAvg, mot.avgInit);
         // reach (common)
         tg = tg
             .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
@@ -378,15 +456,26 @@ public final class GlidingHarness {
                 .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
         } else {
             // default: release/cycle read last step's forceDotFil (force computed after them).
+            if (TAU_AVG > 0)
+                tg = tg.task("release", NucleotideCycleSystem::catchSlipReleaseAvg, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+            else
+                tg = tg.task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+            if (CANONICAL)
+                tg = tg.task("bind", BindingDetectionSystem::bindCanonicalTwoPoint, b.coord, b.uVec, b.segLength, f.end1, f.end2, f.segLength, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.kinParams, mot.counts);
+            else
+                tg = tg.task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
             tg = tg
-                .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts)
-                .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts)
                 .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts)
                 .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
                 .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
-                .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
-                .task("anchor", TailAnchorSystem::anchor, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts)
-                .task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
+                .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, sc.jointParams, mot.counts)
+                .task("anchor", TailAnchorSystem::anchor, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, sc.jointParams, mot.counts);
+            if (CONFIG1)
+                tg = tg.task("bond", CrossBridgeSystem::bondForcesCanonicalConfig1, b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParamsC1);
+            else if (CANONICAL)
+                tg = tg.task("bond", CrossBridgeSystem::bondForcesCanonical, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParams);
+            else
+                tg = tg.task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
             if (DASH_ON) tg = tg.task("dash", CrossBridgeSystem::dashpotForces, b.coord, b.uVec, b.bTransGam, f.coord, f.uVec, f.segLength, mot.boundSeg, mot.bindArc, sc.bondData, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
             tg = tg.task("applyHead", CrossBridgeSystem::applyHeadForce, sc.bondData, b.forceSum, b.torqueSum, mot.counts);
             if (BOX_ALL) tg = tg.task("confineMot", ContainmentSystem::confine, b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum, sc.boxParams, mot.counts);
@@ -395,7 +484,13 @@ public final class GlidingHarness {
                 .task("integMot", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
             if (XB_IMPLICIT) tg = tg.task("xbImpl", CrossBridgeSystem::implicitCorrect, b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, mot.xbImplParams);
             tg = tg
-                .task("deriveMot", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts)
+                .task("deriveMot", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+            // PHASE-2 Version-B head snap — placed LATE (after deriveMot, like integrate) because a body-writing
+            // task placed EARLY (before the force/integrate tasks) breaks the PTX-lowered bind (measured). The
+            // snap therefore takes effect on the NEXT step's bond (a ≤1-step timing delay vs the CPU same-step
+            // snap — within the chaotic aggregate-within-SEM standard).
+            if (CANONICAL) tg = tg.task("snapHead", BindingDetectionSystem::snapCanonicalHead, b.coord, b.uVec, b.yVec, b.segLength, f.end1, f.uVec, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.counts);
+            tg = tg
                 .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
                 .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
                 .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
@@ -417,6 +512,7 @@ public final class GlidingHarness {
         int nB = 3 * mot.nMotors, nM = mot.nMotors, nSeg = f.n;
         sched = new GridScheduler();
         for (String t : new String[]{ "publishHead","reach","release","bind","cycle","anchor","bond","applyHead","register" }) addW("gliding." + t, pad(nM));
+        if (CANONICAL) addW("gliding.snapHead", pad(nM));
         if (DASH_ON) addW("gliding.dash", pad(nM));
         if (XB_IMPLICIT) { addW("gliding.xbSnap", pad(nM)); addW("gliding.xbImpl", pad(nM)); }
         for (String t : new String[]{ "zeroMot","brownMot","joints","integMot","deriveMot" }) addW("gliding." + t, pad(nB));
@@ -437,6 +533,313 @@ public final class GlidingHarness {
         double lo = 1e9, hi = -1e9; for (int i = 0; i < f.n; i++) { double y = f.coordY(i); lo = Math.min(lo, y); hi = Math.max(hi, y); } return hi - lo;
     }
     static long bound(MotorStore m) { long c = 0; for (int i = 0; i < m.nMotors; i++) if (m.boundSeg.get(i) >= 0) c++; return c; }
+
+    // ===================== PHASE-2 Version-B binder characterization (-canondiag) =====================
+    /** Host nearest-reachable arc (mirrors the kernel's tip search over the reach set): returns the tip arc
+     *  (from e1) of the nearest gated candidate, or NaN if none. Used to classify formation FAILURES. */
+    static double nearestArc(Scene sc, int m) {
+        MotorStore mot = sc.mot; FilamentStore f = sc.fil; RigidRodBody b = mot.body;
+        int head = 3 * m + 2; double hl = b.segLength.get(head);
+        double mx = b.coordX(head) + 0.5 * hl * b.uVecX(head);
+        double my = b.coordY(head) + 0.5 * hl * b.uVecY(head);
+        double mz = b.coordZ(head) + 0.5 * hl * b.uVecZ(head);
+        double mux = b.uVecX(head), muy = b.uVecY(head), muz = b.uVecZ(head);
+        double rux = b.uVecX(3 * m), ruy = b.uVecY(3 * m), ruz = b.uVecZ(3 * m);
+        double myoColTol = mot.kinParams.get(7), alignTol = mot.kinParams.get(8);
+        int cnt = sc.reachCount.get(m); int MAXC = SpatialGrid.MAX_CAND; if (cnt > MAXC) cnt = MAXC;
+        double bestD = 1e30, bestArc = Double.NaN;
+        for (int k = 0; k < cnt; k++) {
+            int s = sc.reachSeg.get(m * MAXC + k);
+            double e1x = f.end1.get(s), e1y = f.end1.get(f.n + s), e1z = f.end1.get(2 * f.n + s);
+            double e2x = f.end2.get(s), e2y = f.end2.get(f.n + s), e2z = f.end2.get(2 * f.n + s);
+            double r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+            double den = r1x * r1x + r1y * r1y + r1z * r1z; if (den <= 0) continue;
+            double a = ((mx - e1x) * r1x + (my - e1y) * r1y + (mz - e1z) * r1z) / den;
+            if (a < 0 || a > 1) continue;
+            double cx = e1x + a * r1x, cy = e1y + a * r1y, cz = e1z + a * r1z;
+            double dd = (cx - mx) * (cx - mx) + (cy - my) * (cy - my) + (cz - mz) * (cz - mz);
+            if (dd >= myoColTol * myoColTol) continue;
+            double inv = 1.0 / Math.sqrt(den);
+            double fux = r1x * inv, fuy = r1y * inv, fuz = r1z * inv;
+            if (mux * fux + muy * fuy + muz * fuz < alignTol) continue;
+            if (rux * fux + ruy * fuy + ruz * fuz < 0) continue;
+            if (dd < bestD) { bestD = dd; bestArc = a * Math.sqrt(den); }
+        }
+        return bestArc;
+    }
+
+    /** Instrument the live thermal Version-B binder: dynamic two-point formation, formation success rate +
+     *  end-clustering, the legal-pose check, the bind-time snap magnitude/transient, the lever-strain signal
+     *  under thermal load, native binding rate, and glide. CPU runner (the per-step bind moment must be read
+     *  before integrate overwrites the snapped head). */
+    static void canonDiag(Scene sc, int M) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        int nM = mot.nMotors;
+        double HEAD = MotorStore.HEAD_LEN, alignTol = mot.kinParams.get(8);
+        System.out.println("\n=== PHASE-2 " + (CONFIG1 ? "CONFIG-1 (PAIRS attachments + Hookean J1 load)" : "Version-B two-point") + " — native characterization (thermal gliding, dt=" + DT + ") ===");
+        if (CONFIG1) System.out.printf("  Config 1: PAIRS fracMove=%.2f, J1 Hookean κ=%.3g N·m/rad (= k_tip·L², UNCALIBRATED), forceDotFil = signed J1 lever strain%n", PAIRS_FRACMOVE, KAPPA);
+        System.out.printf("  bed %d motors, %d-seg filament (segLen %.4f µm = %.1f nm), HEAD_LEN %.1f nm, myoColTol %.1f nm%n",
+                nM, f.n, sc.segL, sc.segL * 1e3, HEAD * 1e3, mot.kinParams.get(7) * 1e3);
+
+        long captures = 0, formations = 0, failures = 0, failMinusEnd = 0;
+        double snapAngSum = 0, snapAngMax = 0, snapAngMin = 180;
+        double rearDispSum = 0, rearDispMax = 0;
+        double bindF8Sum = 0, bindF8Max = 0, bindFdSum = 0; long bindN = 0;
+        int legalViolations = 0; double minMotDotFil = 1.0;
+        double failArcSum = 0; long failArcN = 0;
+        // steady-window lever-strain (forceDotFil) under thermal load
+        double fdSum = 0, fdAbsSum = 0, fdSqSum = 0, fdAbsMax = 0; long fdN = 0;
+        int[] fdHist = new int[1001];   // |forceDotFil| histogram, 0.5 pN bins to 500 pN (for p99)
+        long boundSum = 0; int warm = M / 3;
+        double cx0 = 0; boolean nan = false;
+
+        int[] preBound = new int[nM]; boolean[] cap = new boolean[nM];
+        double[] preUx = new double[nM], preUy = new double[nM], preUz = new double[nM];
+        double[] preRx = new double[nM], preRy = new double[nM], preRz = new double[nM];
+
+        for (int t = 0; t < M; t++) {
+            mot.setCounts(t, SEED, f.n); f.counts.set(1, t);
+            MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
+            BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
+            NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+            // ---- snapshot pre-bind (free motors with a candidate = tip-captures) ----
+            for (int m = 0; m < nM; m++) {
+                preBound[m] = mot.boundSeg.get(m);
+                cap[m] = (preBound[m] == MotorStore.FREE_BINDABLE) && sc.reachCount.get(m) > 0;
+                if (cap[m]) {
+                    int h = 3 * m + 2; double hl = b.segLength.get(h);
+                    preUx[m] = b.uVecX(h); preUy[m] = b.uVecY(h); preUz[m] = b.uVecZ(h);
+                    preRx[m] = b.coordX(h) - 0.5 * hl * b.uVecX(h);
+                    preRy[m] = b.coordY(h) - 0.5 * hl * b.uVecY(h);
+                    preRz[m] = b.coordZ(h) - 0.5 * hl * b.uVecZ(h);
+                }
+            }
+            BindingDetectionSystem.bindCanonicalTwoPoint(b.coord, b.uVec, b.segLength, f.end1, f.end2, f.segLength,
+                    sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.kinParams, mot.counts);
+            BindingDetectionSystem.snapCanonicalHead(b.coord, b.uVec, b.yVec, b.segLength, f.end1, f.uVec,
+                    mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.counts);
+            // ---- classify post-bind ----
+            for (int m = 0; m < nM; m++) {
+                if (!cap[m]) continue;
+                captures++;
+                int s = mot.boundSeg.get(m);
+                if (s >= 0) {
+                    formations++;
+                    int h = 3 * m + 2;
+                    double dotU = preUx[m] * b.uVecX(h) + preUy[m] * b.uVecY(h) + preUz[m] * b.uVecZ(h);
+                    if (dotU > 1) dotU = 1; if (dotU < -1) dotU = -1;
+                    double ang = Math.toDegrees(Math.acos(dotU));
+                    snapAngSum += ang; snapAngMax = Math.max(snapAngMax, ang); snapAngMin = Math.min(snapAngMin, ang);
+                    double hl = b.segLength.get(h);
+                    double rx = b.coordX(h) - 0.5 * hl * b.uVecX(h), ry = b.coordY(h) - 0.5 * hl * b.uVecY(h), rz = b.coordZ(h) - 0.5 * hl * b.uVecZ(h);
+                    double rd = Math.sqrt((rx - preRx[m]) * (rx - preRx[m]) + (ry - preRy[m]) * (ry - preRy[m]) + (rz - preRz[m]) * (rz - preRz[m]));
+                    rearDispSum += rd; rearDispMax = Math.max(rearDispMax, rd);
+                    // legal-pose: motDotFil of the snapped head vs the bound segment must pass the gate
+                    double sux = f.uVec.get(s), suy = f.uVec.get(f.n + s), suz = f.uVec.get(2 * f.n + s);
+                    double motDotFil = b.uVecX(h) * sux + b.uVecY(h) * suy + b.uVecZ(h) * suz;
+                    minMotDotFil = Math.min(minMotDotFil, motDotFil);
+                    if (motDotFil < alignTol) legalViolations++;
+                } else {
+                    failures++;
+                    double arc = nearestArc(sc, m);
+                    if (!Double.isNaN(arc)) { failArcSum += arc; failArcN++; if (arc < HEAD) failMinusEnd++; }
+                }
+            }
+            // ---- the rest of the step (canonical dynamics) ----
+            NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
+            ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
+            BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
+            MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, sc.jointParams, mot.counts);
+            TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, sc.jointParams, mot.counts);
+            if (CONFIG1)
+                CrossBridgeSystem.bondForcesCanonicalConfig1(b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam,
+                        mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParamsC1);
+            else
+                CrossBridgeSystem.bondForcesCanonical(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                        mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParams);
+            // ---- bind-time transient: |net F8| + forceDotFil of motors that JUST formed ----
+            for (int m = 0; m < nM; m++) {
+                if (!cap[m] || mot.boundSeg.get(m) < 0) continue;
+                int d = m * CrossBridgeSystem.STRIDE;
+                double fx = sc.bondData.get(d), fy = sc.bondData.get(d + 1), fz = sc.bondData.get(d + 2);
+                double f8 = Math.sqrt(fx * fx + fy * fy + fz * fz);
+                bindF8Sum += f8; bindF8Max = Math.max(bindF8Max, f8); bindFdSum += Math.abs(sc.bondData.get(d + 12)); bindN++;
+            }
+            CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+            RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+            DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+            CrossBridgeSystem.registerForceDot(sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts);
+            ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+            BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+            ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+            CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sc.segMotorCount);
+            CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
+            CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
+            CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
+            RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+            DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+
+            if (t == warm) cx0 = centroidX(f);
+            if (t >= warm) {
+                boundSum += bound(mot);
+                for (int m = 0; m < nM; m++) {
+                    if (mot.boundSeg.get(m) < 0) continue;
+                    double fd = mot.forceDotFil.get(m);
+                    fdSum += fd; fdAbsSum += Math.abs(fd); fdSqSum += fd * fd; fdAbsMax = Math.max(fdAbsMax, Math.abs(fd)); fdN++;
+                    int bin = (int) (Math.abs(fd) * 1e12 / 0.5); if (bin > 1000) bin = 1000; fdHist[bin]++;
+                }
+            }
+            if (Double.isNaN(centroidX(f))) nan = true;
+        }
+
+        double cxN = centroidX(f);
+        double velSteady = (cxN - cx0) / ((M - warm) * DT);
+        double avgB = boundSum / (double) (M - warm);
+        System.out.println("\n  --- (1) does dynamic two-point capture form during a LIVE THERMAL run? ---");
+        System.out.printf("      tip-captures=%d, two-point formations=%d, failures=%d  ⇒ %s%n",
+                captures, formations, failures, formations > 0 ? "YES — motors form the two-point along-filament pose on the fly" : "NO — no two-point formation");
+        System.out.println("\n  --- (2) two-point formation success rate + where failures cluster ---");
+        System.out.printf("      formation success = %.2f%% of tip-captures (%d/%d); failures = %.2f%%%n",
+                100.0 * formations / Math.max(1, captures), formations, captures, 100.0 * failures / Math.max(1, captures));
+        System.out.printf("      of failures, %.1f%% have nearest tip-arc < HEAD_LEN (rear runs off the segment's minus end); mean fail tip-arc = %.1f nm (segLen %.1f nm)%n",
+                100.0 * failMinusEnd / Math.max(1, failArcN), failArcN > 0 ? failArcSum / failArcN * 1e3 : 0, sc.segL * 1e3);
+        System.out.printf("      [expected per-segment fail fraction ≈ HEAD_LEN/segLen = %.1f%% — failures are the same-segment-only restriction at each segment's e1]%n",
+                100.0 * HEAD / sc.segL);
+        System.out.println("\n  --- (1-check) legal-pose: the snapped along-filament pose under the existing gates ---");
+        System.out.printf("      min motDotFil(snapped) = %.4f  (alignTol = %.2f); legal-pose violations = %d  ⇒ %s%n",
+                minMotDotFil, alignTol, legalViolations, legalViolations == 0 ? "the gates ACCEPT the along-filament pose (no inconsistency)" : "*PAUSE: gates REJECT the canonical pose*");
+        System.out.println("\n  --- (2-check) bind-time snap magnitude / transient ---");
+        System.out.printf("      head rotation at snap: mean %.1f°, range [%.1f°, %.1f°]  (perpendicular→along-filament ≈ 90°)%n",
+                formations > 0 ? snapAngSum / formations : 0, snapAngMin, snapAngMax);
+        System.out.printf("      rear(J1-pivot) displacement: mean %.1f nm, max %.1f nm  (jolts the J1 *connection* spring — fracMove damping-limited, dt-robust)%n",
+                formations > 0 ? rearDispSum / formations * 1e3 : 0, rearDispMax * 1e3);
+        if (CONFIG1) {
+            System.out.printf("      bind-step PAIRS |net pin force| mean %.3f pN (max %.3f pN — gentle, dt-robust), mean |forceDotFil(J1 strain at bind)| %.3f pN%n",
+                    bindN > 0 ? bindF8Sum / bindN * 1e12 : 0, bindF8Max * 1e12, bindN > 0 ? bindFdSum / bindN * 1e12 : 0);
+            System.out.println("      ⇒ PAIRS pins gently; the J1-strain bind load reflects the J1 deflection at the binding nucleotide state (not a soft-spring overshoot)");
+        } else {
+            System.out.printf("      bind-step |net F8| mean %.3f pN (max %.3f pN, BOUNDED ≤ 2·myoSpring·myoColTol = %.1f pN — the perpendicular PIN toward the axis), mean |forceDotFil| %.4f pN%n",
+                    bindN > 0 ? bindF8Sum / bindN * 1e12 : 0, bindF8Max * 1e12, 2.0 * (MYO_SPRING * 1e12) * (mot.kinParams.get(7) * 1e3),
+                    bindN > 0 ? bindFdSum / bindN * 1e12 : 0);
+            System.out.println("      ⇒ the along-filament load the CATCH reads is ~0 at bind (both F8 ⟂ axis) ⇒ GENTLE bind (no along-fil overshoot at formation)");
+        }
+        System.out.println("\n  --- (3) native binding rate / avgBound (UNCALIBRATED kOn) ---");
+        System.out.printf("      avgBound(steady) = %.2f over %d motors (%.3f%% duty); formations/step = %.3f%n",
+                avgB, nM, 100.0 * avgB / nM, formations / (double) M);
+        System.out.println("\n  --- (4) does it GLIDE? ---");
+        System.out.printf("      steady velocity = %.3f µm/s (%s); net Δx = %.4f µm over %.4f s; z-drift %.4f µm; NaN=%s%n",
+                velSteady, velSteady < 0 ? "−x ✓ directed gliding" : "+x/0 ?", cxN - cx0, (M - warm) * DT, centroidZ(f) - FIL_Z, nan);
+        System.out.println("\n  --- (5) dt-gentleness of the lever-strain signal UNDER THERMAL LOAD (the key open question) ---");
+        double fdMean = fdN > 0 ? fdSum / fdN : 0, fdAbsMean = fdN > 0 ? fdAbsSum / fdN : 0, fdRms = fdN > 0 ? Math.sqrt(fdSqSum / fdN) : 0;
+        double p99 = 0; long acc99 = 0, tgt99 = (long) (0.99 * fdN);
+        for (int bin = 0; bin <= 1000; bin++) { acc99 += fdHist[bin]; if (acc99 >= tgt99) { p99 = bin * 0.5; break; } }
+        System.out.printf("      forceDotFil over bound motors: mean %.4f pN, mean|·| %.4f pN, RMS %.4f pN, p99|·| %.2f pN, max|·| %.4f pN%n",
+                fdMean * 1e12, fdAbsMean * 1e12, fdRms * 1e12, p99, fdAbsMax * 1e12);
+        System.out.printf("      vs the old two-F8 canonical tail (PHASE2_VERSIONB §5): RMS 8.9 pN, max 90–116 pN; phase-1 deterministic isometric +0.285 pN%n");
+        boolean gentle = fdRms * 1e12 < 4.0 && fdAbsMax * 1e12 < 40.0;   // tail materially smaller than the two-F8 RMS 8.9 / max ~100
+        System.out.printf("      ⇒ the two-point geometric pinning keeps the lever-strain %s at dt=%.0e under thermal forces%n",
+                gentle ? "BOUNDED/gentle (no reintroduced stiff overshoot)" : "*elevated — report (overshoot may have reappeared)*", DT);
+        System.out.println("\n  --- (6) dt stability ---");
+        System.out.printf("      %s over %d steps at dt=%.0e%n", nan ? "*BLEW UP (NaN)*" : "STABLE (bounded, no NaN)", M, DT);
+        System.out.println("\n=== Version-B native characterization complete ===");
+    }
+
+    // ===================== PHASE-2 step-3: single-molecule duty assay (kOn calibration) =====================
+    /** One single-molecule step: the Config-1 motor dynamics on a FIXED filament (no filament integration ⇒ the
+     *  proximal motors bind/cycle/release on held actin; the duty is kinetically gated, not geometry-confounded). */
+    static void singleStep(Scene sc, int t) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        mot.setCounts(t, SEED, f.n); f.counts.set(1, t);
+        MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
+        BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
+        if (TAU_AVG > 0)
+            NucleotideCycleSystem.catchSlipReleaseAvg(mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+        else
+            NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
+        BindingDetectionSystem.bindCanonicalTwoPoint(b.coord, b.uVec, b.segLength, f.end1, f.end2, f.segLength, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.kinParams, mot.counts);
+        NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
+        ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
+        BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
+        MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, sc.jointParams, mot.counts);
+        TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, sc.jointParams, mot.counts);
+        CrossBridgeSystem.bondForcesCanonicalConfig1(b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam,
+                mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParamsC1);
+        CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+        RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+        DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        if (CONFIG1 || CANONICAL) BindingDetectionSystem.snapCanonicalHead(b.coord, b.uVec, b.yVec, b.segLength, f.end1, f.uVec, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.counts);
+        CrossBridgeSystem.registerForceDot(sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts);
+        // filament FIXED — not integrated (single-molecule held actin)
+    }
+
+    static void singleMolecule(Scene sc, int M) {
+        MotorStore mot = sc.mot; int nM = mot.nMotors;
+        int warm = M / 4;
+        long boundSteps = 0, freeBindSteps = 0, inReachFree = 0, bindEvents = 0, releaseEvents = 0;
+        double fdSum = 0; long fdN = 0;
+        int[] prevBound = new int[nM];
+        for (int m = 0; m < nM; m++) prevBound[m] = mot.boundSeg.get(m);
+        // τ_thermal autocorrelation (Test 3): per-motor forceDotFil history ring + covariance at fixed lags.
+        final int[] LAGS = {1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144}; final int LMAX = 150;
+        float[] hist = ACORR ? new float[nM * LMAX] : null; int[] streak = ACORR ? new int[nM] : null;
+        double ac0 = 0, acSumF = 0; long acN = 0; double[] acLag = new double[LAGS.length];
+        System.out.printf("%n=== PHASE-2 step-3/4a single-molecule DUTY assay (Config-1, %d proximal motors, FIXED filament, kOn=%.3g, τavg=%.3g ms, F_ext=%.1f pN, dt=%.0e) ===%n",
+                nM, KON, TAU_AVG * 1e3, F_EXT, DT);
+        for (int t = 0; t < M; t++) {
+            singleStep(sc, t);
+            if (t >= warm) {
+                for (int m = 0; m < nM; m++) {
+                    int bs = mot.boundSeg.get(m);
+                    boolean nowBound = bs >= 0;
+                    if (nowBound) { boundSteps++; double fd = mot.forceDotFil.get(m); fdSum += fd; fdN++; }
+                    else if (bs == MotorStore.FREE_BINDABLE) { freeBindSteps++; if (sc.reachCount.get(m) > 0) inReachFree++; }
+                    if (nowBound && prevBound[m] < 0) bindEvents++;        // attachment
+                    if (!nowBound && prevBound[m] >= 0) releaseEvents++;   // detachment
+                    if (ACORR) {
+                        if (nowBound) {
+                            float Fn = mot.forceDotFil.get(m);
+                            if (streak[m] >= LAGS[LAGS.length - 1]) {       // enough continuous-bound history for the longest lag
+                                ac0 += Fn * Fn; acSumF += Fn; acN++;
+                                for (int k = 0; k < LAGS.length; k++) { int j = ((t - LAGS[k]) % LMAX + LMAX) % LMAX; acLag[k] += Fn * hist[m * LMAX + j]; }
+                            }
+                            hist[m * LMAX + (t % LMAX)] = Fn; streak[m]++;
+                        } else streak[m] = 0;
+                    }
+                    prevBound[m] = bs;
+                }
+            } else {
+                for (int m = 0; m < nM; m++) prevBound[m] = mot.boundSeg.get(m);
+            }
+        }
+        long totMotorSteps = (long) (M - warm) * nM;
+        double duty = boundSteps / (double) totMotorSteps;
+        double attachRate = freeBindSteps > 0 ? bindEvents / (freeBindSteps * DT) : 0;   // binds per second of free-bindable time
+        double tOnMs = releaseEvents > 0 ? boundSteps * DT / releaseEvents * 1e3 : 0;     // mean bound lifetime (ms)
+        double inReachFrac = freeBindSteps > 0 ? inReachFree / (double) freeBindSteps : 0;
+        double pEmp = inReachFree > 0 ? bindEvents / (double) inReachFree : 0;            // empirical per-in-reach-step capture prob
+        double pTheory = KON > 0 ? 1.0 - Math.exp(-KON * 2.0 * mot.kinParams.get(7) * DT) : 1.0;  // max per-step capture prob (d⊥=0); saturated kOn=0 ⇒ 1
+        double fdMean = fdN > 0 ? fdSum / fdN * 1e12 : 0;
+        System.out.printf("  duty = %.4f (%.2f%%)   [target ~0.01–0.02]%n", duty, duty * 100);
+        System.out.printf("  attachment rate = %.1f /s (binds per sec of free time)   t_on = %.2f ms [target ~10 ms]   mean forceDotFil = %.3f pN%n",
+                attachRate, tOnMs, fdMean);
+        System.out.printf("  in-reach fraction (while free) = %.3f   per-encounter P_capture: theory %.5f / empirical %.5f  ⇒ regime: %s%n",
+                inReachFrac, pTheory, pEmp, pTheory < 0.5 ? "REACTION-LIMITED (probabilistic per encounter)" : "SATURATED (near bind-on-contact)");
+        System.out.printf("  SUMMARY  kOn=%.4g  tau_ms=%.3g  fext_pN=%.1f  duty=%.4f  attach/s=%.1f  t_on_ms=%.2f  fdMean_pN=%.3f%n",
+                KON, TAU_AVG * 1e3, F_EXT, duty, attachRate, tOnMs, fdMean);
+        if (ACORR && acN > 0) {
+            double mu = acSumF / acN, var = ac0 / acN - mu * mu;
+            System.out.println("  --- τ_thermal: J1-strain (forceDotFil) autocorrelation C(lag) [normalized covariance] ---");
+            double tauTherm = 0;
+            for (int k = 0; k < LAGS.length; k++) {
+                double cov = acLag[k] / acN - mu * mu;
+                double c = var > 0 ? cov / var : 0;
+                double lagMs = LAGS[k] * DT * 1e3;
+                System.out.printf("    lag %3d (%.3f ms): C = %.4f%n", LAGS[k], lagMs, c);
+                if (tauTherm == 0 && c < 0.3679) tauTherm = lagMs;   // 1/e crossing
+            }
+            System.out.printf("  ⇒ τ_thermal ≈ %.3f ms (1/e of the J1-strain autocorr); var = %.3f pN²%n", tauTherm, var * 1e24);
+        }
+    }
 
     static void probe(Scene sc, int M) {
         System.out.println("\n--- cheap probe: does it glide −x, stably, at ~the right avgBound? ---");

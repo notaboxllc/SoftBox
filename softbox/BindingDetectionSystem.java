@@ -389,6 +389,140 @@ public final class BindingDetectionSystem {
     }
 
     // ============================================================================================
+    // PHASE-2 CANONICAL VERSION-B TWO-POINT BINDER (flag-gated, default-off; the -canonical gliding path).
+    // The single-point tip search is RETAINED VERBATIM (the same reachTestDistSq gates as bindNearest —
+    // α-foot, conDist<myoColTol, motDotFil≥alignTol, rodDotFil≥0). The second (rear/J1-pivot) anchor is a
+    // CONSEQUENCE of the rigid canonical head, not a second search: on tip-capture success we test whether the
+    // along-filament two-point pose is FORMABLE (the rear site lands on the SAME bound segment — the
+    // CANONICAL_MOTOR §3 reachability test, applied at the moment of capture) and, if so, IMMEDIATELY collapse
+    // to two-point: snap the head to lie ALONG the filament (head.uVec = seg.uVec) with the tip at site A
+    // (bindArc) and the rear at site B (bindArc2), registering BOTH bonds in the same step (Version B — no
+    // single-point dwell, so the old non-canonical head-pivot mechanism can never leak in at bind time). If
+    // NOT formable (the rear runs off the segment's minus end — clusters within HEAD_LEN of a segment's e1 /
+    // the filament's true minus end), the bind FAILS and the search continues (we do NOT force a two-point bond
+    // where the same-segment geometry forbids it; the rear-on-a-neighbour case is the flagged follow-on).
+    //
+    // THE SNAP (reported, not hidden). The head is captured perpendicular (gliding-bed pose) and snapped to
+    // along-filament — a ~90° head rotation. We place the flat head so BOTH point-springs sit at the captured
+    // perpendicular distance conDist (tip barely moves; |F8a|=|F8b|=myoSpring·conDist ≤ myoSpring·myoColTol,
+    // and forceDotFil = (F8a+F8b)·segU ≈ 0 since both springs are ⟂ the filament axis ⇒ a GENTLE bind, no
+    // along-filament load transient). The head's rear (J1 pivot) moves ~HEAD_LEN onto the axis ⇒ a transient
+    // on J1's *connection* spring (the fracMove damping-limited spring, /dt-cancelling ⇒ dt-robust, relaxes in
+    // O(1/fracMove) steps), NOT on the stiff Hookean cross-bridge. The harness measures the snap angle + the
+    // rear displacement + the lever/rod jolt and reports them.
+    //
+    // Two kernels (GPU-safe split): bindCanonicalTwoPoint makes the DECISION (search + formability) and writes
+    // boundSeg/bindArc/bindArc2 + the canonSnap flag (small writes — these lower cleanly). snapCanonicalHead is a
+    // SEPARATE small kernel that performs the head-pose SNAP for the flagged motors. The snap was split off
+    // because writing the body pose (b.coord/uVec/yVec) INSIDE the large search kernel makes the PTX-lowered bind
+    // silently never commit (measured: full snap ⇒ GPU avgBound 0, decision-only ⇒ GPU binds normally); the small
+    // snap kernel writes the body fine. Race-free (each motor owns its head slot + bound-state); device-agnostic.
+    public static void bindCanonicalTwoPoint(
+            FloatArray bodyCoord, FloatArray bodyUVec, FloatArray bodySegLength,
+            FloatArray segEnd1, FloatArray segEnd2, FloatArray segSegLength,
+            IntArray motorCandSeg, IntArray motorCandCount,
+            IntArray boundSeg, FloatArray bindArc, FloatArray bindArc2, IntArray canonSnap,
+            FloatArray kinParams, IntArray counts) {
+        int nM = counts.get(0);
+        int nB = bodyCoord.getSize() / 3;            // = 3*nM
+        int nSeg = segEnd1.getSize() / 3;
+        int MAXC = SpatialGrid.MAX_CAND;
+        float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        for (@Parallel int m = 0; m < nM; m++) {
+            if (boundSeg.get(m) != MotorStore.FREE_BINDABLE) continue;
+            int head = 3 * m + 2, rod = 3 * m;
+            float hl = bodySegLength.get(head);
+            float hcx = bodyCoord.get(head), hcy = bodyCoord.get(nB + head), hcz = bodyCoord.get(2 * nB + head);
+            float hux = bodyUVec.get(head), huy = bodyUVec.get(nB + head), huz = bodyUVec.get(2 * nB + head);
+            float mx = hcx + 0.5f * hl * hux, my = hcy + 0.5f * hl * huy, mz = hcz + 0.5f * hl * huz; // head tip = bindTip
+            float rux = bodyUVec.get(rod), ruy = bodyUVec.get(nB + rod), ruz = bodyUVec.get(2 * nB + rod);
+
+            // --- the RETAINED single-point tip search: nearest reachable candidate segment + tip arc ---
+            int cnt = motorCandCount.get(m); if (cnt > MAXC) cnt = MAXC;
+            int bestSeg = -1; float bestD = 1.0e30f; float bestArc = 0f;
+            for (int k = 0; k < cnt; k++) {
+                int s = motorCandSeg.get(m * MAXC + k);
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float d = reachTestDistSq(mx, my, mz, hux, huy, huz, rux, ruy, ruz,
+                        e1x, e1y, e1z, e2x, e2y, e2z, myoColTol, alignTol);
+                if (d >= 0f && d < bestD) {
+                    bestD = d; bestSeg = s;
+                    float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                    float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                    float numer = (mx - e1x) * r1x + (my - e1y) * r1y + (mz - e1z) * r1z;
+                    bestArc = numer / (float) Math.sqrt(denom);   // tip arc from end1
+                }
+            }
+            if (bestSeg < 0) continue;                            // no tip capture this step
+
+            // --- Version-B formability: the canonical along-filament pose has the rear HEAD_LEN toward e1 ---
+            float slen = segSegLength.get(bestSeg);
+            float tipArc = bestArc;
+            float rearArc = bestArc - hl;                         // hl = HEAD_LEN (head sub-body length)
+            if (rearArc < 0f || tipArc > slen) continue;          // rear runs off the segment ⇒ NOT formable → bind fails
+            // REACTION-LIMITED kOn gate (PHASE2_KON; kinParams[14] = kOn µm^-1 s^-1). Myosin-actin binding is
+            // reaction-limited, NOT bind-on-contact: a formable encounter captures with P = 1 − exp(−kOn·Δl·dt),
+            // Δl the chord of the filament through the tight capture sphere (radius myoColTol; Δl = 2·√(r²−d⊥²),
+            // d⊥² = bestD the perpendicular distance²). kOn ≤ 0 ⇒ P=1 ⇒ saturated bind-on-contact (the prior
+            // geometric behavior). RNG = the reused wang-hash keyed (motor,step,seed), salt "C1KO" (distinct from
+            // the MOTOR/BRAT/XLKB salts) ⇒ reproducible CPU↔GPU.
+            float kOn = kinParams.get(14);
+            if (kOn > 0f) {
+                float chord = 2.0f * (float) Math.sqrt(myoColTol * myoColTol - bestD);
+                float pBind = 1.0f - (float) Math.exp(-kOn * chord * kinParams.get(6));
+                int hb = wangHash((m * 1000003) ^ (counts.get(1) * 999983) ^ (counts.get(2) * 7919) ^ 0x43314B4F);
+                float u = (hb >>> 1) / 2147483647.0f;
+                if (u >= pBind) continue;                         // this encounter did not capture (reaction-limited)
+            }
+            // formable + captured: register BOTH bonds + flag the head for the snap (Version-B immediate collapse)
+            boundSeg.set(m, bestSeg); bindArc.set(m, tipArc); bindArc2.set(m, rearArc); canonSnap.set(m, 1);
+        }
+    }
+
+    /** PHASE-2 Version-B head SNAP (the small GPU-safe kernel). For each motor freshly flagged by
+     *  bindCanonicalTwoPoint (canonSnap==1), rotate+translate the head sub-body to lie ALONG the bound segment:
+     *  uVec ∥ segment, both point-springs at the captured perpendicular distance conDist (tip site = bindArc,
+     *  rear site = bindArc2 feet), yVec = the perpendicular roll. Then clear the flag. The head has NOT moved
+     *  since the decision kernel (consecutive), so the current head tip still gives the captured conDist/perpHat.
+     *  Race-free (each motor owns its head slot). Default-off: only the -canonical path runs it. */
+    public static void snapCanonicalHead(
+            FloatArray bodyCoord, FloatArray bodyUVec, FloatArray bodyYVec, FloatArray bodySegLength,
+            FloatArray segEnd1, FloatArray segUVec,
+            IntArray boundSeg, FloatArray bindArc, FloatArray bindArc2, IntArray canonSnap, IntArray counts) {
+        int nM = counts.get(0);
+        int nB = bodyCoord.getSize() / 3;
+        int nSeg = segEnd1.getSize() / 3;
+        for (@Parallel int m = 0; m < nM; m++) {
+            if (canonSnap.get(m) != 1) continue;
+            canonSnap.set(m, 0);
+            int s = boundSeg.get(m); if (s < 0) continue;
+            int head = 3 * m + 2;
+            float hl = bodySegLength.get(head);
+            float hcx = bodyCoord.get(head), hcy = bodyCoord.get(nB + head), hcz = bodyCoord.get(2 * nB + head);
+            float hux = bodyUVec.get(head), huy = bodyUVec.get(nB + head), huz = bodyUVec.get(2 * nB + head);
+            float mx = hcx + 0.5f * hl * hux, my = hcy + 0.5f * hl * huy, mz = hcz + 0.5f * hl * huz;   // current head tip
+            float tipArc = bindArc.get(m);
+            float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+            float sux = segUVec.get(s), suy = segUVec.get(nSeg + s), suz = segUVec.get(2 * nSeg + s);
+            float ftx = e1x + tipArc * sux, fty = e1y + tipArc * suy, ftz = e1z + tipArc * suz;          // tip foot on axis
+            float px = mx - ftx, py = my - fty, pz = mz - ftz;                                            // perpendicular offset
+            float conDist = (float) Math.sqrt(px * px + py * py + pz * pz);
+            if (conDist > 1.0e-7f) { float inv = 1.0f / conDist; px *= inv; py *= inv; pz *= inv; }
+            else { px = -suy; py = sux; pz = 0f;
+                   float pm = (float) Math.sqrt(px * px + py * py + pz * pz);
+                   if (pm < 1.0e-4f) { px = 0f; py = 0f; pz = 1f; pm = 1f; }
+                   px /= pm; py /= pm; pz /= pm; conDist = 0f; }
+            float fcArc = 0.5f * (tipArc + bindArc2.get(m));      // head-center foot arc (midpoint of the two feet)
+            float fccx = e1x + fcArc * sux, fccy = e1y + fcArc * suy, fccz = e1z + fcArc * suz;
+            float ncx = fccx + conDist * px, ncy = fccy + conDist * py, ncz = fccz + conDist * pz;
+            bodyCoord.set(head, ncx); bodyCoord.set(nB + head, ncy); bodyCoord.set(2 * nB + head, ncz);
+            bodyUVec.set(head, sux); bodyUVec.set(nB + head, suy); bodyUVec.set(2 * nB + head, suz);
+            bodyYVec.set(head, px); bodyYVec.set(nB + head, py); bodyYVec.set(2 * nB + head, pz);
+        }
+    }
+
+    // ============================================================================================
     // BINDING-SEARCH REFORMULATION (flag-gated, default-off; the geometric bindNearest stays the
     // default v1-faithful comparator). The geometric search is a per-STEP geometric event — it
     // under-resolves binding at coarse dt (a head Brownian-jumps THROUGH the tight reach shell between

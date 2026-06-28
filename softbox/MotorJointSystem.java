@@ -87,6 +87,12 @@ public final class MotorJointSystem {
         //   size 11 (production + every other harness) ⇒ j1Frozen=0 ⇒ the J1 rest still switches, BYTE-IDENTICAL.
         //   size 12 (MotorStrokeHarness -isolate 2)    ⇒ [11]=1 freezes J1 rest at 0° (uncocked) so only F9 strokes.
         int j1Frozen = (jointParams.getSize() > 11) ? (int) jointParams.get(11) : 0;
+        // CONFIG 1 (PHASE2_CONFIG1): flag-gated by jointParams SIZE — size ≤ 12 ⇒ config1=0 ⇒ the existing
+        // fracMove stall-capped J1 angular DRIVER (BYTE-IDENTICAL). size ≥ 14 with [12]=1 ⇒ J1 becomes a pure
+        // HOOKEAN torsional spring T = κ·(θ − θ_rest) (no /dt, NO stall cap; the stall force EMERGES from κ ×
+        // stroke geometry). [13]=κ (N·m/rad). The rest angle still switches 0°↔60° ⇒ J1 still DRIVES the stroke.
+        int config1 = (jointParams.getSize() > 12) ? (int) jointParams.get(12) : 0;
+        double kappaJ1 = (jointParams.getSize() > 13) ? jointParams.get(13) : 0.0;
 
         for (@Parallel int s = 0; s < nB; s++) {
             int m = s / 3;
@@ -170,10 +176,14 @@ public final class MotorJointSystem {
                     double dotV = lux * hux + luy * huy + luz * huz;
                     if (dotV > 1.0) dotV = 1.0; if (dotV < -1.0) dotV = -1.0;
                     double ang = accurateAcos(dotV) * RAD2DEG;
-                    double invBRG = 1.0 / bRotGam.get(nB + lever) + 1.0 / bRotGam.get(nB + head);
-                    torsionMag = j1FracMoveTorq * DEG2RAD * (ang - j1Rest) / (invBRG * dt);
-                    double maxMag = stallPN * 0.5 * hlen * 1.0e-18;     // Myosin.java:241 (pN·µm → N·m)
-                    if (torsionMag > maxMag) torsionMag = maxMag;
+                    if (config1 != 0) {
+                        torsionMag = kappaJ1 * DEG2RAD * (ang - j1Rest);   // pure Hookean κ·deflection (no /dt, no cap)
+                    } else {
+                        double invBRG = 1.0 / bRotGam.get(nB + lever) + 1.0 / bRotGam.get(nB + head);
+                        torsionMag = j1FracMoveTorq * DEG2RAD * (ang - j1Rest) / (invBRG * dt);
+                        double maxMag = stallPN * 0.5 * hlen * 1.0e-18;     // Myosin.java:241 (pN·µm → N·m)
+                        if (torsionMag > maxMag) torsionMag = maxMag;
+                    }
                 }
                 if (role == 1) {
                     // LEVER side: end2 → -forceMag·lu, R = +½·llen·j1FracR·lever.uVec; torque +tv (v1: lever gets +)
