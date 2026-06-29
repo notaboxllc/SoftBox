@@ -69,6 +69,83 @@ public final class NucleotideCycleSystem {
     }
 
     /**
+     * PHASE-2 ATP-RELEASE COUPLING (config-1 / perp-head gliding path only; flag-scoped in GlidingHarness,
+     * default-on for CONFIG1, A/B control `-noatprelease`). Identical to cycle() EXCEPT: a BOUND head that
+     * fires its transition INTO the ATP state DETACHES at that same transition — ATP-binding IS detachment
+     * (the canonical coupling; v1's commented-out MyoFilLink.ckRelease `isATP()?20000:0` variant in spirit;
+     * PHASE2_ATP_STATE_AUDIT §7 Form A). The ONLY transition that enters NUC_ATP is NONE→ATP, so the coupling
+     * lives there. Detachment REUSES the EXACT FREE_COOLDOWN/refractory path of catchSlipRelease
+     * (refractorySteps = kinParams[10]); the head then hydrolyzes / re-primes OFF the filament (it walks to
+     * the absorbing ADPPi state — offFilADPPi_ADP = 0) and rebinds primed via the normal geometric search.
+     *
+     * What is NOT touched: the catch-slip release (run BEFORE this in the step order) still governs
+     * release-vs-stay during the strained ADP dwell — this adds the ATP terminus AFTER it, it does not
+     * replace it. The bind side is untouched (heads still bind in ADPPi). The cocking/powerstroke
+     * (ADPPi→ADP, in the bond kernel) is untouched.
+     *
+     * Atomicity (both runners): each motor owns its slot; the detach writes boundSeg (the same field the
+     * catch-slip already writes) and no LATER kernel in the step overwrites it (bind runs BEFORE cycle in the
+     * gliding step order, and snap/register/bond only read boundSeg). The NUC RNG salt + draw are byte-for-byte
+     * cycle()'s, so the state-machine transitions are bit-identical to cycle(); the ONLY behavioral delta is the
+     * added boundSeg write on the bound NONE→ATP transition ⇒ CPU≡GPU by construction.
+     */
+    public static void cycleAtpDetach(IntArray nucleotideState, IntArray boundSeg,
+                                      FloatArray forceDotHist, IntArray cooldown,
+                                      FloatArray nucParams, FloatArray kinParams, IntArray counts) {
+        int nM = nucleotideState.getSize();
+        int step = counts.get(1), seed = counts.get(2);
+        float dt = nucParams.get(0);
+        float atpOn = nucParams.get(1);
+        float onATP = nucParams.get(2), offATP = nucParams.get(3);
+        float onPi = nucParams.get(4),  offPi = nucParams.get(5);
+        float onADP = nucParams.get(6), offADP = nucParams.get(7);
+        int refractorySteps = (int) kinParams.get(10);   // ceil(myoRebindTime/dt); 0 = no refractory
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            int state = nucleotideState.get(m);
+            boolean bound = boundSeg.get(m) >= 0;
+            int h = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4E55);  // NUC salt (== cycle)
+            float u = (h >>> 1) / 2147483647.0f;
+
+            // The state machine is byte-for-byte cycle() (same draw, same branches).
+            if (state == MotorStore.NUC_NONE) {
+                if (u < atpOn * dt) state = MotorStore.NUC_ATP;            // NONE→ATP: the cycle entry into ATP
+            } else if (state == MotorStore.NUC_ATP) {
+                float rate = bound ? onATP : offATP;
+                if (u < rate * dt) state = MotorStore.NUC_ADPPI;
+            } else if (state == MotorStore.NUC_ADPPI) {
+                float rate = bound ? onPi : offPi;
+                if (u < rate * dt) state = MotorStore.NUC_ADP;
+            } else { // ADP → NONE, gated on the cross-bridge load (10-window forceDotFil average > 0)
+                float avg = 0f;
+                int b = m * 10;
+                for (int k = 0; k < 10; k++) avg += forceDotHist.get(b + k);
+                avg *= 0.1f;
+                if (avg <= 0f) {
+                    float rate = bound ? onADP : offADP;
+                    if (u < rate * dt) state = MotorStore.NUC_NONE;
+                }
+            }
+            nucleotideState.set(m, state);
+
+            // ATP-binding IS detachment — enforce the invariant "no bound head persists in ATP". A bound head
+            // that ENDS this cycle in ATP detaches NOW. This is zero-window for BOTH entries because cycle runs
+            // AFTER bind in the gliding step order: (i) the cycle entry NONE→ATP (Form A — detach at the
+            // transition), and (ii) a head that bound geometrically THIS step while it was already in ATP (the
+            // bind-in-ATP path: an ATP-detached head rebinds in the dense bed before its 10 ms off-filament
+            // ATP→ADPPi recovery completes — Form A alone leaves this bound-in-ATP). Detach reuses the EXACT
+            // FREE_COOLDOWN/refractory of catchSlipRelease. `bound` is the start-of-cycle bound flag, so a head
+            // released by the catch-slip earlier this step (boundSeg=−2) is not re-touched. The geometric binder
+            // is UNCHANGED (a head may still bind in ATP — it is ejected here before the bond kernel, applying no
+            // force), so this is the EXIT rule, not a bind-side state gate.
+            if (bound && state == MotorStore.NUC_ATP) {
+                if (refractorySteps > 0) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+            }
+        }
+    }
+
+    /**
      * Force-dependent catch-slip release (MyoFilLink.ckRelease, full Guo–Guilford form). A bound motor
      * releases at rate kOff·(αCatch·e^(−F·xCatch/kT)+αSlip·e^(+F·xSlip/kT)), F = forceDotFil; one-step
      * cooldown via FREE_COOLDOWN. RNG keyed (slot, step, seed) with a distinct salt. stats[2m]=bound

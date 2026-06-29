@@ -67,6 +67,9 @@ public final class GlidingHarness {
     static boolean STIFFSWEEP = false;           // -stiffsweep: step-4d κ + powerstroke-angle sensitivity of peak≈stall (measurement-only)
     static boolean FORCEDECOMP = false;          // -forcedecomp: decompose the powerstroke force the config-1 cross-bridge delivers to the FILAMENT (single motor, transport topology, dt=1e-6, Brownian off; measurement-only)
     static boolean BOUNDGEOM = false;            // -boundgeom: report the config-1 motor's bound-state geometry at uncocked/cocked equilibria (measurement-only)
+    static boolean PERPHEAD = false;             // -perphead: config-1 PERP-HEAD variant — rear pin REMOVED, tip pin kept, PAIRS-form ⊥-orientation torque holds the head ⊥ to the filament. Implies -config1. The force-decomposition mechanism gate.
+    static double  PERP_FRACMOVE = 0.5;          // -perpfrac: ⊥-orientation torque strength (matches the prior rear-pin/PAIRS scale)
+    static boolean ATP_RELEASE = true;           // PHASE-2 ATP-RELEASE COUPLING: a bound head detaches AT its NONE→ATP transition (ATP-binding = detachment). Default-ON for CONFIG1 (config1/perphead gliding); A/B control -noatprelease turns it OFF (old decoupled cycle). Non-CONFIG1 paths never see it.
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static double DENSITY = 500.0;              // motors / µm² (-density overrides for the speed-density trend)
@@ -144,6 +147,9 @@ public final class GlidingHarness {
             else if (args[i].equals("-csrecal")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; CSRECAL = true; }  // step-4c catch-slip recalibration
             else if (args[i].equals("-stiffsweep")) { CONFIG1 = true; STIFFSWEEP = true; }   // step-4d κ+angle sensitivity (measurement-only)
             else if (args[i].equals("-forcedecomp")) { CONFIG1 = true; FORCEDECOMP = true; }  // force decomposition (single motor, transport topology)
+            else if (args[i].equals("-perphead")) { CANONICAL = true; CONFIG1 = true; PERPHEAD = true; }  // config-1 PERP-HEAD MOTOR VARIANT (gliding-capable); combine with -forcedecomp for the single-motor mechanism gate
+            else if (args[i].equals("-perpfrac")) PERP_FRACMOVE = Double.parseDouble(args[++i]);  // ⊥-orientation torque strength override
+            else if (args[i].equals("-noatprelease")) ATP_RELEASE = false;  // A/B control: DISABLE the ATP-transition→detach coupling (old decoupled cycle) for config1/perphead
             else if (args[i].equals("-boundgeom")) { CONFIG1 = true; BOUNDGEOM = true; }      // bound-state geometry report (single motor, transport topology)
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
@@ -288,7 +294,10 @@ public final class GlidingHarness {
         // size-14 jointParams (Hookean J1) via enableConfig1. Not config1 ⇒ jointParams = mot.jointParams (byte-id).
         if (CONFIG1) {
             mot.enableConfig1(KAPPA);
-            sc.xbParamsC1 = FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) MotorStore.LEVER_LEN, (float) DT, (float) MotorStore.HEAD_LEN);
+            // PERP-HEAD ⇒ size-6 (appends orientFracMove for the ⊥-orientation torque); plain config-1 ⇒ size-5 (byte-id).
+            sc.xbParamsC1 = PERPHEAD
+                ? FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) MotorStore.LEVER_LEN, (float) DT, (float) MotorStore.HEAD_LEN, (float) PERP_FRACMOVE)
+                : FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) MotorStore.LEVER_LEN, (float) DT, (float) MotorStore.HEAD_LEN);
             sc.jointParams = mot.jointParamsC1;
         } else {
             sc.jointParams = mot.jointParams;
@@ -323,8 +332,16 @@ public final class GlidingHarness {
                     sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.kinParams, mot.counts);
         else
             BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        // PERP-HEAD: freeze uperp at fresh bind (reads canonSnap before snapCanonicalHead clears it)
+        if (PERPHEAD) CrossBridgeSystem.snapPerpRest(b.uVec, f.uVec, mot.boundSeg, mot.canonSnap, mot.perpRest, mot.counts);
         // --- motor nucleotide cycle + dynamics ---
-        NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
+        // PHASE-2 ATP-RELEASE COUPLING: config-1/perp-head detach AT the bound NONE→ATP transition (ATP-binding
+        // = detachment); the catch-slip release above is unchanged (it governs the strained ADP dwell). The plain
+        // cycle (default/canonical-non-config1) is byte-unchanged.
+        if (CONFIG1 && ATP_RELEASE)
+            NucleotideCycleSystem.cycleAtpDetach(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.cooldown, mot.nucParams, mot.kinParams, mot.counts);
+        else
+            NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
         ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
         long _mb = tns();
         BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
@@ -332,7 +349,10 @@ public final class GlidingHarness {
         MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, sc.jointParams, mot.counts);
         TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, sc.jointParams, mot.counts);
         long _bf = tns();
-        if (CONFIG1)
+        if (PERPHEAD)
+            CrossBridgeSystem.bondForcesCanonicalConfig1Perp(b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam,
+                    mot.boundSeg, mot.bindArc, mot.perpRest, mot.nucleotideState, sc.bondData, sc.xbParamsC1);
+        else if (CONFIG1)
             CrossBridgeSystem.bondForcesCanonicalConfig1(b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam,
                     mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParamsC1);
         else if (CANONICAL)
@@ -441,6 +461,7 @@ public final class GlidingHarness {
         if (XB_IMPLICIT) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.xbImplPrev, mot.xbImplParams);
         if (CANONICAL) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.bindArc2, mot.canonSnap);
         if (CONFIG1) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.xbParamsC1, sc.jointParams);
+        if (PERPHEAD) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.perpRest);
         if (TAU_AVG > 0) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.forceDotAvg, mot.avgInit);
         // reach (common)
         tg = tg
@@ -485,13 +506,22 @@ public final class GlidingHarness {
                 tg = tg.task("bind", BindingDetectionSystem::bindCanonicalTwoPoint, b.coord, b.uVec, b.segLength, f.end1, f.end2, f.segLength, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.kinParams, mot.counts);
             else
                 tg = tg.task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+            // PERP-HEAD: freeze uperp at fresh bind (writes perpRest only — no body write ⇒ safe early; canonSnap cleared later by snapHead)
+            if (PERPHEAD) tg = tg.task("snapPerp", CrossBridgeSystem::snapPerpRest, b.uVec, f.uVec, mot.boundSeg, mot.canonSnap, mot.perpRest, mot.counts);
+            // PHASE-2 ATP-RELEASE COUPLING (config-1/perp-head): detach AT the bound NONE→ATP transition. cycle
+            // runs AFTER bind (line above) ⇒ no later kernel overwrites the freed boundSeg this step (atomic on GPU).
+            if (CONFIG1 && ATP_RELEASE)
+                tg = tg.task("cycle", NucleotideCycleSystem::cycleAtpDetach, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.cooldown, mot.nucParams, mot.kinParams, mot.counts);
+            else
+                tg = tg.task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
             tg = tg
-                .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts)
                 .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
                 .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
                 .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, sc.jointParams, mot.counts)
                 .task("anchor", TailAnchorSystem::anchor, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, sc.jointParams, mot.counts);
-            if (CONFIG1)
+            if (PERPHEAD)
+                tg = tg.task("bond", CrossBridgeSystem::bondForcesCanonicalConfig1Perp, b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam, mot.boundSeg, mot.bindArc, mot.perpRest, mot.nucleotideState, sc.bondData, sc.xbParamsC1);
+            else if (CONFIG1)
                 tg = tg.task("bond", CrossBridgeSystem::bondForcesCanonicalConfig1, b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParamsC1);
             else if (CANONICAL)
                 tg = tg.task("bond", CrossBridgeSystem::bondForcesCanonical, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, sc.bondData, sc.xbParams);
@@ -554,6 +584,8 @@ public final class GlidingHarness {
         double lo = 1e9, hi = -1e9; for (int i = 0; i < f.n; i++) { double y = f.coordY(i); lo = Math.min(lo, y); hi = Math.max(hi, y); } return hi - lo;
     }
     static long bound(MotorStore m) { long c = 0; for (int i = 0; i < m.nMotors; i++) if (m.boundSeg.get(i) >= 0) c++; return c; }
+    /** bound heads currently in nucleotide state `st` (the ATP-release invariant: bound-in-ATP must be ~0). */
+    static long boundInState(MotorStore m, int st) { long c = 0; for (int i = 0; i < m.nMotors; i++) if (m.boundSeg.get(i) >= 0 && m.nucleotideState.get(i) == st) c++; return c; }
 
     // ===================== PHASE-2 Version-B binder characterization (-canondiag) =====================
     /** Host nearest-reachable arc (mirrors the kernel's tip search over the reach set): returns the tip arc
@@ -1073,20 +1105,29 @@ public final class GlidingHarness {
         System.out.println("\n=== PHASE-2 FORCE DECOMPOSITION — single motor, transport topology, dt=1e-6, Brownian OFF ===");
         System.out.printf("  config1 κ=%.3g (tip %.3f pN/nm, stall %.2f pN); PAIRS fracMove=%.2f; HEAD_LEN=%.1f nm; LEVER=%.1f nm%n",
                 KAPPA, KAPPA/(LEVER*1e-6)/(LEVER*1e-6)*1e3, motorStallPN(), PAIRS_FRACMOVE, HEAD*1e3, LEVER*1e3);
-        for (int mode = 0; mode < 2; mode++) {
-            boolean cfg1 = (mode == 0);
-            System.out.println("\n----- " + (cfg1 ? "CONFIG-1 (PAIRS pins + Hookean-J1)" : "DEFAULT v1 motor (F8 tip spring + F9/F10)") + " -----");
-            double[] r = decompRun(cfg1, dt, true);    // filament HELD (isometric force time course + impulse)
-            double[] rel = decompRun(cfg1, dt, false); // filament RELEASED (cross-check: does it translate?)
-            System.out.printf("  net axial IMPULSE over the stroke = %.4g pN·s ; released-filament Δx = %+.4f nm (predicted sign %s)%n",
-                    r[0]*1e12, rel[1]*1e6, r[0] < 0 ? "−x glide" : "+x");
+        if (PERPHEAD)
+            System.out.printf("  PERP-HEAD: rear pin REMOVED, tip pin kept, ⊥-orientation PAIRS torque fracMove=%.2f (the head is driven to stand ⊥ to actin)%n", PERP_FRACMOVE);
+        // modes: 0 = PERP-HEAD (new, only when -perphead), 1 = CONFIG-1 (the old 22:1), 2 = DEFAULT v1 (axial ref)
+        int first = PERPHEAD ? 0 : 1;
+        for (int mode = first; mode < 3; mode++) {
+            boolean cfg1 = (mode == 0 || mode == 1);   // config1 force-law branch (PAIRS pins + Hookean-J1)
+            boolean perp = (mode == 0);
+            String label = (mode == 0) ? "PERP-HEAD config-1 (tip pin + ⊥-orientation torque, NO rear pin)"
+                         : (mode == 1) ? "CONFIG-1 (two-point PAIRS pins + Hookean-J1) — the OLD 22:1"
+                                       : "DEFAULT v1 motor (F8 tip spring + F9/F10) — the axial reference";
+            System.out.println("\n----- " + label + " -----");
+            double[] r = decompRun(cfg1, perp, dt, true);    // filament HELD (isometric force time course + impulse)
+            double[] rel = decompRun(cfg1, perp, dt, false); // filament RELEASED (cross-check: does it translate?)
+            System.out.printf("  net axial IMPULSE over the stroke = %.4g pN·s ; released-filament Δx = %+.4f nm  Δz = %+.4f nm (predicted sign %s)%n",
+                    r[0]*1e12, rel[1]*1e6, rel[2]*1e6, r[0] < 0 ? "−x glide" : "+x");
         }
         System.out.println("\n=== force decomposition complete ===");
     }
 
-    /** One decomposition run. Returns {netAxialImpulse(N·s), filamentDx(µm)}. held=true ⇒ filament fixed (isometric);
-     *  held=false ⇒ filament integrated (the released cross-check). Prints the (axial,transverse,per-pin) time course. */
-    static double[] decompRun(boolean cfg1, double dt, boolean held) {
+    /** One decomposition run. Returns {netAxialImpulse(N·s), filamentDx(µm), filamentDz(µm)}. held=true ⇒ filament
+     *  fixed (isometric); held=false ⇒ filament integrated (the released cross-check). perp=true ⇒ the PERP-HEAD
+     *  config-1 variant (rear pin removed, ⊥-orientation torque). Prints the (axial,transverse,per-pin) time course. */
+    static double[] decompRun(boolean cfg1, boolean perp, double dt, boolean held) {
         double HEAD = MotorStore.HEAD_LEN, LEVER = MotorStore.LEVER_LEN, ROD = MotorStore.ROD_LEN;
         // ---- filament: 1 segment along +x at z=0 ----
         FilamentStore f = new FilamentStore(1);
@@ -1117,12 +1158,30 @@ public final class GlidingHarness {
         b.setCoord(rod, (float) (-0.5*HEAD), 0f, (float) (-(LEVER + 0.5*ROD))); b.setUVec(rod, 0f, 0f, 1f); b.setYVec(rod, 0f, 1f, 0f);
         mot.anchor.set(0, (float) (-0.5*HEAD)); mot.anchor.set(1, 0f); mot.anchor.set(2, (float) (-(LEVER + ROD)));  // rod.end1 (tail)
         DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
-        // bind: tip@site A, rear@site B (two-point)
+        // bind: tip@site A, rear@site B (two-point) — the rear pin is UNUSED on the perp path
         double e1x = f.end1.get(0);
         mot.boundSeg.set(0, 0);
         mot.bindArc.set(0, (float) (0.5*HEAD - e1x));      // arc of tip from e1
         mot.bindArc2.set(0, (float) (-0.5*HEAD - e1x));    // arc of rear from e1 (= bindArc − HEAD)
-        FloatArray xbC1 = FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) LEVER, (float) dt, (float) HEAD);
+        // ---- PERP-HEAD: compute + FREEZE uperp (⊥-to-filament direction nearest the bind-time head.uVec) ----
+        if (perp) {
+            double hux = b.uVecX(head), huy = b.uVecY(head), huz = b.uVecZ(head);   // bind-time head.uVec (= +x here)
+            double sxh = f.uVec.get(0), syh = f.uVec.get(f.n), szh = f.uVec.get(2*f.n);  // filament axis x̂
+            double axc = hux*sxh + huy*syh + huz*szh;
+            double upx = hux - axc*sxh, upy = huy - axc*syh, upz = huz - axc*szh;   // remove the axial component
+            double mag = Math.sqrt(upx*upx + upy*upy + upz*upz);
+            if (mag < 0.1) {   // head nearly axial (the EXPECTED bind regime) ⇒ fallback: project the surface normal ẑ
+                double zx=0, zy=0, zz=1, zc = zx*sxh+zy*syh+zz*szh;
+                upx = zx - zc*sxh; upy = zy - zc*syh; upz = zz - zc*szh; mag = Math.sqrt(upx*upx+upy*upy+upz*upz);
+            }
+            if (mag > 0) { upx/=mag; upy/=mag; upz/=mag; }
+            mot.perpRest.set(0, (float) upx); mot.perpRest.set(1, (float) upy); mot.perpRest.set(2, (float) upz);
+            System.out.printf("  frozen uperp (⊥-to-filament head rest) = (%+.3f, %+.3f, %+.3f)  [bind head.uVec=(%+.2f,%+.2f,%+.2f), axial ⇒ ẑ-fallback]%n",
+                    upx, upy, upz, b.uVecX(head), b.uVecY(head), b.uVecZ(head));
+        }
+        FloatArray xbC1 = perp
+                ? FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) LEVER, (float) dt, (float) HEAD, (float) PERP_FRACMOVE)
+                : FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) LEVER, (float) dt, (float) HEAD);
         FloatArray xbDef = FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) dt, (float) HEAD, 0f);
         FloatArray jp = cfg1 ? mot.jointParamsC1 : mot.jointParams;
         FloatArray bondData = new FloatArray(CrossBridgeSystem.STRIDE); bondData.init(0f);
@@ -1131,40 +1190,68 @@ public final class GlidingHarness {
         int SETTLE = 60000, STROKE = 60000;
         mot.setCounts(0, SEED, f.n); f.counts.set(1, 0);
         mot.setAllStates(MotorStore.NUC_ADPPI);
-        for (int t = 0; t < SETTLE; t++) motorStep(f, mot, b, bondData, xbC1, xbDef, jp, cfg1, dt, true);
+        for (int t = 0; t < SETTLE; t++) motorStep(f, mot, b, bondData, xbC1, xbDef, jp, cfg1, perp, dt, true);
         double impulse = 0; double sux = f.uVec.get(0), suy = f.uVec.get(f.n + 0), suz = f.uVec.get(2*f.n + 0);
-        double fcx0 = centroidX(f);
+        double fcx0 = centroidX(f), fcz0 = centroidZ(f);
         if (held) System.out.printf("  step    J1ang°  distA(nm) distB(nm)  axialA(pN) axialB(pN)  netAxial(pN) netTransv(pN) forceDot(pN)%n");
         mot.setAllStates(MotorStore.NUC_NONE);   // FIRE: rest 0°→60°
+        // PRODUCTIVE-PHASE windows (measurement-only, post-fix re-run): the catch-slip now sets a SHORT bound
+        // lifetime (config1 ~1.5 ms, perphead ~1.8 ms — far shorter than the 60 ms isometric settle), so the
+        // transport-relevant force is the strained powerstroke transient, NOT the relaxed isometric equilibrium.
+        // Accumulate the mean axial/transverse the head delivers over the first {0.5,1,2} ms of the strained ADP
+        // dwell (= the productive window the catch-slip governs). Pure readout; no physics touched.
+        int[] winSteps = { (int)Math.round(0.5e-3/dt), (int)Math.round(1.0e-3/dt), (int)Math.round(2.0e-3/dt) };
+        double[] winAxial = new double[winSteps.length], winTransv = new double[winSteps.length];
+        long[] winN = new long[winSteps.length];
         for (int t = 0; t < STROKE; t++) {
-            motorStep(f, mot, b, bondData, xbC1, xbDef, jp, cfg1, dt, held);
-            double[] dc = decompose(f, b, mot, cfg1, dt);   // {axialA,axialB,netAxial,netTransv,distA,distB,forceDot,j1ang}
+            motorStep(f, mot, b, bondData, xbC1, xbDef, jp, cfg1, perp, dt, held);
+            double[] dc = decompose(f, b, mot, cfg1, perp, dt);   // {axialA,axialB,netAxial,netTransv,distA,distB,forceDot,j1ang}
             impulse += dc[2] * dt;
-            if (held && (t % 6000 == 0 || t == STROKE - 1))
+            if (held) for (int w = 0; w < winSteps.length; w++) if (t < winSteps[w]) { winAxial[w] += dc[2]; winTransv[w] += dc[3]; winN[w]++; }
+            // finer EARLY sampling to resolve the productive transient (the powerstroke + early strained dwell)
+            boolean fine = t==0||t==100||t==300||t==600||t==1000||t==1800||t==3000;
+            if (held && (fine || t % 6000 == 0 || t == STROKE - 1))
                 System.out.printf("  %-7d %6.1f  %8.2f %8.2f  %+9.3f %+9.3f  %+11.4f %11.4f %+11.4f%n",
                         t, dc[7], dc[4]*1e3, dc[5]*1e3, dc[0]*1e12, dc[1]*1e12, dc[2]*1e12, dc[3]*1e12, dc[6]*1e12);
             if (!held && (t == 2000 || t == 10000 || t == 30000 || t == STROKE - 1))
                 System.out.printf("     [released] t=%-6d filament Δx=%+.2f nm  Δz=%+.2f nm  (netAxial now %+.4f pN)%n",
                         t, (centroidX(f)-fcx0)*1e6, (centroidZ(f)-0)*1e6, dc[2]*1e12);
         }
-        double dx = centroidX(f) - fcx0;
+        double dx = centroidX(f) - fcx0, dz = centroidZ(f) - fcz0;
         if (held) {
-            double[] dcF = decompose(f, b, mot, cfg1, dt);
-            System.out.printf("  ⇒ final: axialA=%+.3f axialB=%+.3f pN, |axialA|+|axialB|=%.3f, netAxial=%+.4f pN ⇒ ratio |net|/(|A|+|B|)=%.3f%n",
-                    dcF[0]*1e12, dcF[1]*1e12, (Math.abs(dcF[0])+Math.abs(dcF[1]))*1e12, dcF[2]*1e12,
+            double[] dcF = decompose(f, b, mot, cfg1, perp, dt);
+            // the key ratio: |net axial| / |net transverse| (transport vs bending). Old config-1 ≈ 1:22 (transverse).
+            double tr = Math.abs(dcF[3]) > 0 ? Math.abs(dcF[2])/Math.abs(dcF[3]) : 0;
+            System.out.printf("  ⇒ final: netAxial=%+.4f pN, netTransverse=%.4f pN ⇒ AXIAL:TRANSVERSE = %.2f : 1  (>1 ⇒ axial/transport-dominated)%n",
+                    dcF[2]*1e12, dcF[3]*1e12, tr);
+            // head ∠x̂ — should be ≈90° on the perp path (head stands ⊥), ≈0° on the two-point pin
+            double hux=b.uVecX(2),huy=b.uVecY(2),huz=b.uVecZ(2), du=Math.abs(hux*sux+huy*suy+huz*suz); if(du>1)du=1;
+            double levSwing; { double lux=b.uVecX(1),luy=b.uVecY(1),luz=b.uVecZ(1),dl=Math.abs(lux*sux+luy*suy+luz*suz); if(dl>1)dl=1; levSwing=Math.toDegrees(Math.acos(dl)); }
+            System.out.printf("  ⇒ bound geometry: head∠x̂=%.1f° (perp target ⇒ ~90°), lever∠x̂=%.1f°, J1=%.1f° ; |net|/(|A|+|B|)=%.3f%n",
+                    Math.toDegrees(Math.acos(du)), levSwing, dcF[7],
                     Math.abs(dcF[2])/Math.max(1e-30, Math.abs(dcF[0])+Math.abs(dcF[1])));
             System.out.printf("  ⇒ net axial impulse over stroke = %.4g pN·s ; net transverse(final)=%.3f pN%n", impulse*1e12, dcF[3]*1e12);
+            System.out.println("  ⇒ PRODUCTIVE-PHASE means (the strained dwell the catch-slip governs; transport-relevant):");
+            double[] winMs = {0.5, 1.0, 2.0};
+            for (int w = 0; w < winSteps.length; w++) {
+                double ax = winAxial[w]/winN[w]*1e12, tv = winTransv[w]/winN[w]*1e12;
+                System.out.printf("       first %.1f ms: ⟨axial⟩=%+.4f pN  ⟨transverse⟩=%.4f pN  transverse:axial=%.2f:1  per-cycle axial impulse=%+.4g pN·s%n",
+                        winMs[w], ax, tv, Math.abs(ax)>1e-9?Math.abs(tv/ax):0, ax*winMs[w]*1e-3);
+            }
         }
-        return new double[]{ impulse, dx };
+        return new double[]{ impulse, dx, dz };
     }
 
-    /** one motor dynamics step (config1 or default), filament held or integrated. */
+    /** one motor dynamics step (config1 / config1-perp / default), filament held or integrated. */
     static void motorStep(FilamentStore f, MotorStore mot, RigidRodBody b, FloatArray bondData,
-                          FloatArray xbC1, FloatArray xbDef, FloatArray jp, boolean cfg1, double dt, boolean held) {
+                          FloatArray xbC1, FloatArray xbDef, FloatArray jp, boolean cfg1, boolean perp, double dt, boolean held) {
         ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
         MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, jp, mot.counts);
         TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, jp, mot.counts);
-        if (cfg1)
+        if (cfg1 && perp)
+            CrossBridgeSystem.bondForcesCanonicalConfig1Perp(b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam,
+                    mot.boundSeg, mot.bindArc, mot.perpRest, mot.nucleotideState, bondData, xbC1);
+        else if (cfg1)
             CrossBridgeSystem.bondForcesCanonicalConfig1(b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam,
                     mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, bondData, xbC1);
         else
@@ -1187,7 +1274,7 @@ public final class GlidingHarness {
     /** decompose the force on the filament in the seg frame. config1 ⇒ recompute the two pins separately;
      *  default ⇒ the single seg-side force split into axial/transverse (per-pin N/A). Returns
      *  {axialA, axialB, netAxial, netTransverse, distA, distB, forceDot, j1angDeg} (forces in N). */
-    static double[] decompose(FilamentStore f, RigidRodBody b, MotorStore mot, boolean cfg1, double dt) {
+    static double[] decompose(FilamentStore f, RigidRodBody b, MotorStore mot, boolean cfg1, boolean perp, double dt) {
         double HEAD = MotorStore.HEAD_LEN;
         int head = 2, lev = 1, nB = 3;
         double hcx = b.coordX(head), hcy = b.coordY(head), hcz = b.coordZ(head);
@@ -1202,7 +1289,21 @@ public final class GlidingHarness {
         double j1ang = 0;
         { double lux=b.uVecX(lev),luy=b.uVecY(lev),luz=b.uVecZ(lev); double dv=lux*hux+luy*huy+luz*huz; if(dv>1)dv=1;if(dv<-1)dv=-1; j1ang=Math.toDegrees(Math.acos(dv)); }
         double forceDot = 0;
-        if (cfg1) {
+        if (cfg1 && perp) {
+            // PERP-HEAD: ONE positional pin (the tip). Net force on filament = −F8a (the single PAIRS tip pin
+            // reaction). The ⊥-orientation torque adds no FORCE (only torque), so it does not enter this decomposition.
+            double aOffA = mot.bindArc.get(0) - 0.5*slen;
+            double apAx=scx+aOffA*sux, apAy=scy+aOffA*suy, apAz=scz+aOffA*suz;
+            double dAx=apAx-tipx, dAy=apAy-tipy, dAz=apAz-tipz, distA=Math.sqrt(dAx*dAx+dAy*dAy+dAz*dAz);
+            double axA=0,ayA=0,azA=0;
+            if (distA>0){ double lx=dAx/distA,ly=dAy/distA,lz=dAz/distA;
+                double mcH=moveCH(hux,huy,huz,lx,ly,lz,hbTGx,hbTGy,hbRGy,HEAD), mcS=moveCH(sux,suy,suz,lx,ly,lz,sbTGx,sbTGy,sbRGy,slen);
+                double fm=PAIRS_FRACMOVE*1e-6*distA/(dt*(mcH+mcS)); axA=-fm*lx; ayA=-fm*ly; azA=-fm*lz; }   // on filament
+            double axialA=axA*sux+ayA*suy+azA*suz;
+            double netAxial=axialA;
+            double tx=axA-netAxial*sux, ty=ayA-netAxial*suy, tz=azA-netAxial*suz, netTransv=Math.sqrt(tx*tx+ty*ty+tz*tz);
+            return new double[]{ axialA, 0, netAxial, netTransv, distA, 0, forceDot, j1ang };
+        } else if (cfg1) {
             double aOffA = mot.bindArc.get(0) - 0.5*slen, aOffB = mot.bindArc2.get(0) - 0.5*slen;
             double apAx=scx+aOffA*sux, apAy=scy+aOffA*suy, apAz=scz+aOffA*suz;
             double apBx=scx+aOffB*sux, apBy=scy+aOffB*suy, apBz=scz+aOffB*suz;
@@ -1281,10 +1382,10 @@ public final class GlidingHarness {
 
         int SETTLE = 80000;
         mot.setAllStates(MotorStore.NUC_ADPPI);
-        for (int t=0;t<SETTLE;t++) motorStep(f,mot,b,bondData,xbC1,xbDef,jp,true,dt,true);
+        for (int t=0;t<SETTLE;t++) motorStep(f,mot,b,bondData,xbC1,xbDef,jp,true,false,dt,true);
         double[] unc = geomSnap(b, mot, "UNCOCKED (J1 rest 0°, ADPPi — pre-stroke)");
         mot.setAllStates(MotorStore.NUC_NONE);
-        for (int t=0;t<SETTLE;t++) motorStep(f,mot,b,bondData,xbC1,xbDef,jp,true,dt,true);
+        for (int t=0;t<SETTLE;t++) motorStep(f,mot,b,bondData,xbC1,xbDef,jp,true,false,dt,true);
         double[] coc = geomSnap(b, mot, "COCKED (J1 rest 60°, NONE — post-stroke)");
 
         // unc/coc layout: [0..2]rod.e1 [3..5]rod.e2 [6..8]lev.e1 [9..11]lev.e2 [12..14]head.e1 [15..17]head.e2
@@ -1618,18 +1719,20 @@ public final class GlidingHarness {
         sc.mot.setCounts(0, SEED, sc.fil.n); sc.fil.counts.set(1, 0);
         plan.withGridScheduler(sched).execute();
         long sample = 0; double boundSum = 0; double cxHalf = cx0; boolean nan = false;
+        long atpBoundSum = 0, boundForState = 0;   // ATP-RELEASE invariant: device-side bound-in-ATP must be ~0
         int report = Math.max(1, M / 10);
         long t0 = System.nanoTime();
         for (int t = 1; t < M; t++) {
             sc.mot.setCounts(t, SEED, sc.fil.n); sc.fil.counts.set(1, t);
             TornadoExecutionResult res = plan.withGridScheduler(sched).execute();
             if (t % report == 0 || t == M - 1) {
-                res.transferToHost(sc.fil.coord, sc.mot.boundSeg);
+                res.transferToHost(sc.fil.coord, sc.mot.boundSeg, sc.mot.nucleotideState);
                 double cx = centroidX(sc.fil);
                 if (Double.isNaN(cx)) nan = true;
                 if (t >= M / 2 && cxHalf == cx0) cxHalf = cx;
-                boundSum += bound(sc.mot); sample++;
-                System.out.printf("  step %-8d centroidX=%.5f  avgBound(inst)=%d%n", t, cx, bound(sc.mot));
+                long bAll = bound(sc.mot), bAtp = boundInState(sc.mot, MotorStore.NUC_ATP);
+                boundSum += bAll; atpBoundSum += bAtp; boundForState += bAll; sample++;
+                System.out.printf("  step %-8d centroidX=%.5f  avgBound(inst)=%d  bound-in-ATP=%d%n", t, cx, bAll, bAtp);
             }
         }
         long t1 = System.nanoTime();
@@ -1639,6 +1742,8 @@ public final class GlidingHarness {
         double avgB = boundSum / sample;
         System.out.printf("%n  velocity(net) = %.3f µm/s (%s), STEADY = %.3f, avgBound = %.2f  (v1 fixture 8.33/7.6), NaN=%s%n",
                 vel, vel < 0 ? "−x ✓" : "+x ?", velSteady, avgB, nan);
+        System.out.printf("  [ATP-release invariant] device-side bound-in-ATP = %.2f%% of bound  (target ≈ 0; fix %s)%n",
+                boundForState > 0 ? 100.0 * atpBoundSum / boundForState : 0.0, (CONFIG1 && ATP_RELEASE) ? "ON" : "OFF");
         System.out.printf("  GPU THROUGHPUT: %.0f steps/s (%.2f ms/step) at %d motors; device-resident, host pull only at output cadence%n",
                 stepsPerSec, 1e3 / stepsPerSec, sc.mot.nMotors);
     }

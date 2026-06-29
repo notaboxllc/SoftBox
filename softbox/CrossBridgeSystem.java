@@ -285,6 +285,151 @@ public final class CrossBridgeSystem {
         }
     }
 
+    /**
+     * CANONICAL_MOTOR CONFIG 1 — PERP-HEAD variant (flag-gated; PHASE2_PERP_HEAD_FINDINGS.md). The bound-geometry
+     * report found the TWO-POINT head pin mis-delivers the powerstroke: rigidly fixed at tip + rear, the head
+     * cannot slide on actin, so the converter swing presents only a transverse reaction couple (bending, not
+     * transport). This variant is config-1 with ONE structural change (jba):
+     *   (1) REMOVE the rear pin (pin B / bindArc2). The head is no longer two-point-pinned.
+     *   (2) KEEP the tip pin (pin A / bindArc) — the head's tip stays stereospecifically bound (single-point
+     *       positional PAIRS pin; the strong-bound contact does not slide).
+     *   (3) ADD a PAIRS-form orientation torque (the dt-robust fracMove/(moveC·dt) family, same convention as the
+     *       config-1 pins / the F9/F10 alignment) that drives the head's uVec toward `perpRest` — the FROZEN-at-bind
+     *       ⊥-to-filament direction. This replaces the rigid rear-pin orientation constraint with a soft-but-dt-
+     *       robust torque so the head STANDS ⊥ to actin (the converter swing must then move the LEVER, not rotate
+     *       the head flat). +T on the head, −T reaction on the segment (mirrors F9/F10; perpRest is frozen, ≈the
+     *       fixed filament's ⊥ direction).
+     * Everything else is HELD identical to config1: the J1 Hookean converter (0°↔60° switch in MotorJointSystem),
+     * the catch load forceDotFil = signed J1 lever strain (κ/L)·(θ_rest−θ), κ, the PAIRS pin form. bindArc2 is
+     * UNUSED on this path (dropped from the signature; the array stays allocated).
+     *
+     * xbParams (config1-perp): [0]=fracMove(PAIRS pin) [1]=κ(N·m/rad) [2]=leverLen(µm) [3]=dt [4]=HEAD_LEN(µm)
+     *                          [5]=orientFracMove (the ⊥-orientation torque strength; matches the rear-pin scale).
+     * Same bondData stride-13 layout / head-self-write / seg-side gather (reused VERBATIM). Default path untouched.
+     */
+    public static void bondForcesCanonicalConfig1Perp(
+            FloatArray motorCoord, FloatArray motorUVec, FloatArray motorBTransGam, FloatArray motorBRotGam,
+            FloatArray filCoord, FloatArray filUVec, FloatArray filSegLength, FloatArray filBTransGam, FloatArray filBRotGam,
+            IntArray boundSeg, FloatArray bindArc, FloatArray perpRest, IntArray nucleotideState,
+            FloatArray bondData, FloatArray xbParams) {
+
+        int nB = motorCoord.getSize() / 3;
+        int nSeg = filCoord.getSize() / 3;
+        int nM = nB / 3;
+        double fracMove = xbParams.get(0), kappa = xbParams.get(1), leverLenUm = xbParams.get(2);
+        double dt = xbParams.get(3), headLen = xbParams.get(4);
+        double orientFrac = (xbParams.getSize() > 5) ? xbParams.get(5) : fracMove;
+        double DEG2RAD = Math.PI / 180.0, RAD2DEG = 180.0 / Math.PI;
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            int d = m * STRIDE;
+            for (int k = 0; k < STRIDE; k++) bondData.set(d + k, 0f);
+            int s = boundSeg.get(m);
+            if (s < 0) continue;
+
+            int h = 3 * m + 2, lv = 3 * m + 1;
+            double hcx = motorCoord.get(h), hcy = motorCoord.get(nB + h), hcz = motorCoord.get(2 * nB + h);
+            double hux = motorUVec.get(h), huy = motorUVec.get(nB + h), huz = motorUVec.get(2 * nB + h);
+            double hbTGx = motorBTransGam.get(h), hbTGy = motorBTransGam.get(nB + h), hbRGy = motorBRotGam.get(nB + h);
+            double tipx = hcx + 0.5 * headLen * hux, tipy = hcy + 0.5 * headLen * huy, tipz = hcz + 0.5 * headLen * huz;   // head.end2
+
+            double scx = filCoord.get(s), scy = filCoord.get(nSeg + s), scz = filCoord.get(2 * nSeg + s);
+            double sux = filUVec.get(s), suy = filUVec.get(nSeg + s), suz = filUVec.get(2 * nSeg + s);
+            double slen = filSegLength.get(s);
+            double sbTGx = filBTransGam.get(s), sbTGy = filBTransGam.get(nSeg + s), sbRGy = filBRotGam.get(nSeg + s);
+
+            // ---- PAIRS pin A: tip (head.end2) → site A (bindArc). The ONLY positional pin (rear pin removed). ----
+            double aOffA = bindArc.get(m) - 0.5 * slen;
+            double apAx = scx + aOffA * sux, apAy = scy + aOffA * suy, apAz = scz + aOffA * suz;
+            double dAx = apAx - tipx, dAy = apAy - tipy, dAz = apAz - tipz;
+            double distA = Math.sqrt(dAx * dAx + dAy * dAy + dAz * dAz);
+            double FAx = 0, FAy = 0, FAz = 0;
+            if (distA > 0.0) {
+                double lAx = dAx / distA, lAy = dAy / distA, lAz = dAz / distA;
+                double mcH = moveC(hux, huy, huz, lAx, lAy, lAz, hbTGx, hbTGy, hbRGy, headLen);
+                double mcS = moveC(sux, suy, suz, lAx, lAy, lAz, sbTGx, sbTGy, sbRGy, slen);
+                double denom = dt * (mcH + mcS);
+                double fmag = (denom > 0.0) ? (fracMove * 1.0e-6 * distA / denom) : 0.0;
+                FAx = fmag * lAx; FAy = fmag * lAy; FAz = fmag * lAz;
+            }
+
+            // ---- tip-pin positional torque (R in metres) ----
+            double RtAx = (tipx - hcx) * 1e-6, RtAy = (tipy - hcy) * 1e-6, RtAz = (tipz - hcz) * 1e-6;
+            double THAx = RtAy * FAz - RtAz * FAy, THAy = RtAz * FAx - RtAx * FAz, THAz = RtAx * FAy - RtAy * FAx;
+            double RSAx = (apAx - scx) * 1e-6, RSAy = (apAy - scy) * 1e-6, RSAz = (apAz - scz) * 1e-6;
+            double TSAx = RSAy * (-FAz) - RSAz * (-FAy), TSAy = RSAz * (-FAx) - RSAx * (-FAz), TSAz = RSAx * (-FAy) - RSAy * (-FAx);
+
+            // ---- ⊥-orientation PAIRS torque: drive head.uVec → perpRest (frozen). +T head, −T seg. ----
+            double px = perpRest.get(m), py = perpRest.get(nM + m), pz = perpRest.get(2 * nM + m);
+            double Tox = 0, Toy = 0, Toz = 0;
+            // axis = head.uVec × perpRest (rotates head.uVec TOWARD perpRest by the right-hand rule)
+            double aox = huy * pz - huz * py, aoy = huz * px - hux * pz, aoz = hux * py - huy * px;
+            double mo = aox * aox + aoy * aoy + aoz * aoz;
+            if (mo > 1.0e-30) {
+                double im = 1.0 / Math.sqrt(mo); aox *= im; aoy *= im; aoz *= im;
+                double dot = hux * px + huy * py + huz * pz; if (dot > 1) dot = 1; if (dot < -1) dot = -1;
+                double angRad = accurateAcos(dot);    // angle to rotate head.uVec onto perpRest
+                double tm = orientFrac * angRad / ((1.0 / hbRGy + 1.0 / sbRGy) * dt);
+                Tox = tm * aox; Toy = tm * aoy; Toz = tm * aoz;
+            }
+
+            // ---- J1 lever strain → forceDotFil (the catch load; unchanged from config1) ----
+            double lux = motorUVec.get(lv), luy = motorUVec.get(nB + lv), luz = motorUVec.get(2 * nB + lv);
+            double dotV = lux * hux + luy * huy + luz * huz; if (dotV > 1) dotV = 1; if (dotV < -1) dotV = -1;
+            double angDeg = accurateAcos(dotV) * RAD2DEG;
+            double j1Rest = (nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? 60.0 : 0.0;
+            double deflRad = (angDeg - j1Rest) * DEG2RAD;
+            double leverM = leverLenUm * 1.0e-6;
+            double forceDot = (leverM > 0.0) ? (kappa / leverM) * (-deflRad) : 0.0;   // resisting (θ<rest) ⇒ +
+
+            // head-side: +F8a tip pin, torque (THA + T_orient)
+            bondData.set(d,     (float) FAx); bondData.set(d + 1, (float) FAy); bondData.set(d + 2, (float) FAz);
+            bondData.set(d + 3, (float) (THAx + Tox));
+            bondData.set(d + 4, (float) (THAy + Toy));
+            bondData.set(d + 5, (float) (THAz + Toz));
+            // seg-side: −F8a, torque (TSA − T_orient reaction)
+            bondData.set(d + 6, (float) (-FAx)); bondData.set(d + 7, (float) (-FAy)); bondData.set(d + 8, (float) (-FAz));
+            bondData.set(d + 9,  (float) (TSAx - Tox));
+            bondData.set(d + 10, (float) (TSAy - Toy));
+            bondData.set(d + 11, (float) (TSAz - Toz));
+            bondData.set(d + 12, (float) forceDot);   // the J1 lever-strain load (NOT a pin tension)
+        }
+    }
+
+    /**
+     * PHASE-2 PERP-HEAD — freeze the per-motor ⊥-orientation rest at FRESH bind (the gliding-pipeline analog of
+     * the force-decomp gate's bind-time uperp computation). Runs right after the (two-point) binder, BEFORE
+     * snapCanonicalHead clears `canonSnap`: for each motor whose `canonSnap != 0` (a fresh formation this step) it
+     * computes `uperp` = the ⊥-to-filament direction nearest the head's current uVec (ẑ-fallback when the head is
+     * near-axial — the expected fresh-bind regime) and stores it in `perpRest`. Gating on `canonSnap` makes it a
+     * one-shot FREEZE (subsequent steps see canonSnap=0 ⇒ perpRest is held). Does NOT touch the body pose (only
+     * writes perpRest) ⇒ safe to place early (unlike snapCanonicalHead). Does NOT clear canonSnap (snapCanonicalHead
+     * owns that). ADDITIVE — only the PERP-HEAD gliding path calls it; byte-identical default. */
+    public static void snapPerpRest(FloatArray motorUVec, FloatArray filUVec, IntArray boundSeg,
+                                    IntArray canonSnap, FloatArray perpRest, IntArray counts) {
+        int nB = motorUVec.getSize() / 3;
+        int nSeg = filUVec.getSize() / 3;
+        int nM = nB / 3;
+        for (@Parallel int m = 0; m < nM; m++) {
+            if (canonSnap.get(m) == 0) continue;          // only freshly-bound motors ⇒ frozen otherwise
+            int s = boundSeg.get(m);
+            if (s < 0) continue;
+            int h = 3 * m + 2;
+            double hux = motorUVec.get(h), huy = motorUVec.get(nB + h), huz = motorUVec.get(2 * nB + h);
+            double sux = filUVec.get(s), suy = filUVec.get(nSeg + s), suz = filUVec.get(2 * nSeg + s);
+            double axc = hux * sux + huy * suy + huz * suz;
+            double upx = hux - axc * sux, upy = huy - axc * suy, upz = huz - axc * suz;   // ⊥ component of the head uVec
+            double mag = Math.sqrt(upx * upx + upy * upy + upz * upz);
+            if (mag < 0.1) {                              // head near-axial ⇒ fallback: project the surface normal ẑ
+                double zc = suz;                          // ẑ·seg
+                upx = -zc * sux; upy = -zc * suy; upz = 1.0 - zc * suz;
+                mag = Math.sqrt(upx * upx + upy * upy + upz * upz);
+            }
+            if (mag > 0.0) { upx /= mag; upy /= mag; upz /= mag; }
+            perpRest.set(m, (float) upx); perpRest.set(nM + m, (float) upy); perpRest.set(2 * nM + m, (float) upz);
+        }
+    }
+
     /** v1 moveCoeff (VERBATIM MotorJointSystem.moveC / the PAIRS effective mobility along a link). */
     private static double moveC(double ux, double uy, double uz,
                                double lx, double ly, double lz,

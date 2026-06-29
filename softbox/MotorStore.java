@@ -85,6 +85,13 @@ public final class MotorStore {
     // never sets it ⇒ allocating it is byte-identical for every existing harness.
     public final IntArray   canonSnap; // nMotors
 
+    // PHASE-2 PERP-HEAD (flag-gated, default unused): the FROZEN-at-bind perpendicular-to-filament rest
+    // direction for the head's uVec orientation torque (config-1 perp variant — rear pin REMOVED, tip pin
+    // kept, this PAIRS-form orientation torque holds the head ⊥ to the filament). Planar 3·nMotors (unit
+    // vector). Read ONLY by CrossBridgeSystem.bondForcesCanonicalConfig1Perp; default path never touches it
+    // ⇒ allocating it is byte-identical for every existing harness. See PHASE2_PERP_HEAD_FINDINGS.md.
+    public final FloatArray perpRest;  // 3·nMotors planar; frozen ⊥-to-filament head-uVec rest target
+
     // ---- Per-motor cumulative stats (race-free; host sums for the off-rate gate) ----
     //   stats[2m]   = # steps this motor began the step bound
     //   stats[2m+1] = # release events fired
@@ -183,6 +190,7 @@ public final class MotorStore {
         bindArc  = new FloatArray(nMotors);
         bindArc2 = new FloatArray(nMotors);        // CANONICAL_MOTOR rear-site (default unused)
         canonSnap = new IntArray(nMotors);         // PHASE-2 Version-B snap flag (default unused)
+        perpRest = new FloatArray(3 * nMotors);    // PHASE-2 PERP-HEAD frozen ⊥ rest (default unused)
         stats    = new IntArray(2 * nMotors);
         capStats = new IntArray(nMotors);          // §6.10 break-force release fires per motor (measurement only)
         kinParams = new FloatArray(20);   // [0..17] kinetics; [18]=sustained-load injection F_ext (N, measurement); [19]=reserved
@@ -195,6 +203,7 @@ public final class MotorStore {
         bindArc.init(0f);
         bindArc2.init(0f);
         canonSnap.init(0);
+        perpRest.init(0f);
         stats.init(0);
         capStats.init(0);
         cooldown.init(0);
