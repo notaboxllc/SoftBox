@@ -92,6 +92,13 @@ public final class MotorStore {
     // ⇒ allocating it is byte-identical for every existing harness. See PHASE2_PERP_HEAD_FINDINGS.md.
     public final FloatArray perpRest;  // 3·nMotors planar; frozen ⊥-to-filament head-uVec rest target
 
+    // PHASE-2 HEAD-ANGLE SWEEP (flag-gated, default unused): the head↔filament rest-angle θ baked into the
+    // frozen perpRest target by snapPerpRest, so the bond kernel is UNCHANGED (it still drives head.uVec →
+    // perpRest). headTiltCS = [cos θ, sin θ, setFlag]; setFlag 0 ⇒ snapPerpRest stores the plain ⊥ rest
+    // (byte-identical to the original perp-head). Read ONLY by CrossBridgeSystem.snapPerpRest on the
+    // PERP-HEAD path; default unused. See PHASE2_HEADANGLE_SWEEP_FINDINGS.md.
+    public final FloatArray headTiltCS;  // [0]=cosθ [1]=sinθ [2]=setFlag
+
     // ---- Per-motor cumulative stats (race-free; host sums for the off-rate gate) ----
     //   stats[2m]   = # steps this motor began the step bound
     //   stats[2m+1] = # release events fired
@@ -191,6 +198,7 @@ public final class MotorStore {
         bindArc2 = new FloatArray(nMotors);        // CANONICAL_MOTOR rear-site (default unused)
         canonSnap = new IntArray(nMotors);         // PHASE-2 Version-B snap flag (default unused)
         perpRest = new FloatArray(3 * nMotors);    // PHASE-2 PERP-HEAD frozen ⊥ rest (default unused)
+        headTiltCS = new FloatArray(3);            // PHASE-2 HEAD-ANGLE SWEEP θ (default unused; setFlag 0)
         stats    = new IntArray(2 * nMotors);
         capStats = new IntArray(nMotors);          // §6.10 break-force release fires per motor (measurement only)
         kinParams = new FloatArray(20);   // [0..17] kinetics; [18]=sustained-load injection F_ext (N, measurement); [19]=reserved
@@ -204,6 +212,7 @@ public final class MotorStore {
         bindArc2.init(0f);
         canonSnap.init(0);
         perpRest.init(0f);
+        headTiltCS.init(0f);                       // [2]=setFlag 0 ⇒ snapPerpRest uses the plain ⊥ rest path
         stats.init(0);
         capStats.init(0);
         cooldown.init(0);

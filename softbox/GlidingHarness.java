@@ -69,6 +69,11 @@ public final class GlidingHarness {
     static boolean BOUNDGEOM = false;            // -boundgeom: report the config-1 motor's bound-state geometry at uncocked/cocked equilibria (measurement-only)
     static boolean PERPHEAD = false;             // -perphead: config-1 PERP-HEAD variant — rear pin REMOVED, tip pin kept, PAIRS-form ⊥-orientation torque holds the head ⊥ to the filament. Implies -config1. The force-decomposition mechanism gate.
     static double  PERP_FRACMOVE = 0.5;          // -perpfrac: ⊥-orientation torque strength (matches the prior rear-pin/PAIRS scale)
+    // ---- HEAD-ANGLE SWEEP (flag-gated, default-off ⇒ θ=90 ⊥ path byte-identical) ----
+    static double  HEADTILT_DEG = 90.0;          // -headtilt <deg>: head↔filament rest angle θ baked into the frozen perpRest target (0=along actin, 90=⊥=current perphead)
+    static boolean HEADTILT_SET = false;         // true ⇒ apply Target(θ); false ⇒ plain ⊥ rest (byte-identical perphead)
+    static boolean HEADTILT_SWEEP = false;       // -headtiltsweep: Stage-1 single-motor force-decomp θ sweep on the OFF-AXIS bind (measurement-only)
+    static double  OFFAXIS_DEG = 40.0;           // -offaxis <deg>: off-axis bind angle for the decomp setup (non-degenerate perpRest; default 40°)
     static boolean ATP_RELEASE = true;           // PHASE-2 ATP-RELEASE COUPLING: a bound head detaches AT its NONE→ATP transition (ATP-binding = detachment). Default-ON for CONFIG1 (config1/perphead gliding); A/B control -noatprelease turns it OFF (old decoupled cycle). Non-CONFIG1 paths never see it.
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
@@ -90,6 +95,8 @@ public final class GlidingHarness {
     static long sliceSteps = 0, boundAccum = 0;
     static SiteMotionTracker SMT = null;
     static long tns() { return SUBSTEP ? System.nanoTime() : 0L; }
+    // HEAD-ANGLE SWEEP — settled-state metrics captured by decompRun (for the Stage-1 sweep table)
+    static double DEC_axialPN, DEC_transvPN, DEC_headAngDeg, DEC_leverAngDeg, DEC_j1Deg;
 
     public static void main(String[] args) {
         int M = 2000;
@@ -149,6 +156,9 @@ public final class GlidingHarness {
             else if (args[i].equals("-forcedecomp")) { CONFIG1 = true; FORCEDECOMP = true; }  // force decomposition (single motor, transport topology)
             else if (args[i].equals("-perphead")) { CANONICAL = true; CONFIG1 = true; PERPHEAD = true; }  // config-1 PERP-HEAD MOTOR VARIANT (gliding-capable); combine with -forcedecomp for the single-motor mechanism gate
             else if (args[i].equals("-perpfrac")) PERP_FRACMOVE = Double.parseDouble(args[++i]);  // ⊥-orientation torque strength override
+            else if (args[i].equals("-headtilt")) { HEADTILT_DEG = Double.parseDouble(args[++i]); HEADTILT_SET = true; CANONICAL = true; CONFIG1 = true; PERPHEAD = true; }  // head↔filament rest angle θ (implies -perphead)
+            else if (args[i].equals("-headtiltsweep")) { HEADTILT_SWEEP = true; CANONICAL = true; CONFIG1 = true; PERPHEAD = true; FORCEDECOMP = true; }  // Stage-1 θ sweep (single-motor force decomp, off-axis bind)
+            else if (args[i].equals("-offaxis")) OFFAXIS_DEG = Double.parseDouble(args[++i]);  // off-axis bind angle for the decomp/sweep setup
             else if (args[i].equals("-noatprelease")) ATP_RELEASE = false;  // A/B control: DISABLE the ATP-transition→detach coupling (old decoupled cycle) for config1/perphead
             else if (args[i].equals("-boundgeom")) { CONFIG1 = true; BOUNDGEOM = true; }      // bound-state geometry report (single motor, transport topology)
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
@@ -160,6 +170,7 @@ public final class GlidingHarness {
 
         for (String a : args) if (a.equals("-forcetest")) { forceTest(); return; }
         if (STIFFSWEEP) { stiffnessAngleSweep(); return; }   // step-4d: builds its own minimal one-shot scenes
+        if (HEADTILT_SWEEP) { headTiltSweep(); return; }     // Stage-1 θ sweep (single-motor force decomp, off-axis bind)
         if (FORCEDECOMP) { forceDecomp(); return; }          // force decomposition: builds its own single-motor transport scene
         if (BOUNDGEOM) { boundGeom(); return; }              // bound-state geometry: builds its own single-motor transport scene
 
@@ -298,6 +309,11 @@ public final class GlidingHarness {
             sc.xbParamsC1 = PERPHEAD
                 ? FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) MotorStore.LEVER_LEN, (float) DT, (float) MotorStore.HEAD_LEN, (float) PERP_FRACMOVE)
                 : FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) MotorStore.LEVER_LEN, (float) DT, (float) MotorStore.HEAD_LEN);
+            // HEAD-ANGLE SWEEP: bake θ into the frozen perpRest target (snapPerpRest). setFlag 0 ⇒ plain ⊥ (byte-id).
+            if (PERPHEAD && HEADTILT_SET) {
+                double th = Math.toRadians(HEADTILT_DEG);
+                mot.headTiltCS.set(0, (float) Math.cos(th)); mot.headTiltCS.set(1, (float) Math.sin(th)); mot.headTiltCS.set(2, 1f);
+            }
             sc.jointParams = mot.jointParamsC1;
         } else {
             sc.jointParams = mot.jointParams;
@@ -333,7 +349,7 @@ public final class GlidingHarness {
         else
             BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
         // PERP-HEAD: freeze uperp at fresh bind (reads canonSnap before snapCanonicalHead clears it)
-        if (PERPHEAD) CrossBridgeSystem.snapPerpRest(b.uVec, f.uVec, mot.boundSeg, mot.canonSnap, mot.perpRest, mot.counts);
+        if (PERPHEAD) CrossBridgeSystem.snapPerpRest(b.uVec, f.uVec, mot.boundSeg, mot.canonSnap, mot.perpRest, mot.counts, mot.headTiltCS);
         // --- motor nucleotide cycle + dynamics ---
         // PHASE-2 ATP-RELEASE COUPLING: config-1/perp-head detach AT the bound NONE→ATP transition (ATP-binding
         // = detachment); the catch-slip release above is unchanged (it governs the strained ADP dwell). The plain
@@ -461,7 +477,7 @@ public final class GlidingHarness {
         if (XB_IMPLICIT) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.xbImplPrev, mot.xbImplParams);
         if (CANONICAL) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.bindArc2, mot.canonSnap);
         if (CONFIG1) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.xbParamsC1, sc.jointParams);
-        if (PERPHEAD) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.perpRest);
+        if (PERPHEAD) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.perpRest, mot.headTiltCS);
         if (TAU_AVG > 0) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.forceDotAvg, mot.avgInit);
         // reach (common)
         tg = tg
@@ -507,7 +523,7 @@ public final class GlidingHarness {
             else
                 tg = tg.task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
             // PERP-HEAD: freeze uperp at fresh bind (writes perpRest only — no body write ⇒ safe early; canonSnap cleared later by snapHead)
-            if (PERPHEAD) tg = tg.task("snapPerp", CrossBridgeSystem::snapPerpRest, b.uVec, f.uVec, mot.boundSeg, mot.canonSnap, mot.perpRest, mot.counts);
+            if (PERPHEAD) tg = tg.task("snapPerp", CrossBridgeSystem::snapPerpRest, b.uVec, f.uVec, mot.boundSeg, mot.canonSnap, mot.perpRest, mot.counts, mot.headTiltCS);
             // PHASE-2 ATP-RELEASE COUPLING (config-1/perp-head): detach AT the bound NONE→ATP transition. cycle
             // runs AFTER bind (line above) ⇒ no later kernel overwrites the freed boundSeg this step (atomic on GPU).
             if (CONFIG1 && ATP_RELEASE)
@@ -1116,18 +1132,65 @@ public final class GlidingHarness {
                          : (mode == 1) ? "CONFIG-1 (two-point PAIRS pins + Hookean-J1) — the OLD 22:1"
                                        : "DEFAULT v1 motor (F8 tip spring + F9/F10) — the axial reference";
             System.out.println("\n----- " + label + " -----");
-            double[] r = decompRun(cfg1, perp, dt, true);    // filament HELD (isometric force time course + impulse)
-            double[] rel = decompRun(cfg1, perp, dt, false); // filament RELEASED (cross-check: does it translate?)
+            double[] r = decompRun(cfg1, perp, dt, true, 0.0, 90.0, false);    // filament HELD (isometric force time course + impulse)
+            double[] rel = decompRun(cfg1, perp, dt, false, 0.0, 90.0, false); // filament RELEASED (cross-check: does it translate?)
             System.out.printf("  net axial IMPULSE over the stroke = %.4g pN·s ; released-filament Δx = %+.4f nm  Δz = %+.4f nm (predicted sign %s)%n",
                     r[0]*1e12, rel[1]*1e6, rel[2]*1e6, r[0] < 0 ? "−x glide" : "+x");
         }
         System.out.println("\n=== force decomposition complete ===");
     }
 
+    /**
+     * PHASE-2 HEAD-ANGLE SWEEP (Stage 1, MEASUREMENT-ONLY). Hold the PERP-HEAD topology FIXED (single tip pin +
+     * the ⊥-orientation PAIRS torque) and vary ONLY the torque's target angle θ between head-uVec-aligned-with-
+     * filament (θ=0) and full-perpendicular (θ=90 = the current perp-head). Surface-free swing-plane target:
+     *   perpRest = normalize(u−(u·f)f),  f_hat = sign(u·f)·f,  Target(θ) = cos θ·f_hat + sin θ·perpRest.
+     * The head is bound OFF-AXIS (a real acute angle φ=OFFAXIS_DEG between u and f) so perpRest is well-defined in
+     * ONE fixed {f,u}=x–z plane across the whole sweep (the degenerate ẑ-fallback NEVER fires). Single motor,
+     * gliding/transport topology, dt=1e-6, Brownian OFF. Reports per θ: settled axial force (along f), the
+     * transverse:axial ratio (the perp-head gate metric), and whether the head HOLDS at the commanded θ. The rest
+     * of the config is IDENTICAL to the 2026-06-29 post-fix re-measure (κ force-matched, ATP-release governs the
+     * cycle elsewhere; here the stroke is fired with hand-set nucleotide states as in -forcedecomp). NO physics
+     * edit, no retune, no default change. CPU host-side, single motor, sub-second/θ.
+     */
+    static void headTiltSweep() {
+        double dt = 1.0e-6;
+        double HEAD = MotorStore.HEAD_LEN, LEVER = MotorStore.LEVER_LEN;
+        double phi = OFFAXIS_DEG;
+        int[] thetas = { 0, 15, 30, 45, 60, 75, 90 };
+        System.out.println("\n=== PHASE-2 HEAD-ANGLE SWEEP (Stage 1) — perp-head topology held fixed, θ swept; single motor, dt=1e-6, Brownian OFF ===");
+        System.out.printf("  off-axis bind φ=%.0f° (u·f acute ⇒ perpRest well-defined, NO ẑ-fallback); κ=%.3g (tip %.3f pN/nm, stall %.2f pN); PAIRS fracMove=%.2f; ⊥-orient fracMove=%.2f; HEAD_LEN=%.1f nm; LEVER=%.1f nm%n",
+                phi, KAPPA, KAPPA/(LEVER*1e-6)/(LEVER*1e-6)*1e3, motorStallPN(), PAIRS_FRACMOVE, PERP_FRACMOVE, HEAD*1e3, LEVER*1e3);
+        System.out.println("  surface-free angle rule: perpRest=normalize(u−(u·f)f), f_hat=sign(u·f)·f, Target(θ)=cosθ·f_hat+sinθ·perpRest");
+        double[] axial = new double[thetas.length], transv = new double[thetas.length], headAng = new double[thetas.length];
+        double[] levAng = new double[thetas.length], j1 = new double[thetas.length];
+        for (int i = 0; i < thetas.length; i++) {
+            decompRun(true, true, dt, true, phi, thetas[i], true);   // cfg1+perp, HELD (isometric), off-axis, θ=thetas[i]
+            axial[i] = DEC_axialPN; transv[i] = DEC_transvPN; headAng[i] = DEC_headAngDeg; levAng[i] = DEC_leverAngDeg; j1[i] = DEC_j1Deg;
+        }
+        System.out.println("\n--- Stage-1 sweep table (settled isometric force on the filament) ---");
+        System.out.println("   θ(cmd)  head∠f(meas)  holds?   axial(pN)   transverse(pN)   transverse:axial   lever∠f   J1°");
+        for (int i = 0; i < thetas.length; i++) {
+            double ratio = Math.abs(axial[i]) > 1e-6 ? Math.abs(transv[i]/axial[i]) : Double.POSITIVE_INFINITY;
+            boolean holds = Math.abs(headAng[i] - thetas[i]) <= 10.0;
+            System.out.printf("   %4d°    %6.1f°      %-5s   %+8.3f     %8.3f         %s      %5.1f°  %5.1f°%n",
+                    thetas[i], headAng[i], holds ? "YES" : "no", axial[i], transv[i],
+                    Double.isInfinite(ratio) ? "  ∞ (axial≈0)" : String.format("%7.2f : 1", ratio), levAng[i], j1[i]);
+        }
+        System.out.println("\n  Reading:");
+        System.out.println("   • 'holds?' = |head∠f − θ| ≤ 10° (does the ⊥-orientation torque actually drive+hold the head to the commanded θ).");
+        System.out.println("   • transverse:axial — perp-head gate metric: ~2:1 = transport-like (like the default v1 motor that glides); ~22:1 = config-1 bending artifact.");
+        // θ=90 cross-check vs the published perp-head (the same ⊥ fixed point, reached from the off-axis bind):
+        int last = thetas.length - 1;
+        double r90 = Math.abs(axial[last]) > 1e-6 ? Math.abs(transv[last]/axial[last]) : 0;
+        System.out.printf("  θ=90° cross-check: axial %+.3f pN, transverse:axial %.2f:1 (published perp-head: +1.94 pN, 2.35:1).%n", axial[last], r90);
+        System.out.println("\n=== head-angle sweep (Stage 1) complete ===");
+    }
+
     /** One decomposition run. Returns {netAxialImpulse(N·s), filamentDx(µm), filamentDz(µm)}. held=true ⇒ filament
      *  fixed (isometric); held=false ⇒ filament integrated (the released cross-check). perp=true ⇒ the PERP-HEAD
      *  config-1 variant (rear pin removed, ⊥-orientation torque). Prints the (axial,transverse,per-pin) time course. */
-    static double[] decompRun(boolean cfg1, boolean perp, double dt, boolean held) {
+    static double[] decompRun(boolean cfg1, boolean perp, double dt, boolean held, double offAxisDeg, double tiltDeg, boolean tiltSet) {
         double HEAD = MotorStore.HEAD_LEN, LEVER = MotorStore.LEVER_LEN, ROD = MotorStore.ROD_LEN;
         // ---- filament: 1 segment along +x at z=0 ----
         FilamentStore f = new FilamentStore(1);
@@ -1150,19 +1213,38 @@ public final class GlidingHarness {
         RigidRodBody b = mot.body;
         for (int s = 0; s < 3; s++) { b.brownTransScale.set(s, 0f); b.brownRotScale.set(s, 0f); }  // Brownian OFF
         int rod = 0, lev = 1, head = 2;
-        // head: center at filament (0,0,0), uVec +x ⇒ tip=+HEAD/2·x (site A), rear=−HEAD/2·x (site B)
-        b.setCoord(head, 0f, 0f, 0f); b.setUVec(head, 1f, 0f, 0f); b.setYVec(head, 0f, 1f, 0f);
-        // lever: end2 = head.end1 = (−HEAD/2,0,0); uVec +z ⇒ center=(−HEAD/2,0,−LEVER/2)
-        b.setCoord(lev, (float) (-0.5*HEAD), 0f, (float) (-0.5*LEVER)); b.setUVec(lev, 0f, 0f, 1f); b.setYVec(lev, 0f, 1f, 0f);
-        // rod: end2 = lever.end1 = (−HEAD/2,0,−LEVER); uVec +z ⇒ center=(−HEAD/2,0,−LEVER−ROD/2)
-        b.setCoord(rod, (float) (-0.5*HEAD), 0f, (float) (-(LEVER + 0.5*ROD))); b.setUVec(rod, 0f, 0f, 1f); b.setYVec(rod, 0f, 1f, 0f);
-        mot.anchor.set(0, (float) (-0.5*HEAD)); mot.anchor.set(1, 0f); mot.anchor.set(2, (float) (-(LEVER + ROD)));  // rod.end1 (tail)
-        DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
-        // bind: tip@site A, rear@site B (two-point) — the rear pin is UNUSED on the perp path
         double e1x = f.end1.get(0);
-        mot.boundSeg.set(0, 0);
-        mot.bindArc.set(0, (float) (0.5*HEAD - e1x));      // arc of tip from e1
-        mot.bindArc2.set(0, (float) (-0.5*HEAD - e1x));    // arc of rear from e1 (= bindArc − HEAD)
+        if (offAxisDeg <= 0.0) {
+            // ---- DEFAULT axial bind (the published -forcedecomp pose; UNCHANGED) ----
+            // head: center at filament (0,0,0), uVec +x ⇒ tip=+HEAD/2·x (site A), rear=−HEAD/2·x (site B)
+            b.setCoord(head, 0f, 0f, 0f); b.setUVec(head, 1f, 0f, 0f); b.setYVec(head, 0f, 1f, 0f);
+            // lever: end2 = head.end1 = (−HEAD/2,0,0); uVec +z ⇒ center=(−HEAD/2,0,−LEVER/2)
+            b.setCoord(lev, (float) (-0.5*HEAD), 0f, (float) (-0.5*LEVER)); b.setUVec(lev, 0f, 0f, 1f); b.setYVec(lev, 0f, 1f, 0f);
+            // rod: end2 = lever.end1 = (−HEAD/2,0,−LEVER); uVec +z ⇒ center=(−HEAD/2,0,−LEVER−ROD/2)
+            b.setCoord(rod, (float) (-0.5*HEAD), 0f, (float) (-(LEVER + 0.5*ROD))); b.setUVec(rod, 0f, 0f, 1f); b.setYVec(rod, 0f, 1f, 0f);
+            mot.anchor.set(0, (float) (-0.5*HEAD)); mot.anchor.set(1, 0f); mot.anchor.set(2, (float) (-(LEVER + ROD)));  // rod.end1 (tail)
+            DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+            // bind: tip@site A, rear@site B (two-point) — the rear pin is UNUSED on the perp path
+            mot.boundSeg.set(0, 0);
+            mot.bindArc.set(0, (float) (0.5*HEAD - e1x));      // arc of tip from e1
+            mot.bindArc2.set(0, (float) (-0.5*HEAD - e1x));    // arc of rear from e1 (= bindArc − HEAD)
+        } else {
+            // ---- OFF-AXIS bind (HEAD-ANGLE SWEEP; additive) — tilt ONLY the head's bind orientation to a real acute
+            // angle φ from the filament so perpRest = normalize(u−(u·f)f) is GENUINE (the head's own ⊥ component,
+            // SURFACE-FREE) and well-defined in ONE fixed {f,u}=x–z plane across the whole θ sweep — the degenerate
+            // ẑ-fallback NEVER fires. The lever/rod/ANCHOR stay EXACTLY at the published -forcedecomp perp-head
+            // positions so the J1-strain geometry (the force source) is IDENTICAL to the perp-head decomp ⇒ θ=90
+            // reproduces the published +1.94 pN / 2.35:1; the sweep isolates θ alone, not the anchor geometry.
+            double phi = Math.toRadians(offAxisDeg), cu = Math.cos(phi), su = Math.sin(phi);
+            b.setCoord(head, 0f, 0f, 0f); b.setUVec(head, (float) cu, 0f, (float) su); b.setYVec(head, 0f, 1f, 0f);   // tilted head, center at origin
+            b.setCoord(lev, (float) (-0.5*HEAD), 0f, (float) (-0.5*LEVER)); b.setUVec(lev, 0f, 0f, 1f); b.setYVec(lev, 0f, 1f, 0f);   // PUBLISHED lever
+            b.setCoord(rod, (float) (-0.5*HEAD), 0f, (float) (-(LEVER + 0.5*ROD))); b.setUVec(rod, 0f, 0f, 1f); b.setYVec(rod, 0f, 1f, 0f);   // PUBLISHED rod
+            mot.anchor.set(0, (float) (-0.5*HEAD)); mot.anchor.set(1, 0f); mot.anchor.set(2, (float) (-(LEVER + ROD)));   // PUBLISHED anchor
+            DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+            mot.boundSeg.set(0, 0);
+            mot.bindArc.set(0, (float) (0.5*HEAD*cu - e1x));   // tip x-projection (head.end2 = +0.5HEAD·u)
+            mot.bindArc2.set(0, (float) (-0.5*HEAD*cu - e1x)); // rear x-projection (UNUSED on the perp path)
+        }
         // ---- PERP-HEAD: compute + FREEZE uperp (⊥-to-filament direction nearest the bind-time head.uVec) ----
         if (perp) {
             double hux = b.uVecX(head), huy = b.uVecY(head), huz = b.uVecZ(head);   // bind-time head.uVec (= +x here)
@@ -1175,9 +1257,18 @@ public final class GlidingHarness {
                 upx = zx - zc*sxh; upy = zy - zc*syh; upz = zz - zc*szh; mag = Math.sqrt(upx*upx+upy*upy+upz*upz);
             }
             if (mag > 0) { upx/=mag; upy/=mag; upz/=mag; }
+            // HEAD-ANGLE SWEEP — rotate the rest target within the {f,u} plane to angle θ (SURFACE-FREE):
+            // Target(θ) = cos θ·f_hat + sin θ·perpRest, f_hat = sign(u·f)·f (θ=0 ⇒ along actin, θ=90 ⇒ ⊥).
+            if (tiltSet) {
+                double cosT = Math.cos(Math.toRadians(tiltDeg)), sinT = Math.sin(Math.toRadians(tiltDeg));
+                double sgn = (axc >= 0) ? 1.0 : -1.0, fhx = sgn*sxh, fhy = sgn*syh, fhz = sgn*szh;
+                double tx = cosT*fhx + sinT*upx, ty = cosT*fhy + sinT*upy, tz = cosT*fhz + sinT*upz;
+                double tm = Math.sqrt(tx*tx + ty*ty + tz*tz);
+                if (tm > 0) { upx = tx/tm; upy = ty/tm; upz = tz/tm; }
+            }
             mot.perpRest.set(0, (float) upx); mot.perpRest.set(1, (float) upy); mot.perpRest.set(2, (float) upz);
-            System.out.printf("  frozen uperp (⊥-to-filament head rest) = (%+.3f, %+.3f, %+.3f)  [bind head.uVec=(%+.2f,%+.2f,%+.2f), axial ⇒ ẑ-fallback]%n",
-                    upx, upy, upz, b.uVecX(head), b.uVecY(head), b.uVecZ(head));
+            if (!HEADTILT_SWEEP) System.out.printf("  frozen uperp (⊥-to-filament head rest) = (%+.3f, %+.3f, %+.3f)  [bind head.uVec=(%+.2f,%+.2f,%+.2f)%s]%n",
+                    upx, upy, upz, b.uVecX(head), b.uVecY(head), b.uVecZ(head), tiltSet ? String.format(", θ=%.0f°", tiltDeg) : ", axial ⇒ ẑ-fallback");
         }
         FloatArray xbC1 = perp
                 ? FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) LEVER, (float) dt, (float) HEAD, (float) PERP_FRACMOVE)
@@ -1227,6 +1318,7 @@ public final class GlidingHarness {
             // head ∠x̂ — should be ≈90° on the perp path (head stands ⊥), ≈0° on the two-point pin
             double hux=b.uVecX(2),huy=b.uVecY(2),huz=b.uVecZ(2), du=Math.abs(hux*sux+huy*suy+huz*suz); if(du>1)du=1;
             double levSwing; { double lux=b.uVecX(1),luy=b.uVecY(1),luz=b.uVecZ(1),dl=Math.abs(lux*sux+luy*suy+luz*suz); if(dl>1)dl=1; levSwing=Math.toDegrees(Math.acos(dl)); }
+            DEC_axialPN = dcF[2]*1e12; DEC_transvPN = dcF[3]*1e12; DEC_headAngDeg = Math.toDegrees(Math.acos(du)); DEC_leverAngDeg = levSwing; DEC_j1Deg = dcF[7];
             System.out.printf("  ⇒ bound geometry: head∠x̂=%.1f° (perp target ⇒ ~90°), lever∠x̂=%.1f°, J1=%.1f° ; |net|/(|A|+|B|)=%.3f%n",
                     Math.toDegrees(Math.acos(du)), levSwing, dcF[7],
                     Math.abs(dcF[2])/Math.max(1e-30, Math.abs(dcF[0])+Math.abs(dcF[1])));

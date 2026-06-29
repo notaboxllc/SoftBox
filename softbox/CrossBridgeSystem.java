@@ -406,10 +406,11 @@ public final class CrossBridgeSystem {
      * writes perpRest) ⇒ safe to place early (unlike snapCanonicalHead). Does NOT clear canonSnap (snapCanonicalHead
      * owns that). ADDITIVE — only the PERP-HEAD gliding path calls it; byte-identical default. */
     public static void snapPerpRest(FloatArray motorUVec, FloatArray filUVec, IntArray boundSeg,
-                                    IntArray canonSnap, FloatArray perpRest, IntArray counts) {
+                                    IntArray canonSnap, FloatArray perpRest, IntArray counts, FloatArray headTiltCS) {
         int nB = motorUVec.getSize() / 3;
         int nSeg = filUVec.getSize() / 3;
         int nM = nB / 3;
+        double cosT = headTiltCS.get(0), sinT = headTiltCS.get(1), tiltSet = headTiltCS.get(2);
         for (@Parallel int m = 0; m < nM; m++) {
             if (canonSnap.get(m) == 0) continue;          // only freshly-bound motors ⇒ frozen otherwise
             int s = boundSeg.get(m);
@@ -418,14 +419,24 @@ public final class CrossBridgeSystem {
             double hux = motorUVec.get(h), huy = motorUVec.get(nB + h), huz = motorUVec.get(2 * nB + h);
             double sux = filUVec.get(s), suy = filUVec.get(nSeg + s), suz = filUVec.get(2 * nSeg + s);
             double axc = hux * sux + huy * suy + huz * suz;
-            double upx = hux - axc * sux, upy = huy - axc * suy, upz = huz - axc * suz;   // ⊥ component of the head uVec
+            double upx = hux - axc * sux, upy = huy - axc * suy, upz = huz - axc * suz;   // ⊥ component of the head uVec (perpRest, SURFACE-FREE)
             double mag = Math.sqrt(upx * upx + upy * upy + upz * upz);
-            if (mag < 0.1) {                              // head near-axial ⇒ fallback: project the surface normal ẑ
+            if (mag < 0.1) {                              // head near-axial (degenerate) ⇒ fallback: project the surface normal ẑ
                 double zc = suz;                          // ẑ·seg
                 upx = -zc * sux; upy = -zc * suy; upz = 1.0 - zc * suz;
                 mag = Math.sqrt(upx * upx + upy * upy + upz * upz);
             }
             if (mag > 0.0) { upx /= mag; upy /= mag; upz /= mag; }
+            // PHASE-2 HEAD-ANGLE SWEEP — when tiltSet, rotate the rest target within the {f,u} plane to angle θ:
+            // Target(θ) = cos θ·f_hat + sin θ·perpRest, f_hat = sign(u·f)·f (θ=0 ⇒ head aligned to actin, θ=90 ⇒ ⊥).
+            // SURFACE-FREE in the non-degenerate case (uses the filament direction only). θ=90 ⇒ Target≈perpRest.
+            if (tiltSet != 0.0) {
+                double sgn = (axc >= 0.0) ? 1.0 : -1.0;
+                double fhx = sgn * sux, fhy = sgn * suy, fhz = sgn * suz;
+                double tx = cosT * fhx + sinT * upx, ty = cosT * fhy + sinT * upy, tz = cosT * fhz + sinT * upz;
+                double tm = Math.sqrt(tx * tx + ty * ty + tz * tz);
+                if (tm > 0.0) { upx = tx / tm; upy = ty / tm; upz = tz / tm; }
+            }
             perpRest.set(m, (float) upx); perpRest.set(nM + m, (float) upy); perpRest.set(2 * nM + m, (float) upz);
         }
     }
