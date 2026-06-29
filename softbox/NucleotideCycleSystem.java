@@ -280,4 +280,163 @@ public final class NucleotideCycleSystem {
             }
         }
     }
+
+    // ============================================================================================
+    // PHASE-2 ATP-RECHARGE MODEL (jba, 2026-06-29; flag-gated `-atprecharge`, default-off ⇒ every existing path
+    // byte-identical). The nucleotide cycle is SLAVED to the force-based release (no force-independent detach):
+    //   (1) the ONLY release is the force-based Guo–Guilford catch-slip (catchSlipRelease*Recharge). There is NO
+    //       nucleotide-dice detachment (cycleAtpDetach's bound→ATP→detach pathway is NOT used on this path).
+    //   (2) ADP→NONE is TIED TO RELEASE: when (and only when) the catch-slip detaches a head, its nucleotide goes
+    //       ADP→NONE. The cycle itself never rolls ADP→NONE ⇒ a BOUND head HOLDS in ADP (cocked, force-bearing)
+    //       until the force releases it (cycleNoBoundAtp drops the cycle's ADP→NONE).
+    //   (3) the freed (NONE) head takes up a new ATP by MONTE CARLO — the normal free-head NONE→ATP roll (atpOn,
+    //       fast at saturating [ATP]; reducing atpOn models low [ATP] — the extensibility jba flagged). Then
+    //       ATP→ADPPi (hydrolysis recovery) → waits primed in ADPPi → rebinds.
+    // Replaces the cycleAtpDetach approach (which jba identified as a spurious force-INDEPENDENT release channel).
+
+    /** (1) Cycle for the ATP-recharge model (jba). Two changes vs cycle():
+     *    - NONE→ATP (the ATP uptake) fires ONLY when the head is FREE — a bound head never recharges ATP;
+     *    - ADP→NONE is REMOVED from the cycle — it happens ONLY at the catch-slip release (catchSlipRelease*Recharge
+     *      sets NONE). A BOUND head therefore HOLDS in ADP (cocked, force-bearing, post-power-stroke) until the
+     *      force-based catch-slip detaches it. The free recharge path is NONE→ATP (fast, atpOn=2e4) → ATP→ADPPi
+     *      (the ~10 ms hydrolysis recovery) → waits primed in ADPPi (off-fil ADPPi→ADP = 0) → rebinds.
+     *  The wang-hash draw/salt are byte-for-byte cycle()'s. (`forceDotHist` is unused here — ADP→NONE moved to
+     *  the release; kept in the signature for call-site stability.) */
+    public static void cycleNoBoundAtp(IntArray nucleotideState, IntArray boundSeg,
+                                       FloatArray forceDotHist, FloatArray nucParams, IntArray counts) {
+        int nM = nucleotideState.getSize();
+        int step = counts.get(1), seed = counts.get(2);
+        float dt = nucParams.get(0);
+        float atpOn = nucParams.get(1);
+        float onATP = nucParams.get(2), offATP = nucParams.get(3);
+        float onPi = nucParams.get(4),  offPi = nucParams.get(5);
+        for (@Parallel int m = 0; m < nM; m++) {
+            int state = nucleotideState.get(m);
+            boolean bound = boundSeg.get(m) >= 0;
+            int h = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4E55);  // NUC salt (== cycle)
+            float u = (h >>> 1) / 2147483647.0f;
+            if (state == MotorStore.NUC_NONE) {
+                if (!bound && u < atpOn * dt) state = MotorStore.NUC_ATP;   // ATP uptake ONLY when FREE (jba)
+            } else if (state == MotorStore.NUC_ATP) {
+                float rate = bound ? onATP : offATP;
+                if (u < rate * dt) state = MotorStore.NUC_ADPPI;
+            } else if (state == MotorStore.NUC_ADPPI) {
+                float rate = bound ? onPi : offPi;
+                if (u < rate * dt) state = MotorStore.NUC_ADP;
+            }
+            // ADP: NO cycle transition — ADP→NONE happens ONLY at the catch-slip release (jba). A bound head
+            // HOLDS in ADP; it leaves the bound state only via the force-based catch-slip.
+            nucleotideState.set(m, state);
+        }
+    }
+
+    /** (2)+(3) catchSlipRelease + ATP recharge: byte-for-byte catchSlipRelease EXCEPT on every release (the
+     *  force-cap branch and the catch-slip branch) it ALSO sets nucleotideState ← NUC_ATP (the freed head recharges).
+     *  The added `nucleotideState` arg is the only signature delta; the release decision is unchanged. */
+    public static void catchSlipReleaseRecharge(IntArray boundSeg, FloatArray forceDotFil, FloatArray forceMag, IntArray cooldown,
+                                                IntArray stats, IntArray capStats, FloatArray kinParams, IntArray counts,
+                                                IntArray nucleotideState) {
+        int nM = boundSeg.getSize();
+        int step = counts.get(1), seed = counts.get(2);
+        float kOff = kinParams.get(0), aCatch = kinParams.get(1), aSlip = kinParams.get(2);
+        float xCatch = kinParams.get(3), xSlip = kinParams.get(4), kT = kinParams.get(5), dt = kinParams.get(6);
+        int refractorySteps = (int) kinParams.get(10);
+        float breakForceN = kinParams.get(11);
+        boolean capOn = kinParams.get(12) > 0.5f;
+        float blockProb = kinParams.get(13);
+        for (@Parallel int m = 0; m < nM; m++) {
+            int bs = boundSeg.get(m);
+            if (bs >= 0) {
+                stats.set(2 * m, stats.get(2 * m) + 1);
+                boolean enterRefractory = refractorySteps > 0;
+                if (blockProb < 1.0f) {
+                    int rh = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x52465241);
+                    float ru = (rh >>> 1) / 2147483647.0f;
+                    enterRefractory = enterRefractory && (ru < blockProb);
+                }
+                if (capOn && forceMag.get(m) > breakForceN) {
+                    capStats.set(m, capStats.get(m) + 1);
+                    nucleotideState.set(m, MotorStore.NUC_NONE);                // ADP→NONE coupled to release (then free MC takes up ATP)
+                    if (enterRefractory) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                    continue;
+                }
+                float fExt = kinParams.getSize() > 18 ? kinParams.get(18) : 0f;
+                float F = forceDotFil.get(m) + fExt;
+                float rate = kOff * (aCatch * (float) Math.exp(-F * xCatch / kT) + aSlip * (float) Math.exp(F * xSlip / kT));
+                int h = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4D54);
+                float u = (h >>> 1) / 2147483647.0f;
+                if (u < rate * dt) {
+                    stats.set(2 * m + 1, stats.get(2 * m + 1) + 1);
+                    nucleotideState.set(m, MotorStore.NUC_NONE);                // ADP→NONE coupled to release (then free MC takes up ATP)
+                    if (enterRefractory) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                }
+            } else if (bs == MotorStore.FREE_COOLDOWN) {
+                int c = cooldown.get(m) - 1;
+                if (c <= 0) { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                else { cooldown.set(m, c); }
+            }
+        }
+    }
+
+    /** (2)+(3) catchSlipReleaseAvg + ATP recharge: byte-for-byte catchSlipReleaseAvg EXCEPT on every release it
+     *  ALSO sets nucleotideState ← NUC_ATP. This is the variant the calibrated stack (`-tauavg`) uses. */
+    public static void catchSlipReleaseAvgRecharge(IntArray boundSeg, FloatArray forceDotFil, FloatArray forceDotAvg, IntArray avgInit,
+                                                   FloatArray forceMag, IntArray cooldown,
+                                                   IntArray stats, IntArray capStats, FloatArray kinParams, IntArray counts,
+                                                   IntArray nucleotideState) {
+        int nM = boundSeg.getSize();
+        int step = counts.get(1), seed = counts.get(2);
+        float kOff = kinParams.get(0), aCatch = kinParams.get(1), aSlip = kinParams.get(2);
+        float xCatch = kinParams.get(3), xSlip = kinParams.get(4), kT = kinParams.get(5), dt = kinParams.get(6);
+        int refractorySteps = (int) kinParams.get(10);
+        float breakForceN = kinParams.get(11);
+        boolean capOn = kinParams.get(12) > 0.5f;
+        float blockProb = kinParams.get(13);
+        float alpha = kinParams.get(17);
+        for (@Parallel int m = 0; m < nM; m++) {
+            int bs = boundSeg.get(m);
+            if (bs >= 0) {
+                float Finst = forceDotFil.get(m);
+                float Favg;
+                if (avgInit.get(m) == 0) { Favg = Finst; forceDotAvg.set(m, Finst); avgInit.set(m, 1); }
+                else { Favg = forceDotAvg.get(m) + alpha * (Finst - forceDotAvg.get(m)); forceDotAvg.set(m, Favg); }
+                stats.set(2 * m, stats.get(2 * m) + 1);
+                boolean enterRefractory = refractorySteps > 0;
+                if (blockProb < 1.0f) {
+                    int rh = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x52465241);
+                    float ru = (rh >>> 1) / 2147483647.0f;
+                    enterRefractory = enterRefractory && (ru < blockProb);
+                }
+                if (capOn && forceMag.get(m) > breakForceN) {
+                    capStats.set(m, capStats.get(m) + 1);
+                    forceDotAvg.set(m, 0f); avgInit.set(m, 0);
+                    nucleotideState.set(m, MotorStore.NUC_NONE);                // ADP→NONE coupled to release (then free MC takes up ATP)
+                    if (enterRefractory) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                    continue;
+                }
+                float fExt = kinParams.getSize() > 18 ? kinParams.get(18) : 0f;
+                float F = Favg + fExt;
+                float rate = kOff * (aCatch * (float) Math.exp(-F * xCatch / kT) + aSlip * (float) Math.exp(F * xSlip / kT));
+                int h = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4D54);
+                float u = (h >>> 1) / 2147483647.0f;
+                if (u < rate * dt) {
+                    stats.set(2 * m + 1, stats.get(2 * m + 1) + 1);
+                    forceDotAvg.set(m, 0f); avgInit.set(m, 0);
+                    nucleotideState.set(m, MotorStore.NUC_NONE);                // ADP→NONE coupled to release (then free MC takes up ATP)
+                    if (enterRefractory) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                }
+            } else {
+                forceDotAvg.set(m, 0f); avgInit.set(m, 0);
+                if (bs == MotorStore.FREE_COOLDOWN) {
+                    int c = cooldown.get(m) - 1;
+                    if (c <= 0) { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                    else { cooldown.set(m, c); }
+                }
+            }
+        }
+    }
 }

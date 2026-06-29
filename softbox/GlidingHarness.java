@@ -75,6 +75,8 @@ public final class GlidingHarness {
     static boolean HEADTILT_SWEEP = false;       // -headtiltsweep: Stage-1 single-motor force-decomp θ sweep on the OFF-AXIS bind (measurement-only)
     static double  OFFAXIS_DEG = 40.0;           // -offaxis <deg>: off-axis bind angle for the decomp setup (non-degenerate perpRest; default 40°)
     static boolean ATP_RELEASE = true;           // PHASE-2 ATP-RELEASE COUPLING: a bound head detaches AT its NONE→ATP transition (ATP-binding = detachment). Default-ON for CONFIG1 (config1/perphead gliding); A/B control -noatprelease turns it OFF (old decoupled cycle). Non-CONFIG1 paths never see it.
+    static boolean BRAKEDIAG = false;            // -brakediag (PART B, measurement-only): per-bound-head axial seg-force (assist −x / brake +x) vs signed catch load forceDotFil, binned by time-since-stroke; release-vs-signed-load histogram. CPU runner, default-off.
+    static boolean ATP_RECHARGE = false;         // -atprecharge (jba 2026-06-29): the CORRECTED nucleotide↔release coupling. (1) a BOUND head is locked out of ATP uptake (NONE→ATP only when FREE); (2) the ONLY release is the force-based Guo–Guilford catch-slip (NO dice-roll detach — overrides ATP_RELEASE); (3) on release the head is recharged nucleotideState←ATP (debugging form). Default-off ⇒ every existing path byte-identical.
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static double DENSITY = 500.0;              // motors / µm² (-density overrides for the speed-density trend)
@@ -112,6 +114,7 @@ public final class GlidingHarness {
             if (args[i].equals("-3js")) viz = args[++i];
             else if (args[i].equals("-diag")) diag = true;
             else if (args[i].equals("-cycldiag")) cycldiag = true;
+            else if (args[i].equals("-brakediag")) BRAKEDIAG = true;   // PART B brake decomposition
             else if (args[i].equals("-grid")) grid = true;
             else if (args[i].equals("-ztrace")) ztrace = true;
             else if (args[i].equals("-assistlog")) assistlog = true;   // §6.9 per-bound-motor tuple dump (default off)
@@ -160,6 +163,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-headtiltsweep")) { HEADTILT_SWEEP = true; CANONICAL = true; CONFIG1 = true; PERPHEAD = true; FORCEDECOMP = true; }  // Stage-1 θ sweep (single-motor force decomp, off-axis bind)
             else if (args[i].equals("-offaxis")) OFFAXIS_DEG = Double.parseDouble(args[++i]);  // off-axis bind angle for the decomp/sweep setup
             else if (args[i].equals("-noatprelease")) ATP_RELEASE = false;  // A/B control: DISABLE the ATP-transition→detach coupling (old decoupled cycle) for config1/perphead
+            else if (args[i].equals("-atprecharge")) ATP_RECHARGE = true;    // jba: catch-slip-ONLY release + ATP recharge on release + bound head locked out of ATP uptake (no dice-roll detach)
             else if (args[i].equals("-boundgeom")) { CONFIG1 = true; BOUNDGEOM = true; }      // bound-state geometry report (single motor, transport topology)
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
@@ -200,6 +204,7 @@ public final class GlidingHarness {
         if (CANON_DIAG) { canonDiag(sc, Math.max(M, 12000)); return; }
         if (diag) { diagnose(sc, Math.max(M, 8000)); return; }
         if (cycldiag) { cyclediag(sc, Math.max(M, 8000)); return; }
+        if (BRAKEDIAG) { brakeDiagnose(sc, Math.max(M, 12000)); return; }
         if (grid) { measureGrid(sc, M, gpu); return; }
         if (ztrace) { ztrace(sc, M, gpu); return; }
         if (assistlog) { assistLog(sc, M, gpu); return; }
@@ -338,7 +343,11 @@ public final class GlidingHarness {
         MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
         BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
         long _rel = tns();
-        if (TAU_AVG > 0)
+        if (ATP_RECHARGE && TAU_AVG > 0)   // jba ATP-RECHARGE: catch-slip is the ONLY release; recharge to ATP on release
+            NucleotideCycleSystem.catchSlipReleaseAvgRecharge(mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts, mot.nucleotideState);
+        else if (ATP_RECHARGE)
+            NucleotideCycleSystem.catchSlipReleaseRecharge(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts, mot.nucleotideState);
+        else if (TAU_AVG > 0)
             NucleotideCycleSystem.catchSlipReleaseAvg(mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
         else
             NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
@@ -354,7 +363,9 @@ public final class GlidingHarness {
         // PHASE-2 ATP-RELEASE COUPLING: config-1/perp-head detach AT the bound NONE→ATP transition (ATP-binding
         // = detachment); the catch-slip release above is unchanged (it governs the strained ADP dwell). The plain
         // cycle (default/canonical-non-config1) is byte-unchanged.
-        if (CONFIG1 && ATP_RELEASE)
+        if (ATP_RECHARGE)   // jba: a BOUND head is locked out of ATP uptake; NO dice-roll detach (release = catch-slip only)
+            NucleotideCycleSystem.cycleNoBoundAtp(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
+        else if (CONFIG1 && ATP_RELEASE)
             NucleotideCycleSystem.cycleAtpDetach(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.cooldown, mot.nucParams, mot.kinParams, mot.counts);
         else
             NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
@@ -514,7 +525,11 @@ public final class GlidingHarness {
                 .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
         } else {
             // default: release/cycle read last step's forceDotFil (force computed after them).
-            if (TAU_AVG > 0)
+            if (ATP_RECHARGE && TAU_AVG > 0)   // jba ATP-RECHARGE: catch-slip = the ONLY release; recharge to ATP on release
+                tg = tg.task("release", NucleotideCycleSystem::catchSlipReleaseAvgRecharge, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts, mot.nucleotideState);
+            else if (ATP_RECHARGE)
+                tg = tg.task("release", NucleotideCycleSystem::catchSlipReleaseRecharge, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts, mot.nucleotideState);
+            else if (TAU_AVG > 0)
                 tg = tg.task("release", NucleotideCycleSystem::catchSlipReleaseAvg, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
             else
                 tg = tg.task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
@@ -526,7 +541,9 @@ public final class GlidingHarness {
             if (PERPHEAD) tg = tg.task("snapPerp", CrossBridgeSystem::snapPerpRest, b.uVec, f.uVec, mot.boundSeg, mot.canonSnap, mot.perpRest, mot.counts, mot.headTiltCS);
             // PHASE-2 ATP-RELEASE COUPLING (config-1/perp-head): detach AT the bound NONE→ATP transition. cycle
             // runs AFTER bind (line above) ⇒ no later kernel overwrites the freed boundSeg this step (atomic on GPU).
-            if (CONFIG1 && ATP_RELEASE)
+            if (ATP_RECHARGE)   // jba: BOUND head locked out of ATP uptake; NO dice-roll detach (release = catch-slip only)
+                tg = tg.task("cycle", NucleotideCycleSystem::cycleNoBoundAtp, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
+            else if (CONFIG1 && ATP_RELEASE)
                 tg = tg.task("cycle", NucleotideCycleSystem::cycleAtpDetach, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.cooldown, mot.nucParams, mot.kinParams, mot.counts);
             else
                 tg = tg.task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
@@ -1799,6 +1816,122 @@ public final class GlidingHarness {
         System.out.printf("  predicted occupancy from dwells (NONE %.0f/ATP %.0f/ADPPi %.0f/ADP %.0f steps): NONE %.1f%% ATP %.1f%% ADPPi %.1f%% ADP %.1f%%%n",
                 dN,dA,dP,dD, 100*dN/ds,100*dA/ds,100*dP/ds,100*dD/ds);
         System.out.println("  ⇒ empirical rates ≈ nominal ⇒ cycle self-consistent under load (high ADP = the load-gate, not a bug)");
+    }
+
+    /**
+     * PART B — BRAKE DECOMPOSITION (measurement-only, CPU runner, flag-gated `-brakediag`, default-off).
+     * For each bound head, per post-warmup step, decompose:
+     *   (1) the ACTUAL AXIAL FORCE ON THE FILAMENT — the seg-side reaction bondData[d+6..8] this head puts on
+     *       its segment. Fx = bondData[d+6]. The matbed filament glides −x, so Fx<0 ASSISTS the glide and Fx>0
+     *       BRAKES it. Also the along-filament projection Fseg·segU.
+     *   (2) the SIGNED catch load forceDotFil (the J1 lever strain the catch-slip actually reads). Per the
+     *       CrossBridgeSystem convention + the -csrecal/-fext calibration: forceDotFil>0 = RESISTING = the catch
+     *       arm (lifetime rises to the ~6 pN peak ⇒ HELD); forceDotFil<0 = ASSISTING = the catch exponential
+     *       e^(−F·xCatch) detonates ⇒ FAST RELEASE.
+     * binned by TIME-SINCE-STROKE (pre-stroke / fresh / mid / long-held ADP). The decisive cross-tab: do BRAKING
+     * heads (Fx>0) read forceDotFil>0 (catch/held — the brake-and-mis-score) or forceDotFil<0 (fast release)?
+     * Plus the release-events-vs-signed-load histogram (the forceDotFil that fired each release). No physics
+     * touched — reads forceDotFil + bondData after step() exactly as diagnose()/cyclediag().
+     */
+    static void brakeDiagnose(Scene sc, int M) {
+        MotorStore mot = sc.mot; FilamentStore f = sc.fil; int nM = mot.nMotors; int warm = 2000;
+        int STR = CrossBridgeSystem.STRIDE, nSeg = f.n;
+        int[] prevBound = new int[nM], prevState = new int[nM], strokeStep = new int[nM];
+        for (int m = 0; m < nM; m++) { prevBound[m] = mot.boundSeg.get(m); prevState[m] = mot.nucleotideState.get(m); strokeStep[m] = -1; }
+        // time-since-stroke bins: 0=PRE-stroke (bound, not yet stroked), 1=FRESH (≤1 ms), 2=MID (1–3 ms), 3=LONG (>3 ms)
+        final int NB = 4; final double DTMS = DT * 1e3;
+        long[] binN = new long[NB]; double[] binFx = new double[NB], binAx = new double[NB], binFd = new double[NB];
+        long[] binFdPos = new long[NB], binFxBrake = new long[NB];
+        // cross-tab over ALL bound steps: [Fx sign: 0 brake(+x) / 1 assist(−x)][Fd sign: 0 catch(>0) / 1 slip(<0)]
+        long[][] xtab = new long[2][2];
+        long[][] xtabLong = new long[2][2];   // restricted to LONG-held (bin 3)
+        // release histogram by the signed load that fired it (preFd, in pN) + by time-since-stroke bin
+        long relStrongResist = 0, relMildResist = 0, relMildAssist = 0, relStrongAssist = 0; // >+1, 0..+1, −1..0, <−1 pN
+        long[] relBin = new long[NB]; long releaseTot = 0;
+        double netFxSum = 0; long netFxN = 0;     // ensemble net x-force per bound head (the directed force)
+        float[] preFd = new float[nM];
+        double filUx = 0; long filUxN = 0;
+        for (int t = 0; t < M; t++) {
+            for (int m = 0; m < nM; m++) preFd[m] = mot.forceDotFil.get(m);   // load the start-of-step release will consume
+            step(sc, t);
+            if (t < warm) { for (int m = 0; m < nM; m++) { prevBound[m] = mot.boundSeg.get(m); prevState[m] = mot.nucleotideState.get(m);
+                                                           if (prevBound[m] < 0) strokeStep[m] = -1; } continue; }
+            for (int m = 0; m < nM; m++) {
+                int bs = mot.boundSeg.get(m), st = mot.nucleotideState.get(m);
+                // (re)bind ⇒ reset stroke clock; stroke ⇒ stamp it
+                if (prevBound[m] < 0 && bs >= 0) strokeStep[m] = -1;
+                if (bs >= 0 && prevState[m] == MotorStore.NUC_ADPPI && st == MotorStore.NUC_ADP) strokeStep[m] = t;
+                // release this step (bound → cooldown): attribute to the load preFd[m] that fired it
+                if (prevBound[m] >= 0 && bs == MotorStore.FREE_COOLDOWN) {
+                    releaseTot++;
+                    double fpN = preFd[m] * 1e12;
+                    if (fpN > 1.0) relStrongResist++; else if (fpN > 0) relMildResist++;
+                    else if (fpN > -1.0) relMildAssist++; else relStrongAssist++;
+                    int rb = (strokeStep[m] < 0) ? 0 : binOf(t - strokeStep[m], DTMS);
+                    relBin[rb]++;
+                }
+                if (bs >= 0) {
+                    int d = m * STR;
+                    double fx = sc.bondData.get(d + 6), fy = sc.bondData.get(d + 7), fz = sc.bondData.get(d + 8);
+                    double sux = f.uVec.get(bs), suy = f.uVec.get(nSeg + bs), suz = f.uVec.get(2 * nSeg + bs);
+                    double axial = fx * sux + fy * suy + fz * suz;
+                    float fd = mot.forceDotFil.get(m);
+                    int bin = (strokeStep[m] < 0) ? 0 : binOf(t - strokeStep[m], DTMS);
+                    binN[bin]++; binFx[bin] += fx; binAx[bin] += axial; binFd[bin] += fd;
+                    if (fd > 0) binFdPos[bin]++;
+                    boolean brake = fx > 0;       // +x opposes the −x glide
+                    if (brake) binFxBrake[bin]++;
+                    int fi = brake ? 0 : 1, gi = (fd > 0) ? 0 : 1;
+                    xtab[fi][gi]++; if (bin == 3) xtabLong[fi][gi]++;
+                    netFxSum += fx; netFxN++;
+                    filUx += sux; filUxN++;
+                }
+                prevBound[m] = bs; prevState[m] = st;
+            }
+        }
+        System.out.println("\n=== PART B: brake decomposition (post-warmup, CPU; glide = −x ⇒ Fx<0 ASSISTS, Fx>0 BRAKES) ===");
+        System.out.printf("  filament mean uVec_x = %+.3f (≈±1 ⇒ axial≈±Fx)%n", filUx / Math.max(1, filUxN));
+        System.out.printf("  ensemble mean per-bound-head Fx = %+.4f pN  (negative ⇒ net forward/glide force)%n", 1e12 * netFxSum / Math.max(1, netFxN));
+        System.out.println("  time-since-stroke bins: 0=PRE-stroke  1=FRESH(≤1ms)  2=MID(1–3ms)  3=LONG(>3ms)");
+        System.out.printf("  %-14s %10s %12s %12s %12s %12s %12s%n", "bin", "boundSteps", "meanFx(pN)", "meanAxial", "meanFd(pN)", "%Fd>0(catch)", "%brake(Fx>0)");
+        String[] nm = {"PRE", "FRESH", "MID", "LONG"};
+        for (int bn = 0; bn < NB; bn++) {
+            long c = Math.max(1, binN[bn]);
+            System.out.printf("  %-14s %10d %12.4f %12.4f %12.4f %12.1f %12.1f%n", nm[bn], binN[bn],
+                    1e12 * binFx[bn] / c, 1e12 * binAx[bn] / c, 1e12 * binFd[bn] / c,
+                    100.0 * binFdPos[bn] / c, 100.0 * binFxBrake[bn] / c);
+        }
+        long xt = xtab[0][0] + xtab[0][1] + xtab[1][0] + xtab[1][1];
+        System.out.println("\n  CROSS-TAB (all bound steps) — the brake-and-mis-score signature:");
+        System.out.printf("    %% of bound steps that are BRAKE(Fx>0) & CATCH(Fd>0, held)  = %.2f%%   <-- mis-score if large%n", 100.0 * xtab[0][0] / xt);
+        System.out.printf("    %% BRAKE(Fx>0) & SLIP(Fd<0, fast-release)                   = %.2f%%%n", 100.0 * xtab[0][1] / xt);
+        System.out.printf("    %% ASSIST(Fx<0) & CATCH(Fd>0, held)                         = %.2f%%%n", 100.0 * xtab[1][0] / xt);
+        System.out.printf("    %% ASSIST(Fx<0) & SLIP(Fd<0, fast-release)                  = %.2f%%%n", 100.0 * xtab[1][1] / xt);
+        long brakeTot = xtab[0][0] + xtab[0][1];
+        System.out.printf("    of BRAKING heads: %.1f%% read CATCH(held) / %.1f%% read SLIP(release)%n",
+                100.0 * xtab[0][0] / Math.max(1, brakeTot), 100.0 * xtab[0][1] / Math.max(1, brakeTot));
+        long xtL = xtabLong[0][0] + xtabLong[0][1] + xtabLong[1][0] + xtabLong[1][1];
+        long brakeL = xtabLong[0][0] + xtabLong[0][1];
+        System.out.printf("    LONG-held only: %.1f%% of long-held steps BRAKE; of those %.1f%% read CATCH(held)%n",
+                100.0 * brakeL / Math.max(1, xtL), 100.0 * xtabLong[0][0] / Math.max(1, brakeL));
+        System.out.println("\n  RELEASE events vs the signed load that fired them (preFd):");
+        long rt = Math.max(1, releaseTot);
+        System.out.printf("    strong-RESIST(>+1pN) %.1f%% | mild-resist(0..+1) %.1f%% | mild-assist(−1..0) %.1f%% | strong-ASSIST(<−1pN) %.1f%%  (n=%d)%n",
+                100.0 * relStrongResist / rt, 100.0 * relMildResist / rt, 100.0 * relMildAssist / rt, 100.0 * relStrongAssist / rt, releaseTot);
+        System.out.printf("    releases by time-since-stroke: PRE %.1f%% | FRESH %.1f%% | MID %.1f%% | LONG %.1f%%%n",
+                100.0 * relBin[0] / rt, 100.0 * relBin[1] / rt, 100.0 * relBin[2] / rt, 100.0 * relBin[3] / rt);
+        System.out.println("\n  INTERPRETATION GUIDE:");
+        System.out.println("   • brake hypothesis CONFIRMED  ⇒ LONG-held heads are mostly BRAKE(Fx>0) AND read CATCH(Fd>0,held) (mis-score),");
+        System.out.println("     and releases cluster at RESIST(Fd>0), not at assist ⇒ the catch holds the braking heads.");
+        System.out.println("   • brake hypothesis REFUTED   ⇒ braking heads already read SLIP(Fd<0) / release fast, OR held heads don't brake.");
+    }
+
+    /** time-since-stroke (steps) → bin index: 0 handled by caller (pre-stroke), 1 FRESH ≤1ms, 2 MID 1–3ms, 3 LONG >3ms. */
+    static int binOf(int stepsSince, double dtMs) {
+        double ms = stepsSince * dtMs;
+        if (ms <= 1.0) return 1;
+        if (ms <= 3.0) return 2;
+        return 3;
     }
 
     /** GPU probe: run the device-resident gliding TaskGraph; sample velocity/avgBound at output cadence
