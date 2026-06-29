@@ -53,7 +53,7 @@ public final class GlidingHarness {
     static boolean CANONICAL = false;            // -canonical: PHASE-2 Version-B two-point canonical motor (bindCanonicalTwoPoint + bondForcesCanonical). Default off ⇒ byte-identical.
     static boolean CANON_DIAG = false;           // -canondiag: instrument the Version-B binder (formation rate, snap magnitude, legal-pose, lever-strain under thermal load). Implies -canonical.
     static boolean CONFIG1 = false;              // -config1: PHASE-2 Config-1 composed architecture (PAIRS attachments + Hookean J1 load). Implies -canonical.
-    static double  KAPPA = 6.4e-20;              // J1 torsional stiffness (N·m/rad); κ = k_tip·L² ≈ 1e-3·(8e-9)². -kappa overrides. NOT calibrated.
+    static double  KAPPA = 3.82e-20;             // J1 torsional stiffness (N·m/rad). FORCE-MATCHED (Phase-2 SET-A, 2026-06-28): κ=F·L/θ with F=5pN skeletal stall (Finer'94), L=8nm, θ=60° ⇒ tip≈0.597 pN/nm, stall 5.00 pN. Was 6.4e-20 (8.38 pN). -kappa overrides.
     static double  PAIRS_FRACMOVE = 0.5;         // PAIRS attachment fracMove (dt-robust pin strength); not calibrated
     static double  KON = 0.0;                    // -kon: reaction-limited attachment rate (µm^-1 s^-1); 0 ⇒ saturated bind-on-contact. PHASE-2 step-3 calibration target.
     static boolean SINGLE = false;               // -single: single-molecule duty assay (proximal motors on a fixed filament)
@@ -65,6 +65,8 @@ public final class GlidingHarness {
     static boolean DCALIB = false;               // -dcalib: catch force-sensitivity calibration (rate vs load sweep at fixed kOn/τ)
     static boolean CSRECAL = false;              // -csrecal: step-4c catch-slip recalibration (lifetime vs load PAST the peak + independent motor stall + peak≈stall)
     static boolean STIFFSWEEP = false;           // -stiffsweep: step-4d κ + powerstroke-angle sensitivity of peak≈stall (measurement-only)
+    static boolean FORCEDECOMP = false;          // -forcedecomp: decompose the powerstroke force the config-1 cross-bridge delivers to the FILAMENT (single motor, transport topology, dt=1e-6, Brownian off; measurement-only)
+    static boolean BOUNDGEOM = false;            // -boundgeom: report the config-1 motor's bound-state geometry at uncocked/cocked equilibria (measurement-only)
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static double DENSITY = 500.0;              // motors / µm² (-density overrides for the speed-density trend)
@@ -73,6 +75,7 @@ public final class GlidingHarness {
     // bed geometry: bX0 = filament +x end; the bed spans x∈[bXlo,bXhi], y∈[-bYhalf,bYhalf].
     // default ≈6×2; -full → v1's 14×2 (~14k motors); -v1box → v1's 4×1 (exactly 2000 heads).
     static double bX0 = 2.2, bXlo = -3.5, bXhi = 2.7, bYhalf = 1.0;
+    static boolean MATBED = false;   // -matbed: FULL-MAT speed-density bed — long −x runway so the filament stays fully over motors throughout the measurement window (verified in measureGrid). Filament +x end placed near the +x edge; glides −x through the populated mat.
     static int SEED = 0x6111D;   // varied across an ensemble (placement + RNG)
     static boolean BOX = false;      // -box: wire the ContainmentSystem chamber over the gliding filament (v1-faithful: anchored motors un-boxed)
     static boolean BOX_ALL = false;  // -boxall: additionally confine every motor sub-body (upper-bound box-check load at 3·nMotors bodies)
@@ -105,6 +108,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-gpu")) gpu = true;
             else if (args[i].equals("-full")) { bX0 = 5.87; bXlo = -7.0; bXhi = 6.37; bYhalf = 1.0; }  // v1 14×2, ~13.4k motors
             else if (args[i].equals("-v1box")) { bX0 = 1.7; bXlo = -2.0; bXhi = 2.0; bYhalf = 0.5; }   // v1 4×1, exactly 2000 heads
+            else if (args[i].equals("-matbed")) { MATBED = true; bX0 = 1.6; bXlo = -3.2; bXhi = 2.6; bYhalf = 0.6; }   // FULL-MAT: 5.8×1.2µm bed; filament +x end at 1.6 (settling +x excursion ~0.4 stays on-mat, +x margin ~0.6; ~2.9µm −x runway), y±0.6 covers rotation. nMot = density·6.96.
             else if (args[i].equals("-densemat")) {   // motor-mat throughput probe: square 14·√N bed (BoA dense-gliding box schedule) → 98000·N motors, single filament
                 double side = 14.0 * Math.sqrt(Double.parseDouble(args[++i]));
                 bX0 = 1.0; bXlo = -side / 2; bXhi = side / 2; bYhalf = side / 2;
@@ -139,6 +143,8 @@ public final class GlidingHarness {
             else if (args[i].equals("-dcalib")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; DCALIB = true; }  // catch force-sensitivity calibration
             else if (args[i].equals("-csrecal")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; CSRECAL = true; }  // step-4c catch-slip recalibration
             else if (args[i].equals("-stiffsweep")) { CONFIG1 = true; STIFFSWEEP = true; }   // step-4d κ+angle sensitivity (measurement-only)
+            else if (args[i].equals("-forcedecomp")) { CONFIG1 = true; FORCEDECOMP = true; }  // force decomposition (single motor, transport topology)
+            else if (args[i].equals("-boundgeom")) { CONFIG1 = true; BOUNDGEOM = true; }      // bound-state geometry report (single motor, transport topology)
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
@@ -148,6 +154,8 @@ public final class GlidingHarness {
 
         for (String a : args) if (a.equals("-forcetest")) { forceTest(); return; }
         if (STIFFSWEEP) { stiffnessAngleSweep(); return; }   // step-4d: builds its own minimal one-shot scenes
+        if (FORCEDECOMP) { forceDecomp(); return; }          // force decomposition: builds its own single-motor transport scene
+        if (BOUNDGEOM) { boundGeom(); return; }              // bound-state geometry: builds its own single-motor transport scene
 
         if (CANONICAL && FRESH_READ) { System.out.println("ERROR: -canonical is only wired for the default step order (not -freshread)."); System.exit(2); }
         System.out.println("=== Soft Box increment 4b-iv — gliding assay (cheap probe)" + (CANONICAL ? " [PHASE-2 CANONICAL Version-B two-point motor]" : "") + " ===");
@@ -1041,6 +1049,305 @@ public final class GlidingHarness {
         return Double.NaN;
     }
 
+    /** v1 moveCoeff (replica of CrossBridgeSystem.moveC / MotorJointSystem.moveC, for the host-side per-pin
+     *  force decomposition — measurement only, NO kernel touched). */
+    static double moveCH(double ux, double uy, double uz, double lx, double ly, double lz,
+                         double bTGx, double bTGy, double bRGy, double lenUm) {
+        double cosB = ux*lx + uy*ly + uz*lz; if (cosB > 1) cosB = 1; if (cosB < -1) cosB = -1;
+        double cosB2 = cosB*cosB, cosA2 = 1.0 - cosB2, lSq = 1.0e-12 * lenUm * lenUm;
+        return cosB2/bTGx + cosA2/bTGy + lSq*cosA2/(4.0*bRGy);
+    }
+
+    /**
+     * PHASE-2 FORCE DECOMPOSITION (MEASUREMENT-ONLY; no physics edit, no fix). A SINGLE config-1 motor in the
+     * GLIDING (transport) topology — tail ANCHORED to the surface, head two-point-pinned to a HELD filament segment —
+     * fires ONE powerstroke (J1 rest 0°→60°) at dt=1e-6, Brownian OFF. Decomposes the net force the cross-bridge
+     * delivers to the FILAMENT in the filament frame: axial (along segU, the transport direction) vs transverse, AND
+     * the two PAIRS pins separately (pin-A tip@bindArc, pin-B rear@bindArc2) projected on segU. The decisive question:
+     * is axial_A ≈ −axial_B (a cancelling couple ⇒ bends, no transport)? Contrasts the config-1 net axial impulse
+     * with the DEFAULT v1-faithful motor (which glides −5.7 µm/s) and cross-checks against a RELEASED filament.
+     */
+    static void forceDecomp() {
+        double dt = 1.0e-6;                                   // dt=1e-6: stability (per task), NOT a default change
+        double HEAD = MotorStore.HEAD_LEN, LEVER = MotorStore.LEVER_LEN, ROD = MotorStore.ROD_LEN;
+        System.out.println("\n=== PHASE-2 FORCE DECOMPOSITION — single motor, transport topology, dt=1e-6, Brownian OFF ===");
+        System.out.printf("  config1 κ=%.3g (tip %.3f pN/nm, stall %.2f pN); PAIRS fracMove=%.2f; HEAD_LEN=%.1f nm; LEVER=%.1f nm%n",
+                KAPPA, KAPPA/(LEVER*1e-6)/(LEVER*1e-6)*1e3, motorStallPN(), PAIRS_FRACMOVE, HEAD*1e3, LEVER*1e3);
+        for (int mode = 0; mode < 2; mode++) {
+            boolean cfg1 = (mode == 0);
+            System.out.println("\n----- " + (cfg1 ? "CONFIG-1 (PAIRS pins + Hookean-J1)" : "DEFAULT v1 motor (F8 tip spring + F9/F10)") + " -----");
+            double[] r = decompRun(cfg1, dt, true);    // filament HELD (isometric force time course + impulse)
+            double[] rel = decompRun(cfg1, dt, false); // filament RELEASED (cross-check: does it translate?)
+            System.out.printf("  net axial IMPULSE over the stroke = %.4g pN·s ; released-filament Δx = %+.4f nm (predicted sign %s)%n",
+                    r[0]*1e12, rel[1]*1e6, r[0] < 0 ? "−x glide" : "+x");
+        }
+        System.out.println("\n=== force decomposition complete ===");
+    }
+
+    /** One decomposition run. Returns {netAxialImpulse(N·s), filamentDx(µm)}. held=true ⇒ filament fixed (isometric);
+     *  held=false ⇒ filament integrated (the released cross-check). Prints the (axial,transverse,per-pin) time course. */
+    static double[] decompRun(boolean cfg1, double dt, boolean held) {
+        double HEAD = MotorStore.HEAD_LEN, LEVER = MotorStore.LEVER_LEN, ROD = MotorStore.ROD_LEN;
+        // ---- filament: 1 segment along +x at z=0 ----
+        FilamentStore f = new FilamentStore(1);
+        f.monomerCount.set(0, FIL_MONO);
+        f.setUVec(0, 1f, 0f, 0f); f.setYVec(0, 0f, 1f, 0f); f.setCoord(0, 0f, 0f, 0f);
+        f.brownTransScale.set(0, 0f); f.brownRotScale.set(0, 0f);
+        DragTensorSystem.run(f); f.setParams(dt, 0); f.setCounts(0, 0);
+        f.chainParams.set(0, (float) dt); f.chainParams.set(1, 0.5f); f.chainParams.set(2, 0.1f);
+        f.chainParams.set(3, 0.2f); f.chainParams.set(4, 0f); f.chainParams.set(5, 1.0e-20f);
+        f.chainParams.set(6, (float) Constants.actinMonoRadius);
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        double slen = f.segLength.get(0);
+
+        // ---- one motor; place the bound pose by hand: head ON the filament (uVec +x), lever+rod hang down to the anchor ----
+        MotorStore mot = new MotorStore(1);
+        mot.assembleArticulated(0, 0f, 0f, (float) (-(LEVER + ROD)), 0f, 0f, 1f, (float) Constants.BTransCoeff);
+        DragTensorSystem.run(mot);
+        mot.setBodyParams(dt); mot.setJointParams(dt); mot.setKinParams(0.006, -0.4, dt); mot.setNucParams(dt);
+        if (cfg1) mot.enableConfig1(KAPPA);
+        RigidRodBody b = mot.body;
+        for (int s = 0; s < 3; s++) { b.brownTransScale.set(s, 0f); b.brownRotScale.set(s, 0f); }  // Brownian OFF
+        int rod = 0, lev = 1, head = 2;
+        // head: center at filament (0,0,0), uVec +x ⇒ tip=+HEAD/2·x (site A), rear=−HEAD/2·x (site B)
+        b.setCoord(head, 0f, 0f, 0f); b.setUVec(head, 1f, 0f, 0f); b.setYVec(head, 0f, 1f, 0f);
+        // lever: end2 = head.end1 = (−HEAD/2,0,0); uVec +z ⇒ center=(−HEAD/2,0,−LEVER/2)
+        b.setCoord(lev, (float) (-0.5*HEAD), 0f, (float) (-0.5*LEVER)); b.setUVec(lev, 0f, 0f, 1f); b.setYVec(lev, 0f, 1f, 0f);
+        // rod: end2 = lever.end1 = (−HEAD/2,0,−LEVER); uVec +z ⇒ center=(−HEAD/2,0,−LEVER−ROD/2)
+        b.setCoord(rod, (float) (-0.5*HEAD), 0f, (float) (-(LEVER + 0.5*ROD))); b.setUVec(rod, 0f, 0f, 1f); b.setYVec(rod, 0f, 1f, 0f);
+        mot.anchor.set(0, (float) (-0.5*HEAD)); mot.anchor.set(1, 0f); mot.anchor.set(2, (float) (-(LEVER + ROD)));  // rod.end1 (tail)
+        DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        // bind: tip@site A, rear@site B (two-point)
+        double e1x = f.end1.get(0);
+        mot.boundSeg.set(0, 0);
+        mot.bindArc.set(0, (float) (0.5*HEAD - e1x));      // arc of tip from e1
+        mot.bindArc2.set(0, (float) (-0.5*HEAD - e1x));    // arc of rear from e1 (= bindArc − HEAD)
+        FloatArray xbC1 = FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) LEVER, (float) dt, (float) HEAD);
+        FloatArray xbDef = FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) dt, (float) HEAD, 0f);
+        FloatArray jp = cfg1 ? mot.jointParamsC1 : mot.jointParams;
+        FloatArray bondData = new FloatArray(CrossBridgeSystem.STRIDE); bondData.init(0f);
+
+        // ---- settle at the PRIMED state (ADPPi ⇒ J1 rest 0°), then FIRE (NONE ⇒ rest 60°) ----
+        int SETTLE = 60000, STROKE = 60000;
+        mot.setCounts(0, SEED, f.n); f.counts.set(1, 0);
+        mot.setAllStates(MotorStore.NUC_ADPPI);
+        for (int t = 0; t < SETTLE; t++) motorStep(f, mot, b, bondData, xbC1, xbDef, jp, cfg1, dt, true);
+        double impulse = 0; double sux = f.uVec.get(0), suy = f.uVec.get(f.n + 0), suz = f.uVec.get(2*f.n + 0);
+        double fcx0 = centroidX(f);
+        if (held) System.out.printf("  step    J1ang°  distA(nm) distB(nm)  axialA(pN) axialB(pN)  netAxial(pN) netTransv(pN) forceDot(pN)%n");
+        mot.setAllStates(MotorStore.NUC_NONE);   // FIRE: rest 0°→60°
+        for (int t = 0; t < STROKE; t++) {
+            motorStep(f, mot, b, bondData, xbC1, xbDef, jp, cfg1, dt, held);
+            double[] dc = decompose(f, b, mot, cfg1, dt);   // {axialA,axialB,netAxial,netTransv,distA,distB,forceDot,j1ang}
+            impulse += dc[2] * dt;
+            if (held && (t % 6000 == 0 || t == STROKE - 1))
+                System.out.printf("  %-7d %6.1f  %8.2f %8.2f  %+9.3f %+9.3f  %+11.4f %11.4f %+11.4f%n",
+                        t, dc[7], dc[4]*1e3, dc[5]*1e3, dc[0]*1e12, dc[1]*1e12, dc[2]*1e12, dc[3]*1e12, dc[6]*1e12);
+            if (!held && (t == 2000 || t == 10000 || t == 30000 || t == STROKE - 1))
+                System.out.printf("     [released] t=%-6d filament Δx=%+.2f nm  Δz=%+.2f nm  (netAxial now %+.4f pN)%n",
+                        t, (centroidX(f)-fcx0)*1e6, (centroidZ(f)-0)*1e6, dc[2]*1e12);
+        }
+        double dx = centroidX(f) - fcx0;
+        if (held) {
+            double[] dcF = decompose(f, b, mot, cfg1, dt);
+            System.out.printf("  ⇒ final: axialA=%+.3f axialB=%+.3f pN, |axialA|+|axialB|=%.3f, netAxial=%+.4f pN ⇒ ratio |net|/(|A|+|B|)=%.3f%n",
+                    dcF[0]*1e12, dcF[1]*1e12, (Math.abs(dcF[0])+Math.abs(dcF[1]))*1e12, dcF[2]*1e12,
+                    Math.abs(dcF[2])/Math.max(1e-30, Math.abs(dcF[0])+Math.abs(dcF[1])));
+            System.out.printf("  ⇒ net axial impulse over stroke = %.4g pN·s ; net transverse(final)=%.3f pN%n", impulse*1e12, dcF[3]*1e12);
+        }
+        return new double[]{ impulse, dx };
+    }
+
+    /** one motor dynamics step (config1 or default), filament held or integrated. */
+    static void motorStep(FilamentStore f, MotorStore mot, RigidRodBody b, FloatArray bondData,
+                          FloatArray xbC1, FloatArray xbDef, FloatArray jp, boolean cfg1, double dt, boolean held) {
+        ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
+        MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, jp, mot.counts);
+        TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, jp, mot.counts);
+        if (cfg1)
+            CrossBridgeSystem.bondForcesCanonicalConfig1(b.coord, b.uVec, b.bTransGam, b.bRotGam, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam,
+                    mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, bondData, xbC1);
+        else
+            CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                    mot.boundSeg, mot.bindArc, mot.nucleotideState, bondData, xbDef);
+        CrossBridgeSystem.applyHeadForce(bondData, b.forceSum, b.torqueSum, mot.counts);
+        RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+        DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        if (!held) {
+            ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+            // gather the seg-side reaction onto the filament (1 motor, 1 seg ⇒ direct)
+            int d = 0;
+            f.forceSum.set(0, bondData.get(d+6)); f.forceSum.set(f.n, bondData.get(d+7)); f.forceSum.set(2*f.n, bondData.get(d+8));
+            f.torqueSum.set(0, bondData.get(d+9)); f.torqueSum.set(f.n, bondData.get(d+10)); f.torqueSum.set(2*f.n, bondData.get(d+11));
+            RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+            DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        }
+    }
+
+    /** decompose the force on the filament in the seg frame. config1 ⇒ recompute the two pins separately;
+     *  default ⇒ the single seg-side force split into axial/transverse (per-pin N/A). Returns
+     *  {axialA, axialB, netAxial, netTransverse, distA, distB, forceDot, j1angDeg} (forces in N). */
+    static double[] decompose(FilamentStore f, RigidRodBody b, MotorStore mot, boolean cfg1, double dt) {
+        double HEAD = MotorStore.HEAD_LEN;
+        int head = 2, lev = 1, nB = 3;
+        double hcx = b.coordX(head), hcy = b.coordY(head), hcz = b.coordZ(head);
+        double hux = b.uVecX(head), huy = b.uVecY(head), huz = b.uVecZ(head);
+        double tipx = hcx + 0.5*HEAD*hux, tipy = hcy + 0.5*HEAD*huy, tipz = hcz + 0.5*HEAD*huz;
+        double rearx = hcx - 0.5*HEAD*hux, reary = hcy - 0.5*HEAD*huy, rearz = hcz - 0.5*HEAD*huz;
+        double scx = f.coordX(0), scy = f.coordY(0), scz = f.coordZ(0);
+        double sux = f.uVec.get(0), suy = f.uVec.get(f.n), suz = f.uVec.get(2*f.n);
+        double slen = f.segLength.get(0);
+        double hbTGx = b.bTransGam.get(head), hbTGy = b.bTransGam.get(nB+head), hbRGy = b.bRotGam.get(nB+head);
+        double sbTGx = f.bTransGam.get(0), sbTGy = f.bTransGam.get(f.n), sbRGy = f.bRotGam.get(f.n);
+        double j1ang = 0;
+        { double lux=b.uVecX(lev),luy=b.uVecY(lev),luz=b.uVecZ(lev); double dv=lux*hux+luy*huy+luz*huz; if(dv>1)dv=1;if(dv<-1)dv=-1; j1ang=Math.toDegrees(Math.acos(dv)); }
+        double forceDot = 0;
+        if (cfg1) {
+            double aOffA = mot.bindArc.get(0) - 0.5*slen, aOffB = mot.bindArc2.get(0) - 0.5*slen;
+            double apAx=scx+aOffA*sux, apAy=scy+aOffA*suy, apAz=scz+aOffA*suz;
+            double apBx=scx+aOffB*sux, apBy=scy+aOffB*suy, apBz=scz+aOffB*suz;
+            double dAx=apAx-tipx, dAy=apAy-tipy, dAz=apAz-tipz, distA=Math.sqrt(dAx*dAx+dAy*dAy+dAz*dAz);
+            double dBx=apBx-rearx, dBy=apBy-reary, dBz=apBz-rearz, distB=Math.sqrt(dBx*dBx+dBy*dBy+dBz*dBz);
+            // force ON FILAMENT = −F_head; pin A
+            double axA=0,ayA=0,azA=0,axB=0,ayB=0,azB=0;
+            if (distA>0){ double lx=dAx/distA,ly=dAy/distA,lz=dAz/distA;
+                double mcH=moveCH(hux,huy,huz,lx,ly,lz,hbTGx,hbTGy,hbRGy,HEAD), mcS=moveCH(sux,suy,suz,lx,ly,lz,sbTGx,sbTGy,sbRGy,slen);
+                double fm=PAIRS_FRACMOVE*1e-6*distA/(dt*(mcH+mcS)); axA=-fm*lx; ayA=-fm*ly; azA=-fm*lz; }   // on filament
+            if (distB>0){ double lx=dBx/distB,ly=dBy/distB,lz=dBz/distB;
+                double mcH=moveCH(hux,huy,huz,lx,ly,lz,hbTGx,hbTGy,hbRGy,HEAD), mcS=moveCH(sux,suy,suz,lx,ly,lz,sbTGx,sbTGy,sbRGy,slen);
+                double fm=PAIRS_FRACMOVE*1e-6*distB/(dt*(mcH+mcS)); axB=-fm*lx; ayB=-fm*ly; azB=-fm*lz; }
+            double axialA=axA*sux+ayA*suy+azA*suz, axialB=axB*sux+ayB*suy+azB*suz;
+            double nx=axA+axB, ny=ayA+ayB, nz=azA+azB, netAxial=nx*sux+ny*suy+nz*suz;
+            double tx=nx-netAxial*sux, ty=ny-netAxial*suy, tz=nz-netAxial*suz, netTransv=Math.sqrt(tx*tx+ty*ty+tz*tz);
+            // forceDot (J1 strain) — informational
+            return new double[]{ axialA, axialB, netAxial, netTransv, distA, distB, forceDot, j1ang };
+        } else {
+            // default: single seg-side force (bondData computed in motorStep, but recompute net from the stored vector
+            // is not available here ⇒ use the head-side F8 negated). Recompute F8 = myoSpring·(site−tip).
+            double aOff = mot.bindArc.get(0) - 0.5*slen;
+            double apx=scx+aOff*sux, apy=scy+aOff*suy, apz=scz+aOff*suz;
+            double dxv=apx-tipx, dyv=apy-tipy, dzv=apz-tipz;
+            double fx=MYO_SPRING*dxv, fy=MYO_SPRING*dyv, fz=MYO_SPRING*dzv;   // F8 on head; on filament = −F8
+            double ofx=-fx, ofy=-fy, ofz=-fz;
+            double netAxial=ofx*sux+ofy*suy+ofz*suz;
+            double tx=ofx-netAxial*sux, ty=ofy-netAxial*suy, tz=ofz-netAxial*suz, netTransv=Math.sqrt(tx*tx+ty*ty+tz*tz);
+            double dist=Math.sqrt(dxv*dxv+dyv*dyv+dzv*dzv);
+            return new double[]{ netAxial, 0, netAxial, netTransv, dist, 0, forceDot, j1ang };
+        }
+    }
+
+    /**
+     * PHASE-2 BOUND GEOMETRY (MEASUREMENT-ONLY). Report the config-1 motor's actual bound-state geometry at the
+     * UNCOCKED (J1 0°, ADPPi) and COCKED (J1 60°, NONE) equilibria, in the gliding topology (tail anchored, head
+     * two-point-pinned to a filament along +x), dt=1e-6, Brownian OFF. Reports every body's unit-vector + endpoints,
+     * the converter swing axis tv = lever×head + the lever swing plane, the lever load-end (lever.end1) displacement
+     * decomposed Δ(x,z,y), and the head/lever angles to the filament axis. Dumps a CSV for the schematic. NO edit/fix.
+     */
+    static void boundGeom() {
+        double dt = 1.0e-6;
+        double HEAD = MotorStore.HEAD_LEN, LEVER = MotorStore.LEVER_LEN, ROD = MotorStore.ROD_LEN;
+        System.out.println("\n=== PHASE-2 BOUND GEOMETRY — config-1 motor, gliding topology, dt=1e-6, Brownian OFF ===");
+        System.out.println("  frame: x̂ = filament axis (+x), ẑ = surface normal (+z, anchor below at −z), ŷ = x̂×ẑ = (0,−1,0)");
+        // ---- single motor + held filament (same construction as -forcedecomp config-1) ----
+        FilamentStore f = new FilamentStore(1);
+        f.monomerCount.set(0, FIL_MONO);
+        f.setUVec(0, 1f, 0f, 0f); f.setYVec(0, 0f, 1f, 0f); f.setCoord(0, 0f, 0f, 0f);
+        f.brownTransScale.set(0, 0f); f.brownRotScale.set(0, 0f);
+        DragTensorSystem.run(f); f.setParams(dt, 0); f.setCounts(0, 0);
+        f.chainParams.set(0,(float)dt); f.chainParams.set(1,0.5f); f.chainParams.set(2,0.1f);
+        f.chainParams.set(3,0.2f); f.chainParams.set(4,0f); f.chainParams.set(5,1.0e-20f); f.chainParams.set(6,(float)Constants.actinMonoRadius);
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        double slen = f.segLength.get(0);
+        MotorStore mot = new MotorStore(1);
+        mot.assembleArticulated(0, 0f, 0f, (float)(-(LEVER+ROD)), 0f,0f,1f, (float)Constants.BTransCoeff);
+        DragTensorSystem.run(mot);
+        mot.setBodyParams(dt); mot.setJointParams(dt); mot.setKinParams(0.006,-0.4,dt); mot.setNucParams(dt);
+        mot.enableConfig1(KAPPA);
+        RigidRodBody b = mot.body;
+        for (int s=0;s<3;s++){ b.brownTransScale.set(s,0f); b.brownRotScale.set(s,0f); }
+        int rod=0, lev=1, head=2;
+        b.setCoord(head,0f,0f,0f); b.setUVec(head,1f,0f,0f); b.setYVec(head,0f,1f,0f);
+        b.setCoord(lev,(float)(-0.5*HEAD),0f,(float)(-0.5*LEVER)); b.setUVec(lev,0f,0f,1f); b.setYVec(lev,0f,1f,0f);
+        b.setCoord(rod,(float)(-0.5*HEAD),0f,(float)(-(LEVER+0.5*ROD))); b.setUVec(rod,0f,0f,1f); b.setYVec(rod,0f,1f,0f);
+        mot.anchor.set(0,(float)(-0.5*HEAD)); mot.anchor.set(1,0f); mot.anchor.set(2,(float)(-(LEVER+ROD)));
+        DerivedGeometrySystem.derive(b.coord,b.uVec,b.yVec,b.zVec,b.end1,b.end2,b.segLength,mot.counts);
+        double e1x = f.end1.get(0);
+        mot.boundSeg.set(0,0); mot.bindArc.set(0,(float)(0.5*HEAD-e1x)); mot.bindArc2.set(0,(float)(-0.5*HEAD-e1x));
+        FloatArray xbC1 = FloatArray.fromElements((float)PAIRS_FRACMOVE,(float)KAPPA,(float)LEVER,(float)dt,(float)HEAD);
+        FloatArray xbDef = FloatArray.fromElements((float)MYO_SPRING,90f,0.4f,(float)dt,(float)HEAD,0f);
+        FloatArray jp = mot.jointParamsC1;
+        FloatArray bondData = new FloatArray(CrossBridgeSystem.STRIDE); bondData.init(0f);
+        mot.setCounts(0,SEED,f.n); f.counts.set(1,0);
+
+        int SETTLE = 80000;
+        mot.setAllStates(MotorStore.NUC_ADPPI);
+        for (int t=0;t<SETTLE;t++) motorStep(f,mot,b,bondData,xbC1,xbDef,jp,true,dt,true);
+        double[] unc = geomSnap(b, mot, "UNCOCKED (J1 rest 0°, ADPPi — pre-stroke)");
+        mot.setAllStates(MotorStore.NUC_NONE);
+        for (int t=0;t<SETTLE;t++) motorStep(f,mot,b,bondData,xbC1,xbDef,jp,true,dt,true);
+        double[] coc = geomSnap(b, mot, "COCKED (J1 rest 60°, NONE — post-stroke)");
+
+        // unc/coc layout: [0..2]rod.e1 [3..5]rod.e2 [6..8]lev.e1 [9..11]lev.e2 [12..14]head.e1 [15..17]head.e2
+        //                 [18..20]rodU [21..23]levU [24..26]headU
+        System.out.println("\n--- (2) converter swing axis + plane ---");
+        double[] tvU = cross(unc,21, unc,24), tvC = cross(coc,21, coc,24);   // lever.uVec × head.uVec
+        System.out.printf("  tv=lever×head  uncocked (%.3f,%.3f,%.3f)  cocked (%.3f,%.3f,%.3f)  ⇒ %s%n",
+                tvU[0],tvU[1],tvU[2], tvC[0],tvC[1],tvC[2], (Math.abs(tvC[1])>Math.abs(tvC[0])&&Math.abs(tvC[1])>Math.abs(tvC[2]))?"≈ ±ŷ (the J1 torque axis lies on y — out of the x̂ filament direction)":"not y-dominant");
+        // the lever's ACTUAL rotation axis uncocked→cocked = unit(levU_unc × levU_coc); swing plane normal = that axis
+        double[] axis = unit(cross(unc,21, coc,21));
+        System.out.printf("  lever rotation axis (unc→cocked) = (%.3f,%.3f,%.3f) ⇒ swing plane normal; plane %s the filament x̂%n",
+                axis[0],axis[1],axis[2], Math.abs(axis[0])<0.5 ? "CONTAINS-ish? (normal⊥x̂ ⇒ plane contains x̂)" : "is tilted to");
+        System.out.println("\n--- (3) lever LOAD end (lever.end1) displacement uncocked→cocked (the load sweep) ---");
+        double dlx=coc[6]-unc[6], dly=coc[7]-unc[7], dlz=coc[8]-unc[8];
+        System.out.printf("  Δ(lever.end1, the LOAD/rod side) = Δx(axial) %+.2f nm,  Δz(transverse) %+.2f nm,  Δy %+.2f nm  ⇒ load end sweeps %s (this motion goes to the ANCHOR side via the rod, NOT to the filament)%n",
+                dlx*1e3, dlz*1e3, dly*1e3, Math.abs(dlx)>Math.abs(dlz) ? "ALONG the filament (Δx>Δz)" : "ACROSS the filament (Δz>Δx)");
+        double dtx=coc[15]-unc[15], dtz=coc[17]-unc[17], dty=coc[16]-unc[16];   // head tip
+        System.out.printf("  Δ(head tip, the FILAMENT side)   = Δx %+.3f nm, Δz %+.3f nm, Δy %+.3f nm  ⇒ the head is two-point-pinned ⇒ it does NOT slide along actin (Δx≈0); it transmits only the transverse reaction%n", dtx*1e3, dtz*1e3, dty*1e3);
+        System.out.println("\n--- (4) how the motor STANDS on the filament (angles to x̂) ---");
+        for (int st=0; st<2; st++) {
+            double[] g = (st==0)?unc:coc;
+            double hA=ang(g,24,1,0,0), lA=ang(g,21,1,0,0), rA=ang(g,18,1,0,0);
+            System.out.printf("  %-9s head∠x̂=%.1f°  lever∠x̂=%.1f°  rod∠x̂=%.1f°  (90°=perpendicular to the filament)%n",
+                    st==0?"uncocked":"cocked", hA, lA, rA);
+        }
+        // ---- CSV for the schematic ----
+        try {
+            StringBuilder sb = new StringBuilder("# body,state,e1x,e1y,e1z,e2x,e2y,e2z (µm)\n");
+            String[] bn={"rod","lever","head"};
+            for (int st=0; st<2; st++){ double[] g=(st==0)?unc:coc; String sn=st==0?"uncocked":"cocked";
+                for (int bi=0; bi<3; bi++) sb.append(String.format(java.util.Locale.US,"%s,%s,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f%n",
+                        bn[bi],sn, g[6*bi],g[6*bi+1],g[6*bi+2], g[6*bi+3],g[6*bi+4],g[6*bi+5])); }
+            sb.append(String.format(java.util.Locale.US,"anchor,both,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f%n",
+                    mot.anchor.get(0),mot.anchor.get(1),mot.anchor.get(2), mot.anchor.get(0),mot.anchor.get(1),mot.anchor.get(2)));
+            sb.append(String.format(java.util.Locale.US,"filament,both,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f%n",
+                    f.end1.get(0),f.end1.get(1),f.end1.get(2), f.end2.get(0),f.end2.get(1),f.end2.get(2)));
+            java.nio.file.Files.writeString(java.nio.file.Path.of("bound_geometry.csv"), sb.toString());
+            System.out.println("\n  wrote bound_geometry.csv (for the schematic)");
+        } catch (java.io.IOException e) { System.out.println("  (CSV write failed: "+e.getMessage()+")"); }
+        System.out.println("\n=== bound geometry complete ===");
+    }
+    /** snapshot every body's endpoints + uVec; returns the packed [rod.e1,rod.e2,lev.e1,lev.e2,head.e1,head.e2, rodU,levU,headU]. */
+    static double[] geomSnap(RigidRodBody b, MotorStore mot, String title) {
+        double[] g = new double[27];
+        String[] bn = {"rod","lever","head"};
+        System.out.println("\n--- (1) " + title + " ---");
+        System.out.printf("  %-6s %-26s %-26s %-26s%n", "body", "end1 (x,y,z µm)", "end2 (x,y,z µm)", "uVec (x,y,z)");
+        for (int i=0;i<3;i++){
+            double cx=b.coordX(i),cy=b.coordY(i),cz=b.coordZ(i), ux=b.uVecX(i),uy=b.uVecY(i),uz=b.uVecZ(i), L=b.segLength.get(i);
+            double e1x=cx-0.5*L*ux,e1y=cy-0.5*L*uy,e1z=cz-0.5*L*uz, e2x=cx+0.5*L*ux,e2y=cy+0.5*L*uy,e2z=cz+0.5*L*uz;
+            g[6*i]=e1x; g[6*i+1]=e1y; g[6*i+2]=e1z; g[6*i+3]=e2x; g[6*i+4]=e2y; g[6*i+5]=e2z;
+            g[18+3*i]=ux; g[18+3*i+1]=uy; g[18+3*i+2]=uz;
+            System.out.printf("  %-6s (%+.4f,%+.4f,%+.4f)  (%+.4f,%+.4f,%+.4f)  (%+.3f,%+.3f,%+.3f)%n", bn[i],e1x,e1y,e1z,e2x,e2y,e2z,ux,uy,uz);
+        }
+        System.out.printf("  key pts: anchor=(%+.4f,%+.4f,%+.4f)  J1 pivot/rear-pin=head.e1=(%+.4f,%+.4f,%+.4f)  head tip/siteA=head.e2=(%+.4f,%+.4f,%+.4f)  lever LOAD end=lever.e1=(%+.4f,%+.4f,%+.4f)%n",
+                mot.anchor.get(0),mot.anchor.get(1),mot.anchor.get(2), g[12],g[13],g[14], g[15],g[16],g[17], g[6],g[7],g[8]);
+        return g;
+    }
+    static double[] cross(double[] a, int ai, double[] c, int ci){ double ax=a[ai],ay=a[ai+1],az=a[ai+2],cx=c[ci],cy=c[ci+1],cz=c[ci+2];
+        return new double[]{ ay*cz-az*cy, az*cx-ax*cz, ax*cy-ay*cx }; }
+    static double[] unit(double[] v){ double m=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]); return m>0?new double[]{v[0]/m,v[1]/m,v[2]/m}:v; }
+    static double ang(double[] g, int gi, double x, double y, double z){ double d=g[gi]*x+g[gi+1]*y+g[gi+2]*z; if(d>1)d=1;if(d<-1)d=-1; return Math.toDegrees(Math.acos(Math.abs(d))); }
+
     /** PHASE-2 step-4c: recalibrate BOTH catch-slip pathways to Guo & Guilford (2006) bond data, then check the
      *  EMERGENT "peak ≈ stall" tuning. Lifetime (t_on) vs sustained RESISTING load, swept PAST the peak (0→+10 pN)
      *  on the averaged catch (τ held), to SEE the catch-slip rise→peak→fall. Reports the peak force/lifetime, the
@@ -1337,6 +1644,10 @@ public final class GlidingHarness {
     }
 
     static double centroidY(FilamentStore f) { double s = 0; for (int i = 0; i < f.n; i++) s += f.coordY(i); return s / f.n; }
+    static double minCoordX(FilamentStore f) { double m = 1e30; for (int i = 0; i < f.n; i++) m = Math.min(m, f.coordX(i)); return m; }
+    static double maxCoordX(FilamentStore f) { double m = -1e30; for (int i = 0; i < f.n; i++) m = Math.max(m, f.coordX(i)); return m; }
+    static double minCoordY(FilamentStore f) { double m = 1e30; for (int i = 0; i < f.n; i++) m = Math.min(m, f.coordY(i)); return m; }
+    static double maxCoordY(FilamentStore f) { double m = -1e30; for (int i = 0; i < f.n; i++) m = Math.max(m, f.coordY(i)); return m; }
 
     /**
      * Fixture-reconciliation measurement (4b-iv): emit BOTH of v1's velocity statistics, computed by the
@@ -1355,32 +1666,43 @@ public final class GlidingHarness {
         final int bufCap = Math.max(2, (int) Math.round(1.0 / dtInt));   // v1 LONG_WINDOW_SECONDS=1.0
         int nInt = M / OUT_INT;
         double[] cx = new double[nInt + 1], cy = new double[nInt + 1], cz = new double[nInt + 1];
+        double[] mnx = new double[nInt + 1], mxx = new double[nInt + 1], mny = new double[nInt + 1], mxy = new double[nInt + 1];
         long[] bnd = new long[nInt + 1];
         System.out.printf("%n--- grid measurement (%s, %d motors, box x∈[%.1f,%.1f] y±%.1f, seed=0x%X) ---%n",
                 gpu ? "GPU" : "CPU", sc.mot.nMotors, bXlo, bXhi, bYhalf, SEED);
+        if (MATBED) {
+            double bedX = bXhi - bXlo, bedY = 2 * bYhalf, filLen = sc.fil.n * sc.segL;
+            double tip = KAPPA / (MotorStore.LEVER_LEN * 1e-6) / (MotorStore.LEVER_LEN * 1e-6) * 1e3;   // N/m → pN/nm (×1e3)
+            System.out.printf("  [matbed] FULL-MAT bed %.2f×%.2f µm² @ %.0f motors/µm² ⇒ %d motors; filament %.2f µm; κ=%.3g (tip %.3f pN/nm, stall %.2f pN); kOn=%.0g xCatch=%.2f τ=%.2fms%n",
+                    bedX, bedY, DENSITY, sc.mot.nMotors, filLen, KAPPA, tip, motorStallPN(), KON, XCATCH, TAU_AVG * 1e3);
+        }
 
         int k = 0;
         if (gpu) {
             TornadoExecutionPlan plan = buildPlan(sc);
             sc.mot.setCounts(0, SEED, sc.fil.n); sc.fil.counts.set(1, 0);
             plan.withGridScheduler(sched).execute();                    // warm-up (PTX compile), untimed
-            cx[0] = centroidX(sc.fil); cy[0] = centroidY(sc.fil); cz[0] = centroidZ(sc.fil); bnd[0] = bound(sc.mot); k = 1;
+            cx[0] = centroidX(sc.fil); cy[0] = centroidY(sc.fil); cz[0] = centroidZ(sc.fil); bnd[0] = bound(sc.mot);
+            mnx[0] = minCoordX(sc.fil); mxx[0] = maxCoordX(sc.fil); mny[0] = minCoordY(sc.fil); mxy[0] = maxCoordY(sc.fil); k = 1;
             TornadoExecutionResult res = null;
             for (int t = 1; t < M; t++) {
                 sc.mot.setCounts(t, SEED, sc.fil.n); sc.fil.counts.set(1, t);
                 res = plan.withGridScheduler(sched).execute();
                 if ((t + 1) % OUT_INT == 0 && k <= nInt) {
                     res.transferToHost(sc.fil.coord, sc.mot.boundSeg);
-                    cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot); k++;
+                    cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot);
+                    mnx[k] = minCoordX(sc.fil); mxx[k] = maxCoordX(sc.fil); mny[k] = minCoordY(sc.fil); mxy[k] = maxCoordY(sc.fil); k++;
                 }
             }
             if (res != null) res.transferToHost(sc.mot.capStats, sc.mot.stats);   // §6.10 firing-rate pull
         } else {
-            cx[0] = centroidX(sc.fil); cy[0] = centroidY(sc.fil); cz[0] = centroidZ(sc.fil); bnd[0] = bound(sc.mot); k = 1;
+            cx[0] = centroidX(sc.fil); cy[0] = centroidY(sc.fil); cz[0] = centroidZ(sc.fil); bnd[0] = bound(sc.mot);
+            mnx[0] = minCoordX(sc.fil); mxx[0] = maxCoordX(sc.fil); mny[0] = minCoordY(sc.fil); mxy[0] = maxCoordY(sc.fil); k = 1;
             for (int t = 0; t < M; t++) {
                 step(sc, t);
                 if ((t + 1) % OUT_INT == 0 && k <= nInt) {
-                    cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot); k++;
+                    cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot);
+                    mnx[k] = minCoordX(sc.fil); mxx[k] = maxCoordX(sc.fil); mny[k] = minCoordY(sc.fil); mxy[k] = maxCoordY(sc.fil); k++;
                 }
             }
         }
@@ -1404,6 +1726,15 @@ public final class GlidingHarness {
         double netX  = (cx[n-1] - cx[0]) / ((n-1)*dtInt);
         int h = n / 2;
         double netXYsteady = Math.sqrt(Math.pow(cx[n-1]-cx[h],2) + Math.pow(cy[n-1]-cy[h],2)) / ((n-1-h)*dtInt);
+        // ---- velFitX: drift velocity = −slope of a least-squares fit of cx(t) over the steady 2nd half.
+        //      Uses ALL window samples (not just the 2 endpoints) ⇒ far lower thermal variance than the
+        //      net-chord; the optimal directed-drift estimator for x(t)=x0−V·t+noise. This is the V the
+        //      MM fit consumes (the gliding velocity = the filament's directed −x sliding rate). ----
+        double st = 0, stt = 0, sxx = 0, stx = 0; int nf = 0;
+        for (int i = h; i < n; i++) { double ti = i * dtInt; st += ti; stt += ti*ti; sxx += cx[i]; stx += ti*cx[i]; nf++; }
+        double denF = nf*stt - st*st;
+        double slopeX = denF != 0 ? (nf*stx - st*sxx) / denF : 0.0;
+        double velFitX = -slopeX;   // forward (−x) directed speed, µm/s (positive = gliding −x)
         // ---- avgBound ----
         double avgBall = 0; for (int i = 0; i < n; i++) avgBall += bnd[i]; avgBall /= n;
         double avgBsteady = 0; for (int i = h; i < n; i++) avgBsteady += bnd[i]; avgBsteady /= (n - h);
@@ -1413,16 +1744,33 @@ public final class GlidingHarness {
         System.out.printf("  instantaneousSpeed (3D/intvl) :  %7.3f     %7.3f   µm/s%n", instAll/instN, instSteady/Math.max(1,instNs));
         System.out.printf("  net-displacement XY/time      :  %7.3f     %7.3f   µm/s%n", netXY, netXYsteady);
         System.out.printf("  net-displacement x-only/time  :  %7.3f                µm/s%n", netX);
+        System.out.printf("  velFitX (−slope cx, steady)   :  %7.3f   <== V for the MM fit (directed −x glide)  µm/s%n", velFitX);
         System.out.printf("  longWindowSpeedXY @ end       :  %7.3f                µm/s%n", longWindowSpeedXY);
         System.out.printf("  avgBound                      :  %7.3f     %7.3f%n", avgBall, avgBsteady);
-        System.out.printf("  GRID_ROW seed=0x%X nMot=%d inst=%.3f instSteady=%.3f netXY=%.3f netSteady=%.3f netX=%.3f lwXY=%.3f avgB=%.3f%n",
-                SEED, sc.mot.nMotors, instAll/instN, instSteady/Math.max(1,instNs), netXY, netXYsteady, netX, longWindowSpeedXY, avgBall);
+        System.out.printf("  GRID_ROW seed=0x%X nMot=%d density=%.0f velFitX=%.3f inst=%.3f instSteady=%.3f netXY=%.3f netSteady=%.3f netX=%.3f lwXY=%.3f avgB=%.3f avgBsteady=%.3f%n",
+                SEED, sc.mot.nMotors, DENSITY, velFitX, instAll/instN, instSteady/Math.max(1,instNs), netXY, netXYsteady, netX, longWindowSpeedXY, avgBall, avgBsteady);
         // §6.10 break-force release firing rate: cap fires / bound-motor-steps (whole run).
         long capFires = 0, boundStepsTot = 0;
         for (int m = 0; m < sc.mot.nMotors; m++) { capFires += sc.mot.capStats.get(m); boundStepsTot += sc.mot.stats.get(2*m); }
         double capRate = boundStepsTot > 0 ? (double) capFires / boundStepsTot : 0.0;
         System.out.printf("  CAP_ROW seed=0x%X faithfulRelease=%s capFires=%d boundSteps=%d capRatePerBoundStep=%.5f%n",
                 SEED, FAITHFUL_RELEASE ? "ON" : "OFF", capFires, boundStepsTot, capRate);
+        // ---- full-mat coverage verification (windowed to the MEASUREMENT window = steady 2nd half, the
+        //      samples netSteady is computed over): did the filament stay fully over the motor bed there? ----
+        double wMnX = 1e30, wMxX = -1e30, wMnY = 1e30, wMxY = -1e30;   // steady-window extents
+        for (int i = h; i < n; i++) { wMnX = Math.min(wMnX, mnx[i]); wMxX = Math.max(wMxX, mxx[i]); wMnY = Math.min(wMnY, mny[i]); wMxY = Math.max(wMxY, mxy[i]); }
+        double rMnX = 1e30, rMxX = -1e30, rMnY = 1e30, rMxY = -1e30;   // whole-run extents (informational)
+        for (int i = 0; i < n; i++) { rMnX = Math.min(rMnX, mnx[i]); rMxX = Math.max(rMxX, mxx[i]); rMnY = Math.min(rMnY, mny[i]); rMxY = Math.max(rMxY, mxy[i]); }
+        double mXlo = wMnX - bXlo, mXhi = bXhi - wMxX, mYlo = wMnY - (-bYhalf), mYhi = bYhalf - wMxY;
+        double minMargin = Math.min(Math.min(mXlo, mXhi), Math.min(mYlo, mYhi));
+        double runMinMargin = Math.min(Math.min(rMnX - bXlo, bXhi - rMxX), Math.min(rMnY - (-bYhalf), bYhalf - rMxY));
+        boolean fullMat = minMargin > 0.05;   // ≥50 nm clear of every bed edge throughout the measurement window
+        System.out.printf("  COVERAGE window[%d..%d] x∈[%.3f,%.3f] y∈[%.3f,%.3f] | whole-run x∈[%.3f,%.3f] y∈[%.3f,%.3f] | bed x∈[%.2f,%.2f] y±%.2f%n",
+                h, n - 1, wMnX, wMxX, wMnY, wMxY, rMnX, rMxX, rMnY, rMxY, bXlo, bXhi, bYhalf);
+        System.out.printf("  COV_ROW seed=0x%X nMot=%d density=%.0f marginX_lo=%.3f marginX_hi=%.3f marginY_lo=%.3f marginY_hi=%.3f minMargin=%.3f runMinMargin=%.3f fullMat=%s%n",
+                SEED, sc.mot.nMotors, DENSITY, mXlo, mXhi, mYlo, mYhi, minMargin, runMinMargin, fullMat ? "YES" : "VIOLATED");
+        if (MATBED && !fullMat)
+            System.out.printf("  *** COVERAGE VIOLATED (measurement-window minMargin %.3f µm ≤ 0.05): filament reached a bed edge — velocity is edge-corrupted, widen the bed / shorten the run ***%n", minMargin);
     }
 
     /** filament centroid-z and a tilt/bow proxy (max−min segment z). */
