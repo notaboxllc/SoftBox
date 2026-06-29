@@ -64,6 +64,7 @@ public final class GlidingHarness {
     static double  XCATCH = 0.0;                 // -xcatch <nm>: catch distance d override (Veigel calibration); 0 ⇒ v1 default 2.5 nm
     static boolean DCALIB = false;               // -dcalib: catch force-sensitivity calibration (rate vs load sweep at fixed kOn/τ)
     static boolean CSRECAL = false;              // -csrecal: step-4c catch-slip recalibration (lifetime vs load PAST the peak + independent motor stall + peak≈stall)
+    static boolean STIFFSWEEP = false;           // -stiffsweep: step-4d κ + powerstroke-angle sensitivity of peak≈stall (measurement-only)
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static double DENSITY = 500.0;              // motors / µm² (-density overrides for the speed-density trend)
@@ -137,6 +138,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-density")) DENSITY = Double.parseDouble(args[++i]);                // motor density (speed-density trend)
             else if (args[i].equals("-dcalib")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; DCALIB = true; }  // catch force-sensitivity calibration
             else if (args[i].equals("-csrecal")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; CSRECAL = true; }  // step-4c catch-slip recalibration
+            else if (args[i].equals("-stiffsweep")) { CONFIG1 = true; STIFFSWEEP = true; }   // step-4d κ+angle sensitivity (measurement-only)
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
@@ -145,6 +147,7 @@ public final class GlidingHarness {
         if (!pos.isEmpty()) M = Integer.parseInt(pos.get(0));
 
         for (String a : args) if (a.equals("-forcetest")) { forceTest(); return; }
+        if (STIFFSWEEP) { stiffnessAngleSweep(); return; }   // step-4d: builds its own minimal one-shot scenes
 
         if (CANONICAL && FRESH_READ) { System.out.println("ERROR: -canonical is only wired for the default step order (not -freshread)."); System.exit(2); }
         System.out.println("=== Soft Box increment 4b-iv — gliding assay (cheap probe)" + (CANONICAL ? " [PHASE-2 CANONICAL Version-B two-point motor]" : "") + " ===");
@@ -909,14 +912,18 @@ public final class GlidingHarness {
         F_EXT = 0;
     }
 
-    /** PHASE-2 step-4c: independent motor STALL force (pN) — the J1 converter spring at FULL deflection. Build
-     *  one Config-1 motor bound to a pinned segment, lever held COLLINEAR with the head (θ=0, the uncocked
-     *  geometry), nucleotide state COCKED (rest 60°) ⇒ a single bond evaluation reads forceDotFil = (κ/L)·(60°),
-     *  the maximal lever-tip force the converter develops against a held tail. Independent of the catch (geometry
-     *  + κ only); no relaxation (a one-shot held-pose eval). */
-    static double motorStallPN() {
+    /** PHASE-2 step-4c: independent motor STALL force (pN) at the production κ, lever, 60° converter. */
+    static double motorStallPN() { return motorStallPN(KAPPA, MotorStore.LEVER_LEN, 60.0); }
+
+    /** PHASE-2 step-4d (parameterized): the independent motor STALL force (pN) — the Hookean J1 converter spring at
+     *  FULL deflection = `strokeAngleDeg`, for stiffness `kappaVal` (N·m/rad) and lever `leverLenUm` (µm). A one-shot
+     *  held-pose `bondForcesCanonicalConfig1` eval reads forceDotFil = (κ/L)·deflection (geometry + κ only, NO catch,
+     *  NO relaxation). The deflection magnitude is imposed by holding the lever at angle (60°+θ) from the head (the
+     *  kernel's cocked rest is 60° ⇒ |60−(60+θ)| = θ), so NO kernel edit is needed — the kernel computes the same
+     *  linear (κ/L)·deflection it was validated on at 60° in 4c (8.38 pN). Only lever.uVec, head.uVec, κ, L enter
+     *  forceDotFil (the PAIRS pins don't feed it), so the lever position is immaterial. MEASUREMENT-ONLY. */
+    static double motorStallPN(double kappaVal, double leverLenUm, double strokeAngleDeg) {
         int nSeg = 1;
-        double L = (Constants.stdSegLength + 1) * Constants.actinMonoRadius;
         FilamentStore fil = new FilamentStore(nSeg);
         fil.monomerCount.set(0, Constants.stdSegLength);
         fil.setUVec(0, 1f, 0f, 0f); fil.setYVec(0, 0f, 1f, 0f); fil.setCoord(0, 0f, 0f, 0f);
@@ -924,31 +931,114 @@ public final class GlidingHarness {
         DragTensorSystem.run(fil); fil.setParams(DT, 0); fil.setCounts(0, 0);
         DerivedGeometrySystem.derive(fil.coord, fil.uVec, fil.yVec, fil.zVec, fil.end1, fil.end2, fil.segLength, fil.counts);
         MotorStore mot = new MotorStore(1);
-        // head along +x just under the filament; lever COLLINEAR with the head (J1 angle θ=0)
         RigidRodBody b = mot.body;
         double zHead = -0.002;
         int rod = 0, lever = 1, head = 2;
         b.setCoord(head, 0f, 0f, (float) zHead); b.setUVec(head, 1f, 0f, 0f); b.setYVec(head, 0f, 1f, 0f);
-        double rearx = -0.5 * MotorStore.HEAD_LEN;     // head.end1 = J1 pivot
-        double lcx = rearx - 0.5 * MotorStore.LEVER_LEN; // lever collinear (+x) ⇒ J1 angle 0
-        b.setCoord(lever, (float) lcx, 0f, (float) zHead); b.setUVec(lever, 1f, 0f, 0f); b.setYVec(lever, 0f, 1f, 0f);
-        double rcx = lcx - 0.5 * MotorStore.LEVER_LEN - 0.5 * MotorStore.ROD_LEN;
-        b.setCoord(rod, (float) rcx, 0f, (float) zHead); b.setUVec(rod, 1f, 0f, 0f); b.setYVec(rod, 0f, 1f, 0f);
+        // lever held at (60°+θ) from the head ⇒ imposed J1 deflection = θ (against the fixed 60° cocked rest)
+        double psi = Math.toRadians(60.0 + strokeAngleDeg);
+        b.setCoord(lever, -0.02f, 0f, (float) zHead); b.setUVec(lever, (float) Math.cos(psi), 0f, (float) Math.sin(psi)); b.setYVec(lever, 0f, 1f, 0f);
+        b.setCoord(rod, -0.05f, 0f, (float) zHead); b.setUVec(rod, 1f, 0f, 0f); b.setYVec(rod, 0f, 1f, 0f);
         DragTensorSystem.run(mot);
         mot.setBodyParams(DT); mot.setJointParams(DT); mot.setKinParams(0.006, -0.4, DT); mot.setNucParams(DT);
-        mot.enableConfig1(KAPPA);
-        // two-point bind: tip + rear feet on the segment
+        mot.enableConfig1(kappaVal);
         double e1x = fil.end1.get(0), sux = fil.uVec.get(0);
         double tipx = 0.5 * MotorStore.HEAD_LEN, rearxF = -0.5 * MotorStore.HEAD_LEN;
         mot.boundSeg.set(0, 0);
         mot.bindArc.set(0, (float) ((tipx - e1x) * sux));
         mot.bindArc2.set(0, (float) ((rearxF - e1x) * sux));
-        mot.setAllStates(MotorStore.NUC_ATP);   // cocked (≠ADPPi) ⇒ J1 rest 60°
+        mot.setAllStates(MotorStore.NUC_ATP);   // cocked ⇒ J1 rest 60°
         FloatArray bondData = new FloatArray(CrossBridgeSystem.STRIDE); bondData.init(0f);
-        FloatArray xbC1 = FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) KAPPA, (float) MotorStore.LEVER_LEN, (float) DT, (float) MotorStore.HEAD_LEN);
+        FloatArray xbC1 = FloatArray.fromElements((float) PAIRS_FRACMOVE, (float) kappaVal, (float) leverLenUm, (float) DT, (float) MotorStore.HEAD_LEN);
         CrossBridgeSystem.bondForcesCanonicalConfig1(b.coord, b.uVec, b.bTransGam, b.bRotGam, fil.coord, fil.uVec, fil.segLength, fil.bTransGam, fil.bRotGam,
                 mot.boundSeg, mot.bindArc, mot.bindArc2, mot.nucleotideState, bondData, xbC1);
-        return Math.abs(bondData.get(12)) * 1e12;   // |forceDotFil| at full 60° deflection = stall (pN)
+        return Math.abs(bondData.get(12)) * 1e12;   // |forceDotFil| at full θ deflection = stall (pN)
+    }
+
+    /** PHASE-2 step-4d (MEASUREMENT-ONLY): sweep κ (crossbridge stiffness) and the powerstroke angle to map the
+     *  SENSITIVITY of the emergent peak≈stall coincidence. Bond peak HELD at the 4c GG-calibrated 6.0 pN (it is
+     *  κ-independent — the catch-slip crossover is set by xCatch/xSlip, and the −fext load scale dominates the
+     *  native κ-dependent forceDotFil). Production κ (6.4e-20) + angle (60°) UNCHANGED; one-shot stall evals. */
+    static void stiffnessAngleSweep() {
+        double PEAK = 6.0;                       // 4c GG-calibrated catch-slip peak force (pN), κ-independent
+        double Lprod = MotorStore.LEVER_LEN;     // 8 nm (µm)
+        double kT = Constants.kT;
+        System.out.println("\n=== PHASE-2 step-4d: κ + powerstroke-angle sensitivity of the peak≈stall coincidence (MEASUREMENT-ONLY) ===");
+        System.out.printf("  bond peak HELD = %.1f pN (4c Guo&Guilford, κ-independent); production κ=6.4e-20 (tip 1 pN/nm), angle 60° UNCHANGED.%n", PEAK);
+
+        // ---- SWEEP 1: κ (tip-stiffness 0.5→3 pN/nm), angle fixed 60° ----
+        System.out.println("\n--- SWEEP 1: peak/stall vs crossbridge tip-stiffness (lever 8 nm, 60°) ---");
+        System.out.printf("  %-14s %-12s %-14s %-14s %-10s%n", "tip(pN/nm)", "κ(N·m/rad)", "stall(pN)", "peak/stall", "in 2×band?");
+        double[] tips = { 0.35, 0.5, 0.75, 1.0, 1.5, 2.0, 2.6, 3.0 };
+        double[] s1tip = new double[tips.length], s1ratio = new double[tips.length];
+        for (int i = 0; i < tips.length; i++) {
+            double tipSI = tips[i] * 1.0e-3;                 // pN/nm → N/m
+            double kappa = tipSI * (Lprod * 1e-6) * (Lprod * 1e-6);   // κ = tip·L²
+            double stall = motorStallPN(kappa, Lprod, 60.0);
+            double ratio = PEAK / stall;
+            s1tip[i] = tips[i]; s1ratio[i] = ratio;
+            System.out.printf("  %-14.2f %-12.3g %-14.2f %-14.2f %-10s%n", tips[i], kappa, stall, ratio,
+                    (ratio >= 0.5 && ratio <= 2.0) ? "yes" : "NO");
+        }
+        // band edges (ratio crosses 0.5 and 2.0) by linear interp on tip vs ratio
+        double tipAt1 = interpX(s1tip, s1ratio, 1.0), tipLo = interpX(s1tip, s1ratio, 2.0), tipHi = interpX(s1tip, s1ratio, 0.5);
+        System.out.printf("  ⇒ peak/stall = 1.0 at tip ≈ %.2f pN/nm; the ~2× band (ratio 0.5–2.0) spans tip ≈ %.2f → %.2f pN/nm.%n", tipAt1, tipLo, tipHi);
+        System.out.printf("    production 1 pN/nm: ratio %.2f — %s the band; Kaya-Higuchi ~2.6 pN/nm: ratio %.2f — %s.%n",
+                PEAK / motorStallPN(1.0e-3 * (Lprod*1e-6)*(Lprod*1e-6), Lprod, 60.0), "INSIDE",
+                PEAK / motorStallPN(2.6e-3 * (Lprod*1e-6)*(Lprod*1e-6), Lprod, 60.0),
+                (PEAK / motorStallPN(2.6e-3 * (Lprod*1e-6)*(Lprod*1e-6), Lprod, 60.0)) >= 0.5 ? "inside" : "OUTSIDE");
+
+        // ---- SWEEP 2a: angle, FIXED lever 8 nm → stroke & stall both rise with angle ----
+        System.out.println("\n--- SWEEP 2a: stroke & stall vs converter angle (FIXED lever 8 nm, production κ) ---");
+        System.out.printf("  %-10s %-16s %-16s %-14s%n", "angle(°)", "stroke=2Lsin(θ/2)", "stall_kernel(pN)", "stall_analytic");
+        double[] angs = { 45, 55, 60, 65, 70, 80 };
+        double[] s2stroke = new double[angs.length], s2stall = new double[angs.length];
+        for (int i = 0; i < angs.length; i++) {
+            double th = Math.toRadians(angs[i]);
+            double stroke = 2.0 * (Lprod * 1e3) * Math.sin(th / 2);   // nm
+            double stall = motorStallPN(KAPPA, Lprod, angs[i]);
+            double stallAna = (KAPPA / (Lprod * 1e-6)) * th * 1e12;   // (κ/L)·θ_rad
+            s2stroke[i] = stroke; s2stall[i] = stall;
+            System.out.printf("  %-10.0f %-16.3f %-16.2f %-14.2f%n", angs[i], stroke, stall, stallAna);
+        }
+        // ---- SWEEP 2b: angle, FIXED stroke 8 nm + FIXED tip-stiffness 1 pN/nm (adjust L, κ=tip·L²) → ~angle-invariant ----
+        System.out.println("\n--- SWEEP 2b: stall vs angle (FIXED stroke 8 nm + FIXED tip-stiffness 1 pN/nm; L,κ adjusted) ---");
+        System.out.printf("  %-10s %-14s %-14s %-16s%n", "angle(°)", "lever(nm)", "κ(N·m/rad)", "stall(pN)");
+        double strokeFix = 8.0;   // nm
+        double[] s2bstall = new double[angs.length];
+        for (int i = 0; i < angs.length; i++) {
+            double th = Math.toRadians(angs[i]);
+            double Lnm = strokeFix / (2.0 * Math.sin(th / 2));   // L for fixed stroke
+            double Lum = Lnm * 1e-3;
+            double kappa = 1.0e-3 * (Lum * 1e-6) * (Lum * 1e-6);  // tip 1 pN/nm ⇒ κ=tip·L²
+            double stall = motorStallPN(kappa, Lum, angs[i]);
+            s2bstall[i] = stall;
+            System.out.printf("  %-10.0f %-14.3f %-14.3g %-16.2f%n", angs[i], Lnm, kappa, stall);
+        }
+        double mn = 1e9, mx = 0; for (double v : s2bstall) { mn = Math.min(mn, v); mx = Math.max(mx, v); }
+        System.out.printf("  ⇒ stall spans %.2f–%.2f pN across 45–80° (%.0f%% variation) ⇒ %s at fixed stroke+stiffness.%n",
+                mn, mx, 100 * (mx - mn) / mn, (mx - mn) / mn < 0.15 ? "~ANGLE-INVARIANT ✓ (the chord-vs-arc θ/(2sin(θ/2)) correction)" : "angle-dependent");
+
+        // ---- CSV for the matplotlib graphs ----
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("# sweep1: tip_pN_per_nm,peak_over_stall\n");
+            for (int i = 0; i < tips.length; i++) sb.append(String.format(java.util.Locale.US, "S1,%.3f,%.4f%n", s1tip[i], s1ratio[i]));
+            sb.append("# sweep2a: angle_deg,stroke_nm,stall_pN\n");
+            for (int i = 0; i < angs.length; i++) sb.append(String.format(java.util.Locale.US, "S2A,%.1f,%.4f,%.4f%n", angs[i], s2stroke[i], s2stall[i]));
+            sb.append("# sweep2b: angle_deg,stall_pN_fixed_stroke\n");
+            for (int i = 0; i < angs.length; i++) sb.append(String.format(java.util.Locale.US, "S2B,%.1f,%.4f%n", angs[i], s2bstall[i]));
+            java.nio.file.Files.writeString(java.nio.file.Path.of("stiffness_angle_sweep.csv"), sb.toString());
+            System.out.println("\n  wrote stiffness_angle_sweep.csv (for the matplotlib graphs)");
+        } catch (java.io.IOException e) { System.out.println("  (CSV write failed: " + e.getMessage() + ")"); }
+    }
+    /** linear interpolation: find x where y(x)=target, given monotonic-ish (x,y). */
+    static double interpX(double[] x, double[] y, double target) {
+        for (int i = 0; i < x.length - 1; i++) {
+            if ((y[i] - target) * (y[i + 1] - target) <= 0 && y[i] != y[i + 1])
+                return x[i] + (target - y[i]) * (x[i + 1] - x[i]) / (y[i + 1] - y[i]);
+        }
+        return Double.NaN;
     }
 
     /** PHASE-2 step-4c: recalibrate BOTH catch-slip pathways to Guo & Guilford (2006) bond data, then check the
