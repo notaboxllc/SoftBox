@@ -380,6 +380,98 @@ public final class NucleotideCycleSystem {
         }
     }
 
+    // ============================================================================================
+    // CANONICAL LYMN-TAYLOR CYCLE (jba, 2026-06-29; flag-gated `-lymntaylor`, default-off ⇒ every existing path
+    // byte-identical). The VALIDATED single-pathway nucleotide cycle that REPLACES the -atprecharge experiments
+    // (cycleNoBoundAtp + catch-as-sole-release). Detachment is NUCLEOTIDE-DRIVEN and FAST (restores skeletal V₀);
+    // the 4c Guo & Guilford catch is the LOAD-MODULATION of the ADP→NONE rate, NOT a release pathway. There is
+    // EXACTLY ONE release mechanism: NONE→ATP (ATP binding to the rigor head detaches it).
+    //
+    // States / transitions (one RNG draw per motor/step; per-head pure function ⇒ CPU≡GPU bit-identical):
+    //   • bind in ADP·Pi (pre-stroke, lever uncocked — the binder side, unchanged)
+    //   • ADP·Pi → ADP   : powerstroke (Pi release swings the lever 0°→60°); rate onPi (Howard ~1e4/s)
+    //   • ADP → NONE     : POST-stroke (lever stays swung); rate = base·g(F), base = onADP (Howard ~1e3/s),
+    //                      g(F) = αCatch·e^(−F·xCatch/kT) + αSlip·e^(+F·xSlip/kT)  (= 1 at F=0). Unloaded ⇒ fast
+    //                      (~1 ms, skeletal gliding); resisting load ⇒ slowed (the catch, lifetime → ~6 pN peak,
+    //                      for the ring). The 4c catch is REUSED VERBATIM (xCatch/xSlip/αCatch/αSlip), only its
+    //                      BASE is now the skeletal cycling rate (absolute catch lifetimes scale with the base).
+    //   • NONE → ATP     : DETACHMENT (ATP binding releases the rigor head); rate atpOn (fast). ENFORCED: a BOUND
+    //                      head ending the cycle in ATP detaches THIS step (covers the cycle NONE→ATP AND the
+    //                      rebind-in-ATP edge — cycle runs AFTER bind, BEFORE bond ⇒ zero-force window, no
+    //                      sustained bound-in-ATP; the ATP-STATE-AUDIT clock-decoupling bug stays fixed).
+    //   • off-fil ATP → ADP·Pi : hydrolysis recovery re-primes the lever to uncocked (offATP); then rebind.
+    // F = τ-averaged forceDotFil (the 4c EMA, kinParams[17]=alpha; alpha=0 ⇒ instantaneous). NO separate
+    // catch-slip release task on this path (the recharge/atprelease release kernels are NOT called).
+
+    /** The Lymn-Taylor cycle + its single nucleotide-driven release. Replaces cycle()/cycleAtpDetach/cycleNoBoundAtp
+     *  AND the separate catchSlipRelease* on the `-lymntaylor` path. stats[2m]=bound steps, stats[2m+1]=releases. */
+    public static void cycleLymnTaylor(IntArray nucleotideState, IntArray boundSeg,
+                                       FloatArray forceDotFil, FloatArray forceDotAvg, IntArray avgInit,
+                                       IntArray cooldown, IntArray stats,
+                                       FloatArray nucParams, FloatArray kinParams, IntArray counts) {
+        int nM = nucleotideState.getSize();
+        int step = counts.get(1), seed = counts.get(2);
+        float dt = nucParams.get(0);
+        float atpOn = nucParams.get(1);
+        float onATP = nucParams.get(2), offATP = nucParams.get(3);
+        float onPi = nucParams.get(4),  offPi = nucParams.get(5);
+        float onADP = nucParams.get(6), offADP = nucParams.get(7);
+        float aCatch = kinParams.get(1), aSlip = kinParams.get(2);
+        float xCatch = kinParams.get(3), xSlip = kinParams.get(4), kT = kinParams.get(5);
+        int refractorySteps = (int) kinParams.get(10);
+        float alpha = kinParams.get(17);   // EMA dt/τ (the 4c catch averaging); 0 ⇒ instantaneous
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            int bs = boundSeg.get(m);
+            boolean bound = bs >= 0;
+            int state = nucleotideState.get(m);
+            int h = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4E55);  // NUC salt (== cycle)
+            float u = (h >>> 1) / 2147483647.0f;
+
+            // catch input F = τ-averaged forceDotFil (EMA seeded at bind); free heads carry no load
+            float Favg;
+            if (bound) {
+                float Finst = forceDotFil.get(m);
+                if (alpha > 0f) {
+                    if (avgInit.get(m) == 0) { Favg = Finst; forceDotAvg.set(m, Finst); avgInit.set(m, 1); }
+                    else { Favg = forceDotAvg.get(m) + alpha * (Finst - forceDotAvg.get(m)); forceDotAvg.set(m, Favg); }
+                } else { Favg = Finst; }
+            } else { Favg = 0f; forceDotAvg.set(m, 0f); avgInit.set(m, 0); }
+
+            if (state == MotorStore.NUC_NONE) {
+                if (u < atpOn * dt) state = MotorStore.NUC_ATP;          // ATP uptake (rigor) ⇒ detaches below if bound
+            } else if (state == MotorStore.NUC_ATP) {
+                float rate = bound ? onATP : offATP;
+                if (u < rate * dt) state = MotorStore.NUC_ADPPI;          // hydrolysis recovery (off-fil re-primes lever)
+            } else if (state == MotorStore.NUC_ADPPI) {
+                float rate = bound ? onPi : offPi;
+                if (u < rate * dt) state = MotorStore.NUC_ADP;            // powerstroke (Pi release)
+            } else { // ADP → NONE — base rate × catch g(F) (post-stroke, LOAD-MODULATED; NOT a gate)
+                float g = aCatch * (float) Math.exp(-Favg * xCatch / kT) + aSlip * (float) Math.exp(Favg * xSlip / kT);
+                float rate = (bound ? onADP : offADP) * g;
+                if (u < rate * dt) state = MotorStore.NUC_NONE;
+            }
+            nucleotideState.set(m, state);
+
+            // SINGLE release + bookkeeping: a BOUND head ending in ATP detaches (NONE→ATP = detachment; also ejects
+            // the rebind-in-ATP edge). cycle runs AFTER bind / BEFORE bond ⇒ no force applied, no later kernel
+            // overwrites the freed boundSeg ⇒ atomic on GPU; no sustained bound-in-ATP.
+            if (bound) {
+                stats.set(2 * m, stats.get(2 * m) + 1);
+                if (state == MotorStore.NUC_ATP) {
+                    stats.set(2 * m + 1, stats.get(2 * m + 1) + 1);
+                    forceDotAvg.set(m, 0f); avgInit.set(m, 0);
+                    if (refractorySteps > 0) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                }
+            } else if (bs == MotorStore.FREE_COOLDOWN) {
+                int c = cooldown.get(m) - 1;
+                if (c <= 0) { boundSeg.set(m, MotorStore.FREE_BINDABLE); }   // refractory elapsed
+                else { cooldown.set(m, c); }
+            }
+        }
+    }
+
     /** (2)+(3) catchSlipReleaseAvg + ATP recharge: byte-for-byte catchSlipReleaseAvg EXCEPT on every release it
      *  ALSO sets nucleotideState ← NUC_ATP. This is the variant the calibrated stack (`-tauavg`) uses. */
     public static void catchSlipReleaseAvgRecharge(IntArray boundSeg, FloatArray forceDotFil, FloatArray forceDotAvg, IntArray avgInit,

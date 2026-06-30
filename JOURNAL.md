@@ -1,5 +1,51 @@
 # Soft Box Project Journal
 
+## 2026-06-29 — LYMN-TAYLOR CYCLE restored (undo -atprecharge): nucleotide-driven fast detachment ⇒ skeletal V₀ ~6 µm/s (was Myo2 ~1); flag-gated -lymntaylor, default byte-identical, CPU≡GPU
+Implemented the validated single-pathway Lymn-Taylor cycle (`NucleotideCycleSystem.cycleLymnTaylor`), replacing the
+`-atprecharge` experiments. **ONE release: NONE→ATP = detachment** (ATP binding releases the rigor head); the 4c Guo &
+Guilford catch **MODULATES the ADP→NONE rate** (base = Howard ~1e3/s × g(F), g=1 at F=0), **NOT a release pathway** —
+catch reused VERBATIM (not re-calibrated), only its base moved from kOff 100/s to the cascade 1e3/s. **bound-in-ATP
+enforced ≈0** (a bound head ending in ATP detaches; cycle runs after bind/before bond ⇒ zero-force window, the
+ATP-STATE-AUDIT clock-decoupling bug stays fixed). **VALIDATED** (perphead flat θ=0, calibrated stack): unloaded
+detachment **141→651/s** (base-cycle ~870/s), bound-time **7.07→1.07–1.54 ms**, **V₀=step×rate ~1.0→~6.0 µm/s
+(SKELETAL band; was Myo2)** — the MOTOR-PARAM-PROVENANCE turnover deficit (the deleted Howard ADP→NONE) is FIXED;
+**bound-in-ATP 0.0 %**; **dt=1e-5 stable** (capRate 0, fullMat YES, no whip/NaN to density 2000); **CPU≡GPU
+aggregate-within-SEM** (avgB 0.64≈0.62, netX −0.44≈−0.40, inst 6.5≈6.4). **Co-retune:** stale kOn 2e5→**2e6** (10×)
+lifts binding (avgB + −x glide rise monotonically with density, glide clear ≥ d1000); 1e7 = diminishing returns
+(encounter/geometry-limited). **ORTHOGONAL residual (pre-existing, NOT the turnover; flagged, out of scope):** density
+threshold ~500–1000 (above Uyeda 100–300) + measured netX dt/drag-suppressed (~0.5–1 vs V₀ 6) = the flat single-tip
+sparse binding (BINDING-SURVEY) + per-head transport-efficiency (SLIP-DIRECTION ~0.05 pN/head) + dt=1e-5/aeta-100×
+suppression (SPEED-DENSITY / DT-CONVERGENCE). **THESIS: mechanism-flag #1 RESOLVED** — cycling-detachment is now a
+**parameterized rate** (ADP→NONE base + NONE→ATP), not a code branch ⇒ a clean isoform swap (skeletal ~1e3/s, Myo2
+~1.4e2/s, same mechanism); J1-strain-as-load flag (#2) stays deferred. Additive: `cycleLymnTaylor` + LT branches in
+`stepOrig`/`buildPlan`/`singleStep` (skip the separate release task, route cycle to LT) + measureGrid pulls only
+`stats` on LT (no cap task ⇒ capStats not a device var). **Flag-gated `-lymntaylor` (alias `-lt`); default/-atprecharge
+byte-identical** (regression: 141/s, 7.07 ms reproduced exactly); `BoA-v1ref` byte-clean; **NOT flipped to default**
+(intended as production once the orthogonal binding/efficiency levers land). Report: `PHASE2_LYMN_TAYLOR_FINDINGS.md`;
+raw `RUN_LOGS/2026-06-29_lt_*.txt`. Next (separate): binding-density + transport-efficiency levers, then default LT.
+
+## 2026-06-29 — MOTOR-PARAM PROVENANCE AUDIT (read-only/design-only): skeletal-faithful mechanics, Myo2-slow turnover; the slow turnover is a MECHANISM choice (-atprecharge deletes the fast biochemical detachment), not a drifted constant
+Audited every motor constant for isoform provenance + classified physics/numerical/murky + designed the Skeletal_Myosin
+file schema. **(A)** Catch-slip is genuinely SKELETAL (Guo & Guilford 2006 PNAS 103:9844 + Stam 2015: xCatch 2.5/xSlip
+0.40/αC·αS 0.92·0.08/peak ~6 pN), stall 5 pN (Finer 1994), step ~6.96 nm, cascade rates Howard 2001 Table 14-2 —
+**mechanics faithful-skeletal.** **(B)** Turnover is Myo2-regime: **V₀ = step×unloaded-rate = 6.96 nm × 143/s ≈ 1.0
+µm/s** vs skeletal 5–8; the entire gap is **bound-time (7.1 ms vs ~1.25 ms, ~5.7×)**, NOT step or κ. **ROOT = the
+`-atprecharge` model makes the catch-slip bond (kOff 100/s, GG mechanical regime, realized ~141/s) the SOLE
+detachment, DELETING the Howard biochemical ADP→NONE (1e3/s, ~1 ms, skeletal-fast) the cascade already has** — the
+mechanical-bond-as-cycling-rate conflation, CONFIRMED; it also explains the slip-direction "catch at unloaded floor
+for every head". Duty 1.69 % vs skeletal ~5 %; the turnover fix must co-retune the (already-stale, BINDING-SURVEY)
+kOn. **(C)** Designed `params/Skeletal_Myosin` (measured constants + inline citations; ⚠ kOff/kOn flagged drifted/
+stale), a SEPARATE `params/Actin_Filament` (phalloidin Lp — actin varies independently), and `-isoform <name>`
+reading `params/<name>_Myosin` with **default = no read ⇒ BYTE-IDENTICAL** until a non-default isoform is selected.
+**THESIS FLAG:** mechanics+catch+cascade are clean parameter swaps, but TWO items are still mechanism in CODE — the
+**detachment PATHWAY** (biochemical-cycle vs catch-slip-only, a `-atprecharge`/`ATP_RELEASE`/kernel branch) and the
+**J1-strain-as-load** choice; the turnover follow-up should parameterize the detachment rate to make the falsifiability
+boundary clean. Internal inconsistency: skeletal catch peak (6 pN) on Myo2-slow turnover (7 ms); stall sourced two
+ways (v2 5 pN Finer / v1 Env 6 pN). Murky-flagged (NOT bucketed): myoColTol (6 nm capture reach), tauAvg (0.5 ms catch
+EMA), myosinBreakForce (12 pN, off), the weak-binding candReach. **NO code edit, no file created/wired, no default
+flipped, nothing committed; `BoA-v1ref` byte-clean.** Deliverable: `MOTOR_PARAM_PROVENANCE.md`. Follow-up (separate):
+wire the file + the turnover fix.
+
 ## 2026-06-29 — SLIP-DIRECTION DIAGNOSIS: does the catch-slip release post-stroke heads? → BRAKE REFUTED, not a sign bug (BAIL on the fix). Measurement-only `-brakediag`, default byte-identical
 Tested the hypothesis that high-avgBound-but-low-netX (avgBound ~15 @ density 3000, netX −0.46 µm/s) is a BRAKE: held
 post-stroke ADP heads strain backward and resist while the catch mis-scores them into the held/catch regime. **Part A

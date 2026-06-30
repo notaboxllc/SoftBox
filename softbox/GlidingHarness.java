@@ -75,6 +75,7 @@ public final class GlidingHarness {
     static boolean HEADTILT_SWEEP = false;       // -headtiltsweep: Stage-1 single-motor force-decomp θ sweep on the OFF-AXIS bind (measurement-only)
     static double  OFFAXIS_DEG = 40.0;           // -offaxis <deg>: off-axis bind angle for the decomp setup (non-degenerate perpRest; default 40°)
     static boolean ATP_RELEASE = true;           // PHASE-2 ATP-RELEASE COUPLING: a bound head detaches AT its NONE→ATP transition (ATP-binding = detachment). Default-ON for CONFIG1 (config1/perphead gliding); A/B control -noatprelease turns it OFF (old decoupled cycle). Non-CONFIG1 paths never see it.
+    static boolean LYMN_TAYLOR = false;          // -lymntaylor (jba 2026-06-29): the VALIDATED canonical Lymn-Taylor cycle. ONE release pathway (NONE→ATP = detachment, fast/nucleotide-driven); the 4c catch MODULATES the ADP→NONE rate (not a release). Replaces the -atprecharge experiments. Default-off ⇒ byte-identical; overrides ATP_RECHARGE/ATP_RELEASE when on.
     static boolean BRAKEDIAG = false;            // -brakediag (PART B, measurement-only): per-bound-head axial seg-force (assist −x / brake +x) vs signed catch load forceDotFil, binned by time-since-stroke; release-vs-signed-load histogram. CPU runner, default-off.
     static boolean ATP_RECHARGE = false;         // -atprecharge (jba 2026-06-29): the CORRECTED nucleotide↔release coupling. (1) a BOUND head is locked out of ATP uptake (NONE→ATP only when FREE); (2) the ONLY release is the force-based Guo–Guilford catch-slip (NO dice-roll detach — overrides ATP_RELEASE); (3) on release the head is recharged nucleotideState←ATP (debugging form). Default-off ⇒ every existing path byte-identical.
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
@@ -163,6 +164,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-headtiltsweep")) { HEADTILT_SWEEP = true; CANONICAL = true; CONFIG1 = true; PERPHEAD = true; FORCEDECOMP = true; }  // Stage-1 θ sweep (single-motor force decomp, off-axis bind)
             else if (args[i].equals("-offaxis")) OFFAXIS_DEG = Double.parseDouble(args[++i]);  // off-axis bind angle for the decomp/sweep setup
             else if (args[i].equals("-noatprelease")) ATP_RELEASE = false;  // A/B control: DISABLE the ATP-transition→detach coupling (old decoupled cycle) for config1/perphead
+            else if (args[i].equals("-lymntaylor") || args[i].equals("-lt")) LYMN_TAYLOR = true;   // jba: the validated canonical cycle (single nucleotide-driven release)
             else if (args[i].equals("-atprecharge")) ATP_RECHARGE = true;    // jba: catch-slip-ONLY release + ATP recharge on release + bound head locked out of ATP uptake (no dice-roll detach)
             else if (args[i].equals("-boundgeom")) { CONFIG1 = true; BOUNDGEOM = true; }      // bound-state geometry report (single motor, transport topology)
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
@@ -343,7 +345,11 @@ public final class GlidingHarness {
         MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
         BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
         long _rel = tns();
-        if (ATP_RECHARGE && TAU_AVG > 0)   // jba ATP-RECHARGE: catch-slip is the ONLY release; recharge to ATP on release
+        if (LYMN_TAYLOR) {
+            // VALIDATED Lymn-Taylor: NO separate release — detachment is nucleotide-driven (NONE→ATP) in the cycle
+            // kernel below. (The cooldown decrement + the single release live in cycleLymnTaylor.)
+        }
+        else if (ATP_RECHARGE && TAU_AVG > 0)   // jba ATP-RECHARGE: catch-slip is the ONLY release; recharge to ATP on release
             NucleotideCycleSystem.catchSlipReleaseAvgRecharge(mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts, mot.nucleotideState);
         else if (ATP_RECHARGE)
             NucleotideCycleSystem.catchSlipReleaseRecharge(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts, mot.nucleotideState);
@@ -363,7 +369,9 @@ public final class GlidingHarness {
         // PHASE-2 ATP-RELEASE COUPLING: config-1/perp-head detach AT the bound NONE→ATP transition (ATP-binding
         // = detachment); the catch-slip release above is unchanged (it governs the strained ADP dwell). The plain
         // cycle (default/canonical-non-config1) is byte-unchanged.
-        if (ATP_RECHARGE)   // jba: a BOUND head is locked out of ATP uptake; NO dice-roll detach (release = catch-slip only)
+        if (LYMN_TAYLOR)   // jba: the validated canonical cycle — single nucleotide-driven release (NONE→ATP), catch modulates ADP→NONE
+            NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+        else if (ATP_RECHARGE)   // jba: a BOUND head is locked out of ATP uptake; NO dice-roll detach (release = catch-slip only)
             NucleotideCycleSystem.cycleNoBoundAtp(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
         else if (CONFIG1 && ATP_RELEASE)
             NucleotideCycleSystem.cycleAtpDetach(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.cooldown, mot.nucParams, mot.kinParams, mot.counts);
@@ -489,7 +497,7 @@ public final class GlidingHarness {
         if (CANONICAL) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.bindArc2, mot.canonSnap);
         if (CONFIG1) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.xbParamsC1, sc.jointParams);
         if (PERPHEAD) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.perpRest, mot.headTiltCS);
-        if (TAU_AVG > 0) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.forceDotAvg, mot.avgInit);
+        if (TAU_AVG > 0 || LYMN_TAYLOR) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.forceDotAvg, mot.avgInit);
         // reach (common)
         tg = tg
             .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
@@ -525,7 +533,9 @@ public final class GlidingHarness {
                 .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
         } else {
             // default: release/cycle read last step's forceDotFil (force computed after them).
-            if (ATP_RECHARGE && TAU_AVG > 0)   // jba ATP-RECHARGE: catch-slip = the ONLY release; recharge to ATP on release
+            // LYMN_TAYLOR: NO separate release task — detachment is nucleotide-driven in the cycle kernel below.
+            if (LYMN_TAYLOR) { /* no release task */ }
+            else if (ATP_RECHARGE && TAU_AVG > 0)   // jba ATP-RECHARGE: catch-slip = the ONLY release; recharge to ATP on release
                 tg = tg.task("release", NucleotideCycleSystem::catchSlipReleaseAvgRecharge, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts, mot.nucleotideState);
             else if (ATP_RECHARGE)
                 tg = tg.task("release", NucleotideCycleSystem::catchSlipReleaseRecharge, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts, mot.nucleotideState);
@@ -541,7 +551,9 @@ public final class GlidingHarness {
             if (PERPHEAD) tg = tg.task("snapPerp", CrossBridgeSystem::snapPerpRest, b.uVec, f.uVec, mot.boundSeg, mot.canonSnap, mot.perpRest, mot.counts, mot.headTiltCS);
             // PHASE-2 ATP-RELEASE COUPLING (config-1/perp-head): detach AT the bound NONE→ATP transition. cycle
             // runs AFTER bind (line above) ⇒ no later kernel overwrites the freed boundSeg this step (atomic on GPU).
-            if (ATP_RECHARGE)   // jba: BOUND head locked out of ATP uptake; NO dice-roll detach (release = catch-slip only)
+            if (LYMN_TAYLOR)   // jba: the validated canonical cycle — single nucleotide-driven release (NONE→ATP), catch modulates ADP→NONE
+                tg = tg.task("cycle", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+            else if (ATP_RECHARGE)   // jba: BOUND head locked out of ATP uptake; NO dice-roll detach (release = catch-slip only)
                 tg = tg.task("cycle", NucleotideCycleSystem::cycleNoBoundAtp, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
             else if (CONFIG1 && ATP_RELEASE)
                 tg = tg.task("cycle", NucleotideCycleSystem::cycleAtpDetach, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.cooldown, mot.nucParams, mot.kinParams, mot.counts);
@@ -838,12 +850,16 @@ public final class GlidingHarness {
         mot.setCounts(t, SEED, f.n); f.counts.set(1, t);
         MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
         BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
-        if (TAU_AVG > 0)
+        if (LYMN_TAYLOR) { /* LT: no separate release — detachment is nucleotide-driven in the cycle below */ }
+        else if (TAU_AVG > 0)
             NucleotideCycleSystem.catchSlipReleaseAvg(mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
         else
             NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
         BindingDetectionSystem.bindCanonicalTwoPoint(b.coord, b.uVec, b.segLength, f.end1, f.end2, f.segLength, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.kinParams, mot.counts);
-        NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
+        if (LYMN_TAYLOR)
+            NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+        else
+            NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
         ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
         BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
         MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, sc.jointParams, mot.counts);
@@ -2024,7 +2040,8 @@ public final class GlidingHarness {
                     mnx[k] = minCoordX(sc.fil); mxx[k] = maxCoordX(sc.fil); mny[k] = minCoordY(sc.fil); mxy[k] = maxCoordY(sc.fil); k++;
                 }
             }
-            if (res != null) res.transferToHost(sc.mot.capStats, sc.mot.stats);   // §6.10 firing-rate pull
+            // §6.10 firing-rate pull. LT has no break-force cap task ⇒ capStats is not a device variable (skip it).
+            if (res != null) { if (LYMN_TAYLOR) res.transferToHost(sc.mot.stats); else res.transferToHost(sc.mot.capStats, sc.mot.stats); }
         } else {
             cx[0] = centroidX(sc.fil); cy[0] = centroidY(sc.fil); cz[0] = centroidZ(sc.fil); bnd[0] = bound(sc.mot);
             mnx[0] = minCoordX(sc.fil); mxx[0] = maxCoordX(sc.fil); mny[0] = minCoordY(sc.fil); mxy[0] = maxCoordY(sc.fil); k = 1;
