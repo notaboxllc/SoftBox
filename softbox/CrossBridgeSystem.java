@@ -83,6 +83,15 @@ public final class CrossBridgeSystem {
         //   size ≤9 (production + -xbsat) ⇒ f9Frozen=0 ⇒ the F9 rest still switches, BYTE-IDENTICAL.
         //   size 10 (MotorStrokeHarness -isolate 1) ⇒ [9]=1 freezes the F9 rest at 90° (uncocked) so only J1 strokes.
         int f9Frozen = (xbParams.getSize() > 9) ? (int) xbParams.get(9) : 0;
+        // AXIAL SWING LOCK (PHASE-2, -axlock; xbParams[10]). Flag-gated by SIZE:
+        //   size ≤10 (production + -spherehead) ⇒ axLock=0 ⇒ F10 targets seg.yVec (BYTE-IDENTICAL).
+        //   size 11 (Gliding -axlock) ⇒ [10]=1 ⇒ F10 retargets the head yVec to ŝ = normalize(n̂bed×seg.uVec),
+        //   n̂bed = lab +Z, HEAD-ONLY (BoA MyoFilLink.alignYVecTorqueAxial). Fixes the neck swing plane to axial.
+        int axLock = (xbParams.getSize() > 10) ? (int) xbParams.get(10) : 0;
+        // STEREOSPECIFIC ROLL SIGN (PHASE-2, -rollsign; xbParams[11]). size ≤11 ⇒ rollSign=0 ⇒ align head.yVec
+        // to the NEARER of ±ŝ (the sign-agnostic axial lock, byte-identical). size 12 with [11]=1 ⇒ align to
+        // +ŝ SPECIFICALLY (ŝ = n̂bed×û_seg is the barbed-sweep sign, from polarity) ⇒ the roll SIGN is fixed.
+        int rollSign = (xbParams.getSize() > 11) ? (int) xbParams.get(11) : 0;
 
         for (@Parallel int m = 0; m < nM; m++) {
             int d = m * STRIDE;
@@ -143,7 +152,7 @@ public final class CrossBridgeSystem {
                 double tm = j1FMT * DEG2RAD * angD / ((1.0 / hbRGy + 1.0 / sbRGy) * dt);
                 T9x = tm * t9x; T9y = tm * t9y; T9z = tm * t9z;
             }
-            // F10 yVec alignment torque (rest 0)
+            // F10 yVec alignment torque (rest 0): default aligns head.yVec → seg.yVec, two-body.
             double t10x = syy * hyz - syz * hyy, t10y = syz * hyx - syx * hyz, t10z = syx * hyy - syy * hyx;
             double m10 = t10x * t10x + t10y * t10y + t10z * t10z;
             double T10x = 0, T10y = 0, T10z = 0;
@@ -154,19 +163,244 @@ public final class CrossBridgeSystem {
                 double tm = j1FMT * DEG2RAD * ang / ((1.0 / hbRGx + 1.0 / sbRGx) * dt);
                 T10x = tm * t10x; T10y = tm * t10y; T10z = tm * t10z;
             }
+            // head-side / seg-side F10 contribution. Default: head −T10, seg +T10 (byte-identical when axLock=0).
+            double hF10x = -T10x, hF10y = -T10y, hF10z = -T10z;
+            double sF10x =  T10x, sF10y =  T10y, sF10z =  T10z;
+            if (axLock != 0) {
+                // AXIAL LOCK: align head.yVec → ŝ = normalize(n̂bed×seg.uVec), n̂bed=(0,0,1) ⇒ ŝ=(−suy,sux,0). Head-only.
+                double sx = -suy, sy = sux, sz = 0.0;
+                double sm = sx * sx + sy * sy + sz * sz;
+                double lx = 0, ly = 0, lz = 0;
+                if (sm > 1.0e-18) {
+                    double ims = 1.0 / Math.sqrt(sm); sx *= ims; sy *= ims; sz *= ims;
+                    double tvx = hyy * sz - hyz * sy, tvy = hyz * sx - hyx * sz, tvz = hyx * sy - hyy * sx;   // head.yVec × ŝ
+                    double dotv = hyx * sx + hyy * sy + hyz * sz;
+                    if (rollSign == 0 && dotv < 0) { tvx = -tvx; tvy = -tvy; tvz = -tvz; dotv = -dotv; }      // nearer of ±ŝ (default)
+                    // rollSign!=0: align to +ŝ SPECIFICALLY (no flip) ⇒ heads at −ŝ get rotated all the way to +ŝ
+                    if (dotv > 1) dotv = 1; if (dotv < -1) dotv = -1;
+                    double tvm = tvx * tvx + tvy * tvy + tvz * tvz;
+                    if (tvm > 1.0e-30) {
+                        double imt = 1.0 / Math.sqrt(tvm); tvx *= imt; tvy *= imt; tvz *= imt;
+                        double angL = accurateAcos(dotv) * RAD2DEG;
+                        double tmL = j1FMT * DEG2RAD * angL / ((1.0 / hbRGx + 1.0 / sbRGx) * dt);
+                        lx = tmL * tvx; ly = tmL * tvy; lz = tmL * tvz;                                        // rotate head.yVec toward ŝ
+                    }
+                }
+                hF10x = lx; hF10y = ly; hF10z = lz;      // head only
+                sF10x = 0;  sF10y = 0;  sF10z = 0;       // no segment reaction (ŝ is a bed reference)
+            }
 
-            // head-side: +F, torque TH - T9 - T10
+            // head-side: +F, torque TH - T9 + hF10 (default hF10 = −T10 ⇒ byte-identical)
             bondData.set(d,     (float) Fx);  bondData.set(d + 1, (float) Fy);  bondData.set(d + 2, (float) Fz);
-            bondData.set(d + 3, (float) (THx - T9x - T10x));
-            bondData.set(d + 4, (float) (THy - T9y - T10y));
-            bondData.set(d + 5, (float) (THz - T9z - T10z));
-            // seg-side: -F, torque TS + T9 + T10  (-forcebias subtracts a uniform −x bias on the seg side; 0 in production)
+            bondData.set(d + 3, (float) (THx - T9x + hF10x));
+            bondData.set(d + 4, (float) (THy - T9y + hF10y));
+            bondData.set(d + 5, (float) (THz - T9z + hF10z));
+            // seg-side: -F, torque TS + T9 + sF10  (-forcebias subtracts a uniform −x bias on the seg side; 0 in production)
             bondData.set(d + 6, (float) (nFx - xbias)); bondData.set(d + 7, (float) nFy); bondData.set(d + 8, (float) nFz);
-            bondData.set(d + 9,  (float) (TSx + T9x + T10x));
-            bondData.set(d + 10, (float) (TSy + T9y + T10y));
-            bondData.set(d + 11, (float) (TSz + T9z + T10z));
+            bondData.set(d + 9,  (float) (TSx + T9x + sF10x));
+            bondData.set(d + 10, (float) (TSy + T9y + sF10y));
+            bondData.set(d + 11, (float) (TSz + T9z + sF10z));
             // forceDotFil = Dot(F, seg.uVec) — the along-filament load (motor-side force)
             bondData.set(d + 12, (float) (Fx * sux + Fy * suy + Fz * suz));
+        }
+    }
+
+    /**
+     * DIRECTED power-stroke converter (sphere-head; PHASE-2, 2026-07-01). Replaces the J1 cross(lever,head)
+     * converter — whose torsion axis is DEGENERATE at the collinear/straight recovery pose, so each new power
+     * stroke picks its swing azimuth from numerical residue and FLIPS direction between cycles (the ill-defined
+     * direction jba observed). Here the swing is driven toward a POLARITY-DEFINED target so the direction is
+     * deterministic and always barbed-ward:
+     *   target lever uVec  û_L* = normalize( cos θ_rest · û_head − sin θ_rest · f̂ ),   f̂ = bound-seg uVec
+     * (pointed→barbed). Tipping the lever toward −f̂ sweeps its REAR (rod/tail-side end) toward the BARBED end.
+     * Standard compliant alignment-torque form (k = j1FracMoveTorq); +T on the lever, −T on the head (internal
+     * converter couple). Per-motor PURE — motor m writes only its own lever (3m+1) & head (3m+2) torque slots
+     * (disjoint) ⇒ race-free, no atomics, CPU≡GPU. Use with the J1 angular converter OFF (jointParams[3]=0)
+     * so this is the sole stroke driver; the J1 POSITION spring (lever.end2↔head.end1) stays on.
+     * swingParams: [0]=k [1]=dt [2]=θ_uncocked(deg) [3]=θ_cocked(deg). ADDITIVE/flag-gated ⇒ default untouched.
+     */
+    public static void directedSwing(FloatArray motorUVec, FloatArray motorTorqueSum, FloatArray motorBRotGam,
+                                     FloatArray filUVec, IntArray boundSeg, IntArray nucleotideState,
+                                     FloatArray swingParams, IntArray counts) {
+        int nB = motorUVec.getSize() / 3;
+        int nSeg = filUVec.getSize() / 3;
+        int nM = nB / 3;
+        double k = swingParams.get(0), dt = swingParams.get(1);
+        double thetaU = swingParams.get(2), thetaC = swingParams.get(3);
+        double DEG2RAD = Math.PI / 180.0;
+        for (@Parallel int m = 0; m < nM; m++) {
+            int s = boundSeg.get(m);
+            if (s < 0) continue;
+            int lev = 3 * m + 1, head = 3 * m + 2;
+            double lux = motorUVec.get(lev), luy = motorUVec.get(nB + lev), luz = motorUVec.get(2 * nB + lev);
+            double hux = motorUVec.get(head), huy = motorUVec.get(nB + head), huz = motorUVec.get(2 * nB + head);
+            double fx = filUVec.get(s), fy = filUVec.get(nSeg + s), fz = filUVec.get(2 * nSeg + s);
+            double rest = (nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? thetaC : thetaU;
+            double th = rest * DEG2RAD, c = Math.cos(th), sn = Math.sin(th);
+            double tx = c * hux - sn * fx, ty = c * huy - sn * fy, tz = c * huz - sn * fz;   // target lever dir (tip toward −f̂)
+            double tm2 = tx * tx + ty * ty + tz * tz;
+            if (tm2 < 1.0e-30) continue;
+            double it = 1.0 / Math.sqrt(tm2); tx *= it; ty *= it; tz *= it;
+            // axis = lever.uVec × target ⇒ rotates lever.uVec TOWARD target (b̂×â form)
+            double ax = luy * tz - luz * ty, ay = luz * tx - lux * tz, az = lux * ty - luy * tx;
+            double am2 = ax * ax + ay * ay + az * az;
+            if (am2 < 1.0e-30) continue;                    // already aligned to the target
+            double ia = 1.0 / Math.sqrt(am2); ax *= ia; ay *= ia; az *= ia;
+            double dot = lux * tx + luy * ty + luz * tz; if (dot > 1) dot = 1; if (dot < -1) dot = -1;
+            double ang = accurateAcos(dot);                 // radians
+            double mag = k * ang / ((1.0 / motorBRotGam.get(nB + lev) + 1.0 / motorBRotGam.get(nB + head)) * dt);
+            motorTorqueSum.set(lev,          (float) (motorTorqueSum.get(lev)          + mag * ax));
+            motorTorqueSum.set(nB + lev,     (float) (motorTorqueSum.get(nB + lev)     + mag * ay));
+            motorTorqueSum.set(2 * nB + lev, (float) (motorTorqueSum.get(2 * nB + lev) + mag * az));
+            motorTorqueSum.set(head,          (float) (motorTorqueSum.get(head)          - mag * ax));
+            motorTorqueSum.set(nB + head,     (float) (motorTorqueSum.get(nB + head)     - mag * ay));
+            motorTorqueSum.set(2 * nB + head, (float) (motorTorqueSum.get(2 * nB + head) - mag * az));
+        }
+    }
+
+    /**
+     * TWIST-COST census (PHASE-2, 2026-07-01, -twistcensus). At each FRESH bind (boundSeg free→bound this
+     * step), record the arrival angle between the head's yVec (as it arrives) and the +ŝ roll target
+     * (ŝ = n̂bed×seg.uVec) — the assembly twist the stereospecific roll-sign lock must impose. Binned into
+     * 6×30° buckets [0,180]° per motor (each motor writes only its own twistHist[6m+bin] + prevBound[m] ⇒
+     * race-free). Runs AFTER bind, BEFORE the roll lock (bondForces) acts, so head.yVec is the arrival value.
+     * prevBound init −1, twistHist init 0. ADDITIVE/flag-gated ⇒ default untouched. */
+    public static void captureBindTwist(FloatArray motorYVec, FloatArray filUVec, IntArray boundSeg,
+                                        IntArray prevBound, IntArray twistHist, IntArray counts) {
+        int nB = motorYVec.getSize() / 3;
+        int nSeg = filUVec.getSize() / 3;
+        int nM = nB / 3;
+        double RAD2DEG = 180.0 / Math.PI;
+        for (@Parallel int m = 0; m < nM; m++) {
+            int s = boundSeg.get(m);
+            int ps = prevBound.get(m);
+            if (s >= 0 && ps < 0) {                          // fresh bind this step
+                int h = 3 * m + 2;
+                double sux = filUVec.get(s), suy = filUVec.get(nSeg + s);
+                double sx = -suy, sy = sux;                  // +ŝ = n̂bed×û_seg (z=0)
+                double sm = Math.sqrt(sx * sx + sy * sy);
+                if (sm > 1.0e-9) {
+                    sx /= sm; sy /= sm;
+                    double dot = motorYVec.get(h) * sx + motorYVec.get(nB + h) * sy;   // head.yVec·(+ŝ)
+                    if (dot > 1) dot = 1; if (dot < -1) dot = -1;
+                    double ang = accurateAcos(dot) * RAD2DEG;                            // 0..180°
+                    int bin = (int) (ang / 30.0); if (bin > 5) bin = 5; if (bin < 0) bin = 0;
+                    twistHist.set(6 * m + bin, twistHist.get(6 * m + bin) + 1);
+                }
+            }
+            prevBound.set(m, s);
+        }
+    }
+
+    /**
+     * BIND-TIME stereospecific HEAD-AXIS init (PHASE-2, 2026-07-01, -mhatset). At each FRESH bind
+     * (boundSeg free→bound this step), orient the bound head to the fully stereospecific pose that fixes
+     * the SECOND free sign — the head-axis mhat = head.uVec sign along ±n̂bed. The ⊥ hold (F9) + roll lock
+     * (-rollsign) pin mhat to ±n̂bed but leave the sign free (≈50/50, PHASE2_MHAT_BIND_FINDINGS STEP 0);
+     * the PRODUCTIVE pole is +n̂bed (+Z) — then p = ŷ_head×û_head = f̂ and the head-frame swing sweeps
+     * barbed-ward, matching -dirswing.
+     *
+     * Sets the full orthonormal head frame consistent with the +ŝ roll: û_head = +n̂bed = (0,0,1);
+     * ŷ_head = +ŝ = n̂bed×û_seg = (−suy, sux, 0); ẑ_head recomputed by DerivedGeometrySystem (û×ŷ). This is
+     * an INITIALIZATION at the bind event ONLY (prevBound gate) — NOT a per-step torque, NOT a persistent
+     * pin. The existing ⊥ hold + roll lock maintain the pose thereafter. Per-motor PURE (motor m writes only
+     * its own head slot 3m+2 + prevBound[m]) ⇒ race-free, no atomics, CPU≡GPU.
+     *
+     * PLACEMENT: run LATE (after DerivedGeometrySystem.derive), mirroring snapCanonicalHead — an early
+     * body-pose write breaks the PTX-lowered bind (GPU avgBound→0). Takes effect on the next step's bond
+     * ⇒ CPU/GPU timing identical. prevBound init −1. ADDITIVE/flag-gated ⇒ default untouched.
+     */
+    public static void setBindMhat(FloatArray motorCoord, FloatArray motorUVec, FloatArray motorYVec, FloatArray filUVec,
+                                   IntArray boundSeg, IntArray prevBound, IntArray counts) {
+        int nB = motorUVec.getSize() / 3;
+        int nSeg = filUVec.getSize() / 3;
+        int nM = nB / 3;
+        double halfHead = 0.5 * MotorStore.HEAD_LEN;
+        for (@Parallel int m = 0; m < nM; m++) {
+            int s = boundSeg.get(m);
+            int ps = prevBound.get(m);
+            if (s >= 0 && ps < 0) {                          // fresh bind this step
+                int h = 3 * m + 2;
+                double sux = filUVec.get(s), suy = filUVec.get(nSeg + s);
+                double sx = -suy, sy = sux;                  // +ŝ = n̂bed×û_seg (z=0)
+                double sm = Math.sqrt(sx * sx + sy * sy);
+                // MINIMAL intervention: reorient ONLY wrong-pole heads (uz<0). Heads already on the productive
+                // +ẑ pole (~52%) are left EXACTLY as-arrived (zero disturbance) — the wrong-pole heads (~48%)
+                // are the only ones flipped. This is the fairest bind-time init: it touches the smallest set and
+                // does not perturb an already-productive attachment.
+                if (motorUVec.get(2 * nB + h) >= 0.0) { prevBound.set(m, s); continue; }
+                if (sm > 1.0e-9) {
+                    sx /= sm; sy /= sm;
+                    // IMPULSE-FREE reorientation: rotate the head about its BOUND TIP (= the F8 attach point),
+                    // so the F8 spring vector (site − tip) is preserved ⇒ no catch-slip release impulse. Preserve
+                    // htip = hc + ½·HEAD_LEN·û_old, then set û_head = +ẑ and hc = htip − ½·HEAD_LEN·û_new.
+                    double hcx = motorCoord.get(h), hcy = motorCoord.get(nB + h), hcz = motorCoord.get(2 * nB + h);
+                    double uox = motorUVec.get(h), uoy = motorUVec.get(nB + h), uoz = motorUVec.get(2 * nB + h);
+                    double htx = hcx + halfHead * uox, hty = hcy + halfHead * uoy, htz = hcz + halfHead * uoz;
+                    // û_head = +n̂bed = +ẑ (the productive pole)
+                    motorUVec.set(h, 0f); motorUVec.set(nB + h, 0f); motorUVec.set(2 * nB + h, 1f);
+                    // ŷ_head = +ŝ (in-plane, ⊥ û_head ⇒ orthonormal; derive recomputes ẑ_head = û×ŷ)
+                    motorYVec.set(h, (float) sx); motorYVec.set(nB + h, (float) sy); motorYVec.set(2 * nB + h, 0f);
+                    // hc so the tip is preserved (û_new=+ẑ ⇒ hc = htip − ½·HEAD_LEN·ẑ)
+                    motorCoord.set(h, (float) htx); motorCoord.set(nB + h, (float) hty); motorCoord.set(2 * nB + h, (float) (htz - halfHead));
+                }
+            }
+            prevBound.set(m, s);
+        }
+    }
+
+    /**
+     * HEAD-FRAME power-stroke converter (sphere-head; PHASE-2, 2026-07-01) — the biologically-defensible
+     * recast of `directedSwing`. Same mechanics, but the swing target is derived PURELY from the head's own
+     * (orientation-locked) frame — NO filament axis appears in the swing law (note: no filUVec argument).
+     *
+     * Biology: binding orients the head (the ⊥ hold pins û_head, the axial/roll lock pins ŷ_head→ŝ); the
+     * converter then rotates the neck relative to the BOUND HEAD, about the head's hinge axis ŷ_head, by the
+     * state-dependent rest angle θ_rest (0°→60° on ADP-Pi→ADP). Actin polarity enters ONLY through the head's
+     * bound pose — exactly as in real myosin. Rodrigues (û_head ⊥ ŷ_head):
+     *   target û_L* = normalize( cos θ_rest · û_head − sin θ_rest · (ŷ_head × û_head) ).
+     * When the head is fully locked (ŷ_head = +ŝ, û_head ⊥ f̂), ŷ_head × û_head = f̂, so this is IDENTICAL to
+     * directedSwing's `cos θ·û_head − sin θ·f̂`. The recast is well-defined at EVERY pose (the axial lock
+     * removed the straight-pose degeneracy of the old cross(lever,head) converter). Same compliant torque form,
+     * +T lever / −T head, per-motor pure ⇒ race-free, CPU≡GPU. Use with J1 angular converter OFF.
+     * swingParams: [0]=k [1]=dt [2]=θ_uncocked(deg) [3]=θ_cocked(deg). ADDITIVE/flag-gated ⇒ default untouched.
+     */
+    public static void directedSwingHeadFrame(FloatArray motorUVec, FloatArray motorYVec, FloatArray motorTorqueSum,
+                                              FloatArray motorBRotGam, IntArray boundSeg, IntArray nucleotideState,
+                                              FloatArray swingParams, IntArray counts) {
+        int nB = motorUVec.getSize() / 3;
+        int nM = nB / 3;
+        double k = swingParams.get(0), dt = swingParams.get(1);
+        double thetaU = swingParams.get(2), thetaC = swingParams.get(3);
+        double DEG2RAD = Math.PI / 180.0;
+        for (@Parallel int m = 0; m < nM; m++) {
+            int s = boundSeg.get(m);
+            if (s < 0) continue;
+            int lev = 3 * m + 1, head = 3 * m + 2;
+            double lux = motorUVec.get(lev), luy = motorUVec.get(nB + lev), luz = motorUVec.get(2 * nB + lev);
+            double hux = motorUVec.get(head), huy = motorUVec.get(nB + head), huz = motorUVec.get(2 * nB + head);
+            double hyx = motorYVec.get(head), hyy = motorYVec.get(nB + head), hyz = motorYVec.get(2 * nB + head);
+            double rest = (nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? thetaC : thetaU;
+            double th = rest * DEG2RAD, c = Math.cos(th), sn = Math.sin(th);
+            // power-stroke direction in the head frame = ŷ_head × û_head (= f̂ when the head is fully locked)
+            double px = hyy * huz - hyz * huy, py = hyz * hux - hyx * huz, pz = hyx * huy - hyy * hux;
+            double tx = c * hux - sn * px, ty = c * huy - sn * py, tz = c * huz - sn * pz;   // target lever dir (head frame)
+            double tm2 = tx * tx + ty * ty + tz * tz;
+            if (tm2 < 1.0e-30) continue;
+            double it = 1.0 / Math.sqrt(tm2); tx *= it; ty *= it; tz *= it;
+            double ax = luy * tz - luz * ty, ay = luz * tx - lux * tz, az = lux * ty - luy * tx;   // lever × target
+            double am2 = ax * ax + ay * ay + az * az;
+            if (am2 < 1.0e-30) continue;
+            double ia = 1.0 / Math.sqrt(am2); ax *= ia; ay *= ia; az *= ia;
+            double dot = lux * tx + luy * ty + luz * tz; if (dot > 1) dot = 1; if (dot < -1) dot = -1;
+            double ang = accurateAcos(dot);
+            double mag = k * ang / ((1.0 / motorBRotGam.get(nB + lev) + 1.0 / motorBRotGam.get(nB + head)) * dt);
+            motorTorqueSum.set(lev,          (float) (motorTorqueSum.get(lev)          + mag * ax));
+            motorTorqueSum.set(nB + lev,     (float) (motorTorqueSum.get(nB + lev)     + mag * ay));
+            motorTorqueSum.set(2 * nB + lev, (float) (motorTorqueSum.get(2 * nB + lev) + mag * az));
+            motorTorqueSum.set(head,          (float) (motorTorqueSum.get(head)          - mag * ax));
+            motorTorqueSum.set(nB + head,     (float) (motorTorqueSum.get(nB + head)     - mag * ay));
+            motorTorqueSum.set(2 * nB + head, (float) (motorTorqueSum.get(2 * nB + head) - mag * az));
         }
     }
 

@@ -365,6 +365,7 @@ public final class BindingDetectionSystem {
         float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
         for (@Parallel int m = 0; m < nM; m++) {
             if (boundSeg.get(m) != MotorStore.FREE_BINDABLE) continue;
+            if (kinParams.get(19) > 0.5f) continue;   // -nobind thermal-floor control (measurement; default 0 ⇒ byte-identical)
             float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
             float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
             float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
@@ -806,6 +807,7 @@ public final class BindingDetectionSystem {
         float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
         for (@Parallel int m = 0; m < nM; m++) {
             if (boundSeg.get(m) != MotorStore.FREE_BINDABLE) continue;
+            if (kinParams.get(19) > 0.5f) continue;   // -nobind thermal-floor control (measurement; default 0 ⇒ byte-identical)
             float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
             float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
             float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);

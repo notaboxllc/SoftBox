@@ -1,5 +1,301 @@
 # Soft Box Project Journal
 
+## 2026-07-01 — sphere-head: the HEAD-AXIS (mhat) sign — censused (v2 IS 50/50, like BoA), then bind-time set from polarity ⇒ HOLDS but is NOT a speed lever (costs binding). New `-mhatcensus`/`-mhatset`; default byte-identical.
+STEP 0 (`-mhatcensus`, `GlidingHarness.mhatTally` = sign of `head.uVec·n̂bed`): under `-hfswing -rollsign` at
+d1000 v2's mhat is **~50/50 (+ẑ 52.4%, mean 0.52 sd 0.14, no drift)** — a genuine SECOND free sign (the roll
+lock pins ŷ_head=+ŝ and F9 pins û_head⊥f̂, leaving û_head=±n̂bed free). Convention: v2's head-frame swing reads
+`motorUVec[head]` directly (`p=ŷ×û`), NO reversed uVecR variant — **productive pole = +ẑ** (then p=f̂,
+barbed-ward). STEP 1 (`-mhatset`, `CrossBridgeSystem.setBindMhat`): at each fresh bind (prevBound gate, placed
+LATE = body-write PTX gotcha) reorient the head to +ẑ/+ŝ — **init only, no persistent torque**, impulse-free
+(reorient about the bound tip so F8 is preserved), wrong-pole-only (touch only the ~48% at −ẑ). STEP 2 (GPU
+`-full` d1000, LONG_ROW, seed 0x6111D): **the census HOLDS (≥97% +ẑ, no decay) in every variant, but avgBound
+never returns to ~14 and the net glide never recovers** — monotonic in reorientation amount: free-sign 13.9 /
+−1.65 → wrong-only 6.0 / −0.94 → impulse-free-all 4.3 / −1.03 → hard-snap 1.0 / −0.20. **Mechanism:** the head
+is over-determined by TWO attachments (F8-to-filament + J1-to-lever); a bind-instant ~180° reorientation of the
+un-oriented, doubly-tethered head disturbs one (F8 hard-snap → catch-slip collapse; impulse-free → J1 impulse →
+still releases). **VERDICT (a 4th outcome, not the task's A/B/C):** the mhat sign STICKS once set but is NOT a
+recoverable speed lever — fixing it costs more binding than the per-head directedness it buys; a persistent
+torque would pin-absorb (BoA). `-hfswing -rollsign` (−2.15/−1.65) stands as the honest head-referenced glide;
+the mhat 50/50 is a structural DOF of the doubly-tethered sphere-head under the head-frame law. Release pathway
+(all runs): default `catchSlipRelease` (catch-slip on F8 `forceDotFil`) + standard `cycle` = BoA's
+catch-slip-on-F8 family. CPU≡GPU by construction (per-motor pure). `BoA-v1ref` byte-clean; production
+byte-identical (all gated on `-mhatset`/`-mhatcensus`). → `PHASE2_MHAT_BIND_FINDINGS.md`.
+
+## 2026-07-01 — sphere-head: the −2.15(hfswing+rollsign) vs −3.0(dirswing) gap DIAGNOSED — NOT head-noise (TEST 1 refutes), NOT saturation (TEST 2 refutes); it's a real, density-independent, IRREDUCIBLE stroke-law difference. All speeds from the settled long assay.
+Added the long-assay `LONG_ROW` estimator (on-bed LS-centroid, ≥1 s window; cross-checked vs frame LS:
+rollsign d1000 −2.11 vs −2.15) and `-headlock <mult>` (head-lock stiffness knob). **Release pathway (stated):
+ALL sphere-head configs use the SAME default `catchSlipRelease` + standard `cycle`** — the −3.0/−2.15 spread
+is a pure stroke-law difference, no release confound. **TEST 1 (head-lock stiffness sweep, `-full` d500):
+REFUTES the thermal-head-noise claim** — stiffening moves `-hfswing -rollsign` the WRONG way (−1.56 → −1.02 →
++0.14 → +0.28 at ×1/×2/×4/×8) and collapses avgBound (8.7 → 7.1 → 1.7 → 0.2; explicit-stiffness whipping
+detaches heads). Speed does NOT climb toward −3.0 ⇒ the gap is not a coolable/stiffenable head-orientation
+noise; the compliant k=0.4 is already near-optimal. **TEST 2 (two laws vs density, d250–1000): REFUTES
+saturation** — `-dirswing` rises MONOTONICALLY (−1.90→−2.48→−2.69→−3.0, not saturated at d1000) and the gap
+PERSISTS ~1.4–1.8× at every density INCLUDING sparse d250 (avgBound 6.4). Overturns the prior
+"binding-saturated ×1.16" aside. **Gap robust (n=3, d500): dirswing −2.46±0.02 vs rollsign −1.56±0.10 SEM,
+1.58×, >5σ.** **Convergence:** LS slope settles by a ~0.7–0.9 s window (dirswing→−3.0, rollsign→−2.1) — the
+numbers are statistically settled well under 1 s; run length is set by settling, not a fixed sim time.
+**Resolved reading:** the gap is a genuine, IRREDUCIBLE per-head difference — the head-frame law both binds
+fewer heads (d500 avgBound 8.7 vs 10.4, ×1.19) and strokes less effectively per head, because its converter
+references + reacts on the head's own dynamically-imperfect frame vs `-dirswing`'s external clean f̂; and it's
+NOT a tunable inefficiency (the one knob, head-lock stiffness, backfires). **−2.15 is the honest glide of the
+head-referenced motor; −3.0 is faster only via the f̂ modeling convenience.** Corrects the prior docs' "just
+head thermal noise, −2.15 more physical" inference (the Brownian-off single-motor identity still holds; the
+"reducible noise" framing was wrong). New: `-headlock`, `LONG_ROW`; diagnostic only, default byte-identical;
+`BoA-v1ref` clean. Report: `PHASE2_HFSWING_GAP_FINDINGS.md`.
+
+## 2026-07-01 — sphere-head: STEREOSPECIFIC roll sign (`-rollsign`, +ŝ from polarity) — fixes the roll-sign DOF (census 50/50 → 99.5% +ŝ), CHEAP (twist mean 48.5°, avgBound/lifetime unchanged), speed −1.86 → −2.15 but NOT back to −3.0 (residual = head-orientation noise, not sign).
+Fixes the `-hfswing` roll-sign free DOF: the axial lock aligned head.yVec to the NEARER of ±ŝ (sign-free,
+50/50); `-rollsign` aligns to **+ŝ specifically** (ŝ = n̂bed×û_seg is the barbed sign, from filament
+polarity) — one gated branch in `CrossBridgeSystem.bondForces` (skip the sign-flip). Per-motor pure, CPU≡GPU,
+default byte-identical. **Single motor: unchanged** (barbed, axial 1.00). **Mat d1000 1.5 s LS-centroid:**
+`-rollsign` **−2.15 µm/s** (axial 0.999, avgBound 14.0) vs `-hfswing` −1.86 vs `-dirswing` −3.0. **Roll
+census: 99.5% +ŝ** (was 50/50) — the fix works at the DOF level. **Twist cost (`-twistcensus`, 36k binds):
+mean arrival 48.5°, only 15% far-side (>90°), avgBound/lifetime IDENTICAL to `-hfswing` (14.0/0.59 ms vs
+13.5/0.60 ms)** ⇒ the roll-sign lock is **cheap/faithful, NOT a forced-twist artifact**; the +ŝ arrivals are
+self-generated (held heads rebind near +ŝ; `-hfswing` arrivals are uniform, mean 90°). **Why still < −3.0:**
+NOT the sign (now 99.5% +ŝ) — the head-frame law references the head's own thermally-fluctuating orientation
+(û_head, ŷ_head jiggle; fresh heads mid-convergence), while `-dirswing` references the clean fixed f̂. Proven
+by the Brownian-OFF single motor, where the two laws are IDENTICAL — the gap appears only under mat Brownian.
+So `-dirswing`'s −3.0 is a mild noise-free-reference overestimate; **−2.15 (head-referenced) is arguably the
+more physical glide.** (The mat is also binding-saturated: 50/50→99.5% +ŝ buys only ×1.16, not the naive ×2.)
+**Verdict:** `-hfswing -rollsign` is now working AND first-principles AND cheap-assembly — the defensible
+motor; `-dirswing` kept only if the higher (noise-free) number is wanted. No retune. New: `-rollsign`,
+`-twistcensus` (`CrossBridgeSystem.captureBindTwist`), `-rollcensus` accumulation. `BoA-v1ref` clean.
+Report: `PHASE2_ROLLSIGN_FINDINGS.md`.
+
+## 2026-07-01 — sphere-head: HEAD-FRAME converter recast (`-hfswing`, `directedSwingHeadFrame`) — biologically-defensible power stroke; reproduces the single motor EXACTLY but reveals the axial lock leaves the head ROLL-SIGN free (50/50) ⇒ mat glide −1.86 vs −3.0 µm/s.
+Recast the directed swing so the target is derived from the head's OWN frame — target û_lever* =
+normalize(cos θ·û_head − sin θ·(ŷ_head × û_head)), **no f̂ in the swing law** (Rodrigues: rotate û_head about
+the head hinge ŷ_head by θ_rest). Biology: binding orients the head; the converter rotates the neck relative
+to the bound head; actin polarity enters only via the head's bound pose. Equals `-dirswing`'s
+`cos θ·û_head − sin θ·f̂` **iff ŷ_head×û_head = f̂**, i.e. iff the head is locked to +ŝ. **Single-motor gate:
+IDENTICAL** (axial fraction 1.000, rear +7.80 nm barbed, recovery→straight — the gate sets ŷ_head=+ŝ).
+**Mat (d1000, 1.5 s, LS-centroid): the speed MOVED — −1.86 µm/s vs `-dirswing` −3.0** (axial fraction still
+0.999, avgBound ~14). **Root cause (`-rollcensus`, 20,515 bound-head samples): the axial lock pins the roll
+AXIS but not its SIGN — head.yVec·ŝ is 50.6% +ŝ / 49.4% −ŝ (≈50/50, a free DOF).** The −ŝ heads sweep the
+neck pointed-ward under the head-frame law; `-dirswing` is robust (re-derives from f̂, both signs sweep
+barbed), so it hid this. Not a cancellation to zero (0.62×, not (1−2p)≈0) — load-dependent catch-slip favors
+the productive heads, drift stays axial. **The finding: "binding orients the head" pins û_head (⊥) and the
+roll axis |ŷ_head| but NOT the roll sign; a fully stereospecific lock needs polarity at bind (which a
+bed-normal×axis lock lacks).** The recast is the correct biological formulation; it surfaced an incomplete
+head lock — NOT tuned (per task). Fix (future, deferred): align head.yVec to a DEFINITE +ŝ at bind (lock
+sign convention), then head-frame reproduces −3.0. `-dirswing` stays the working model meanwhile. New:
+`CrossBridgeSystem.directedSwingHeadFrame`, `-hfswing`/`-rollcensus`, `AxLockGateHarness -hfswing`. Default
+byte-identical; `BoA-v1ref` clean. Report: `PHASE2_HEADFRAME_SWING_FINDINGS.md`.
+
+## 2026-07-01 — sphere-head motor: axial swing-plane lock (§9.4c) + deterministic directed power stroke ⇒ directed glide ≈ 3.0 µm/s
+Two flag-gated additions to the sphere-head gliding motor (F9-frozen ⊥ head + J1 neck-swing); default
+byte-identical, `BoA-v1ref` clean.
+**(1) Axial lock (`-axlock`, `CrossBridgeSystem.bondForces` xbParams[10]):** F10 retargeted from the
+segment's incidental yVec to ŝ = normalize(n̂bed×û_seg), head-only (faithful port of BoA
+`alignYVecTorqueAxial`; compliant k=0.4, no pin). Fixes the swing PLANE — single-motor axial fraction 1.00
+at any filament roll (vs →0 un-locked). Alone on the mat: no net-glide gain (velFitX ~0.84→~0.96, null;
+CPU≡GPU agree) — the swing AZIMUTH was still uncontrolled.
+**(2) Directed power stroke (`-dirswing`, `CrossBridgeSystem.directedSwing`):** the J1 converter axis
+cross(lever,head) is degenerate at the straight recovery pose ⇒ the stroke direction FLIPPED between cycles
+(jba's viewer catch). Replaced by a torque driving the neck toward the polarity-defined target
+û_L* = normalize(cos θ·û_head − sin θ·f̂), so the rear sweeps barbed-ward EVERY cycle; J1 angular converter
+off (position spring kept). Per-motor pure ⇒ race-free, CPU≡GPU.
+**Result:** single-motor stroke reliably barbed-ward (every power stroke rear +x, recovery→straight, purely
+axial). Mat (single 2 µm filament, d1000, 1.5 s, GPU): **v_axial ≈ −3.0 µm/s, axial fraction 1.00, avgBound
+~14, pointed-leading** — LS-centroid over the fully-on-bed window (t≤1.06 s, per
+`~/Code/BoA/PROPER_SPEED_ANALYSIS.md`). Same regime as BoA's −2.09; the axial-fraction-1.00 (net≈path)
+directed glide is the win vs the earlier ~1 µm/s wander. Lock fixes the plane, directed swing the azimuth.
+New: `AxLockGateHarness`, `-axlock`/`-dirswing`/`-j1swing`, `CrossBridgeSystem.{bondForces axLock,
+directedSwing}`. Reports: `SPHEREHEAD_MOTOR_RESULTS.md`, `PHASE2_SPHEREHEAD_AXLOCK_FINDINGS.md`.
+
+## 2026-06-30 — sphere-head on the GPU DENSE MAT (the real assay): GLIDES −X (velFitX peak ~1.1 µm/s @ d500), but SLOW (sub-skeletal). The 40-motor "+X" was a reduced-scale ARTIFACT — refuted on the full bed.
+**STEP 1 — GPU build (the efficient faithful realization):** the three-body sphere-head = F8 tip anchor + the head-vs-actin
+angle FROZEN at 90° (the compliant ⊥ perp-maintainer, no F9 power stroke) + the J1 converter neck-swing (0↔60°) as the
+ONLY stroke. GlidingHarness's default motor already runs F8+F9+F10+J1 on the validated device-resident dense-mat TaskGraph
+(CSR gather, bind-on-proximity, nucleotide cycle, catch-slip, velFitX, `-nobind` floor, density ladder), so `-spherehead`
+realizes it by freezing F9's rest at 90° (`xbParams[9]=1`) — F10 supplies the azimuth reference the single-motor CPU
+harness lacked. ONE flag, NO new device code, `-cpu` stays valid; default-off ⇒ production BYTE-IDENTICAL (regression:
+default d1000 velFitX 5.703 unchanged); `BoA-v1ref` byte-clean. **STEP 2 — the dense-mat ladder (GPU device-resident,
+full 14×2 bed, 40k, n=3, dt=1e-5):** velFitX (>0=−x) = **0.41±0.12 / 1.10±0.13 / 0.91±0.05 / 0.53±0.12 µm/s @ density
+200/500/1000/2000** (avgBound 4.8/9.3/14.9/18.7); floor (`-nobind`) velFitX −0.38 (diffusion noise). **EVERY density glides
+−X, unambiguously above floor, dt=1e-5 STABLE at mat scale** (fullMat=YES, capFires=0 to 13920 motors — no implicit/substep
+needed). **CPU≡GPU (d500): GPU 1.12 / CPU 1.81, both −X, avgB agree** (the one-step-stale parallel residual is larger than
+the F9 motor's — the weak J1 stroke is more sensitive; sign+magnitude agree = the chaotic standard). **ADJUDICATION:
+GLIDE-but-SLOW.** The sphere-head (J1 neck-swing, head held ⊥, F8 anchor, F10 azimuth) is a WORKING −x gliding motor on the
+real dense GPU mat — but velFitX peaks ~1.1 µm/s (d500), **below the 5–8 µm/s skeletal band** and ~5× under the default F9
+motor's 5.7 (the J1 neck-swing is a weaker stroke than F9 head-reorientation, per STROKE_VS_ARMLENGTH). **Non-monotonic:**
+velFitX peaks at d500 and DROPS at d2000 (0.53) while avgBound keeps rising — over-binding/tug-of-war; the lever is per-head
+transport efficiency, NOT direction or binding. **The 40-motor CPU "+X gate" (prior task) was a reduced-scale artifact —
+refuted on the full mat (no F10 azimuth + no collective dynamics at 40 motors).** Glide is adjudicated only on the full mat
+(standing rule honored). New flag only ⇒ production byte-identical. Report: `PHASE2_SPHEREHEAD_GPU_MAT_FINDINGS.md`; raw
+`RUN_LOGS/2026-06-30_spherehead_gpu_mat_sweep.txt`.
+
+## 2026-06-30 — sphere-head full-mat gliding assay (single-density velFitX gate): velFitX = −0.084 µm/s ⇒ glides +X (WRONG), NO −X glide. Blocker = the DUTY CYCLE (release-while-cocked), not the stroke.
+Ran the single-density velFitX gate (the task's stage-behind gate) on the corrected three-body sphere-head mat: CPU,
+40 motors, one 0.4 µm filament, n=3 + `-nobind` floor, dt=1e-5; velFitX = −slope of the steady-2nd-half centroid-x fit
+(>0 = −x glide = correct). **Result: STROKE-ON velFitX = −0.084 ± 0.007 µm/s, FLOOR +0.000 ± 0.000, avgBound 6.23,
+dt-stable** ⇒ velFitX NEGATIVE = **the filament glides +X (WRONG polarity), above the ~0 floor (real, not noise). NO
+−X glide.** **Root cause = the DUTY CYCLE, not the stroke geometry:** the single-motor M3 −X measured only the
+**power-stroke half** (settle uncocked → cock once → measure); the full bind→stroke→**recover**→release cycle also has
+the **+X recovery stroke** (J1 60°→0°), and in the mat it nets +X because the recovery isn't separated from the stroke
+by release timing — `catchSlipRelease` fires at a ~random phase (the sub-pN catch is inert), so motors recover **while
+still bound**, dragging +X. **NOT a bind impulse** (+X persists `-noreset`: +233 vs +200 nm). The stroke
+geometry/polarity, spring (1 pN/nm), catch-slip load (axial F·seg.uVec), and the compliant perp-orientation torque are
+all CORRECT (single-motor verified). **The full density ladder + the dense ~28k-motor GPU bed were NOT run — deferred:**
+(1) the direction is +X, so a ladder would only confirm +X at every density; (2) the dense bed needs a GPU sphere-head
+build (sphereBond + perpTorque + J1 + the head-side gather as a device graph) not yet done. **Path to the glide proof:**
+couple detachment to the cocked/post-stroke state (v1's NONE→ATP cocked detachment ⇒ recover UNBOUND) → re-run the gate,
+confirm velFitX flips >0 (−x) → then build the GPU mat for the full ladder + CPU≡GPU. dt=1e-5 stability PASS at this
+scale (the filament drag damped the compliant overshoot, as predicted). New files/flag-gated only ⇒ production
+byte-identical; `BoA-v1ref` byte-clean. Report: `PHASE2_SPHEREHEAD_MAT_GLIDE_FINDINGS.md`.
+
+## 2026-06-30 — sphere-head FIX: three-body topology RESTORED, but re-measure → BAIL. The powerstroke's axial directedness LIVES in F9 (the head–actin angle the abstraction deleted); the J1 converter swings ⊥ to actin. NO glide claim.
+Fixed the body-count collapse: the motor is again **rod →(J2)→ neck →(J1)→ HEAD**, three distinct rigid bodies, both
+joints intact, the head a **sphere of real extent (R=10 nm)** carrying the actin attachment at the head TIP (= v1's F8
+contact, off-centre) ↔ a fixed filament site; compliant v1 tail; F9 deleted. **Viewer (`threejs_spherehead`, 320 frames)
+shows three distinct bodies** — rod/tail, short neck, big head ball standing the neck OFF the filament — the 2-body "T"
+is gone. **BUT re-measure (single motor, dt=1e-6) → the restored motor does NOT transport, triggering the bail:** (1)
+**collinear degeneracy** — J1's bend axis cross(lever,head)=0 when collinear, and the uncocked rest is exactly 0°
+(collinear), so the converter can't deterministically self-start (M1=0, θ stuck at 0°); v1's F9 has no such degeneracy
+because it references the FILAMENT axis (that's *why* v1's stroke is F9, not J1). (2) **perpendicular swing** — breaking
+the degeneracy with a 25° head tilt, the converter does swing (θ→60°) but moves the head Z-dominated (−2.24 nm Z, −0.22 nm
+axial, axial frac 0.10); the free filament moves +0.78 nm (+X, ≈0) ⇒ **no axial transport.** M2 impulse-free bind 0.000;
+M4 thermal fair test (Brownian ON, n=4) stroke-ON −25.8 vs stroke-OFF −36.7 nm ⇒ ON−OFF +11 nm (no clean −X; noisy floor,
+consistent with no transport). **Root cause: the powerstroke's axial directedness LIVES in F9 (head-vs-FILAMENT) — the
+very "head-actin angle" the sphere abstraction called non-physical and deleted.** The J1 converter (head-vs-LEVER) bends ⊥
+to actin. BoA Run 2 transported only because it HELD the head (supplying the actin reference). **J1 kept FREE, head NOT
+pinned ⇒ the bail is "the orientation-free sphere abstraction is wrong," NOT pin-absorption from over-constraining.** The
+faithful model needs the head's actin-orientation back (a COMPLIANT F9-like reference toward the actin axis — the
+directedness, not a rigid clamp — or accept v1's F9 as the stroke). NO glide claim (standing rule; full-mat assay not run).
+New files/flag-gated only ⇒ production byte-identical; `BoA-v1ref` byte-clean. Report: `PHASE2_SPHEREHEAD_FIX_FINDINGS.md`.
+
+## 2026-06-30 — sphere-head Part 1: the TAIL CONSTRAINT vs v1 RESOLVED — v1 is COMPLIANT, the rigid clamp was UNFAITHFUL; the faithful compliant sphere-head delivers the −X step with NO rigid pin. Part 2: -3js frames. Part 3 (glide proof) NOT RUN ⇒ glide UNPROVEN.
+**Standing rule applied:** no glide is accepted without the full myosin-mat assay (velFitX, thermal floor, n≥3, dt=1e-5);
+single-motor steps are kinematics, NOT glide. **The sphere-head is "gate passed, glide UNPROVEN."**
+**PART 1 (gate on the assay's validity):** the build's rigid tail clamp (position+orientation) was the SAME CLASS as the
+v2 two-point head pin / BoA 180° pin — add a rigid constraint so the lever reaches its angle. Checked v1 (`BoA-v1ref`):
+(1) tail = **COMPLIANT point-spring**, force only — `MyosinFixed.applyRodFixedPtForce` (`MyosinFixed.java:51-67`); the
+torque line `:70` is **commented out** ⇒ NOT a rigid clamp; (2) rod orientation **FREE** — `myoJ2FracMoveTorq=0.00`
+(`Env.java:159`), no J2 angular spring; (3) the stroke (F9) reacts on the **FILAMENT + head, NEVER the rod**
+(`MyoFilLink.java:248/251`). ⇒ the rigid clamp + reacting-the-swing-on-the-rod were both unfaithful. **Fix:** react the
+swing torque on the **FILAMENT** (`SphereHeadSystem.swing` reactOnFil, mirroring F9) + drop the clamp (v1 compliant
+point-anchor only, `-compliant`). The lever then reorients about its own center like v1's head under F9. **Re-run (M1/M3,
+compliant): M1 geometric step −8.13 nm (axial, −X), M2 impulse-free (+0.000), M3 −4.22 nm delivered to a FREE filament
+(−X, lever→125° clean, dt=1e-6)** — ~half the geometric throw because the compliant contact+tail share the displacement
+(correct for a compliant linkage). **The compliant, v1-faithful sphere-head DELIVERS the step with NO rigid pin — the bail
+condition (rigid orientation pin required) is NOT triggered.** dt note: compliant is stable+correct at dt=1e-5 with
+realistic ensemble filament drag (`-filgam 20`, θ→125°); the low-drag 1-seg TOY filament goes explicit-stiffness unstable
+at dt=1e-5 (lever→26°) — the known dt-ceiling, re-check at ensemble scale in Part 3. **PART 2 (-3js):** `threejs_spherehead`
+(89 frames, compliant stroke dt=1e-6, lever sweeps in-plane toward barbed, filament steps −X, whole linkage flexes =
+compliant not pinned) + `threejs_spherehead_rigid_overshoot` (labeled dt=1e-5 toy −135 nm artifact). **PART 3 (the
+full-mat velFitX assay = the ONLY glide proof): NOT RUN ⇒ glide UNPROVEN.** Next increment: wire the compliant sphere-head
+into the gliding mat (one new GPU piece — route the motor-side gather to the LEVER + gather the swing's filament-torque
+reaction; CPU sequential is race-free with direct writes) + catch-slip rebind + matbed velFitX sweep + re-check dt=1e-5 at
+scale. **Kinematics ✓ (v1-faithful, no pin), glide ✗ (unproven).** New files/flag-gated only ⇒ production byte-identical;
+`BoA-v1ref` byte-clean. Report: `PHASE2_SPHEREHEAD_GLIDE_FINDINGS.md`.
+
+## 2026-06-30 — SPHERE-HEAD motor BUILT + the step/direction gate PASSED (the clean form of BoA Run 2): −9.18 nm skeletal −X step, impulse-free bind, step EMERGES from geometry (no pin)
+Built the sphere-head anchor motor in v2 and ran the MEASURE-FIRST gate (single motor, CPU) before any ensemble glide.
+**The mechanism:** motor domain = a point/sphere anchor at the converter/neck tip (lever.end2; moment arm = LEVER_LEN
+8 nm — the correct lever, NOT the over-long 20 nm head). One compliant Hookean anchor↔fixed-material-site spring
+(`SphereHeadSystem.sphereBond`); NO head axis, NO F9, NO head-to-filament angle. Power stroke = the lever swinging
+about the **rigidly bed-clamped rod** (`SphereHeadSystem.swing`), swing axis **ŝ = lever×fhat defined EXPLICITLY ⟂ the
+filament** (the fix for the BoA pin-absorption failure, whose head×lever axis rotated with the pose), θ 55°↔125° (70°,
+centred on 90° for max axial throw). Load to catch-slip = the anchor force along the filament axis. v1 catch-slip
+biochem. NO rigid/orientation/two-point pin — **the bail condition (a pin needed to make it work) did NOT trigger.**
+**The rigid-tail tether was load-bearing:** point-anchoring only the rod's tail let the swing reaction spin the rod →
+continuous walk (M2 +186 nm, M1 throw 3.6 nm); clamping the rod pose fully (the physical bed-rigid tail) → M1 the full
+9.18 nm, M2 exactly 0. **GATE (all PASS):** M1 per-cycle geometric step **−9.18 nm = 2·L·sin(35°) exactly, purely axial,
+−X** (skeletal 5–10 nm); M2 impulse-free bind (bound-not-stroking ⇒ Δx=0, the BoA Runs 4–5 rectification artifact is
+absent); M3 direction **−X**, delivered step **exactly −9.18 nm at dt=1e-6 (lever reaches target θ=125°, stable)**. The
+dt=1e-5 toy-filament M3 overshoot (−135 nm, lever flattens to 170°) is the **explicit anchor-spring stiffness on a
+low-drag 1-seg free filament** (k·dt/γ — the known dt-ceiling family), NOT a mechanism flaw: **at dt=1e-5 with realistic
+ensemble filament drag (×5/×20/×50 — the gliding 11-seg ~1.9 µm filament) the delivered step is exactly −9.18 nm,
+stable** ⇒ the ensemble is de-risked. **The step EMERGES from the swing geometry — no invented axial force.** New files
+only (`SphereHeadSystem`, `SphereHeadHarness`) ⇒ production + every other harness byte-identical; `BoA-v1ref` byte-clean.
+**Next increment (unblocked):** wire sphere-head into the multi-motor gliding harness (the GPU gather routes the
+motor-side force to the LEVER not the head — a small gather-target change) + catch-slip rebind + matbed → velFitX vs the
+thermal floor, n≥3, vs the skeletal anchor; re-check dt=1e-5 whipping at ensemble scale (banked implicit/substep fix if
+it appears). Report: `PHASE2_SPHEREHEAD_FINDINGS.md`.
+
+## 2026-06-30 — BoA GEOMETRY EXPLORATION: neck-swing is VIABLE (Run 2, 8.5 µm/s) and skeletal-faithful; the flat-head detour is a dead end via PIN-ABSORPTION (same failure as the v2 canonical rigid pin); resolution = abstract the motor domain as a SPHERE/anchor point.
+
+Done in the BoA code directly (fast iteration, v1's known-good catch-slip biochem) to settle two questions before committing a v2 build: is the **neck-swing** (canonical mechanics) viable, and does **flat-head binding** work. Reference runs on the d1000 bed: baseline head-swing 14 µm/s / avgBound 11.5 / −X.
+
+### Result 1 — the neck-swing TRANSPORTS, and it's the more faithful velocity (Run 2)
+Holding the head fixed (no head-swing) and routing the full 70° power stroke through the **neck/lever** glides **8.5 µm/s at avgBound 15.4, −X**. So neck-swing-only is viable on a single compliant anchor — the canonical mechanics work; the catastrophic v2 failure was never the neck-swing. **And the speed "drop" 14→8.5 is a faithfulness GAIN, not a deficit:** the baseline's 14 µm/s is *super-skeletal* because the head-swing uses the over-long ~20 nm head as the lever; the neck (~8 nm) is the correct lever, and 8.5 µm/s lands in the skeletal 5–8 band. Step ∝ lever length, exactly as the literature says. **Run 2 is the existence proof and the better motor.**
+
+### Result 2 — the flat-head (180°) detour is a DEAD END: pin-absorption (Runs 3–7)
+Trying to lay the head literally flat (180°, collinear with actin) failed through a chain that ends in one root cause:
+- **Run 3** (180° rest + tip-offset): binding collapsed (avgBound 0.36) — the 180° rest fights the bind-capture alignment gate; heads self-release.
+- **Run 4** (center-bind + 30° anti-parallel gate): binding holds (avgBound 14.7) but glides **+X (wrong)** — a bind-*search*-on-tip vs tether-on-center ~10 nm offset injected a spurious barbed-ward rectification.
+- **Run 5** (search/attach/tether all on center): artifact removed ⇒ filament **stationary** (+0.057 µm), avgBound 28.6. Correct for a strain-free flat bind with no stroke.
+- **Runs 6/7** (perpendicular neck rest, 70° stroke, both senses): net motion barely moves (+0.10 / +0.04 µm), **never flips sign**, all weakly barbed-ward.
+
+**Root cause (Runs 5–7):** with the head **rigidly pinned flat by a strong `alignUVecTorque`**, the neck-stroke torque is reacted by the head pin instead of translating the bound contact — the lever swings but does ~no axial work. The residual ±X drift is a bind/release rectification artifact, NOT the stroke (the sign is unaffected by stroke sense). **This is the SAME failure as the v2 canonical motor's rigid two-point pin** (there the converter torque became a transverse couple; here the neck-stroke torque is absorbed by the orientation pin). Tuning the swing centering (55→125) and flipping the lever didn't help because the stroke was never the thing producing the motion.
+
+### The lesson (now seen TWICE, two different mechanisms, one failure)
+**Rigidly constraining the head's pose kills transport** — whether the v2 rigid two-point PAIRS pin or the BoA 180° orientation pin. The stroke torque dumps into the rigid constraint instead of the filament. **The compliant single anchor is what works** (v1/default; Run 2). This is the through-line of the whole motor arc.
+
+### The resolution — abstract the motor domain as a SPHERE / anchor point
+The head-to-filament *angle* was never physical: the motor domain is a compact blob, not a rod, and "the rod's angle to actin" was a modeling artifact that caused four distinct failures (bind-gate fights, the 90°-vs-180° question, pin-absorption, sign artifacts). **Modeling the head as a sphere / point anchor is the MORE faithful abstraction** — head binds at a footprint, the lever pivots about that attachment — and it dissolves all four at once: no orientation to pin (no pin-absorption), no flat-vs-perpendicular question, no alignment gate vs rest-angle conflict. Run 2 is the working mechanism; the sphere-head is its clean form. **What stays real (and must be built correctly):** the lever **pivot point** relative to the anchor (the moment arm = step size, ~8 nm lever → ~9 nm step → skeletal V₀) and the swing **plane + sense** (plane contains the filament axis, swing axis ⟂ to it, sense → −X).
+
+### Plan
+Build the **sphere-head anchor motor in v2** (`SoftBox`): point/sphere anchor + single compliant attachment + lever pivoting about it + 70° axial swing → the clean form of Run 2. Keep **v1 catch-slip biochem** (known-good, holds duty); biochem revisit (LT, the duty×turnover tradeoff) is the deferred follow-on against a working baseline. **Measure the per-cycle filament step + direction FIRST** (skeletal ~5–10 nm, −X), then the rigorous large-mat assay vs the skeletal anchor. NO rigid pin, NO orientation pin. (Optional first checkpoint: port Run 2's 90°-held + neck-swing to v2 to confirm v2 reproduces the 8.5 µm/s before simplifying the head to a sphere.)
+
+**Open / deferred:** the duty×turnover reconciliation (v1 catch-slip's high duty vs LT's bound-in-ATP fix — the prior finding); whether sphere-head + LT holds skeletal duty; the lever pivot/length tuning if the measured step is off-target.
+
+## 2026-06-30 — DEFAULT (v1-port) motor on the Lymn-Taylor cycle: glides −x, STABLE, CPU≡GPU — but SLOW (duty-starved), not skeletal 5–8
+Ran the **DEFAULT motor** (the v1 port: F8 tip spring + F9 90→120° stroke + J1 lever; catch reads the F8 tip-spring
+`forceDotFil`) through `-lymntaylor` in a rigorous full-mat gliding assay. **STEP 0 (BoA-v1ref, READ-ONLY):** v1's
+detachment is **catch-slip/break-force, NOT nucleotide-driven** — the cycle drives only the cocking (`isCocked=!isADPPi`,
+MyoMotor.java:277-279); unbinding is the 12 pN cap (MyoFilLink:334-340) + Guo&Guilford catch-slip on forceDotFil
+(:347-359), independent of nucleotide state (dissociateADP :270-275 does NOT call release). ⇒ **"default+LT" is the
+v1-port STROKE + a fast nucleotide DETACHMENT v1 never ran — a NEW combination, NOT "restoring v1 whole"** (jba's "LT≈v1
+cycle" holds for cocking, not for release). **STEP 1 (no wiring needed):** the LT branches were already gated on
+`LYMN_TAYLOR` alone (independent of CONFIG1/CANONICAL); the default `bondForces` is byte-unchanged, `registerForceDot`
+feeds the default's native F8 load to `cycleLymnTaylor`. Confirmed: cycles, cocks, detaches, bound-in-ATP 0.0%, −x.
+**A/B (diag, d500):** LT vs the native no-LT default — avgBound **7.16→0.74**, bound-in-ATP **59.8%→0.0%**, bound-time
+**1.29→0.41 ms**: LT fixes the bound-in-ATP pathology but **collapses duty**. **STEP 2 (rigorous: full-mat `-matbed`,
+40k, velFitX steady-slope, n=3, GPU device-resident, dt=1e-5):** glides −x, **monotonic with density**, stable (capFires=0,
+fullMat=YES, no NaN to d2000): velFitX **0.05/0.84/1.39/3.00 µm/s @ density 200/500/1000/2000** (avgBound 0.19/0.71/1.11/2.21);
+**thermal floor (`-nobind`, avgBound=0): velFitX −0.38, netX −0.03** ⇒ glide real & ~8× floor at d2000. CPU≡GPU
+aggregate-within-SEM (GPU velFitX 2.20 / CPU 1.62 @ d500 20k; ranges overlap, CPU lower = the one-step-stale residual).
+**OUTCOME #2 — glides −x but SLOW (≤3 µm/s, below skeletal 5–8); LT CHANGED the default's transport.** Diagnosis:
+ensemble glide ∝ avgBound × per-head transport; LT's fast NONE→ATP detachment starves duty (avgBound never reaches v1's
+~7), so the single-molecule V₀≈6 (step×rate) does NOT translate. Headline tension: the native no-LT default glides FASTER
+(−3.3 diag / −5.7 SET-A, avgBound ~7) — **LT slows the default, trading ensemble duty for turnover-correctness +
+bound-in-ATP fix.** Neither config is fully skeletal at once; the gap is purely avgBound (duty). Next lever (out of scope):
+raise avgBound (capture/geometry `myoColTol`/`alignTol`/density at skeletal kinetics — binding is bind-on-contact, no kOn
+to raise; or slow `onADP` toward Myo2, which re-lowers turnover). **Minimal wiring:** added `-nobind` thermal-floor control
+(`kinParams[19]`, default-off byte-identical — regression: glide_d500_s0 reproduces velFitX 0.886/avgB 0.713 exactly).
+`BoA-v1ref` byte-clean; default (no `-lymntaylor`) byte-identical; no motor-physics retune, no default flip. Report:
+`PHASE2_DEFAULT_LT_GLIDE_FINDINGS.md`.
+
+## 2026-06-29 — PLANNER RECKONING: the canonical-motor regression, fully reconstructed — corrected v1 mechanism (PIVOT not slide), the FOUR coupled regressions, the reversed head, and the dt history the journal never recorded. The DEFAULT (v1-port) motor is the ONLY validated glider.
+
+This is connective cross-session context the per-task docs don't carry. It corrects three things this journal got wrong or never wrote down, after a `BoA-v1ref` read (`V1_MOTOR_MECHANISM.md`) and a literature check settled the mechanism.
+
+### The v1 motor — what it ACTUALLY does (CORRECTING this journal's "slides along actin")
+From `BoA-v1ref` (byte-clean oracle), not memory or paraphrase: the bound head is anchored at a **FIXED material site** (`posOnSeg` constant, single writer, zeroed only at release). The F8 tip Hookean spring runs head-tip ↔ that fixed site; **the catch-slip reads the F8 tip-spring's along-filament force**. The powerstroke is the head **REORIENTING** — F9 (`alignUVecTorque`) swings the head↔filament angle 90°→120°, J1 swings the lever 0→60° — which strains the F8 spring and **translates the whole filament as a rigid body**. **It is a PIVOT/lever about a fixed anchor; the contact does NOT slide along actin** (re-anchoring is discrete, only at unbind→rebind). The 06-28/06-29 wording "the swing slides the head's contact ALONG actin" is **WRONG** and is retired here. jba's "no axial sliding" memory was correct.
+
+### The canonical rebuild (06-27) introduced FOUR coupled regressions, not three
+The rebuild was motivated by `STROKE_VS_ARMLENGTH` (the v1/default stroke is carried by F9 head-reorientation ∝ HEAD_LEN, J1 silent — non-canonical). Making it canonical bundled four changes, and the journal only cleanly diagnosed two:
+1. **F9 removed → stroke moved to the J1 neck-swing.** Faithful in intent, but the neck-swing as built delivers force *weakly/transversely* (see #2), where F9's head-swing delivered it *strongly*.
+2. **Single compliant tip anchor → rigid TWO-POINT pin.** This is the transport killer (FORCE-DECOMP: 22:1 transverse:axial; the head can't reorient, so the converter torque is reacted as a bending couple = the SET-A whipping).
+3. **Load moved from the F8 tip-spring force → J1 lever strain** (mechanism-flag #2). **NEW CAUSAL CHAIN (never recorded):** this was not an independent choice — replacing the reporting Hookean spring with a non-reporting PAIRS pin *forced* it, because a stiff geometric pin doesn't expose a force to feed the catch. v1 read the **real attachment load**; the rebuild had nothing left but lever strain, which SLIP-DIRECTION showed is *decoupled* from the real axial force. So flag #2 is a regression with a known-good v1 predecessor, not a deferred curiosity.
+4. **Head laid down REVERSED fore-aft** (corrects the journal's dismissal). Config-1/perphead place the tip toward the barbed end and the J1 converter toward the pointed end. Literature (plus-end myosins: lever points toward the barbed end pre-stroke, converter moves toward the +end) requires the **opposite** — converter/J1 toward barbed, motor-domain tip toward pointed. **The +x glide that config-1/perphead showed — dismissed in the perphead entry as "a uperp-direction/converter-polarity calibration choice" — is a FLIPPED HEAD, not a tuning knob.** v1/default glides −x because its orientation is already correct. (Code-confirm the exact pose vs swing direction; the literature answer and the observed +x sign make it very likely.)
+
+### The dt history (recorded here because it never was, and every "why is it like this" traced back to it)
+The dt arc (06-24→06-26) was on the v1-style motor: 1e-5 is the **faithful ceiling** — the F8 Hookean tip-spring overshoot inflates the off-rate ~2.6× vs the 1e-6 limit but stays *stable*; 1e-4 collapses unconditionally (k·dt/γ > 2). Six attempts to push past 1e-5 (search reformulation, force-averaging, thermal correlation, dashpot, saturation, local-implicit) all failed/under-delivered; the implicit-J1 solve was **banked** (~2× faithful-dt, not 10×). The principle: resolve finer detail as dt falls, but operate in a large-enough dt for tractable runs — 1e-5 is the sweet spot. **Per jba's recollection (to verify): the instability that drove the PAIRS pins was the *two translational* PAIRS pins, not the single Hookean tip spring** — i.e. a single compliant tip anchor may be both faithful and stable, and the two-point geometry created the problem the pins were adopted to solve.
+
+### The flawed-gliding-test caveat (the reason this reconstruction was needed)
+Several rebuild-era "still gliding" reports were **characterization runs, not large-mat/long-run assays**, and missed that the filament didn't really glide. SET-A (06-28) — the first rigorous assay of the canonical motor — caught it (no transport + whipping) and flagged the earlier "≈9 µm/s @4000" as a settling artifact. **Applying the caveat: the only trustworthy glides on record are 4b-iv (06-16, the default/old motor, −13% residual), SET-A (the default control, −5.7 µm/s), and the 06-29 LT speed-density. The canonical/perphead motor has NEVER passed a rigorous gliding assay. The DEFAULT (v1-port) motor is the only validated glider.**
+
+### The plan (sequenced)
+1. **Default + LT, rigorous large-mat assay** (`CC_PROMPT_default_LT_glide`): does the validated-glider motor reach skeletal speed (5–8 µm/s) on the LT cycle? Confirm v1's actual cycle first so we know if this *restores v1* or is a *new combination*. Goal: see SOMETHING glide at the skeletal target.
+2. **Baby step toward canonical** (`CC_PROMPT_j1_stroke`): on the working default, hold F9 fixed at 90° and make J1 the **sole** config-changer (0→60/70°) — flat motor domain, swinging neck, on the same single compliant anchor, no pin, no load-signal change. **Measure the filament-transport stroke BEFORE gliding** (J1 doesn't move the head tip; STROKE_VS_ARMLENGTH warns J1-alone may give ~0 or reversed). Stroke present → glide (sign read as diagnostic); stroke tiny → lever-geometry, not mechanism.
+3. **Faithful follow-on (named, deferred):** a *neck*-swing that projects force as strongly as v1's *head*-swing — flat head, lever-driven, compliant single anchor, **no rigid pin**, head oriented converter-barbed/tip-pointed. This is the canonical rebuild's actual goal, reached without the four-change demolition.
+
+**Open to verify:** v1's nucleotide cycle (= LT?); the single-tip-spring dt stability claim; the code-confirmed reversed-head pose. **Mechanism-flag #2** (J1-strain-as-load) is now understood as a pin-forced regression, not a deferred curiosity — the default's tip-spring load is the known-good signal.
+
 ## 2026-06-29 — LYMN-TAYLOR CYCLE restored (undo -atprecharge): nucleotide-driven fast detachment ⇒ skeletal V₀ ~6 µm/s (was Myo2 ~1); flag-gated -lymntaylor, default byte-identical, CPU≡GPU
 Implemented the validated single-pathway Lymn-Taylor cycle (`NucleotideCycleSystem.cycleLymnTaylor`), replacing the
 `-atprecharge` experiments. **ONE release: NONE→ATP = detachment** (ATP binding releases the rigor head); the 4c Guo &

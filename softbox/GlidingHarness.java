@@ -56,6 +56,7 @@ public final class GlidingHarness {
     static double  KAPPA = 3.82e-20;             // J1 torsional stiffness (N·m/rad). FORCE-MATCHED (Phase-2 SET-A, 2026-06-28): κ=F·L/θ with F=5pN skeletal stall (Finer'94), L=8nm, θ=60° ⇒ tip≈0.597 pN/nm, stall 5.00 pN. Was 6.4e-20 (8.38 pN). -kappa overrides.
     static double  PAIRS_FRACMOVE = 0.5;         // PAIRS attachment fracMove (dt-robust pin strength); not calibrated
     static double  KON = 0.0;                    // -kon: reaction-limited attachment rate (µm^-1 s^-1); 0 ⇒ saturated bind-on-contact. PHASE-2 step-3 calibration target.
+    static boolean NOBIND = false;               // -nobind: thermal-floor control — motors never bind (kinParams[19]=1). Measurement; default-off ⇒ byte-identical.
     static boolean SINGLE = false;               // -single: single-molecule duty assay (proximal motors on a fixed filament)
     static double  SINGLE_Z = -0.090;            // -singlez: single-molecule anchor z (positions the cycling head's bob range at the filament)
     static double  TAU_AVG = 0.0;                // -tauavg <ms>: time-averaged catch input (EMA window τ); 0 ⇒ instantaneous (byte-identical). PHASE-2 step-4a Jensen fix.
@@ -75,6 +76,18 @@ public final class GlidingHarness {
     static boolean HEADTILT_SWEEP = false;       // -headtiltsweep: Stage-1 single-motor force-decomp θ sweep on the OFF-AXIS bind (measurement-only)
     static double  OFFAXIS_DEG = 40.0;           // -offaxis <deg>: off-axis bind angle for the decomp setup (non-degenerate perpRest; default 40°)
     static boolean ATP_RELEASE = true;           // PHASE-2 ATP-RELEASE COUPLING: a bound head detaches AT its NONE→ATP transition (ATP-binding = detachment). Default-ON for CONFIG1 (config1/perphead gliding); A/B control -noatprelease turns it OFF (old decoupled cycle). Non-CONFIG1 paths never see it.
+    static int VIZ_FRAMES = 400;                 // -vizframes <n>: number of -3js viewer frames (cadence = M/n)
+    static double REBIND_TIME = 0.0;             // -rebindtime <s>: override the post-release rebind refractory (0 ⇒ v1 myoRebindTime, byte-identical)
+    static boolean SPHEREHEAD = false;           // -spherehead: freeze F9 at 90° (perp-maintainer) ⇒ the J1 neck-swing is the stroke (the three-body sphere-head, on the real dense-mat GPU path). Default-off ⇒ byte-identical.
+    static boolean AXLOCK = false;               // -axlock: retarget F10 to ŝ=normalize(n̂bed×seg.uVec) head-only (the axial swing-plane lock, §9.4c). Implies -spherehead. Default-off ⇒ byte-identical.
+    static boolean DIRSWING = false;             // -dirswing: DETERMINISTIC polarity-directed power stroke (CrossBridgeSystem.directedSwing) — neck rear sweeps barbed-ward; J1 angular converter OFF. Implies -axlock. Default-off ⇒ byte-identical.
+    static boolean HFSWING = false;              // -hfswing: HEAD-FRAME converter (directedSwingHeadFrame) — swing target derived from the head's own locked frame (no f̂ in the swing law). Implies -dirswing. Biologically-defensible recast; should reproduce -dirswing.
+    static boolean ROLLCENSUS = false;           // -rollcensus: after a grid run, census bound heads' roll sign (head.yVec·ŝ) — the fraction locked to −ŝ (which sweep pointed-ward under -hfswing). Diagnostic only.
+    static boolean ROLLSIGN = false;             // -rollsign: STEREOSPECIFIC roll — lock head.yVec to +ŝ specifically (from polarity), not nearer-of-±ŝ. Implies -hfswing. Fixes the head-frame swing's roll-sign DOF.
+    static boolean TWISTCENSUS = false;          // -twistcensus: capture the arrival-angle (head.yVec vs +ŝ) at each fresh bind — the roll-sign lock's assembly TWIST cost. Diagnostic only.
+    static boolean MHATCENSUS = false;           // -mhatcensus: census bound heads' HEAD-AXIS sign (head.uVec·n̂bed, n̂bed=+Z) — the second free sign (mhat=±n̂). +ẑ is the productive pole (p=ŷ×û=f̂). Diagnostic only; prints aggregate + per-sample time series + stdev.
+    static boolean MHATSET = false;              // -mhatset: BIND-TIME stereospecific head-axis init — at each fresh bind set head.uVec to +n̂bed (productive pole), consistent with the +ŝ roll. Init only, NO persistent torque. Implies -rollsign. Default-off ⇒ byte-identical.
+    static double HEADLOCK = 1.0;                 // -headlock <mult>: scale the head orientation-lock coeff (xbParams[2], the F9 ⊥ hold + F10 axial/roll lock). >1 stiffens (diagnostic for the head-noise claim). Default 1 ⇒ byte-identical.
     static boolean LYMN_TAYLOR = false;          // -lymntaylor (jba 2026-06-29): the VALIDATED canonical Lymn-Taylor cycle. ONE release pathway (NONE→ATP = detachment, fast/nucleotide-driven); the 4c catch MODULATES the ADP→NONE rate (not a release). Replaces the -atprecharge experiments. Default-off ⇒ byte-identical; overrides ATP_RECHARGE/ATP_RELEASE when on.
     static boolean BRAKEDIAG = false;            // -brakediag (PART B, measurement-only): per-bound-head axial seg-force (assist −x / brake +x) vs signed catch load forceDotFil, binned by time-since-stroke; release-vs-signed-load histogram. CPU runner, default-off.
     static boolean ATP_RECHARGE = false;         // -atprecharge (jba 2026-06-29): the CORRECTED nucleotide↔release coupling. (1) a BOUND head is locked out of ATP uptake (NONE→ATP only when FREE); (2) the ONLY release is the force-based Guo–Guilford catch-slip (NO dice-roll detach — overrides ATP_RELEASE); (3) on release the head is recharged nucleotideState←ATP (debugging form). Default-off ⇒ every existing path byte-identical.
@@ -104,6 +117,7 @@ public final class GlidingHarness {
     public static void main(String[] args) {
         int M = 2000;
         String viz = null;
+        // -vizframes <n>: target number of viewer frames (default 400); raise it for fine-time-resolution -3js runs
         boolean diag = false;
         boolean cycldiag = false;
         boolean grid = false;
@@ -113,6 +127,8 @@ public final class GlidingHarness {
         boolean gpu = false;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("-3js")) viz = args[++i];
+            else if (args[i].equals("-vizframes")) VIZ_FRAMES = Integer.parseInt(args[++i]);
+            else if (args[i].equals("-rebindtime")) REBIND_TIME = Double.parseDouble(args[++i]);   // post-release refractory in seconds (big = can't rebind in the same spot)
             else if (args[i].equals("-diag")) diag = true;
             else if (args[i].equals("-cycldiag")) cycldiag = true;
             else if (args[i].equals("-brakediag")) BRAKEDIAG = true;   // PART B brake decomposition
@@ -147,6 +163,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-config1diag")) { CANONICAL = true; CONFIG1 = true; CANON_DIAG = true; }
             else if (args[i].equals("-kappa")) KAPPA = Double.parseDouble(args[++i]);          // J1 torsional stiffness override (N·m/rad)
             else if (args[i].equals("-kon")) KON = Double.parseDouble(args[++i]);              // reaction-limited attachment rate (µm^-1 s^-1)
+            else if (args[i].equals("-nobind")) NOBIND = true;   // thermal-floor control: motors never bind (kinParams[19]); measurement, default-off byte-identical
             else if (args[i].equals("-single")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; }  // single-molecule duty assay (Config-1)
             else if (args[i].equals("-singlez")) SINGLE_Z = Double.parseDouble(args[++i]);             // single-molecule anchor z override
             else if (args[i].equals("-tauavg")) TAU_AVG = Double.parseDouble(args[++i]) * 1.0e-3;       // time-averaged catch window τ (ms → s)
@@ -165,6 +182,16 @@ public final class GlidingHarness {
             else if (args[i].equals("-offaxis")) OFFAXIS_DEG = Double.parseDouble(args[++i]);  // off-axis bind angle for the decomp/sweep setup
             else if (args[i].equals("-noatprelease")) ATP_RELEASE = false;  // A/B control: DISABLE the ATP-transition→detach coupling (old decoupled cycle) for config1/perphead
             else if (args[i].equals("-lymntaylor") || args[i].equals("-lt")) LYMN_TAYLOR = true;   // jba: the validated canonical cycle (single nucleotide-driven release)
+            else if (args[i].equals("-spherehead")) SPHEREHEAD = true;   // freeze F9 at 90° ⇒ J1 neck-swing is the stroke (sphere-head on the dense-mat GPU path)
+            else if (args[i].equals("-axlock")) { SPHEREHEAD = true; AXLOCK = true; }   // axial swing-plane lock (F10 → ŝ, head-only); implies -spherehead
+            else if (args[i].equals("-dirswing")) { SPHEREHEAD = true; AXLOCK = true; DIRSWING = true; }   // + deterministic polarity-directed power stroke; implies -axlock
+            else if (args[i].equals("-hfswing")) { SPHEREHEAD = true; AXLOCK = true; DIRSWING = true; HFSWING = true; }   // head-frame converter recast (no f̂ in the swing); implies -dirswing
+            else if (args[i].equals("-rollcensus")) ROLLCENSUS = true;   // census the bound-head roll sign (head.yVec·ŝ) after a grid run
+            else if (args[i].equals("-rollsign")) { SPHEREHEAD = true; AXLOCK = true; DIRSWING = true; HFSWING = true; ROLLSIGN = true; }   // stereospecific +ŝ roll; implies -hfswing
+            else if (args[i].equals("-twistcensus")) TWISTCENSUS = true;   // capture the bind-time roll twist (arrival angle vs +ŝ)
+            else if (args[i].equals("-mhatcensus")) MHATCENSUS = true;     // census the bound-head head-axis sign (head.uVec·n̂bed)
+            else if (args[i].equals("-mhatset")) { SPHEREHEAD = true; AXLOCK = true; DIRSWING = true; HFSWING = true; ROLLSIGN = true; MHATSET = true; }   // bind-time stereospecific head-axis init (+n̂); implies -rollsign
+            else if (args[i].equals("-headlock")) HEADLOCK = Double.parseDouble(args[++i]);   // head orientation-lock stiffness multiplier (diagnostic)
             else if (args[i].equals("-atprecharge")) ATP_RECHARGE = true;    // jba: catch-slip-ONLY release + ATP recharge on release + bound head locked out of ATP uptake (no dice-roll detach)
             else if (args[i].equals("-boundgeom")) { CONFIG1 = true; BOUNDGEOM = true; }      // bound-state geometry report (single motor, transport topology)
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
@@ -218,6 +245,9 @@ public final class GlidingHarness {
         FilamentStore fil; MotorStore mot;
         FloatArray bondData, xbParams, boxParams;
         FloatArray xbParamsC1, jointParams;   // CONFIG 1: PAIRS+Hookean-J1 xbParams + the size-14 jointParams (= mot.jointParams when not config1)
+        FloatArray swingParams;               // -dirswing: [k, dt, θ_uncocked, θ_cocked] for CrossBridgeSystem.directedSwing
+        IntArray twistHist, prevBoundTw;      // -twistcensus: per-motor 6-bin arrival-angle histogram + prev boundSeg
+        IntArray prevBoundMh;                 // -mhatset: per-motor prev boundSeg for fresh-bind detection (bind-time head-axis init)
         IntArray segMotorCount, segMotorOffsets, segMotorMyo;
         IntArray reachSeg; IntArray reachCount;
         double segL, x0;
@@ -291,7 +321,9 @@ public final class GlidingHarness {
         }
         DragTensorSystem.run(mot);
         mot.setBodyParams(DT); mot.setJointParams(DT); mot.setKinParams(0.006, -0.4, DT); mot.setNucParams(DT);
+        if (REBIND_TIME > 0) mot.kinParams.set(10, (float) Math.ceil(REBIND_TIME / DT));   // -rebindtime: post-release refractory (a released head can't rebind for this long); default 0 ⇒ the v1 myoRebindTime (byte-identical)
         if (KON > 0) mot.setSearchParams(KON, 0);        // PHASE-2 step-3: reaction-limited attachment rate kОn (kinParams[14])
+        if (NOBIND) mot.kinParams.set(19, 1.0f);         // thermal-floor control: motors never bind (default-off no-op)
         if (TAU_AVG > 0) mot.setReleaseForceAvg(TAU_AVG, DT);   // PHASE-2 step-4a: time-averaged catch input (EMA window τ)
         if (F_EXT != 0) mot.setExtLoad(F_EXT);           // sustained-load injection (force-response guard)
         if (XCATCH > 0) mot.setXCatch(XCATCH);           // PHASE-2 step-4b: catch distance d (Veigel calibration)
@@ -304,7 +336,17 @@ public final class GlidingHarness {
 
         int MAXC = SpatialGrid.MAX_CAND;
         sc.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
-        sc.xbParams = XBSAT_MODE != 0
+        sc.xbParams = SPHEREHEAD
+            // SPHERE-HEAD: freeze F9's rest at 90° (xbParams[9]=1) ⇒ the head-vs-actin ANGLE stops switching
+            // (no F9 power stroke; F9 becomes the compliant ⊥ perp-MAINTAINER), so the J1 converter neck-swing
+            // (0°↔60°, MotorJointSystem) is the ONLY stroke. F8 (tip anchor) unchanged. F10: seg.yVec (default)
+            // or -axlock ⇒ [10]=1 retargets it to ŝ=normalize(n̂bed×seg.uVec) head-only (the axial swing lock).
+            ? (AXLOCK
+                ? (ROLLSIGN
+                    ? FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS, 0f, 0f, 0f, 1f, 1f, 1f)
+                    : FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS, 0f, 0f, 0f, 1f, 1f))
+                : FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS, 0f, 0f, 0f, 1f))
+            : XBSAT_MODE != 0
             ? FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS,
                                       (float) XBSAT_MODE, (float) XBSAT_FMAX, (float) XBSAT_ONSET)
             : FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS);
@@ -325,6 +367,14 @@ public final class GlidingHarness {
         } else {
             sc.jointParams = mot.jointParams;
         }
+        // -dirswing: the deterministic polarity-directed power stroke replaces the J1 angular converter (whose
+        // cross(lever,head) axis is degenerate at the straight rest ⇒ ill-defined swing direction). Turn the J1
+        // TORSION off (jointParams[3]=0; the J1 position spring stays) so directedSwing is the sole stroke driver.
+        sc.swingParams = FloatArray.fromElements(0.4f, (float) DT, 0f, 60f);
+        if (DIRSWING) sc.jointParams.set(3, 0f);
+        if (SPHEREHEAD && HEADLOCK != 1.0) sc.xbParams.set(2, (float) (0.4 * HEADLOCK));   // -headlock: stiffen the F9 ⊥ hold + F10 axial/roll lock (diagnostic; the stroke coeff swingParams[0] is untouched)
+        if (TWISTCENSUS) { sc.twistHist = new IntArray(6 * nMot); sc.twistHist.init(0); sc.prevBoundTw = new IntArray(nMot); sc.prevBoundTw.init(-1); }
+        if (MHATSET) { sc.prevBoundMh = new IntArray(nMot); sc.prevBoundMh.init(-1); }
         sc.segMotorCount = new IntArray(nSeg); sc.segMotorOffsets = new IntArray(nSeg + 1); sc.segMotorMyo = new IntArray(nMot);
         sc.reachSeg = new IntArray(nMot * MAXC); sc.reachSeg.init(-1); sc.reachCount = new IntArray(nMot);
         // in-vitro chamber matching the bed (v1 MyoMiniFilament.checkOuterBugCollision law): [tau, boxX, boxY, boxZ, R, coeff, checkInt]
@@ -363,6 +413,7 @@ public final class GlidingHarness {
                     sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.kinParams, mot.counts);
         else
             BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        if (TWISTCENSUS) CrossBridgeSystem.captureBindTwist(b.yVec, f.uVec, mot.boundSeg, sc.prevBoundTw, sc.twistHist, mot.counts);
         // PERP-HEAD: freeze uperp at fresh bind (reads canonSnap before snapCanonicalHead clears it)
         if (PERPHEAD) CrossBridgeSystem.snapPerpRest(b.uVec, f.uVec, mot.boundSeg, mot.canonSnap, mot.perpRest, mot.counts, mot.headTiltCS);
         // --- motor nucleotide cycle + dynamics ---
@@ -401,6 +452,8 @@ public final class GlidingHarness {
         sliceNs[BOND] += tns() - _bf;
         long _ah = tns();
         CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+        if (HFSWING) CrossBridgeSystem.directedSwingHeadFrame(b.uVec, b.yVec, b.torqueSum, b.bRotGam, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+        else if (DIRSWING) CrossBridgeSystem.directedSwing(b.uVec, b.torqueSum, b.bRotGam, f.uVec, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
         sliceNs[APPLY] += tns() - _ah;
         if (XB_IMPLICIT) CrossBridgeSystem.snapshotHeadCenter(b.coord, mot.xbImplPrev);
         long _mi = tns();
@@ -411,6 +464,8 @@ public final class GlidingHarness {
         // breaks the PTX-lowered bind). Takes effect on the next step's bond ⇒ CPU/GPU snap timing identical.
         if (CANONICAL) BindingDetectionSystem.snapCanonicalHead(b.coord, b.uVec, b.yVec, b.segLength, f.end1, f.uVec,
                 mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.counts);
+        // -mhatset: bind-time stereospecific head-axis init, placed LATE (body-write gotcha; takes effect next step).
+        if (MHATSET) CrossBridgeSystem.setBindMhat(b.coord, b.uVec, b.yVec, f.uVec, mot.boundSeg, sc.prevBoundMh, mot.counts);
         sliceNs[MOTADV] += tns() - _mi;
         long _rf = tns();
         CrossBridgeSystem.registerForceDot(sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts);
@@ -496,6 +551,9 @@ public final class GlidingHarness {
         if (XB_IMPLICIT) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.xbImplPrev, mot.xbImplParams);
         if (CANONICAL) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.bindArc2, mot.canonSnap);
         if (CONFIG1) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.xbParamsC1, sc.jointParams);
+        if (DIRSWING) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.swingParams);
+        if (TWISTCENSUS) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.twistHist, sc.prevBoundTw);
+        if (MHATSET) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.prevBoundMh);
         if (PERPHEAD) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.perpRest, mot.headTiltCS);
         if (TAU_AVG > 0 || LYMN_TAYLOR) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.forceDotAvg, mot.avgInit);
         // reach (common)
@@ -547,6 +605,7 @@ public final class GlidingHarness {
                 tg = tg.task("bind", BindingDetectionSystem::bindCanonicalTwoPoint, b.coord, b.uVec, b.segLength, f.end1, f.end2, f.segLength, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.kinParams, mot.counts);
             else
                 tg = tg.task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+            if (TWISTCENSUS) tg = tg.task("bindTwist", CrossBridgeSystem::captureBindTwist, b.yVec, f.uVec, mot.boundSeg, sc.prevBoundTw, sc.twistHist, mot.counts);
             // PERP-HEAD: freeze uperp at fresh bind (writes perpRest only — no body write ⇒ safe early; canonSnap cleared later by snapHead)
             if (PERPHEAD) tg = tg.task("snapPerp", CrossBridgeSystem::snapPerpRest, b.uVec, f.uVec, mot.boundSeg, mot.canonSnap, mot.perpRest, mot.counts, mot.headTiltCS);
             // PHASE-2 ATP-RELEASE COUPLING (config-1/perp-head): detach AT the bound NONE→ATP transition. cycle
@@ -574,6 +633,8 @@ public final class GlidingHarness {
                 tg = tg.task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
             if (DASH_ON) tg = tg.task("dash", CrossBridgeSystem::dashpotForces, b.coord, b.uVec, b.bTransGam, f.coord, f.uVec, f.segLength, mot.boundSeg, mot.bindArc, sc.bondData, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
             tg = tg.task("applyHead", CrossBridgeSystem::applyHeadForce, sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+            if (HFSWING) tg = tg.task("dirSwing", CrossBridgeSystem::directedSwingHeadFrame, b.uVec, b.yVec, b.torqueSum, b.bRotGam, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+            else if (DIRSWING) tg = tg.task("dirSwing", CrossBridgeSystem::directedSwing, b.uVec, b.torqueSum, b.bRotGam, f.uVec, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
             if (BOX_ALL) tg = tg.task("confineMot", ContainmentSystem::confine, b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum, sc.boxParams, mot.counts);
             if (XB_IMPLICIT) tg = tg.task("xbSnap", CrossBridgeSystem::snapshotHeadCenter, b.coord, mot.xbImplPrev);
             tg = tg
@@ -586,6 +647,7 @@ public final class GlidingHarness {
             // snap therefore takes effect on the NEXT step's bond (a ≤1-step timing delay vs the CPU same-step
             // snap — within the chaotic aggregate-within-SEM standard).
             if (CANONICAL) tg = tg.task("snapHead", BindingDetectionSystem::snapCanonicalHead, b.coord, b.uVec, b.yVec, b.segLength, f.end1, f.uVec, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.counts);
+            if (MHATSET) tg = tg.task("mhatSet", CrossBridgeSystem::setBindMhat, b.coord, b.uVec, b.yVec, f.uVec, mot.boundSeg, sc.prevBoundMh, mot.counts);   // bind-time head-axis init, LATE (body-write gotcha)
             tg = tg
                 .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
                 .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
@@ -609,6 +671,7 @@ public final class GlidingHarness {
         sched = new GridScheduler();
         for (String t : new String[]{ "publishHead","reach","release","bind","cycle","anchor","bond","applyHead","register" }) addW("gliding." + t, pad(nM));
         if (CANONICAL) addW("gliding.snapHead", pad(nM));
+        if (MHATSET) addW("gliding.mhatSet", pad(nM));
         if (DASH_ON) addW("gliding.dash", pad(nM));
         if (XB_IMPLICIT) { addW("gliding.xbSnap", pad(nM)); addW("gliding.xbImpl", pad(nM)); }
         for (String t : new String[]{ "zeroMot","brownMot","joints","integMot","deriveMot" }) addW("gliding." + t, pad(nB));
@@ -2006,6 +2069,34 @@ public final class GlidingHarness {
      * only — no physics touched. GPU pulls fil.coord+boundSeg at the 100-step output cadence (residency
      * preserved); CPU runner steps in-process.
      */
+    /** -rollcensus tally: {#bound heads with head.yVec·ŝ ≥ 0 (+ŝ), #with < 0 (−ŝ)}; ŝ = n̂bed×seg.uVec (n̂bed=+Z). */
+    static long[] rollTally(Scene sc) {
+        RigidRodBody b = sc.mot.body; int nB = b.yVec.getSize() / 3, nS = sc.fil.uVec.getSize() / 3;
+        long plus = 0, minus = 0;
+        for (int m = 0; m < sc.mot.nMotors; m++) {
+            int s = sc.mot.boundSeg.get(m); if (s < 0) continue;
+            int h = 3 * m + 2;
+            double sx = -sc.fil.uVec.get(nS + s), sy = sc.fil.uVec.get(s);   // ŝ = (−suy, sux, 0)
+            double sm = Math.sqrt(sx * sx + sy * sy); if (sm < 1e-9) continue; sx /= sm; sy /= sm;
+            double dot = b.yVec.get(h) * sx + b.yVec.get(nB + h) * sy;
+            if (dot >= 0) plus++; else minus++;
+        }
+        return new long[]{ plus, minus };
+    }
+
+    /** -mhatcensus tally: {#bound heads with head.uVec·n̂bed ≥ 0 (+ẑ, productive pole), #with < 0 (−ẑ)}; n̂bed=+Z. */
+    static long[] mhatTally(Scene sc) {
+        RigidRodBody b = sc.mot.body; int nB = b.uVec.getSize() / 3;
+        long plus = 0, minus = 0;
+        for (int m = 0; m < sc.mot.nMotors; m++) {
+            int s = sc.mot.boundSeg.get(m); if (s < 0) continue;
+            int h = 3 * m + 2;
+            double dot = b.uVec.get(2 * nB + h);   // head.uVec·(+ẑ) = uVec_z
+            if (dot >= 0) plus++; else minus++;
+        }
+        return new long[]{ plus, minus };
+    }
+
     static void measureGrid(Scene sc, int M, boolean gpu) {
         final int OUT_INT = 100;
         final double dtInt = OUT_INT * DT;
@@ -2024,6 +2115,9 @@ public final class GlidingHarness {
         }
 
         int k = 0;
+        long rollPlus = 0, rollMinus = 0;   // -rollcensus accumulators (bound-head roll sign, over all samples)
+        long mhatPlus = 0, mhatMinus = 0;   // -mhatcensus accumulators (bound-head head-axis sign, over all samples)
+        double[] mhatFracT = new double[nInt + 2]; int mhatNT = 0;   // -mhatcensus per-sample +ẑ fraction (census-vs-time)
         if (gpu) {
             TornadoExecutionPlan plan = buildPlan(sc);
             sc.mot.setCounts(0, SEED, sc.fil.n); sc.fil.counts.set(1, 0);
@@ -2038,10 +2132,34 @@ public final class GlidingHarness {
                     res.transferToHost(sc.fil.coord, sc.mot.boundSeg);
                     cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot);
                     mnx[k] = minCoordX(sc.fil); mxx[k] = maxCoordX(sc.fil); mny[k] = minCoordY(sc.fil); mxy[k] = maxCoordY(sc.fil); k++;
+                    if (ROLLCENSUS) { res.transferToHost(sc.mot.body.yVec, sc.fil.uVec); long[] pm = rollTally(sc); rollPlus += pm[0]; rollMinus += pm[1]; }
+                    if (MHATCENSUS) { res.transferToHost(sc.mot.body.uVec, sc.mot.boundSeg); long[] pm = mhatTally(sc); mhatPlus += pm[0]; mhatMinus += pm[1];
+                        long tt = pm[0] + pm[1]; if (tt > 0 && mhatNT < mhatFracT.length) mhatFracT[mhatNT++] = (double) pm[0] / tt; }
                 }
             }
             // §6.10 firing-rate pull. LT has no break-force cap task ⇒ capStats is not a device variable (skip it).
             if (res != null) { if (LYMN_TAYLOR) res.transferToHost(sc.mot.stats); else res.transferToHost(sc.mot.capStats, sc.mot.stats); }
+            if (ROLLCENSUS) {
+                long tot = rollPlus + rollMinus;
+                double p = tot > 0 ? (double) rollMinus / tot : 0;
+                System.out.printf("  ROLL_CENSUS (time-avg over samples) head-samples=%d  +ŝ=%.1f%%  −ŝ=%.1f%%  ⇒ pointed-sweep fraction p=%.3f, naive net factor (1−2p)=%.3f%n",
+                        tot, tot > 0 ? 100.0 * rollPlus / tot : 0, tot > 0 ? 100.0 * rollMinus / tot : 0, p, 1.0 - 2.0 * p);
+            }
+            if (MHATCENSUS) {
+                long tot = mhatPlus + mhatMinus;
+                double fMinus = tot > 0 ? (double) mhatMinus / tot : 0;
+                // per-sample time series mean + stdev of the +ẑ (productive) fraction
+                double mMean = 0; for (int i = 0; i < mhatNT; i++) mMean += mhatFracT[i]; if (mhatNT > 0) mMean /= mhatNT;
+                double mVar = 0; for (int i = 0; i < mhatNT; i++) { double d = mhatFracT[i] - mMean; mVar += d * d; } if (mhatNT > 1) mVar /= (mhatNT - 1);
+                double mSd = Math.sqrt(mVar);
+                System.out.printf("  MHAT_CENSUS (head.uVec·n̂bed, n̂bed=+Z) head-samples=%d  +ẑ(productive)=%.1f%%  −ẑ=%.1f%%  ⇒ wrong-pole fraction q=%.3f, naive net factor (1−2q)=%.3f%n",
+                        tot, tot > 0 ? 100.0 * mhatPlus / tot : 0, tot > 0 ? 100.0 * mhatMinus / tot : 0, fMinus, 1.0 - 2.0 * fMinus);
+                System.out.printf("  MHAT_CENSUS per-sample +ẑ fraction: mean=%.4f stdev=%.4f (n=%d samples)%n", mMean, mSd, mhatNT);
+                System.out.print("  MHAT_CENSUS +ẑ-frac vs time:");
+                for (int i = 0; i < mhatNT; i += Math.max(1, mhatNT / 20)) System.out.printf(" %.2f", mhatFracT[i]);
+                System.out.println();
+            }
+            if (TWISTCENSUS && res != null) res.transferToHost(sc.twistHist);
         } else {
             cx[0] = centroidX(sc.fil); cy[0] = centroidY(sc.fil); cz[0] = centroidZ(sc.fil); bnd[0] = bound(sc.mot);
             mnx[0] = minCoordX(sc.fil); mxx[0] = maxCoordX(sc.fil); mny[0] = minCoordY(sc.fil); mxy[0] = maxCoordY(sc.fil); k = 1;
@@ -2086,6 +2204,27 @@ public final class GlidingHarness {
         double avgBall = 0; for (int i = 0; i < n; i++) avgBall += bnd[i]; avgBall /= n;
         double avgBsteady = 0; for (int i = h; i < n; i++) avgBsteady += bnd[i]; avgBsteady /= (n - h);
 
+        // ---- LONG-ASSAY LS-centroid (the standing-rule reportable glide speed): LS drift of the centroid over
+        //      the ON-BED, past-transient window (t≥0.20 s AND filament fully over the bed), projected on the
+        //      filament axis (≈+x; axial fraction reported to confirm). A ≥1 s window is required — else SHORT. ----
+        double t0LA = 0.20;
+        double Slt=0, Sltt=0, Slcx=0, Slcy=0, Slcz=0, Sltx=0, Slty=0, Sltz=0; int nl=0; double wS=-1, wE=0, laBs=0; int laBn=0;
+        for (int i = 0; i < n; i++) {
+            double ti = i * dtInt;
+            if (ti < t0LA || mnx[i] < bXlo || mxx[i] > bXhi) continue;   // past transient AND fully on the motor bed
+            if (wS < 0) wS = ti; wE = ti;
+            Slt+=ti; Sltt+=ti*ti; Slcx+=cx[i]; Slcy+=cy[i]; Slcz+=cz[i]; Sltx+=ti*cx[i]; Slty+=ti*cy[i]; Sltz+=ti*cz[i]; nl++;
+            laBs += bnd[i]; laBn++;
+        }
+        double laVax=0, laVmag=0, laAxf=0, laWin = wE - wS;
+        if (nl > 2) {
+            double dl = nl*Sltt - Slt*Slt;
+            double vX=(nl*Sltx-Slt*Slcx)/dl, vY=(nl*Slty-Slt*Slcy)/dl, vZ=(nl*Sltz-Slt*Slcz)/dl;
+            laVmag = Math.sqrt(vX*vX+vY*vY+vZ*vZ); laVax = vX; laAxf = laVmag>0 ? Math.abs(vX)/laVmag : 0;
+        }
+        System.out.printf("  LONG_ROW seed=0x%X density=%.0f v_axial=%.3f |v|=%.3f axialFrac=%.3f avgBound=%.2f window=[%.2f,%.2f]s len=%.2fs %s%n",
+                SEED, DENSITY, laVax, laVmag, laAxf, laBn>0?laBs/laBn:0, wS<0?0:wS, wE, laWin, laWin>=1.0 ? "OK" : "*SHORT<1s->use -full*");
+
         System.out.printf("  samples=%d  bufCap=%d  netΔx=%.4f µm over %.4f s%n", n, bufCap, cx[n-1]-cx[0], (n-1)*dtInt);
         System.out.println("  STATISTIC                       full-run    steady(2nd-half)");
         System.out.printf("  instantaneousSpeed (3D/intvl) :  %7.3f     %7.3f   µm/s%n", instAll/instN, instSteady/Math.max(1,instNs));
@@ -2102,6 +2241,18 @@ public final class GlidingHarness {
         double capRate = boundStepsTot > 0 ? (double) capFires / boundStepsTot : 0.0;
         System.out.printf("  CAP_ROW seed=0x%X faithfulRelease=%s capFires=%d boundSteps=%d capRatePerBoundStep=%.5f%n",
                 SEED, FAITHFUL_RELEASE ? "ON" : "OFF", capFires, boundStepsTot, capRate);
+        if (TWISTCENSUS && sc.twistHist != null) {
+            long[] hb = new long[6]; long binds = 0; double angSum = 0; long far = 0;
+            for (int m = 0; m < sc.mot.nMotors; m++) for (int b6 = 0; b6 < 6; b6++) {
+                long c = sc.twistHist.get(6 * m + b6); hb[b6] += c; binds += c;
+                angSum += c * (b6 * 30.0 + 15.0); if (b6 >= 3) far += c;   // bins ≥90° = "far side" (need >90° twist)
+            }
+            double meanAng = binds > 0 ? angSum / binds : 0, farFrac = binds > 0 ? (double) far / binds : 0;
+            // lifetime proxy: (bound-motor-steps)/(bind events)·dt = mean bound lifetime
+            double lifeMs = binds > 0 ? (boundStepsTot / (double) binds) * DT * 1e3 : 0;
+            System.out.printf("  TWIST_ROW binds=%d meanArrivalAngle=%.1f° far(>90°)Frac=%.3f hist[0-30/30-60/60-90/90-120/120-150/150-180]=%d/%d/%d/%d/%d/%d meanLifetime=%.2f ms avgBound=%.2f%n",
+                    binds, meanAng, farFrac, hb[0], hb[1], hb[2], hb[3], hb[4], hb[5], lifeMs, avgBsteady);
+        }
         // ---- full-mat coverage verification (windowed to the MEASUREMENT window = steady 2nd half, the
         //      samples netSteady is computed over): did the filament stay fully over the motor bed there? ----
         double wMnX = 1e30, wMxX = -1e30, wMnY = 1e30, wMxY = -1e30;   // steady-window extents
@@ -2275,15 +2426,15 @@ public final class GlidingHarness {
     static void runViz(Scene sc, int M, String dir, boolean gpu) {
         FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
         new java.io.File(dir).mkdirs();
-        int every = Math.max(1, M / 400), frames = 0;
+        int every = Math.max(1, M / VIZ_FRAMES), frames = 0;
         if (gpu) {
             TornadoExecutionPlan plan = buildPlan(sc);
             writeFrame(dir, frames++, 0, sc);                 // frame 0: initial host pose
             for (int t = 0; t < M; t++) {
                 mot.setCounts(t, SEED, f.n); f.counts.set(1, t);
                 TornadoExecutionResult res = plan.withGridScheduler(sched).execute();
-                if ((t + 1) % every == 0) {                   // pull pose + state at frame cadence only
-                    res.transferToHost(b.end1, b.end2, f.end1, f.end2, mot.nucleotideState);
+                if ((t + 1) % every == 0) {                   // pull pose + state + bound set at frame cadence only
+                    res.transferToHost(b.end1, b.end2, f.end1, f.end2, mot.nucleotideState, mot.boundSeg);
                     writeFrame(dir, frames++, (t + 1) * DT, sc);
                 }
             }
@@ -2302,10 +2453,13 @@ public final class GlidingHarness {
         StringBuilder sb = new StringBuilder(1024);
         sb.append(String.format(java.util.Locale.US, "{\"frame\":%d,\"t\":%.6g,\"bounds\":{\"xDim\":5,\"yDim\":1,\"zDim\":0.4}", frame, t));
         sb.append(",\"segments\":[");
+        int barbed = 0; float bx = -1e30f;   // the +x (barbed/plus) terminus = the segment with the largest end2.x
+        for (int s = 0; s < f.n; s++) if (f.end2.get(s) > bx) { bx = f.end2.get(s); barbed = s; }
         for (int s = 0; s < f.n; s++) {
             if (s > 0) sb.append(',');
-            sb.append(String.format(java.util.Locale.US, "{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":1.0,\"cofilinCount\":0}",
-                s, f.end1.get(s), f.end1.get(f.n + s), f.end1.get(2 * f.n + s), f.end2.get(s), f.end2.get(f.n + s), f.end2.get(2 * f.n + s), Constants.radius));
+            sb.append(String.format(java.util.Locale.US, "{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":1.0,\"cofilinCount\":0%s}",
+                s, f.end1.get(s), f.end1.get(f.n + s), f.end1.get(2 * f.n + s), f.end2.get(s), f.end2.get(f.n + s), f.end2.get(2 * f.n + s), Constants.radius,
+                s == barbed ? ",\"isBarbedEnd\":true" : ""));
         }
         sb.append("],\"myosins\":[");
         boolean first = true;
@@ -2314,10 +2468,10 @@ public final class GlidingHarness {
             if (!first) sb.append(','); first = false;
             int rod = 3 * m, lever = 3 * m + 1, head = 3 * m + 2;
             sb.append(String.format(java.util.Locale.US,
-                "{\"id\":%d,\"rod\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.4g,\"invisible\":false},"
+                "{\"id\":%d,\"bound\":%b,\"rod\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.4g,\"invisible\":false},"
                 + "\"lever\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.4g},"
                 + "\"motor\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.4g,\"state\":\"%s\"}}",
-                m, b.end1X(rod), b.end1Y(rod), b.end1Z(rod), b.end2X(rod), b.end2Y(rod), b.end2Z(rod), MotorStore.ROD_R,
+                m, mot.boundSeg.get(m) >= 0, b.end1X(rod), b.end1Y(rod), b.end1Z(rod), b.end2X(rod), b.end2Y(rod), b.end2Z(rod), MotorStore.ROD_R,
                 b.end1X(lever), b.end1Y(lever), b.end1Z(lever), b.end2X(lever), b.end2Y(lever), b.end2Z(lever), MotorStore.LEVER_R,
                 b.end1X(head), b.end1Y(head), b.end1Z(head), b.end2X(head), b.end2Y(head), b.end2Z(head), MotorStore.HEAD_R, SN[mot.nucleotideState.get(m)]));
         }
