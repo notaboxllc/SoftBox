@@ -78,7 +78,8 @@ public final class GlidingHarness {
     static boolean ATP_RELEASE = true;           // PHASE-2 ATP-RELEASE COUPLING: a bound head detaches AT its NONE→ATP transition (ATP-binding = detachment). Default-ON for CONFIG1 (config1/perphead gliding); A/B control -noatprelease turns it OFF (old decoupled cycle). Non-CONFIG1 paths never see it.
     static int VIZ_FRAMES = 400;                 // -vizframes <n>: number of -3js viewer frames (cadence = M/n)
     static double REBIND_TIME = 0.0;             // -rebindtime <s>: override the post-release rebind refractory (0 ⇒ v1 myoRebindTime, byte-identical)
-    static boolean SPHEREHEAD = false;           // -spherehead: freeze F9 at 90° (perp-maintainer) ⇒ the J1 neck-swing is the stroke (the three-body sphere-head, on the real dense-mat GPU path). Default-off ⇒ byte-identical.
+    static boolean LEGACYMOTOR = false;          // -legacymotor: restore the OLD default motor (v1-port F9 head-swing, 90°↔120°; sphere-head stack OFF). Kept for regression/oracle. See the 2026-07-01 promotion.
+    static boolean SPHEREHEAD = false;           // -spherehead: freeze F9 at 90° (perp-maintainer) ⇒ the J1 neck-swing is the stroke (the three-body sphere-head, on the real dense-mat GPU path). NOW DEFAULT-ON (see the promotion block after arg-parse).
     static boolean AXLOCK = false;               // -axlock: retarget F10 to ŝ=normalize(n̂bed×seg.uVec) head-only (the axial swing-plane lock, §9.4c). Implies -spherehead. Default-off ⇒ byte-identical.
     static boolean DIRSWING = false;             // -dirswing: DETERMINISTIC polarity-directed power stroke (CrossBridgeSystem.directedSwing) — neck rear sweeps barbed-ward; J1 angular converter OFF. Implies -axlock. Default-off ⇒ byte-identical.
     static boolean HFSWING = false;              // -hfswing: HEAD-FRAME converter (directedSwingHeadFrame) — swing target derived from the head's own locked frame (no f̂ in the swing law). Implies -dirswing. Biologically-defensible recast; should reproduce -dirswing.
@@ -191,6 +192,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-twistcensus")) TWISTCENSUS = true;   // capture the bind-time roll twist (arrival angle vs +ŝ)
             else if (args[i].equals("-mhatcensus")) MHATCENSUS = true;     // census the bound-head head-axis sign (head.uVec·n̂bed)
             else if (args[i].equals("-mhatset")) { SPHEREHEAD = true; AXLOCK = true; DIRSWING = true; HFSWING = true; ROLLSIGN = true; MHATSET = true; }   // bind-time stereospecific head-axis init (+n̂); implies -rollsign
+            else if (args[i].equals("-legacymotor")) LEGACYMOTOR = true;    // restore the OLD default motor (v1-port F9 head-swing); sphere-head stack OFF
             else if (args[i].equals("-headlock")) HEADLOCK = Double.parseDouble(args[++i]);   // head orientation-lock stiffness multiplier (diagnostic)
             else if (args[i].equals("-atprecharge")) ATP_RECHARGE = true;    // jba: catch-slip-ONLY release + ATP recharge on release + bound head locked out of ATP uptake (no dice-roll detach)
             else if (args[i].equals("-boundgeom")) { CONFIG1 = true; BOUNDGEOM = true; }      // bound-state geometry report (single motor, transport topology)
@@ -200,6 +202,19 @@ public final class GlidingHarness {
             else pos.add(args[i]);
         }
         if (!pos.isEmpty()) M = Integer.parseInt(pos.get(0));
+
+        // ── MOTOR PROMOTION (2026-07-01) ── the f̂-referenced sphere-head neck-powerstroke is the DEFAULT myosin:
+        //   frozen-F9-90° (SPHEREHEAD) + axial swing lock F10→ŝ (AXLOCK) + f̂-directed neck stroke (DIRSWING).
+        // Enabled with NO flags, on BOTH the GPU TaskGraph and the -cpu runner. This block sets exactly the same
+        // three booleans as the explicit `-dirswing` path ⇒ the new default reproduces old `-dirswing` bit-for-bit.
+        // `-legacymotor` restores the OLD default (v1-port F9 head-swing, sphere-head stack OFF). Alternative motors
+        // (-canonical / -config1 / -perphead) select their own bond law and are NOT overridden. -hfswing/-rollsign/
+        // -mhatset (documented negatives) already set the three true + their extras, so they still take precedence.
+        if (LEGACYMOTOR) {
+            SPHEREHEAD = false; AXLOCK = false; DIRSWING = false; HFSWING = false; ROLLSIGN = false; MHATSET = false;
+        } else if (!CANONICAL && !CONFIG1 && !PERPHEAD) {
+            SPHEREHEAD = true; AXLOCK = true; DIRSWING = true;
+        }
 
         for (String a : args) if (a.equals("-forcetest")) { forceTest(); return; }
         if (STIFFSWEEP) { stiffnessAngleSweep(); return; }   // step-4d: builds its own minimal one-shot scenes

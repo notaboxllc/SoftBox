@@ -1,5 +1,47 @@
 # Soft Box Project Journal
 
+## 2026-07-01 — DONE: promoted the f̂-directed sphere-head neck-stroke to the DEFAULT myosin (implements the DECISION below). New `-legacymotor` restores the old motor. Default CHANGED (contract = two bit-reproductions + CPU≡GPU).
+Collapsed `-spherehead -axlock -dirswing` into the default (runs with NO flags, GPU + `-cpu`): frozen-F9-90°
+(perp maintainer) + axial swing lock (F10→ŝ) + f̂-directed neck powerstroke (`CrossBridgeSystem.directedSwing`,
+rear sweeps barbed-ward, θ 0→60°, J1 angular converter OFF). A single post-arg-parse block sets
+`SPHEREHEAD=AXLOCK=DIRSWING=true` unless `-legacymotor` (old v1-port F9 head-swing) or an alternative bond law
+(`-canonical`/`-config1`/`-perphead`) is selected — so it sets EXACTLY the booleans the explicit `-dirswing`
+set (no force-law change). Release UNCHANGED (default catch-slip + standard 4-state cycle). **Regression (the
+new contract, bit-reproducible CPU):** (A) new default (no flags) ≡ old `-dirswing` **bit-for-bit**; (B)
+`-legacymotor` ≡ old default (built from the pre-promotion commit) **bit-for-bit**; (C) CPU≡GPU on the new
+default (matbed d500: GPU avgBound 10.5/10.0 vs CPU 10.3/9.5, within SEM). **Physics unchanged (Check D):** new
+DEFAULT GPU `-full` d1000 150k → **v_axial −3.02 µm/s, axial frac 0.996, avgBound 14.8** (bit-identical to the
+standalone `-dirswing`). `-hfswing`/`-rollsign`/`-mhatset` stay OFF (documented negatives). `BoA-v1ref`
+byte-clean; no kinetics/geometry retune; the release examination (incl. a possible v2→v1 catch-slip-only map)
+is the NEXT task. New: `-legacymotor` + the promotion block (`GlidingHarness`); `-dirswing` retained as an
+explicit alias of the default. → `PHASE2_DEFAULT_PROMOTION.md`.
+
+## 2026-07-01 — DECISION: adopt the f̂-referenced (filament-directed) neck powerstroke as THE motor; promote to default. The head-frame/mhat arc is the negative-result evidence that motivates it.
+
+After a long faithfulness detour (head-frame swing + roll-sign + mhat locks), the simplifying decision: **the neck powerstroke is referenced to the filament axis f̂ (the neck rotates toward the actin + end), not to the head's own frame.** Promote the fixed-head / axial-lock / f̂-directed-neck model to the default myosin. (PLANNER/PI sign-off given — this re-baselines prior validation numbers, per the standing rule.)
+
+### The biological justification (why f̂-reference is faithful, not a shortcut)
+The motor domain does **not** bind F-actin as a blob in an arbitrary pose — binding is **stereospecific**: the actin interface registers the head to the filament in one deterministic orientation. So the bound head is effectively **clamped to actin**, and "swing the neck relative to the bound head" ≡ "swing the neck relative to the filament." Referencing the stroke to f̂ is therefore a faithful stand-in for a neck swinging off an actin-registered head — not a modeling convenience. In a proper flat-head bind the neck region nearly touches the actin, so **"the neck lever rotates toward the actin + end"** is a reasonable simplified stroke. A structural specialist might contest the exact lever-to-actin angle; absent a specific refutation, this is the working, defensible model.
+
+### The negative results that motivate it (the head-frame arc)
+We built the head-frame stroke (swing referenced to the head's OWN frame: `cosθ·û_head − sinθ·(ŷ_head×û_head)`) to be more first-principles. It glides correct-polarity but **slower**: BoA −3.96→−2.54, v2 −3.0→−2.15. We then ruled out every "recoverable artifact" explanation:
+- **Not the discrete roll-axis** — the axial lock (roll axis → ŝ=n̂×f̂) already holds it; single-motor axial fraction 1.0.
+- **Not the roll SIGN** — `-rollsign` fixed yVec→+ŝ (census 50/50→99.5%), speed only −1.86→−2.15. Cheap (twist ~26–48°), but didn't recover.
+- **Not thermal jiggle** — head-lock stiffness sweep moved speed the WRONG way and collapsed binding (pin-absorption / explicit-stiffness whipping); k≈0.4 is already near-optimal. Refuted.
+- **Not saturation/density** — the gap persists ~1.4–1.8× across d250–1000, including sparse d250. Refuted.
+- **Not the head-axis (mhat) sign** — set at bind (initialization, tip-preserving, NOT a persistent torque; avgBound held ~21, sign retained 0.97 no-decay), speed stayed ~−1.9. Fork 3: the 50/50 mhat is irrelevant to speed. (The earlier persistent-torque mhat lock was a mis-diagnosis — it pin-absorbed, −2.54→+0.22.)
+
+**The residual, understood:** the head-frame law references the head's own orientation, which is (a) systematically tilted (mhat·n̂ mean ~+0.83, ~34° off-axis, not symmetric jiggle) and (b) subject to **stroke-reaction feedback** — the swing is computed from û_head and its reaction pushes û_head, a loop the external f̂ reference structurally lacks (f̂ can't be shoved). So the head-frame motor is irreducibly a bit slower and noisier. That gap is not a fixable inefficiency — but it is also **not a reason to prefer the head-frame law**, because the biology (stereospecific bind = head clamped to actin) says f̂-reference is the correct registration anyway. So we adopt the faster AND defensible one. The head-frame/mhat experiments stand as the documented evidence for that choice, not wasted work.
+
+### What is promoted (the default motor)
+Fixed head at **90° ⊥ strut** (no head swing, both nucleotide states) + **axial swing lock** (roll axis → ŝ=n̂_bed×û_seg, swing plane contains f̂) + **f̂-directed neck powerstroke** (`myoNeckStrokePolarity` / v2 `-dirswing`: rear sweeps barbed-ward, θ 0→70° BoA / 0→60° v2). The old F9 head-swing motor is preserved behind a **legacy flag** (it is the prior validated oracle — 4b-iv −13%, SET-A −5.7). The head-frame, roll-sign, and mhat-lock flags stay OFF as documented negatives. **Release pathway UNCHANGED** (catch-slip on the F8 tip-spring load, per v1) — not bundled into this promotion.
+
+### Open / next
+- **Release, examined in detail** (the next task) — v1/BoA is catch-slip-on-F8; v2 uses the standard catch-slip + 4-state cycle; a clean v2→v1 catch-slip-only map for apples-to-apples, and whether LT (bound-in-ATP fix) belongs in the default.
+- **The BoA(−3.96)/v2(−3.0) gap** — same stroke law + same release class, so it's geometry (neck 70° vs 60°) or a residual; reconcile when examining release.
+- **BoA GPU joint kernel** is still polarity-blind — porting the f̂-directed swing to the device kernel is required before BoA GPU-default is correct (v2's `-dirswing` already runs on the GPU dense mat).
+- Promotion re-baselines all prior default-motor validation numbers.
+
 ## 2026-07-01 — sphere-head: the HEAD-AXIS (mhat) sign — censused (v2 IS 50/50, like BoA), then bind-time set from polarity ⇒ HOLDS but is NOT a speed lever (costs binding). New `-mhatcensus`/`-mhatset`; default byte-identical.
 STEP 0 (`-mhatcensus`, `GlidingHarness.mhatTally` = sign of `head.uVec·n̂bed`): under `-hfswing -rollsign` at
 d1000 v2's mhat is **~50/50 (+ẑ 52.4%, mean 0.52 sd 0.14, no drift)** — a genuine SECOND free sign (the roll
