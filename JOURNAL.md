@@ -1,5 +1,33 @@
 # Soft Box Project Journal
 
+## 2026-07-02 — CAPTURE RADIUS (`myoColTol`) sweep: NOT a distinct speed axis on v2 — REFUTES BoA's CPU +48%. Larger radius LOWERS net glide (per-bound drift collapses); it walks the tug-of-war ceiling STEEPER than density. New flag-gated `-coltol`/`-stretchcensus`; default byte-identical, no promotion.
+GPU `-full` d1000 150k, 3 seedable mat draws, LONG_ROW net v_axial + avgBound + per-bound drift + a read-only
+bound-population census (`-stretchcensus`: extension/per-head axial force/dwell). BoA (CPU, single-run 5/6/7 nm)
+claimed avgBound↑ with per-motor drift FLAT ~0.19 ⇒ net **+48%** and hypothesised `myoColTol` as the master
+engagement knob that beats the tug-of-war. **On v2 it's the OPPOSITE.** **STEP 1 (4/5/6/7/8 nm):** net |v_axial|
+FALLS monotonically **3.83→3.42→3.07→2.38→1.51** (−60%) while avgBound RISES 10.1→18.6 (+85%) and per-bound
+drift COLLAPSES **0.380→0.081**. The 6nm/d1000 point (drift 0.206, avgB 14.9) reproduces the density-sweep d1000
+anchor exactly (cross-consistent). **STEP 2 overlay (drift vs avgBound):** radius & density BOTH lie on falling
+curves that CROSS at the shared 6nm/d1000 anchor; below it radius has HIGHER drift, above it LOWER — radius's
+curve is **STEEPER**, so it does NOT hold drift flat (BoA's claim), it collapses drift FASTER than density ⇒
+`myoColTol` is **not a distinct axis**, it plunges down the SAME tug-of-war ceiling. Net turns over below 4nm
+(smallest = fastest). **Sign-flip origin:** the accepted 4b-iv parallel residual — BoA-CPU (Gauss–Seidel, fresh
+forces) has mild co-bound resistance; v2-GPU (Jacobi, stale forces) resists harder, and more co-bound heads
+(larger radius) amplify it (v2 avgBound lower at every radius yet steeper drift decay). **STEP 3 (4 vs 8nm
+geometry):** ext +13% (5.54→6.27nm), |fdFil| +15% (3.08→3.55pN) — a REAL mild stretch/force shift (not
+count-only) — BUT dwell −49% (0.87→0.45ms) and **signed** fdFil stays ~0.14pN ≪ |fd|3.3 (axial CANCELLATION) ⇒
+the stretched heads add opposing force, not thrust, and detach 2× faster ⇒ drift falls. Geometry works AGAINST
+transport; dominant story is COUNT, extra count anti-productive. **STEP 4 (density-response per radius):** the
+saturation/peak density shifts DOWN with radius — 4nm still rising at d1500 (peak >1500), 6nm peaks ~1500, 8nm
+already falling by d500 (peak <500); 8nm/d500 avgBound 14.2 ≈ 6nm/d1000 14.9 (same duty, half the density).
+**Faithfulness:** `myoColTol` sets WHERE the density-response saturates, not a speed; NO radius reproduces the
+experimental (density,speed) jointly (8nm's low sat-density has ~1.5 speed; 4nm's 4.51 near honest-v1 4.6 but
+sat >1500 & below physical head-reach) — the v2 parallel co-bound penalty means high engagement (low sat-density)
+craters speed. Set `myoColTol` by binding geometry + plateau density, NOT net speed; 6nm already high-engagement,
+no speed argument to raise it. **Validation:** default byte-identical (override only when COL_TOL≠0.006); CPU≡GPU
+bit-identical at the widened reach (coltol 8, d250, 5000 steps); race-free (host-side census). `BoA-v1ref`
+byte-clean; no release/stroke change; NO promotion (adoption = separate signoff). → `PHASE2_CAPTURE_RADIUS_FINDINGS.md`.
+
 ## 2026-07-02 — SPEED LEVERS: none of density/step/kinetics gives a defensible path to skeletal 5–8; net glide is tug-of-war-pinned ~3. Two flag-gated sweeps (`-neckangle`, `-ratescale`); default byte-identical, no promotion.
 GPU `-full` 150k, 3 seedable mat draws each, LONG_ROW net v_axial + avgBound + per-bound drift (mean±SD).
 **STEP 1 (density, no code):** net v_axial rises to a broad shallow peak **d1500 ~3.28** then turns over at

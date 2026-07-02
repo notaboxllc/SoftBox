@@ -97,6 +97,8 @@ public final class GlidingHarness {
     static double DENSITY = 500.0;              // motors / µm² (-density overrides for the speed-density trend)
     static double NECK_ANGLE = 60.0;            // -neckangle <deg>: cocked neck-stroke rest angle (swingParams[3]); default 60 ⇒ byte-identical. STEP-2 step-size lever (step ≈ 2·L·sin(θ/2)).
     static double RATE_SCALE = 1.0;             // -ratescale <x>: scale catch-slip kOff + ALL nucleotide cycle rates by x (faster kinetics = V₀ = step·detach-rate); default 1 ⇒ byte-identical. STEP-3 cycle-rate lever.
+    static double COL_TOL = 0.006;              // -coltol <nm>: myosin bind capture radius (kinParams[7], perp tip-to-axis reach); default 6 nm ⇒ byte-identical. CAPTURE-RADIUS sweep (the engagement/duty master knob). PHYSICAL param, not a free speed dial.
+    static boolean STRETCHCENSUS = false;       // -stretchcensus: read-only census of the BOUND population's anchor-spring extension (forceMag/myoSpring), per-head axial force (forceDotFil), + aggregate dwell (stats). STEP-3 geometry check; no force change; default-off byte-identical.
     static final int    FIL_SEGS = 11;          // ~2 µm of 64-monomer segments
     static final int    FIL_MONO = 64;          // filSegLength (gliding override)
     // bed geometry: bX0 = filament +x end; the bed spans x∈[bXlo,bXhi], y∈[-bYhalf,bYhalf].
@@ -201,6 +203,8 @@ public final class GlidingHarness {
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
             else if (args[i].equals("-neckangle")) NECK_ANGLE = Double.parseDouble(args[++i]);   // STEP-2 step-size lever: cocked neck rest angle (deg)
             else if (args[i].equals("-ratescale")) RATE_SCALE = Double.parseDouble(args[++i]);   // STEP-3 cycle-rate lever: ×scale on kOff + all nucleotide rates
+            else if (args[i].equals("-coltol")) COL_TOL = Double.parseDouble(args[++i]) * 1.0e-3;  // CAPTURE-RADIUS sweep: bind reach in nm → µm (kinParams[7])
+            else if (args[i].equals("-stretchcensus")) STRETCHCENSUS = true;                       // STEP-3 read-only bound-population geometry census
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
@@ -340,6 +344,7 @@ public final class GlidingHarness {
         }
         DragTensorSystem.run(mot);
         mot.setBodyParams(DT); mot.setJointParams(DT); mot.setKinParams(0.006, -0.4, DT); mot.setNucParams(DT);
+        if (COL_TOL != 0.006) mot.kinParams.set(7, (float) COL_TOL);   // CAPTURE-RADIUS sweep: override myoColTol (bind reach). Widens the reachTestDistSq perp threshold in BOTH bruteReachable + bindNearest (CPU + GPU, kinParams[7] uploaded FIRST_EXECUTION). GlidingHarness binds brute-force (no grid) ⇒ no cell-size concern. Default 6 nm ⇒ untouched.
         if (REBIND_TIME > 0) mot.kinParams.set(10, (float) Math.ceil(REBIND_TIME / DT));   // -rebindtime: post-release refractory (a released head can't rebind for this long); default 0 ⇒ the v1 myoRebindTime (byte-identical)
         if (KON > 0) mot.setSearchParams(KON, 0);        // PHASE-2 step-3: reaction-limited attachment rate kОn (kinParams[14])
         if (NOBIND) mot.kinParams.set(19, 1.0f);         // thermal-floor control: motors never bind (default-off no-op)
@@ -2111,6 +2116,22 @@ public final class GlidingHarness {
         return new long[]{ plus, minus };
     }
 
+    /** -stretchcensus tally (STEP-3, read-only): over the CURRENTLY-bound population, accumulate the anchor-spring
+     *  extension (= forceMag/myoSpring, µm→nm; the tip-to-site perpendicular distance — larger = more "stretched")
+     *  and the per-head axial load forceDotFil (N→pN, signed). No force is read or written; the arrays are the
+     *  stored bond outputs (registerForceDot). acc = {extSum, extSqSum, fdSum, fdAbsSum, N}. */
+    static void stretchTally(Scene sc, double[] acc, long[] extHist, long[] fdHist) {
+        double myoSpring = MYO_SPRING;   // N/µm; forceMag [N] / myoSpring = extension [µm]
+        for (int m = 0; m < sc.mot.nMotors; m++) {
+            if (sc.mot.boundSeg.get(m) < 0) continue;
+            double extNm = (sc.mot.forceMag.get(m) / myoSpring) * 1.0e3;    // N/(N/µm)=µm → nm
+            double fdPN  = sc.mot.forceDotFil.get(m) * 1.0e12;             // N → pN (signed)
+            acc[0] += extNm; acc[1] += extNm * extNm; acc[2] += fdPN; acc[3] += Math.abs(fdPN); acc[4] += 1;
+            int eb = (int) (extNm / 2.0); if (eb < 0) eb = 0; if (eb > 10) eb = 10; extHist[eb]++;
+            int fb = (int) Math.floor(fdPN) + 8; if (fb < 0) fb = 0; if (fb > 16) fb = 16; fdHist[fb]++;
+        }
+    }
+
     /** -mhatcensus tally: {#bound heads with head.uVec·n̂bed ≥ 0 (+ẑ, productive pole), #with < 0 (−ẑ)}; n̂bed=+Z. */
     static long[] mhatTally(Scene sc) {
         RigidRodBody b = sc.mot.body; int nB = b.uVec.getSize() / 3;
@@ -2132,8 +2153,8 @@ public final class GlidingHarness {
         double[] cx = new double[nInt + 1], cy = new double[nInt + 1], cz = new double[nInt + 1];
         double[] mnx = new double[nInt + 1], mxx = new double[nInt + 1], mny = new double[nInt + 1], mxy = new double[nInt + 1];
         long[] bnd = new long[nInt + 1];
-        System.out.printf("%n--- grid measurement (%s, %d motors, box x∈[%.1f,%.1f] y±%.1f, seed=0x%X) ---%n",
-                gpu ? "GPU" : "CPU", sc.mot.nMotors, bXlo, bXhi, bYhalf, SEED);
+        System.out.printf("%n--- grid measurement (%s, %d motors, box x∈[%.1f,%.1f] y±%.1f, seed=0x%X, myoColTol=%.1f nm) ---%n",
+                gpu ? "GPU" : "CPU", sc.mot.nMotors, bXlo, bXhi, bYhalf, SEED, COL_TOL * 1e3);
         if (MATBED) {
             double bedX = bXhi - bXlo, bedY = 2 * bYhalf, filLen = sc.fil.n * sc.segL;
             double tip = KAPPA / (MotorStore.LEVER_LEN * 1e-6) / (MotorStore.LEVER_LEN * 1e-6) * 1e3;   // N/m → pN/nm (×1e3)
@@ -2142,6 +2163,11 @@ public final class GlidingHarness {
         }
 
         int k = 0;
+        // -stretchcensus (STEP-3, read-only): bound-population geometry over all samples.
+        //   acc = {extSum(nm), extSqSum, fdSum(pN, signed), fdAbsSum(pN), N(bound-samples)}
+        double[] stxAcc = new double[5];
+        long[] extHist = new long[11];   // anchor-spring extension bins: 0-20 nm, 2 nm each, [10]=overflow
+        long[] fdHist  = new long[17];   // forceDotFil bins: −8..+8 pN, 1 pN each, [0]=≤−8 [16]=≥+8
         long rollPlus = 0, rollMinus = 0;   // -rollcensus accumulators (bound-head roll sign, over all samples)
         long mhatPlus = 0, mhatMinus = 0;   // -mhatcensus accumulators (bound-head head-axis sign, over all samples)
         double[] mhatFracT = new double[nInt + 2]; int mhatNT = 0;   // -mhatcensus per-sample +ẑ fraction (census-vs-time)
@@ -2159,6 +2185,7 @@ public final class GlidingHarness {
                     res.transferToHost(sc.fil.coord, sc.mot.boundSeg);
                     cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot);
                     mnx[k] = minCoordX(sc.fil); mxx[k] = maxCoordX(sc.fil); mny[k] = minCoordY(sc.fil); mxy[k] = maxCoordY(sc.fil); k++;
+                    if (STRETCHCENSUS) { res.transferToHost(sc.mot.forceMag, sc.mot.forceDotFil, sc.mot.boundSeg); stretchTally(sc, stxAcc, extHist, fdHist); }
                     if (ROLLCENSUS) { res.transferToHost(sc.mot.body.yVec, sc.fil.uVec); long[] pm = rollTally(sc); rollPlus += pm[0]; rollMinus += pm[1]; }
                     if (MHATCENSUS) { res.transferToHost(sc.mot.body.uVec, sc.mot.boundSeg); long[] pm = mhatTally(sc); mhatPlus += pm[0]; mhatMinus += pm[1];
                         long tt = pm[0] + pm[1]; if (tt > 0 && mhatNT < mhatFracT.length) mhatFracT[mhatNT++] = (double) pm[0] / tt; }
@@ -2195,6 +2222,7 @@ public final class GlidingHarness {
                 if ((t + 1) % OUT_INT == 0 && k <= nInt) {
                     cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot);
                     mnx[k] = minCoordX(sc.fil); mxx[k] = maxCoordX(sc.fil); mny[k] = minCoordY(sc.fil); mxy[k] = maxCoordY(sc.fil); k++;
+                    if (STRETCHCENSUS) stretchTally(sc, stxAcc, extHist, fdHist);   // CPU host arrays already current
                 }
             }
         }
@@ -2268,6 +2296,24 @@ public final class GlidingHarness {
         double capRate = boundStepsTot > 0 ? (double) capFires / boundStepsTot : 0.0;
         System.out.printf("  CAP_ROW seed=0x%X faithfulRelease=%s capFires=%d boundSteps=%d capRatePerBoundStep=%.5f%n",
                 SEED, FAITHFUL_RELEASE ? "ON" : "OFF", capFires, boundStepsTot, capRate);
+        if (STRETCHCENSUS) {
+            // Aggregate dwell = ΣboundSteps / Σreleases · dt  (mean bound lifetime over the whole run).
+            long relTot = 0; for (int m = 0; m < sc.mot.nMotors; m++) relTot += sc.mot.stats.get(2 * m + 1);
+            double dwellMs = relTot > 0 ? (boundStepsTot / (double) relTot) * DT * 1e3 : 0.0;
+            long N = (long) stxAcc[4];
+            double extMean = N > 0 ? stxAcc[0] / N : 0;
+            double extSd = N > 1 ? Math.sqrt(Math.max(0, stxAcc[1] / N - extMean * extMean)) : 0;
+            double fdMean = N > 0 ? stxAcc[2] / N : 0;          // signed per-head axial force (pN)
+            double fdAbsMean = N > 0 ? stxAcc[3] / N : 0;       // |per-head axial force| (pN)
+            System.out.printf("  STRETCH_ROW seed=0x%X coltol=%.1fnm density=%.0f boundSamples=%d extNm(mean±sd)=%.3f±%.3f fdFilPN(mean/absmean)=%.4f/%.4f dwellMs=%.3f%n",
+                    SEED, COL_TOL * 1e3, DENSITY, N, extMean, extSd, fdMean, fdAbsMean, dwellMs);
+            StringBuilder eh = new StringBuilder("  STRETCH_EXT_HIST(nm 0-2,2-4,...,18-20,>20):");
+            for (int b6 = 0; b6 < extHist.length; b6++) eh.append(' ').append(extHist[b6]);
+            System.out.println(eh);
+            StringBuilder fh = new StringBuilder("  STRETCH_FD_HIST(pN ≤−8,−7,...,+7,≥+8):");
+            for (int b6 = 0; b6 < fdHist.length; b6++) fh.append(' ').append(fdHist[b6]);
+            System.out.println(fh);
+        }
         if (TWISTCENSUS && sc.twistHist != null) {
             long[] hb = new long[6]; long binds = 0; double angSum = 0; long far = 0;
             for (int m = 0; m < sc.mot.nMotors; m++) for (int b6 = 0; b6 < 6; b6++) {
