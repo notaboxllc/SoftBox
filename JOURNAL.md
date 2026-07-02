@@ -1,5 +1,45 @@
 # Soft Box Project Journal
 
+## 2026-07-02 — SPEED LEVERS: none of density/step/kinetics gives a defensible path to skeletal 5–8; net glide is tug-of-war-pinned ~3. Two flag-gated sweeps (`-neckangle`, `-ratescale`); default byte-identical, no promotion.
+GPU `-full` 150k, 3 seedable mat draws each, LONG_ROW net v_axial + avgBound + per-bound drift (mean±SD).
+**STEP 1 (density, no code):** net v_axial rises to a broad shallow peak **d1500 ~3.28** then turns over at
+d2000 (~3.08); **d1000 (3.07) is ~7% below peak, NOT past it** — density buys only +7%, peak ≪ 5–8. Per-bound
+drift falls **monotonically** 0.295(d250)→0.159(d2000) = the tug-of-war signature. Op-density for 2/3 = d1000
+(reference, near-peak, cleaner per-head signal). **STEP 2 (neck angle `-neckangle`, step size):** **FLAT** —
+60→70→80° moves net v_axial ~0 (3.07/3.08/3.07), avgBound + per-bound unchanged (0.206). Step size is NOT a
+lever here (consistent with stroke-effective-lever=HEAD_LEN / θ-is-a-non-lever). **Settles the 60/70 confound:
+neck angle ≈ 0 of the BoA(−3.96,70°)/v2(−3.0,60°) gap** ⇒ the gap is CPU(BoA)/GPU(v2) + the 4b-iv ~0.87×
+parallel residual, not angle. 70° defensible but speed-neutral; 80° a null probe. **STEP 3 (cycle rate
+`-ratescale` = ×kOff + all nucleotide rates, at d1000/70°):** per-bound drift RISES +33%(×2)/+76%(×4) — V₀∝
+detach-rate holds at the single-head level — **but avgBound COLLAPSES 14.9→12.0→8.8**, so **net rises only
++6%(×2)/+8%(×4)**. The "biologically-legitimate 2×" ≠ a 2× glide; the duty×turnover product is near-conserved
+(the default+LT lesson, quantified). ×2 plausibly fast-skeletal, ×4 a probe — but neither reaches ~6.
+**Synthesis:** net ≈ avgBound×per-bound ≈ **3.0–3.4 across ALL levers** — no defensible single lever or stack
+reaches 5–8 (even optimistic d1500×rate2 ~3.5; the honest v1 net is ~4.6, not 8). Reaching higher needs
+BREAKING the duty×efficiency tradeoff (the HEAD_LEN-limited step, or less co-bound resistance) — not a
+density/angle/rate knob, out of scope. New flags default byte-identical; `BoA-v1ref` clean; no release change;
+NO promotion (adoption = separate signoff). → `PHASE2_SPEED_LEVERS_FINDINGS.md`.
+
+## 2026-07-01 — RELEASE RECONCILE (v2 ↔ active BoA): the −3.96/−3.0 gap is NOT release — v2 default is ALREADY catch-slip-only; BAIL invoked (STEP 1/2/3 moot). Audit only, no code changed, no runs.
+Documented both release pathways EXACTLY (STEP 0). **v2 DEFAULT motor** (no flags = SPHEREHEAD+AXLOCK+DIRSWING):
+the ONLY detachment is `catchSlipRelease` on `forceDotFil` (kOff 100/s, αCatch 0.92, αSlip 0.08, xCatch 2.5nm,
+xSlip 0.4nm, kT 4.116e-21J); the plain `cycle()` writes only `nucleotideState` (**cocking, never boundSeg**),
+`directedSwing` reads state only to pick the 0°/60° rest angle (torque, not release); break-cap 12pN is **OFF**
+by default; `cycleAtpDetach` (ATP-binding=detach) is CONFIG1-only, not the default. **Active BoA (`~/Code/BoA/`,
+the −3.96 producer):** `MyoFilLink.ckRelease` catch-slip on `forceDotFil` with **bit-identical** params;
+`MyoMotor.biochemStep` cycle is cocking-only (`dissociateADP` sets state NONE, does NOT `release()`); neck stroke
+0→**70°** (`BoxOfActin.java:565`); break-cap 12pN **ON**; refractory 1e-5s. **⇒ the hypothesized v2
+nucleotide-driven detachment DOES NOT EXIST** — both motors are catch-slip-on-F8-load only, cocking-only cycle,
+identical Guo–Guilford constants. Per the task's explicit bail clause, **STEP 1 (`-v1release`), STEP 2 (d1000
+three-way), STEP 3 (bound-in-ATP) are MOOT** and were not built/run. Two real differences remain, neither a
+nucleotide release: (1) **neck 70°(BoA) vs 60°(v2)** — the flagged confound + leading suspect for the duty/speed
+gap (larger stroke → different cross-bridge force → longer catch lifetime → higher avgBound), **change next, one
+at a time**; (2) break-cap default (BoA ON / v2 OFF) — wrong-direction for the duty gap (BoA detaches more yet
+avgBound higher) + rarely fires (peak ~6pN ≪ 12pN), already reachable via `-faithfulrelease`. Caveats: BoA −3.96
+is **CPU** (its f̂-swing is CPU-only; BoA GPU still legacy-F9), v2 −3.0 is **GPU**; plus the accepted 4b-iv
+~0.87× parallel-scheme residual. **No `-v1release` added; default byte-identical; `BoA-v1ref` byte-clean.**
+→ `PHASE2_RELEASE_RECONCILE_FINDINGS.md`.
+
 ## 2026-07-01 — DONE: promoted the f̂-directed sphere-head neck-stroke to the DEFAULT myosin (implements the DECISION below). New `-legacymotor` restores the old motor. Default CHANGED (contract = two bit-reproductions + CPU≡GPU).
 Collapsed `-spherehead -axlock -dirswing` into the default (runs with NO flags, GPU + `-cpu`): frozen-F9-90°
 (perp maintainer) + axial swing lock (F10→ŝ) + f̂-directed neck powerstroke (`CrossBridgeSystem.directedSwing`,

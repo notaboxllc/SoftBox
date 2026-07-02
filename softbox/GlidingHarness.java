@@ -95,6 +95,8 @@ public final class GlidingHarness {
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static double DENSITY = 500.0;              // motors / µm² (-density overrides for the speed-density trend)
+    static double NECK_ANGLE = 60.0;            // -neckangle <deg>: cocked neck-stroke rest angle (swingParams[3]); default 60 ⇒ byte-identical. STEP-2 step-size lever (step ≈ 2·L·sin(θ/2)).
+    static double RATE_SCALE = 1.0;             // -ratescale <x>: scale catch-slip kOff + ALL nucleotide cycle rates by x (faster kinetics = V₀ = step·detach-rate); default 1 ⇒ byte-identical. STEP-3 cycle-rate lever.
     static final int    FIL_SEGS = 11;          // ~2 µm of 64-monomer segments
     static final int    FIL_MONO = 64;          // filSegLength (gliding override)
     // bed geometry: bX0 = filament +x end; the bed spans x∈[bXlo,bXhi], y∈[-bYhalf,bYhalf].
@@ -197,6 +199,8 @@ public final class GlidingHarness {
             else if (args[i].equals("-atprecharge")) ATP_RECHARGE = true;    // jba: catch-slip-ONLY release + ATP recharge on release + bound head locked out of ATP uptake (no dice-roll detach)
             else if (args[i].equals("-boundgeom")) { CONFIG1 = true; BOUNDGEOM = true; }      // bound-state geometry report (single motor, transport topology)
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
+            else if (args[i].equals("-neckangle")) NECK_ANGLE = Double.parseDouble(args[++i]);   // STEP-2 step-size lever: cocked neck rest angle (deg)
+            else if (args[i].equals("-ratescale")) RATE_SCALE = Double.parseDouble(args[++i]);   // STEP-3 cycle-rate lever: ×scale on kOff + all nucleotide rates
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
@@ -347,6 +351,14 @@ public final class GlidingHarness {
         mot.setFaithfulRefractory(FAITHFUL_REFRACTORY); // §6.11 default off (HEAD 100%/1-step block)
         mot.setDashpot(XBDASH_MULT, DT, DASH_MECH);     // CROSSBRIDGE_DASHPOT: γ_xb = mult·γ_head (mult=0 ⇒ off)
         mot.setImplicit(MYO_SPRING, DT);                // IMPLICIT_CROSSBRIDGE params (only consumed when -xbimplicit wired)
+        // STEP-3 cycle-rate lever (-ratescale, default 1.0 ⇒ no-op/byte-identical): scale the catch-slip kOff AND
+        // every nucleotide cycle rate (atpOn, on/off ATP→ADPPi→ADP→NONE) by the same factor. V₀ = step·detach-rate,
+        // so faster kinetics raises the single-molecule ceiling; the sweep exposes the duty×turnover tradeoff.
+        // dt-safe at ×4: max rate·dt = atpOn·dt = 2e4·1e-5·4 = 0.8 < 1.
+        if (RATE_SCALE != 1.0) {
+            mot.kinParams.set(0, (float) (mot.kinParams.get(0) * RATE_SCALE));   // catch-slip kOff ×scale
+            for (int r = 1; r <= 7; r++) mot.nucParams.set(r, (float) (mot.nucParams.get(r) * RATE_SCALE));  // all cycle rates ×scale
+        }
         mot.nucleotideState.init(MotorStore.NUC_NONE);
 
         int MAXC = SpatialGrid.MAX_CAND;
@@ -385,7 +397,7 @@ public final class GlidingHarness {
         // -dirswing: the deterministic polarity-directed power stroke replaces the J1 angular converter (whose
         // cross(lever,head) axis is degenerate at the straight rest ⇒ ill-defined swing direction). Turn the J1
         // TORSION off (jointParams[3]=0; the J1 position spring stays) so directedSwing is the sole stroke driver.
-        sc.swingParams = FloatArray.fromElements(0.4f, (float) DT, 0f, 60f);
+        sc.swingParams = FloatArray.fromElements(0.4f, (float) DT, 0f, (float) NECK_ANGLE);   // STEP-2: [3]=cocked neck angle (default 60°)
         if (DIRSWING) sc.jointParams.set(3, 0f);
         if (SPHEREHEAD && HEADLOCK != 1.0) sc.xbParams.set(2, (float) (0.4 * HEADLOCK));   // -headlock: stiffen the F9 ⊥ hold + F10 axial/roll lock (diagnostic; the stroke coeff swingParams[0] is untouched)
         if (TWISTCENSUS) { sc.twistHist = new IntArray(6 * nMot); sc.twistHist.init(0); sc.prevBoundTw = new IntArray(nMot); sc.prevBoundTw.init(-1); }
