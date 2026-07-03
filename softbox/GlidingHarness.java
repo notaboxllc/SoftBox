@@ -541,6 +541,12 @@ public final class GlidingHarness {
         if (DASH_ON) CrossBridgeSystem.dashpotForces(b.coord, b.uVec, b.bTransGam, f.coord, f.uVec, f.segLength,
                 mot.boundSeg, mot.bindArc, sc.bondData, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
         CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+        // f̂-MOTOR DEFAULT stroke (2026-07-03): the directed power stroke, identical to stepOrig's dispatch. Without
+        // it -freshread ran a STROKELESS motor (the f̂ promotion a5c67cd wired directedSwing into stepOrig only). It
+        // reads the pre-biochem nucleotideState/boundSeg (consistent with this-order's bond force + gather; a
+        // <1%-of-motor-steps secondary vs stepOrig's post-cycle read — release currency is the dominant A/B variable).
+        if (HFSWING) CrossBridgeSystem.directedSwingHeadFrame(b.uVec, b.yVec, b.torqueSum, b.bRotGam, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+        else if (DIRSWING) CrossBridgeSystem.directedSwing(b.uVec, b.torqueSum, b.bRotGam, f.uVec, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
         // --- filament forces + gather (pre-release bound set ⇒ Newton's 3rd law preserved) ---
         ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
@@ -605,7 +611,12 @@ public final class GlidingHarness {
                 .task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
             if (DASH_ON) tg = tg.task("dash", CrossBridgeSystem::dashpotForces, b.coord, b.uVec, b.bTransGam, f.coord, f.uVec, f.segLength, mot.boundSeg, mot.bindArc, sc.bondData, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
             tg = tg
-                .task("applyHead", CrossBridgeSystem::applyHeadForce, sc.bondData, b.forceSum, b.torqueSum, mot.counts)
+                .task("applyHead", CrossBridgeSystem::applyHeadForce, sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+            // f̂-MOTOR DEFAULT stroke (2026-07-03): mirror stepFresh — directed power stroke, else -freshread runs a
+            // strokeless motor. Same dispatch as the default buildPlan branch (:671–672).
+            if (HFSWING) tg = tg.task("dirSwing", CrossBridgeSystem::directedSwingHeadFrame, b.uVec, b.yVec, b.torqueSum, b.bRotGam, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+            else if (DIRSWING) tg = tg.task("dirSwing", CrossBridgeSystem::directedSwing, b.uVec, b.torqueSum, b.bRotGam, f.uVec, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+            tg = tg
                 .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
                 .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
                 .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)

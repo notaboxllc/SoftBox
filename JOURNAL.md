@@ -1,5 +1,50 @@
 # Soft Box Project Journal
 
+## 2026-07-03 — `-freshread` A/B: fresh release-force does NOT close the BoA/v2 capture-radius split — it collapses v2's net HARDER. Stale release-force REFUTED as the cause. Fixed the orphaned stepFresh; no promotion. `BoA-v1ref` untouched; default byte-unchanged.
+Tests whether making v2's catch-slip read the FRESH (this-step) cross-bridge load closes the dense-regime
+capture-radius sign split (`RELEASE_FORCE_TIMING_AUDIT.md`). **STEP 0 provenance — jba's recollection CONFIRMED.**
+`-freshread`/`stepFresh` = the 4b-iv release-read reorder (`35ef395`+`1c28b3b`, 2026-06-15), v2 analog of BoA's
+2026-06-04 GPU release-read reconciliation; left gated because at 4b-iv it shifted the MECHANISM (assist +0.43 pp)
+but NOT the net residual. Then the **f̂-motor promotion** (`a5c67cd`, 2026-07-01) wired `directedSwing` into
+`stepOrig` ONLY — `stepFresh`/`FRESH_READ` were dropped forward (orphaned, strokeless). **Scoped fix (jba-approved):**
+the only real gap for the default motor was the missing `directedSwing` task (J1-off already shared via
+`sc.jointParams===mot.jointParams`; SPHEREHEAD+AXLOCK via shared `sc.xbParams`) — added it to `stepFresh` + the
+`FRESH_READ` buildPlan, identical to `stepOrig`. Validated CPU≡GPU **bit-identical** on the fixed `-freshread`;
+`stepOrig` byte-unchanged (stale col reproduces PHASE2). **STEP 1 A/B (GPU `-full` d1000, 150k, LONG_ROW, drift =
+|v_axial|/avgBound):** stale drift 0.384/0.205/0.090 (4/6/8 nm, ≡ PHASE2) → **fresh 0.244 / 0.030 / reversed**; net
+−3.72/−3.02/−1.61 → **fresh −2.51 / −0.51 / +2.1(coverage-violated, sign-reversed)**. **Fresh does NOT flatten v2
+toward BoA's rising-net shape — it makes v2's collapse STEEPER** (net → 0 @6 nm, reverses @8 nm), while RAISING
+avgBound (14.8→16.7) — a deeper co-bound tug-of-war (the `IMPLICIT_XB_CAPTURE_RADIUS` mechanism: more retained heads
+→ more cancellation → less net). Notably **stale v2 AGREES with BoA at 6 nm** (both net ≈ −3.02); fresh breaks it.
+**⇒ FORK: the split does NOT close; the 1-step stale release-force is REFUTED as the cause** (empirically refutes the
+`RELEASE_FORCE_TIMING_AUDIT` candidate) — the residual is the **seg-gather co-bound load-sharing**, untouched by
+release currency. **No promotion** (also fresh degrades glide ⇒ would wreck the assay). Next cut (planner):
+engagement-matched BoA↔v2 + a fresh-force seg-gather (CSR-parity design task). Kept: the `stepFresh` faithfulness fix
+(default-OFF) as a now-valid A/B instrument. Caveat: `stepFresh` bundles the full v1-order reorder (release currency
++ force-before-biochem), so not a currency-only isolation — but the direction (collapse away from BoA) is robust.
+Report: `FRESHREAD_AB_FINDINGS.md`; raw `RUN_LOGS/2026-07-03_freshread_ab.txt`.
+
+## 2026-07-03 — RELEASE-FORCE TIMING AUDIT (v2 vs active BoA): they DIFFER — BoA reads FRESH, v2-default reads STALE (1-step lag). Code-read only; nothing changed; `BoA-v1ref` untouched.
+The catch-slip/break-cap read the cross-bridge load at DIFFERENT points in the step. **Active BoA** (CPU
+`MyoFilLink.step`: `addForces`→`ckRelease` in the same step, `:187`→`:193`, so `ckRelease` reads the `forceDotFil`
+`addForces` just wrote at `:267`; GPU reconciled 2026-06-04 — `bridgeMotorForceWriteback`→`ckRelease`,
+`GPUMoveThing.java:6216`) samples **this step's** force = the same evaluation that integrates ⇒ **0-step lag,
+FRESH**. **v2 default** (`GlidingHarness.stepOrig`: `catchSlipRelease` at `:45` reads `mot.forceDotFil` written by
+`registerForceDot` at `:107` of the PREVIOUS step) samples a force one full integrate behind the force actually
+moving the bodies this step (`bondForces`@`:84`) ⇒ **1-step lag, STALE** (bit-identical on both v2 runners ⇒ scheme,
+not runner). **Refines the prior scheme-read:** BOTH codes are Jacobi at the position level (BoA = force-waves →
+`gatherForces` → one `moveThings`@`BoxOfActin.java:1564`; v2 = forces → integrate) — neither catch sees a co-bound
+neighbor's *within-step* motion. The difference is the release-force **currency/lag**, NOT Gauss–Seidel sequential
+per-object updates (corrects `IMPLICIT_XB_CAPTURE_RADIUS_FINDINGS.md`'s "BoA Gauss–Seidel/fresh" framing). BoA
+itself flagged the identical 1-step lag as a defect and removed it from its GPU path; v2's default IS the pre-fix
+structure. **Candidate fix already exists** — `-freshread`/`stepFresh` (both runners) computes force + `register`
+BEFORE release (integration last, forward-Euler unchanged), == BoA's own reconciliation; compatible with the
+race-free CSR gather (pre-release bound set, no atomics) and `-cpu` bit-identity (order-independent wang-hash draws).
+Effect-size caveat: BoA judged the lag "harmless at dt=1e-4"; v2 runs dt=1e-5 (per-step drift smaller) — the split
+is dense-regime only, so a `stepOrig`↔`stepFresh` A/B at the split's capture radii/density is the cheap decisive
+cut (NOT run — planner call; flipping the default re-baselines the promoted glide/avgBound). Report:
+`RELEASE_FORCE_TIMING_AUDIT.md`.
+
 ## 2026-07-03 — IMPLICIT CROSS-BRIDGE @dt=1e-5 vs the dt-refined target: PARTIAL (head-only insufficient) + the gliding assay is UNBRACKETED-dt-sensitive. Measurement only; default byte-identical; `BoA-v1ref` untouched.
 Goal: does the banked `-xbimplicit` (F8 spring implicit on the bound-head translation, already wired CPU+GPU)
 reproduce the dt-refined converged binding at production dt? Promoted default motor, GPU `-full` d1000, LONG_ROW.
