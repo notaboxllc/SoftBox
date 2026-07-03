@@ -1,5 +1,24 @@
 # Soft Box Project Journal
 
+## 2026-07-03 — Engagement-matched BoA↔v2: the capture-radius split is a GENUINE seg-gather co-bound load-sharing difference, NOT the engagement confound.
+At matched avgBound + matched knob (radius r8, avgB≈20) v2 per-bound drift **0.081** vs BoA **0.248** (≈3×; **5.5×**
+after the engagement correction, which points the WRONG way — v2 binds fewer heads at r8 and its own drift curve
+falls steeply, so projecting to BoA's avgBound *widens* the gap) ⇒ **confound REJECTED** (branch 1). Both codes
+span the same avgBound range (~10–20) via radius, so "same curve, different ranges" is inapplicable; within it the
+drifts cross at the anchor and split — v2 craters monotonically (0.380→0.081 over r4→r8), BoA flat/U-shaped
+(0.259→0.167→0.248). **Branch 2 CONFIRMED** = the accepted 4b-iv Jacobi(v2-GPU stale)/Gauss–Seidel(BoA-CPU fresh)
+parallel-scheme residual **localized to the co-bound seg-gather**: quiescent sparse, **grows with co-bound
+density** (dense-regime ring risk; cf. `jacobi-cobound-scheme-risk`). **Branch 3 CONFIRMED** = v2's radius and
+density knobs trace *different* drift-vs-avgBound curves (radius steeper, 0.48× density at avgB≈19; this-session
+probe: density d2000 drift 0.152 vs radius r8 0.081 at avgB≈19) — radius carries per-head stretch/dwell geometry
+beyond count (v2-internal, not the code split). Overlay assembled from the two protocol-matched 3-seed sweeps
+(`PHASE2_SPEED_LEVERS` density arm, `PHASE2_CAPTURE_RADIUS` radius arm) + `CAPTURE_RADIUS_REPLICATE` (BoA radius),
+density arm re-confirmed this session (probe seed 0, d1000 drift 0.205≡0.206). **Scope-flag:** a fresh-force
+(Gauss–Seidel) seg-gather is now a warranted DESIGN task (risks the race-free/CSR/`-cpu`-parity property) — planner
+sign-off, NOT started. BoA density-@avgB20 gap SPECIFIED not run (BoA-CC follow-up). Measurement-only; default
+byte-identical; `BoA-v1ref` untouched. Report: `ENGAGEMENT_MATCHED_FINDINGS.md`; raw
+`RUN_LOGS/2026-07-03_engagement_matched_probe.txt`.
+
 ## 2026-07-03 — RELEASE-PATH FULL AUDIT (v2 vs active BoA): cycle state-machine, rates, cadence, load-gate, cocking, catch-slip, break-cap, step-order. Read-only; no code changed, no runs. `BoA-v1ref` untouched.
 Traced the ENTIRE motor release path end to end (the reconcile doc's "both cocking-only" was an assertion; the
 timing audit checked only catch-slip force currency — this verifies everything else). **Cycle is bit-identical:**
