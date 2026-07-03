@@ -87,6 +87,7 @@ public final class GlidingHarness {
     static boolean ROLLSIGN = false;             // -rollsign: STEREOSPECIFIC roll — lock head.yVec to +ŝ specifically (from polarity), not nearer-of-±ŝ. Implies -hfswing. Fixes the head-frame swing's roll-sign DOF.
     static boolean TWISTCENSUS = false;          // -twistcensus: capture the arrival-angle (head.yVec vs +ŝ) at each fresh bind — the roll-sign lock's assembly TWIST cost. Diagnostic only.
     static boolean MHATCENSUS = false;           // -mhatcensus: census bound heads' HEAD-AXIS sign (head.uVec·n̂bed, n̂bed=+Z) — the second free sign (mhat=±n̂). +ẑ is the productive pole (p=ŷ×û=f̂). Diagnostic only; prints aggregate + per-sample time series + stdev.
+    static boolean STROKECENSUS = false;         // -strokecensus: read-only per-bound-head neck-POWERSTROKE-fidelity census. swing_perp = uLever − (uLever·mhat)mhat (the neck's tilt off the head axis; |swing_perp|=sin(lever–head angle)=stroke magnitude). Reports: stroked fraction (|swing_perp|>sin40°); barbed-sweep fraction (swing_perp·f̂<0 ⇒ tip pointed / rear barbed = productive, mirrors BoA NECK_STROKE_POLARITY 99.6%); swing AXIAL fraction |swing_perp·f̂|/|swing_perp| (1.0=purely axial). f̂=bound seg.uVec. No force/RNG/integration; default-off byte-identical. STROKE_FIDELITY_CENSUS.
     static boolean MHATSET = false;              // -mhatset: BIND-TIME stereospecific head-axis init — at each fresh bind set head.uVec to +n̂bed (productive pole), consistent with the +ŝ roll. Init only, NO persistent torque. Implies -rollsign. Default-off ⇒ byte-identical.
     static double HEADLOCK = 1.0;                 // -headlock <mult>: scale the head orientation-lock coeff (xbParams[2], the F9 ⊥ hold + F10 axial/roll lock). >1 stiffens (diagnostic for the head-noise claim). Default 1 ⇒ byte-identical.
     static boolean LYMN_TAYLOR = false;          // -lymntaylor (jba 2026-06-29): the VALIDATED canonical Lymn-Taylor cycle. ONE release pathway (NONE→ATP = detachment, fast/nucleotide-driven); the 4c catch MODULATES the ADP→NONE rate (not a release). Replaces the -atprecharge experiments. Default-off ⇒ byte-identical; overrides ATP_RECHARGE/ATP_RELEASE when on.
@@ -196,6 +197,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-rollsign")) { SPHEREHEAD = true; AXLOCK = true; DIRSWING = true; HFSWING = true; ROLLSIGN = true; }   // stereospecific +ŝ roll; implies -hfswing
             else if (args[i].equals("-twistcensus")) TWISTCENSUS = true;   // capture the bind-time roll twist (arrival angle vs +ŝ)
             else if (args[i].equals("-mhatcensus")) MHATCENSUS = true;     // census the bound-head head-axis sign (head.uVec·n̂bed)
+            else if (args[i].equals("-strokecensus")) STROKECENSUS = true;  // read-only per-bound-head neck-powerstroke fidelity census (swing axial frac, barbed-sweep frac)
             else if (args[i].equals("-mhatset")) { SPHEREHEAD = true; AXLOCK = true; DIRSWING = true; HFSWING = true; ROLLSIGN = true; MHATSET = true; }   // bind-time stereospecific head-axis init (+n̂); implies -rollsign
             else if (args[i].equals("-legacymotor")) LEGACYMOTOR = true;    // restore the OLD default motor (v1-port F9 head-swing); sphere-head stack OFF
             else if (args[i].equals("-headlock")) HEADLOCK = Double.parseDouble(args[++i]);   // head orientation-lock stiffness multiplier (diagnostic)
@@ -2172,6 +2174,45 @@ public final class GlidingHarness {
         return new long[]{ plus, minus };
     }
 
+    /** -strokecensus tally (read-only): over the CURRENTLY-bound population, measure per-head neck-POWERSTROKE
+     *  fidelity from the stored body pose — NO force/RNG/integration touched.
+     *    mhat  = head.uVec (head axis);  uLever = lever.uVec (neck axis);  f̂ = bound seg.uVec (pointed→barbed, +x).
+     *    swing_perp = uLever − (uLever·mhat)·mhat        (the neck tilt off the head axis; |swing_perp| = sin θ_swing)
+     *    stroked    ⟺ |swing_perp| > sin40° (0.643)      (BoA's >40° stroked gate)
+     *    barbed-sweep (productive) ⟺ swing_perp·f̂ < 0    (tip tilts pointed ⇒ REAR sweeps barbed = the −x-glide sense;
+     *                                                      target=cosθ·mhat−sinθ·f̂ ⇒ ideal swing_perp=−sinθ·f̂)
+     *    swing axial fraction = |swing_perp·f̂| / |swing_perp|   (1.0 = purely axial/productive plane; <1 = off-axis wobble)
+     *  acc = {boundSamples, strokedSamples, barbedProductive(among stroked), axialFracSum(among stroked),
+     *         swingSinSum(among bound), axialFracSum_allBound, N_allBoundForAxial}. axFracHist over stroked heads. */
+    static void strokeTally(Scene sc, double[] acc, long[] axFracHist) {
+        RigidRodBody b = sc.mot.body; int nB = b.uVec.getSize() / 3;
+        int nS = sc.fil.uVec.getSize() / 3;
+        final double SIN40 = 0.6427876;
+        for (int m = 0; m < sc.mot.nMotors; m++) {
+            int s = sc.mot.boundSeg.get(m); if (s < 0) continue;
+            int L = 3 * m + 1, h = 3 * m + 2;
+            double lx = b.uVec.get(L), ly = b.uVec.get(nB + L), lz = b.uVec.get(2 * nB + L);
+            double mx = b.uVec.get(h), my = b.uVec.get(nB + h), mz = b.uVec.get(2 * nB + h);
+            double fx = sc.fil.uVec.get(s), fy = sc.fil.uVec.get(nS + s), fz = sc.fil.uVec.get(2 * nS + s);
+            double fm = Math.sqrt(fx*fx + fy*fy + fz*fz); if (fm < 1e-9) continue; fx/=fm; fy/=fm; fz/=fm;
+            double dotLM = lx*mx + ly*my + lz*mz;                       // uLever·mhat
+            double sx = lx - dotLM*mx, sy = ly - dotLM*my, sz = lz - dotLM*mz;   // swing_perp
+            double sMag = Math.sqrt(sx*sx + sy*sy + sz*sz);             // = sin(lever–head angle)
+            acc[0] += 1;                                                // boundSamples
+            acc[4] += sMag;                                             // Σ sin θ_swing (all bound)
+            if (sMag < 1e-9) continue;
+            double axial = (sx*fx + sy*fy + sz*fz);                     // swing_perp·f̂ (signed)
+            double axialFrac = Math.abs(axial) / sMag;                  // ∈[0,1]
+            acc[5] += axialFrac; acc[6] += 1;                           // axial frac over ALL bound (denominator N)
+            if (sMag > SIN40) {                                         // STROKED head
+                acc[1] += 1;                                            // strokedSamples
+                if (axial < 0) acc[2] += 1;                             // barbed-productive (rear sweeps barbed)
+                acc[3] += axialFrac;                                    // Σ axial frac over stroked
+                int hb = (int)(axialFrac * 10.0); if (hb < 0) hb = 0; if (hb > 10) hb = 10; axFracHist[hb]++;
+            }
+        }
+    }
+
     static void measureGrid(Scene sc, int M, boolean gpu) {
         final int OUT_INT = 100;
         final double dtInt = OUT_INT * DT;
@@ -2195,6 +2236,8 @@ public final class GlidingHarness {
         double[] stxAcc = new double[5];
         long[] extHist = new long[11];   // anchor-spring extension bins: 0-20 nm, 2 nm each, [10]=overflow
         long[] fdHist  = new long[17];   // forceDotFil bins: −8..+8 pN, 1 pN each, [0]=≤−8 [16]=≥+8
+        double[] strAcc = new double[7];    // -strokecensus acc {boundSamples,strokedSamples,barbedProductive,axialFracSum_stroked,swingSinSum_bound,axialFracSum_bound,N_bound}
+        long[] axFracHist = new long[11];   // -strokecensus swing-axial-fraction histogram over STROKED heads, 0.0-1.0 in 0.1 bins
         long rollPlus = 0, rollMinus = 0;   // -rollcensus accumulators (bound-head roll sign, over all samples)
         long mhatPlus = 0, mhatMinus = 0;   // -mhatcensus accumulators (bound-head head-axis sign, over all samples)
         double[] mhatFracT = new double[nInt + 2]; int mhatNT = 0;   // -mhatcensus per-sample +ẑ fraction (census-vs-time)
@@ -2213,6 +2256,7 @@ public final class GlidingHarness {
                     cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot);
                     mnx[k] = minCoordX(sc.fil); mxx[k] = maxCoordX(sc.fil); mny[k] = minCoordY(sc.fil); mxy[k] = maxCoordY(sc.fil); k++;
                     if (STRETCHCENSUS) { res.transferToHost(sc.mot.forceMag, sc.mot.forceDotFil, sc.mot.boundSeg); stretchTally(sc, stxAcc, extHist, fdHist); }
+                    if (STROKECENSUS) { res.transferToHost(sc.mot.body.uVec, sc.mot.boundSeg, sc.fil.uVec); strokeTally(sc, strAcc, axFracHist); }
                     if (ROLLCENSUS) { res.transferToHost(sc.mot.body.yVec, sc.fil.uVec); long[] pm = rollTally(sc); rollPlus += pm[0]; rollMinus += pm[1]; }
                     if (MHATCENSUS) { res.transferToHost(sc.mot.body.uVec, sc.mot.boundSeg); long[] pm = mhatTally(sc); mhatPlus += pm[0]; mhatMinus += pm[1];
                         long tt = pm[0] + pm[1]; if (tt > 0 && mhatNT < mhatFracT.length) mhatFracT[mhatNT++] = (double) pm[0] / tt; }
@@ -2250,6 +2294,7 @@ public final class GlidingHarness {
                     cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot);
                     mnx[k] = minCoordX(sc.fil); mxx[k] = maxCoordX(sc.fil); mny[k] = minCoordY(sc.fil); mxy[k] = maxCoordY(sc.fil); k++;
                     if (STRETCHCENSUS) stretchTally(sc, stxAcc, extHist, fdHist);   // CPU host arrays already current
+                    if (STROKECENSUS) strokeTally(sc, strAcc, axFracHist);          // CPU host arrays already current
                 }
             }
         }
@@ -2323,6 +2368,20 @@ public final class GlidingHarness {
         double capRate = boundStepsTot > 0 ? (double) capFires / boundStepsTot : 0.0;
         System.out.printf("  CAP_ROW seed=0x%X faithfulRelease=%s capFires=%d boundSteps=%d capRatePerBoundStep=%.5f%n",
                 SEED, FAITHFUL_RELEASE ? "ON" : "OFF", capFires, boundStepsTot, capRate);
+        if (STROKECENSUS) {
+            // Per-bound-head neck-powerstroke fidelity (read-only pose census). f̂=barbed=+x; productive glide=−x.
+            long boundN = (long) strAcc[0], strokedN = (long) strAcc[1], NbAx = (long) strAcc[6];
+            double strokedFrac = boundN > 0 ? strAcc[1] / strAcc[0] : 0;             // fraction of bound heads with |swing|>sin40°
+            double barbedFrac  = strokedN > 0 ? strAcc[2] / strAcc[1] : 0;           // barbed-productive among STROKED (BoA ref 99.6%)
+            double axFracStroked = strokedN > 0 ? strAcc[3] / strAcc[1] : 0;         // mean swing axial fraction over stroked
+            double axFracBound   = NbAx > 0 ? strAcc[5] / strAcc[6] : 0;             // mean swing axial fraction over ALL bound
+            double meanSwingDeg  = boundN > 0 ? Math.toDegrees(Math.asin(Math.min(1.0, strAcc[4] / strAcc[0]))) : 0; // ⟨sin⟩→deg (proxy)
+            System.out.printf("  STROKE_ROW seed=0x%X coltol=%.1fnm density=%.0f avgBound~ boundSamples=%d strokedFrac=%.4f barbedSweepFrac=%.4f swingAxialFrac(stroked)=%.4f swingAxialFrac(bound)=%.4f meanSwingDeg=%.2f%n",
+                    SEED, COL_TOL * 1e3, DENSITY, boundN, strokedFrac, barbedFrac, axFracStroked, axFracBound, meanSwingDeg);
+            StringBuilder ah = new StringBuilder("  STROKE_AXFRAC_HIST(stroked heads, 0.0-1.0 /0.1):");
+            for (int b6 = 0; b6 < axFracHist.length; b6++) ah.append(' ').append(axFracHist[b6]);
+            System.out.println(ah);
+        }
         if (STRETCHCENSUS) {
             // Aggregate dwell = ΣboundSteps / Σreleases · dt  (mean bound lifetime over the whole run).
             long relTot = 0; for (int m = 0; m < sc.mot.nMotors; m++) relTot += sc.mot.stats.get(2 * m + 1);

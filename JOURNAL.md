@@ -1,5 +1,26 @@
 # Soft Box Project Journal
 
+## 2026-07-03 — Stroke-fidelity census vs engagement (v2, radius knob coltol4→coltol8 @ d1000, 3 seeds): v2's neck-powerstroke STAYS FAITHFUL as engagement rises ⇒ the capture-radius split is the seg-gather, NOT the motor.
+New read-only `-strokecensus` (per-bound-head neck-powerstroke pose fidelity: swing axial fraction, barbed-sweep
+fraction, stroked fraction, swing angle + histogram; default-off byte-identical; CPU≡GPU aggregate). Radius knob
+(the split's own axis) LOW coltol4 (avgB 10.08) vs HIGH coltol8 (avgB 18.64). **Every stroke-DIRECTION metric is
+FLAT** across the +85 % engagement rise that craters per-bound drift −78 %: barbed-sweep **0.997→0.998** (≈BoA's
+99.6 %), swing axial frac **0.956→0.957** (>92 % of stroked heads in the top 0.9–1.0 axial bin at both), swing
+angle **57.4→57.1°**, stroked frac 0.925→0.921, mhat pole **~49→49 %**, roll ŝ **~50→50 %**; per-stroke **|force|
+even RISES +15 %** (3.08→3.55 pN). The one moving transport metric — signed impulse/head **−56 %** (the task's
+pre-flagged "motor effect") — **decomposes into non-stroke causes:** co-bound signed-force cancellation (|force|↑,
+signed↓ = the gather) + catch-slip dwell-halving (0.87→0.45 ms, kinetics on stretched binding). **Both move
+IDENTICALLY in BoA** (signed 0.238→0.136, |force| 2.90→3.18, dwell 0.640→0.244) **whose net RISES** ⇒ metric ③ is
+NOT the code-differentiator. **⇒ FORK BRANCH 1 (clean confirmation): jba's motor/stroke-degradation hypothesis is
+RULED OUT; the `ENGAGEMENT_MATCHED` seg-gather attribution STANDS.** Also explains `-freshread` deepening the
+collapse (more retained heads → more gather cancellation, stroke unchanged). The split is now triple-excluded: not
+release timing (`FRESHREAD_AB`), not the engagement confound (`ENGAGEMENT_MATCHED`), not the motor (this census) —
+it is the co-bound seg-gather (Jacobi/GS) load-sharing; the fresh-force gather remains the warranted DESIGN task
+(planner sign-off, risks CSR/`-cpu` parity). Validation: GRID_ROW byte-identical with/without the flag; CPU≡GPU
+census aggregate (barbed 0.9962 vs 0.9961); no stroke kernel touched (bail condition never triggered). BoA
+barbed/axial-vs-engagement run SPECIFIED not run (BoA-CC). `BoA-v1ref` untouched. Report:
+`STROKE_FIDELITY_CENSUS_FINDINGS.md`; raw `RUN_LOGS/2026-07-03_stroke_fidelity_census.txt`.
+
 ## 2026-07-03 — Engagement-matched BoA↔v2: the capture-radius split is a GENUINE seg-gather co-bound load-sharing difference, NOT the engagement confound.
 At matched avgBound + matched knob (radius r8, avgB≈20) v2 per-bound drift **0.081** vs BoA **0.248** (≈3×; **5.5×**
 after the engagement correction, which points the WRONG way — v2 binds fewer heads at r8 and its own drift curve
