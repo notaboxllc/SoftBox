@@ -1,5 +1,25 @@
 # Soft Box Project Journal
 
+## 2026-07-03 — RELEASE-PATH FULL AUDIT (v2 vs active BoA): cycle state-machine, rates, cadence, load-gate, cocking, catch-slip, break-cap, step-order. Read-only; no code changed, no runs. `BoA-v1ref` untouched.
+Traced the ENTIRE motor release path end to end (the reconcile doc's "both cocking-only" was an assertion; the
+timing audit checked only catch-slip force currency — this verifies everything else). **Cycle is bit-identical:**
+same states/order (NONE→ATP→ADPPi→ADP→NONE), same 6 rates (2e4/100/100/1e4/0/1e3 — v2 `MotorStore.setNucParams`
+== BoA `Env.java:1329-1345`), same **EVERY-STEP** `rate·deltaT` cadence at dt=1e-5 (**the biochemDeltaT/
+biochemCheckInt cadence gates actin/monomer/crosslink biochem, NOT the motor** — `BoxOfActin.java:1623` runs
+`biochemStart` unconditionally, `MyoMotor.biochemStep` uses `Env.deltaT`; candidate cadence divergence RULED OUT),
+same 10-window boxcar ADP→NONE load-gate (forceDotFil avg≤0 v2 / >0-blocks BoA — sign+threshold+window match),
+same `isCocked=!isADPPi`, and **BOTH cocking-only** (v2 `cycleAtpDetach` gated `CONFIG1&&ATP_RELEASE` off; BoA
+`biochemStep` never calls `release()` — every branch traced). Catch-slip formula+constants bit-identical (kOff100/
+0.92/0.08/2.5nm/0.4nm). **Beyond the KNOWN release-force lag (#2, already refuted as the split cause), found 3 NEW
+release-adjacent diffs, all from v2 registering the load at step END:** #3 the cycle's ADP→NONE load-gate reads
+STALE (v2)/FRESH (BoA); #4 the stroke reads THIS-step post-cycle state (v2)/PRIOR-step state (BoA) — opposite
+currency direction, <1% of steps; #5 v2 releases-before-binds vs BoA binds-before-releases. **#3+#4 flip WITH
+`-freshread`** (stepFresh moves registerForceDot before cycle+catch), i.e. bundled into the already-refuted A/B ⇒
+NO new isolable capture-radius-split candidate; residual stays the **Jacobi seg-gather co-bound load-sharing**.
+Plus known break-cap default (#1 OFF v2/ON BoA, 12 pN, wrong-direction+rarely-fires) and inert/deliberate items
+(#6 `inRigor` bypass = ProteinNode-only, never gliding; #7 `bindTimer`-race omission = deliberate). Which currency/
+default/timing is correct = planner call. Report: `RELEASE_PATH_FULL_AUDIT.md`.
+
 ## 2026-07-03 — `-freshread` A/B: fresh release-force does NOT close the BoA/v2 capture-radius split — it collapses v2's net HARDER. Stale release-force REFUTED as the cause. Fixed the orphaned stepFresh; no promotion. `BoA-v1ref` untouched; default byte-unchanged.
 Tests whether making v2's catch-slip read the FRESH (this-step) cross-bridge load closes the dense-regime
 capture-radius sign split (`RELEASE_FORCE_TIMING_AUDIT.md`). **STEP 0 provenance — jba's recollection CONFIRMED.**
