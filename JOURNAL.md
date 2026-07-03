@@ -1,5 +1,75 @@
 # Soft Box Project Journal
 
+## 2026-07-03 — IMPLICIT CROSS-BRIDGE @dt=1e-5 vs the dt-refined target: PARTIAL (head-only insufficient) + the gliding assay is UNBRACKETED-dt-sensitive. Measurement only; default byte-identical; `BoA-v1ref` untouched.
+Goal: does the banked `-xbimplicit` (F8 spring implicit on the bound-head translation, already wired CPU+GPU)
+reproduce the dt-refined converged binding at production dt? Promoted default motor, GPU `-full` d1000, LONG_ROW.
+**STEP 0 — which spring overshoots? F8, NOT J1 (gate PASSES).** The catch-slip release + 12 pN cap read F8 ONLY
+(`forceDotFil=Dot(F8,segU)`, `forceMag=|F8|=myoSpring·dist`); J1/J2 are dt-robust fracMove PAIRS pins that don't
+feed the release (and the promoted default runs the J1 angular converter OFF). F8 is Hookean with overshoot
+r=k·dt/γ_head≈0.531@1e-5. Census (`-stretchcensus`) confirms empirically: F8 ext/var/|fdFil|/dwell all move
+monotonically with convergence (ext 5.89±5.01/dwell0.63@exp1e-5 → 4.30±2.00/1.86@exp5e-6). **NB the banked solve
+is F8-on-head, NOT "J1" (that JOURNAL label was a mislabel) — so it targets the right spring; the STOP condition
+didn't apply.** **STEP 2 — PARTIAL.** implicit@1e-5 = avgBound **21.5**, glide **2.80**, drift 0.130 — between
+explicit@1e-5 (14.8/3.02/0.204) and the target (56.7/2.20/0.039), closing only ~8–16 % of the gap. **Cause
+(predicted by the banked result):** head-only implicit fixes only the head's own overshoot, but the gliding
+cross-bridge stretch VARIANCE is dominated by the fast filament (site) motion (implicit cuts the census ext-SD
+only −3 % vs convergence's −60 %) ⇒ site-explicit is the bottleneck. **STEP 2b — the target 56.7 is NOT
+converged.** dt=2.5e-6 overshoots it: avgBound **99.3**, glide **1.72**, still climbing (avgB roughly doubles per
+dt-halving, 14.8→56.7→99.3; glide 3.02→2.20→1.72, no plateau through 2.5e-6). ⇒ the honest converged glide is
+**≤1.7 and unbracketed, NOT 2.2/3.0**; the gliding assay is FAR more dt-sensitive than the ±3 % dt-faithful
+envelope implied, and production dt=1e-5 is a heavily under-bound operating point. **STEP 3 — cheap but
+insufficient:** implicit adds ~3 % per-step (2 kernels, `xbSnap`+`xbImpl`) ⇒ ~free, does NOT eat the dt-refine
+savings — but also doesn't deliver them (only ~8–16 % converged). Stable (fullMat=YES, no NaN). CPU≡GPU not
+re-run (stopped early; race-free by construction). **VERDICT: NO converged glide at production dt from the
+head-only form; needs the COUPLED head+site implicit solve or the SUB-STEPPED cross-bridge**
+(`substep-feasibility-verdict`). Seeds 1/2 stopped early (approach being reconsidered) — seed-0 decisive. Report:
+`IMPLICIT_XB_CONVERGENCE_FINDINGS.md`.
+
+## 2026-07-03 — CAPTURE-RADIUS sign-split unification under implicit XB: PREMISE NOT MET (not run) + the scheme read. Analysis only; `BoA-v1ref` untouched.
+Follow-on gated on `-xbimplicit` converging; it only PARTIALLY converged (21.5 vs ≥99) ⇒ per its own gate, the
+radius sweep is **not run** (a 16 %-converged solve can't test "convergence unifies," and head-only implicit
+doesn't even touch the named mechanism — it leaves the seg-gather stale). **Scheme read (as requested):** v2 is
+**Jacobi/one-step-stale** — `bondForces` evaluates each bound head's cross-bridge force ONCE from start-of-step
+head+filament positions; the head integrates; then the filament `segGather` sums those SAME start-of-step
+seg-side forces (no head sees another's within-step update) — **identical on both v2 runners** (CPU `stepOrig` ≡
+GPU TaskGraph, same CSR gather) ⇒ the BoA↔v2 split is **scheme (BoA Gauss–Seidel/fresh vs v2 Jacobi/stale), NOT
+runner.** **Key insight (the confound):** "convergence" does two opposing things to per-bound drift — less
+staleness (↑drift, the hoped effect) vs MORE bound heads (↓drift, tug-of-war) — and the data show the SECOND
+dominates: at 6 nm, refining dt drives v2 drift 0.206→0.130→0.039→0.017 (1e-5→impl→5e-6→2.5e-6), monotonically
+AWAY from BoA's flat ~0.167, not toward it. So convergence DEEPENS v2's tug-of-war ⇒ the sign split is **most
+likely a genuine scheme difference (Jacobi vs Gauss–Seidel co-bound load-sharing), not an under-convergence
+artifact** — and it can't be cleanly tested by dt refinement (convergence is confounded with engagement). Clean
+test = match ENGAGEMENT (avgBound) across codes, and/or a fresh-force v2 gather (a design task, risks the
+race-free CSR/`-cpu` parity). **Escalated:** v2's stale-force co-bound scheme over-produces tug-of-war — a
+dense-regime fidelity risk for the flagship RING (many co-bound motors/filament); settle before trusting ring
+quantitatives. Report: `IMPLICIT_XB_CAPTURE_RADIUS_FINDINGS.md`.
+
+## 2026-07-02 — VISCOSITY DIAGNOSTIC: the ~3 µm/s glide is CYCLE / TUG-OF-WAR-limited, NOT drag-limited. New flag-gated `-aeta`; default byte-identical, no promotion (η is physical, not a speed dial).
+The question: is ~3 the motor's real V₀ (cycle-limited) or is filament drag capping it (drag-limited, true V₀
+higher)? GPU `-full` d1000, LONG_ROW net v_axial + avgBound. Filament-only drag scale (`-aeta`, FDT-consistent
+`applyAeta`; default 0.1 ⇒ r=1.0 no-op byte-identical — reproduces the −3.023/14.77 baseline exactly).
+**STEP 1 — η sweep at production dt=1e-5 (3 seeds):** η↓ does NOT raise the glide, it COLLAPSES it — net
+3.07→0.96→~0.25 (µm/s) as aeta 0.1→0.05→0.025, driven by an avgBound crash 14.9→4.2→0.15 (×0.25 ≈ unbound,
+axialFrac 0.12–0.64). This is the **whip / dt-instability** regime: at fixed dt=1e-5, `dt/aeta`↓ ⇒ the filament
+translates too far/step ⇒ cross-bridge overshoot ⇒ force-dependent release detaches heads (`dt-faithful-ceiling`;
+rescaling drag down ≡ raising the step). Jitter speed RISES 6.3→16.0. A drag-limited glide would rise as η
+falls — this collapses ⇒ NOT drag-limited. **STEP 2 — dt-co-scaled (hold `dt/aeta`=1e-4 ⇒ constant stability;
+seed0):** with the step faithful, ×0.5 binding recovers to **28.4** (~2× baseline 14.8) — proving the STEP-1
+collapse was numerical — yet net glide is **FLAT (+14%)**, per-bound drift HALVES (0.204→0.121). `v ∝ η^-0.18`
+(drag-limited = `η^-1`, +100%; edge-violated ×0.25 at most `η^-0.31`) ⇒ the tug-of-war invariant
+`net ≈ avgBound × per-bound-drift` holds under the viscosity knob — lower drag recruits more co-bound heads that
+CANCEL. **STEP 3 — dt-only control (aeta=0.1, dt 1e-5→5e-6):** disentangles the confound and exposes a
+convergence issue — refining dt 2× at fixed η QUADRUPLES avgBound (14.8→**56.7**) and LOWERS the glide to
+**2.20** (drift craters 0.204→0.039): the operating dt=1e-5 under-binds ~4× (overshoot detaches ¾ of physically-
+bound heads), and MORE heads ⇒ LOWER glide (tug-of-war, unmistakable). **VERDICT: cycle / tug-of-war-limited,
+NOT drag-limited** — ~3 is the real operating glide, no faster V₀ behind filament drag; viscosity acts mainly by
+changing engagement, which the co-bound cancellation eats. **5th independent lever** (after density/angle/rate/
+radius) to hit the same ceiling. **Planner flag (dt-convergence study):** dt=1e-5 is NOT avgBound-converged; the
+converged glide is ~2.2 not 3.0 (deeper tug-of-war); prior Phase-2 lever numbers sit at this under-converged
+point (conclusion strengthens, absolute is dt-sensitive) — needs the cross-bridge sub-step for a converged
+re-baseline. No NaN; 1 coverage-violation (×0.25 faithful, excluded). `BoA-v1ref` byte-clean; default byte-
+identical; no release/stroke/kinetics change. Report: `VISCOSITY_DIAGNOSTIC_FINDINGS.md`.
+
 ## 2026-07-02 — CAPTURE RADIUS (`myoColTol`) sweep: NOT a distinct speed axis on v2 — REFUTES BoA's CPU +48%. Larger radius LOWERS net glide (per-bound drift collapses); it walks the tug-of-war ceiling STEEPER than density. New flag-gated `-coltol`/`-stretchcensus`; default byte-identical, no promotion.
 GPU `-full` d1000 150k, 3 seedable mat draws, LONG_ROW net v_axial + avgBound + per-bound drift + a read-only
 bound-population census (`-stretchcensus`: extension/per-head axial force/dwell). BoA (CPU, single-run 5/6/7 nm)

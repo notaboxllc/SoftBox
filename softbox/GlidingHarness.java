@@ -98,6 +98,7 @@ public final class GlidingHarness {
     static double NECK_ANGLE = 60.0;            // -neckangle <deg>: cocked neck-stroke rest angle (swingParams[3]); default 60 ⇒ byte-identical. STEP-2 step-size lever (step ≈ 2·L·sin(θ/2)).
     static double RATE_SCALE = 1.0;             // -ratescale <x>: scale catch-slip kOff + ALL nucleotide cycle rates by x (faster kinetics = V₀ = step·detach-rate); default 1 ⇒ byte-identical. STEP-3 cycle-rate lever.
     static double COL_TOL = 0.006;              // -coltol <nm>: myosin bind capture radius (kinParams[7], perp tip-to-axis reach); default 6 nm ⇒ byte-identical. CAPTURE-RADIUS sweep (the engagement/duty master knob). PHYSICAL param, not a free speed dial.
+    static double AETA = Constants.aeta;        // -aeta <Pa·s>: filament/medium viscosity (drag γ ∝ aeta, diffusion ∝ 1/aeta). Default 0.1 ⇒ byte-identical. VISCOSITY DIAGNOSTIC: is the glide cycle-limited (η↓ flat) or drag-limited (η↓ raises speed)? PHYSICAL param, NOT a speed dial.
     static boolean STRETCHCENSUS = false;       // -stretchcensus: read-only census of the BOUND population's anchor-spring extension (forceMag/myoSpring), per-head axial force (forceDotFil), + aggregate dwell (stats). STEP-3 geometry check; no force change; default-off byte-identical.
     static final int    FIL_SEGS = 11;          // ~2 µm of 64-monomer segments
     static final int    FIL_MONO = 64;          // filSegLength (gliding override)
@@ -204,6 +205,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-neckangle")) NECK_ANGLE = Double.parseDouble(args[++i]);   // STEP-2 step-size lever: cocked neck rest angle (deg)
             else if (args[i].equals("-ratescale")) RATE_SCALE = Double.parseDouble(args[++i]);   // STEP-3 cycle-rate lever: ×scale on kOff + all nucleotide rates
             else if (args[i].equals("-coltol")) COL_TOL = Double.parseDouble(args[++i]) * 1.0e-3;  // CAPTURE-RADIUS sweep: bind reach in nm → µm (kinParams[7])
+            else if (args[i].equals("-aeta")) AETA = Double.parseDouble(args[++i]);   // VISCOSITY DIAGNOSTIC: filament/medium viscosity (Pa·s); default 0.1 ⇒ byte-identical
             else if (args[i].equals("-stretchcensus")) STRETCHCENSUS = true;                       // STEP-3 read-only bound-population geometry census
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
@@ -297,6 +299,7 @@ public final class GlidingHarness {
             if (s > 0)        { fil.end1NbrSlot.set(s, s - 1); fil.end1NbrSide.set(s, 1); }
         }
         DragTensorSystem.run(fil);
+        applyAeta(fil, AETA);   // VISCOSITY DIAGNOSTIC: scale the FILAMENT drag only (FDT-consistent); AETA==Constants.aeta ⇒ no-op, byte-identical
         fil.setParams(DT, Math.sqrt(2.0 * Constants.kT / DT));
         fil.setCounts(0, 0xF11A);
         // gliding chain params (config-matched, NOT tuned): fracMove 0.5 / fracR 0.1 / fracMoveTorq 0.2.
@@ -716,6 +719,19 @@ public final class GlidingHarness {
     static int pad(int n) { return ((n + B - 1) / B) * B; }
     static void addW(String n, int g) { WorkerGrid w = new WorkerGrid1D(g); w.setLocalWork(B, 1, 1); sched.addWorkerGrid(n, w); }
     static void addS(String n) { WorkerGrid w = new WorkerGrid1D(1); w.setLocalWork(1, 1, 1); sched.addWorkerGrid(n, w); }
+
+    /** VISCOSITY DIAGNOSTIC: scale the filament drag tensors from Constants.aeta to the target aeta
+     *  (drag γ ∝ aeta; diffusion = kT/γ ∝ 1/aeta). FDT stays consistent because BrownianForceSystem
+     *  derives the random-force magnitude from bTransGam/bRotGam. Isolation-clean: filament only —
+     *  motor sub-body drag + head kinetics are UNTOUCHED, so this tests exactly whether FILAMENT drag
+     *  caps the glide. AETA==Constants.aeta ⇒ r==1.0 ⇒ no-op (byte-identical). */
+    static void applyAeta(FilamentStore f, double aeta) {
+        double r = aeta / Constants.aeta;
+        if (r == 1.0) return;
+        aetaScale(f.bTransGam, r);       aetaScale(f.bRotGam, r);
+        aetaScale(f.bTransDiff, 1.0 / r); aetaScale(f.bRotDiff, 1.0 / r);
+    }
+    static void aetaScale(FloatArray a, double r) { for (int i = 0; i < a.getSize(); i++) a.set(i, (float) (a.get(i) * r)); }
 
     static double centroidX(FilamentStore f) { double s = 0; for (int i = 0; i < f.n; i++) s += f.coordX(i); return s / f.n; }
     static double centroidZ(FilamentStore f) { double s = 0; for (int i = 0; i < f.n; i++) s += f.coordZ(i); return s / f.n; }
