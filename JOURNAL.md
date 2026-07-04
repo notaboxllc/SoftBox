@@ -1,5 +1,24 @@
 # Soft Box Project Journal
 
+## 2026-07-03 — dt-convergence at the capture-radius split (coltol8/d1000, the widest BoA↔v2 split): v2's per-bound drift CRATERS 16× as dt→0 — it does NOT rise toward BoA (FORK BRANCH 2).
+Refined dt 1e-5→5e-6→2.5e-6→1.25e-6 at the widest split (coltol8, d1000, -full, seed 0, matched 1.5 s sim time).
+per-bound drift 0.0900→0.0193→0.0077→0.0056 (16×, monotone) while avgBound EXPLODES 17.88→69.10→157.93→216.27
+(12×, toward saturation, increments decelerating) and net glide CONVERGES 1.609→1.332→1.213→1.201 (→~1.20 µm/s).
+On the drift-vs-avgBound plane v2's dt=1e-5 point sits ON its own Jacobi engagement curve (17.88/0.090 ≈ r8
+18.64/0.081), and dt-refinement continues DOWN that curve toward drift→0 — it passes straight through avgBound≈20
+still falling while BoA's curve turns UP there (0.248) ⇒ v2 moves FURTHER from BoA, not toward it. FORK BRANCH 2:
+the converged dense-regime answer is genuinely LOW; the split is NOT a pure Jacobi-staleness artifact that a
+Gauss–Seidel/fresh-force gather would "fix" up to BoA's 0.248; BoA's high coarse drift is the outlier. ⇒ DO NOT
+scope the fresh-force seg-gather to match BoA yet — BoA must itself be dt-convergence-checked first (SPECIFIED:
+coltol8, d1000, dt 1e-5/5e-6/2.5e-6, 3 draws, CAPTURE_RADIUS_REPLICATE protocol — BoA-CC follow-up, not run from
+SoftBox). CAVEAT: the dt→0 limit is a near-SATURATED over-bound state (~220 bound), so per-bound drift is only
+comparable at MATCHED engagement — the genuine same-engagement scheme difference (ENGAGEMENT_MATCHED: v2 0.081 vs
+BoA 0.248 @ avgB≈19) STANDS and convergence gives it no support in BoA's favor. Single-seed decisive (16× monotone
+≫ seed SD ±0.01; seed 0 reproduces the coltol8 3-seed coarse mean); 4-dt×3-seed grid flagged optional, not run.
+Measurement-only (existing params + `-dt`); seg-gather/release/stroke/model byte-unchanged; default byte-identical;
+CPU≡GPU/CSR untouched; BoA-v1ref byte-clean. Report: DT_CONVERGENCE_SEGGATHER_FINDINGS.md; raw
+RUN_LOGS/2026-07-03_dtconv_coltol8_dt{1e-5,5e-6,2.5e-6,1.25e-6}_seed0.txt.
+
 ## 2026-07-03 — Stroke-fidelity census vs engagement (v2, radius knob coltol4→coltol8 @ d1000, 3 seeds): v2's neck-powerstroke STAYS FAITHFUL as engagement rises ⇒ the capture-radius split is the seg-gather, NOT the motor.
 New read-only `-strokecensus` (per-bound-head neck-powerstroke pose fidelity: swing axial fraction, barbed-sweep
 fraction, stroked fraction, swing angle + histogram; default-off byte-identical; CPU≡GPU aggregate). Radius knob
