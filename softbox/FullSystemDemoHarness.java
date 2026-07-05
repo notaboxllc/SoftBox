@@ -717,7 +717,7 @@ public final class FullSystemDemoHarness {
         BindingDetectionSystem.gridReachable(mot2.head, mot2.uVec, mot2.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims,
                 s.gridCellOffsets, s.gridCellContents, s.view.ownerStore, s.view.ownerSlot, s.reachSeg2, s.reachCount2, mot2.kinParams, mot2.counts);
         NucleotideCycleSystem.catchSlipRelease(mot2.boundSeg, mot2.forceDotFil, mot2.forceMag, mot2.cooldown, mot2.stats, mot2.capStats, mot2.kinParams, mot2.counts);
-        BindingDetectionSystem.bindNearest(mot2.head, mot2.uVec, mot2.rodUVec, f.end1, f.end2, s.reachSeg2, s.reachCount2, mot2.boundSeg, mot2.bindArc, mot2.kinParams, mot2.counts);
+        BindingDetectionSystem.bindNearest(mot2.head, mot2.uVec, mot2.rodUVec, f.end1, f.end2, s.reachSeg2, s.reachCount2, mot2.boundSeg, mot2.bindArc, mot2.nucleotideState, mot2.kinParams, mot2.counts);
         NucleotideCycleSystem.cycle(mot2.nucleotideState, mot2.boundSeg, mot2.forceDotHist, mot2.nucParams, mot2.counts);
 
         // === CROSSLINKER FORMATION (O(N) grid, at the formation cadence) + UNBIND ===
@@ -1417,7 +1417,7 @@ public final class FullSystemDemoHarness {
             .task("chunkScatter", SpatialGrid::gridChunkScatter, s.bodyCell, s.gridCounts, s.chunkParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, s.chunkCellCount)
             .task("gridReach", BindingDetectionSystem::gridReachable, mot2.head, mot2.uVec, mot2.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, v.ownerStore, v.ownerSlot, s.reachSeg2, s.reachCount2, mot2.kinParams, mot2.counts)
             .task("release2", NucleotideCycleSystem::catchSlipRelease, mot2.boundSeg, mot2.forceDotFil, mot2.forceMag, mot2.cooldown, mot2.stats, mot2.capStats, mot2.kinParams, mot2.counts)
-            .task("bind2", BindingDetectionSystem::bindNearest, mot2.head, mot2.uVec, mot2.rodUVec, f.end1, f.end2, s.reachSeg2, s.reachCount2, mot2.boundSeg, mot2.bindArc, mot2.kinParams, mot2.counts)
+            .task("bind2", BindingDetectionSystem::bindNearest, mot2.head, mot2.uVec, mot2.rodUVec, f.end1, f.end2, s.reachSeg2, s.reachCount2, mot2.boundSeg, mot2.bindArc, mot2.nucleotideState, mot2.kinParams, mot2.counts)
             .task("cycle2", NucleotideCycleSystem::cycle, mot2.nucleotideState, mot2.boundSeg, mot2.forceDotHist, mot2.nucParams, mot2.counts)
         // forces
             .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
@@ -1884,7 +1884,7 @@ public final class FullSystemDemoHarness {
             .task("chunkScatter", SpatialGrid::gridChunkScatter, s.bodyCell, s.gridCounts, s.chunkParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, s.chunkCellCount)
             .task("gridReach", BindingDetectionSystem::gridReachable, mot2.head, mot2.uVec, mot2.rodUVec, f.end1, f.end2, s.gridParams, s.gridDims, s.gridCellOffsets, s.gridCellContents, v.ownerStore, v.ownerSlot, s.reachSeg2, s.reachCount2, mot2.kinParams, mot2.counts)
             .task("release2", NucleotideCycleSystem::catchSlipRelease, mot2.boundSeg, mot2.forceDotFil, mot2.forceMag, mot2.cooldown, mot2.stats, mot2.capStats, mot2.kinParams, mot2.counts)
-            .task("bind2", BindingDetectionSystem::bindNearest, mot2.head, mot2.uVec, mot2.rodUVec, f.end1, f.end2, s.reachSeg2, s.reachCount2, mot2.boundSeg, mot2.bindArc, mot2.kinParams, mot2.counts)
+            .task("bind2", BindingDetectionSystem::bindNearest, mot2.head, mot2.uVec, mot2.rodUVec, f.end1, f.end2, s.reachSeg2, s.reachCount2, mot2.boundSeg, mot2.bindArc, mot2.nucleotideState, mot2.kinParams, mot2.counts)
             .task("cycle2", NucleotideCycleSystem::cycle, mot2.nucleotideState, mot2.boundSeg, mot2.forceDotHist, mot2.nucParams, mot2.counts);
     }
 

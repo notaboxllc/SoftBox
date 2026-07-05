@@ -160,6 +160,12 @@ public final class MotorStore {
     // correction blends c_imp=(c_exp+r·c_n)/(1+r), r=myoSpring·dt·1e6/γ_head. NO velocity (≠ the dashpot).
     public final FloatArray xbImplPrev;        // 3*nMotors (planar) — pre-integration head center c_n, µm
     public final FloatArray xbImplParams;      // [0]=myoSpring (N/µm) [1]=dt (s)
+    // COUPLED_IMPLICIT_CROSSBRIDGE (-xbimplicit2, measurement, default-off): the head+SITE coupled implicit F8
+    // (COUPLED_IMPLICIT_XB_FINDINGS). Per-segment closed-form STAR: Phase-1 writes A_i (the head's spring-free
+    // predictor blend, lab) + B_i=r_h/(1+r_h) per bound head; Phase-2 gathers over the boundSeg CSR-inverse and
+    // solves each segment's implicit center; Phase-3 reads it back for each head. Reuses xbImplParams + xbImplPrev.
+    public final FloatArray xbCplA;            // 3*nMotors (planar) — per-bond A_i (lab), Phase-1 output
+    public final FloatArray xbCplB;            // nMotors — per-bond B_i = r_h/(1+r_h)
     // nucParams (float): [0]=dt [1]=atpOnMyo [2]=onFilATP_ADPPi [3]=offFilATP_ADPPi
     //   [4]=onFilADPPi_ADP [5]=offFilADPPi_ADP [6]=onFilADP_None [7]=offFilADP_None  (Env.java:836-855)
     public final FloatArray nucParams;
@@ -187,6 +193,8 @@ public final class MotorStore {
         dashParams    = FloatArray.fromElements(0f, (float) Constants.deltaT, (float) HEAD_LEN, 0f);   // [0]gammaMult=0⇒off [3]mechOnly
         xbImplPrev    = new FloatArray(3 * nMotors); xbImplPrev.init(0f);
         xbImplParams  = FloatArray.fromElements(1.0e-9f, (float) Constants.deltaT);   // [0]myoSpring (set by setImplicit) [1]dt
+        xbCplA        = new FloatArray(3 * nMotors); xbCplA.init(0f);   // COUPLED_IMPLICIT: per-bond A_i (lab)
+        xbCplB        = new FloatArray(nMotors);     xbCplB.init(0f);   // COUPLED_IMPLICIT: per-bond B_i
         nucParams = new FloatArray(8);
         head    = new FloatArray(3 * nMotors);
         uVec    = new FloatArray(3 * nMotors);
@@ -201,7 +209,7 @@ public final class MotorStore {
         headTiltCS = new FloatArray(3);            // PHASE-2 HEAD-ANGLE SWEEP θ (default unused; setFlag 0)
         stats    = new IntArray(2 * nMotors);
         capStats = new IntArray(nMotors);          // §6.10 break-force release fires per motor (measurement only)
-        kinParams = new FloatArray(20);   // [0..17] kinetics; [18]=sustained-load injection F_ext (N, measurement); [19]=reserved
+        kinParams = new FloatArray(21);   // [0..17] kinetics; [18]=F_ext (N, measurement); [19]=-nobind; [20]=-adppibind (ADP·Pi bind-gate)
         cooldown  = new IntArray(nMotors);
         counts    = new IntArray(4);
         publishParams = new IntArray(1);
@@ -285,6 +293,7 @@ public final class MotorStore {
         // Measurement only, default 0 ⇒ byte-identical. [19] reserved.
         if (kinParams.getSize() > 18) kinParams.set(18, 0.0f);
         if (kinParams.getSize() > 19) kinParams.set(19, 0.0f);
+        if (kinParams.getSize() > 20) kinParams.set(20, 0.0f);   // -adppibind ADP·Pi bind-gate (default off ⇒ byte-identical)
     }
     /** PHASE-2 step-4a: impose a controlled SUSTAINED external load (pN, signed) on the catch input — the
      *  force-response guard for the time-averaged catch. Measurement only; 0 ⇒ off (byte-identical). */

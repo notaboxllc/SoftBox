@@ -278,7 +278,7 @@ public final class TestBScprHarness {
         mot.setCounts(0, SEED, f.n);
         MotorStore.publishHeadFromBody(b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts);
         BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, reachSeg, reachCount, mot.kinParams, mot.counts);
-        BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, reachSeg, reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, reachSeg, reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
     }
 
     /** Same deterministic bind pipeline on the GPU TaskGraph; returns the resulting boundSeg (host copy). */
@@ -291,11 +291,11 @@ public final class TestBScprHarness {
         TaskGraph tg = new TaskGraph("gate0bind")
             .transferToDevice(DataTransferMode.FIRST_EXECUTION,
                     b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec,
-                    f.end1, f.end2, reachSeg, reachCount, mot.boundSeg, mot.bindArc, mot.kinParams)
+                    f.end1, f.end2, reachSeg, reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams)
             .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts)
             .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
             .task("reach", BindingDetectionSystem::bruteReachable, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, reachSeg, reachCount, mot.kinParams, mot.counts)
-            .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, reachSeg, reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts)
+            .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, reachSeg, reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts)
             .transferToHost(DataTransferMode.UNDER_DEMAND, mot.boundSeg);
         sched = new GridScheduler();
         for (String t : new String[]{ "publishHead", "reach", "bind" }) addW("gate0bind." + t, pad(mot.nMotors));

@@ -357,15 +357,21 @@ public final class BindingDetectionSystem {
             FloatArray head, FloatArray uVec, FloatArray rodUVec,
             FloatArray segEnd1, FloatArray segEnd2,
             IntArray motorCandSeg, IntArray motorCandCount,
-            IntArray boundSeg, FloatArray bindArc,
+            IntArray boundSeg, FloatArray bindArc, IntArray nucleotideState,
             FloatArray kinParams, IntArray counts) {
         int nM = counts.get(0);
         int nSeg = segEnd1.getSize() / 3;
         int MAXC = SpatialGrid.MAX_CAND;
         float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        boolean adppiGate = kinParams.getSize() > 20 && kinParams.get(20) > 0.5f;   // -adppibind: strong-bind only in the pre-stroke ADP·Pi state
         for (@Parallel int m = 0; m < nM; m++) {
             if (boundSeg.get(m) != MotorStore.FREE_BINDABLE) continue;
             if (kinParams.get(19) > 0.5f) continue;   // -nobind thermal-floor control (measurement; default 0 ⇒ byte-identical)
+            // ADP·Pi (weak→strong) binding gate: a head in NONE/ATP/ADP cannot strong-bind actin — only the primed
+            // pre-stroke ADP·Pi state. Eliminates the bind-in-ATP ejection churn (a just-detached ATP head being
+            // geometrically rebound before its ~10 ms ATP→ADP·Pi recovery). Faithful to the cycleLymnTaylor design
+            // intent ("bind in ADP·Pi"). Default OFF (kinParams[20]=0) ⇒ byte-identical to the ungated binder.
+            if (adppiGate && nucleotideState.get(m) != MotorStore.NUC_ADPPI) continue;
             float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
             float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
             float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);

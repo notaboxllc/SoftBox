@@ -367,7 +367,7 @@ public final class DenseContractileHarness {
         BindingDetectionSystem.gridReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.gridParams, sc.gridDims,
                 sc.gridCellOffsets, sc.gridCellContents, sc.view.ownerStore, sc.view.ownerSlot, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
         NucleotideCycleSystem.catchSlipRelease(mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
-        BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts);
+        BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
         NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
 
         // --- minifilament structure mechanics ---
@@ -497,7 +497,7 @@ public final class DenseContractileHarness {
             .task("chunkScatter", SpatialGrid::gridChunkScatter, sc.bodyCell, sc.gridCounts, sc.chunkParams, sc.gridDims, sc.gridCellOffsets, sc.gridCellContents, sc.chunkCellCount)
             .task("gridReach", BindingDetectionSystem::gridReachable, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.gridParams, sc.gridDims, sc.gridCellOffsets, sc.gridCellContents, v.ownerStore, v.ownerSlot, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts)
             .task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts)
-            .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.kinParams, mot.counts)
+            .task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts)
             .task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts)
         // --- minifilament structure mechanics ---
             .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)

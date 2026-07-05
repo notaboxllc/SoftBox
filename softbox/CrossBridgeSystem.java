@@ -936,6 +936,125 @@ public final class CrossBridgeSystem {
         }
     }
 
+    // ======================= COUPLED head+SITE implicit F8 (-xbimplicit2) ============================
+    // The head-only implicitCorrect above leaves the filament SITE explicit; on the gliding assay the stretch
+    // variance is site-motion-dominated (IMPLICIT_XB_CONVERGENCE_FINDINGS), so head-only is only PARTIAL. This
+    // solves the bound head AND its bound segment TOGETHER implicitly under the F8 spring. F8 is zero-rest-length
+    // (F=k·d) ⇒ isotropic stiffness ⇒ the implicit step is a LINEAR solve; F8 never couples two segments ⇒ the
+    // system BLOCK-DIAGONALIZES into per-segment STARS (1 segment + its k_s bound heads). Each star has a
+    // CLOSED FORM (head is isotropic sphere ⇒ scalar r_h; segment rod ⇒ diagonal drag in its body frame):
+    //     head i (lab):   p_i^imp = A_i + B_i·q^imp,  B_i = r_h/(1+r_h),  A_i = (p_i^e − r_h(q^n − p_i^n))/(1+r_h)
+    //     seg (body axis a): q^imp_a = [ q^e_a + r_{s,a}(k_s·q^n − Σp_i^n + ΣA_i)_a ] / [ 1 + r_{s,a}·Σ(1−B_i) ]
+    // (the bond offset c_i CANCELS — held explicit, zero rest length). r=myoSpring·dt·1e6/γ. Three parity-clean
+    // passes: coupleComputeA (per head PURE) → coupleSolveSeg (per SEGMENT, gather over the boundSeg CSR-inverse,
+    // writes its own center) → coupleCorrectHead (per head PURE, reads its segment's new center). No atomics, no
+    // KernelContext, disjoint writes ⇒ CPU≡GPU bit-identical-capable. Runs at end-of-step (after BOTH integrates);
+    // callers re-derive both bodies. ADDITIVE/flag-gated ⇒ byte-identical default. See COUPLED_IMPLICIT_XB_FINDINGS.
+
+    /** COUPLED STEP 1: snapshot each segment's pre-integration CENTER q_n (segPrev planar 3·nSeg). */
+    public static void snapshotSegCenter(FloatArray filCoord, FloatArray segPrev) {
+        int nSeg = filCoord.getSize() / 3;
+        for (@Parallel int s = 0; s < nSeg; s++) {
+            segPrev.set(s,            filCoord.get(s));
+            segPrev.set(nSeg + s,     filCoord.get(nSeg + s));
+            segPrev.set(2 * nSeg + s, filCoord.get(2 * nSeg + s));
+        }
+    }
+
+    /** COUPLED Phase 1 (per bound head, PURE): A_i = (p_i^e − r_h(q^n − p_i^n))/(1+r_h), B_i = r_h/(1+r_h).
+     *  p_i^e = current head center (post integrate), p_i^n = headPrev, q^n = segPrev[boundSeg]. */
+    public static void coupleComputeA(FloatArray bodyCoord, IntArray boundSeg, FloatArray bodyBTransGam,
+                                      FloatArray headPrev, FloatArray segPrev, FloatArray cplA, FloatArray cplB,
+                                      FloatArray xbImplParams) {
+        int nB = bodyCoord.getSize() / 3;
+        int nM = nB / 3;
+        int nSeg = segPrev.getSize() / 3;
+        double myoSpring = xbImplParams.get(0), dt = xbImplParams.get(1);
+        for (@Parallel int m = 0; m < nM; m++) {
+            int s = boundSeg.get(m);
+            if (s < 0) continue;
+            int h = 3 * m + 2;
+            double gh = bodyBTransGam.get(h);
+            double r = myoSpring * dt * 1.0e6 / gh;
+            double inv = 1.0 / (1.0 + r);
+            double B = r * inv;
+            double pex = bodyCoord.get(h),          pey = bodyCoord.get(nB + h),      pez = bodyCoord.get(2 * nB + h);
+            double pnx = headPrev.get(m),           pny = headPrev.get(nM + m),       pnz = headPrev.get(2 * nM + m);
+            double qnx = segPrev.get(s),            qny = segPrev.get(nSeg + s),      qnz = segPrev.get(2 * nSeg + s);
+            cplA.set(m,          (float) ((pex - r * (qnx - pnx)) * inv));
+            cplA.set(nM + m,     (float) ((pey - r * (qny - pny)) * inv));
+            cplA.set(2 * nM + m, (float) ((pez - r * (qnz - pnz)) * inv));
+            cplB.set(m, (float) B);
+        }
+    }
+
+    /** COUPLED Phase 2 (per SEGMENT, GATHER over the boundSeg CSR-inverse): solve the star's central center q^imp
+     *  in the segment's body frame (diagonal drag), write filCoord[s]. Same CSR (segMotorOffsets/segMotorMyo) as
+     *  segGather; segment writes only itself ⇒ race-free, no atomics. */
+    public static void coupleSolveSeg(IntArray segMotorOffsets, IntArray segMotorMyo,
+                                      FloatArray headPrev, FloatArray cplA, FloatArray cplB,
+                                      FloatArray filCoord, FloatArray filUVec, FloatArray filYVec, FloatArray filBTransGam,
+                                      FloatArray segPrev, FloatArray xbImplParams, IntArray counts) {
+        int nSeg = counts.get(3);
+        int nM = cplB.getSize();
+        double myoSpring = xbImplParams.get(0), dt = xbImplParams.get(1);
+        double kdt = myoSpring * dt * 1.0e6;   // = k·dt·1e6 ; r_{s,a} = kdt/γ_{s,a}
+        for (@Parallel int s = 0; s < nSeg; s++) {
+            int start = segMotorOffsets.get(s), end = segMotorOffsets.get(s + 1);
+            int ks = end - start;
+            if (ks <= 0) continue;
+            // gather Σp_i^n (lab), ΣA_i (lab), Σ(1−B_i)
+            double spx = 0, spy = 0, spz = 0, sax = 0, say = 0, saz = 0, sInvB = 0;
+            for (int k = start; k < end; k++) {
+                int m = segMotorMyo.get(k);
+                spx += headPrev.get(m);          spy += headPrev.get(nM + m);      spz += headPrev.get(2 * nM + m);
+                sax += cplA.get(m);              say += cplA.get(nM + m);          saz += cplA.get(2 * nM + m);
+                sInvB += 1.0 - cplB.get(m);
+            }
+            double qnx = segPrev.get(s),   qny = segPrev.get(nSeg + s),   qnz = segPrev.get(2 * nSeg + s);
+            double qex = filCoord.get(s),  qey = filCoord.get(nSeg + s),  qez = filCoord.get(2 * nSeg + s);
+            // V = k_s·q^n − Σp^n + ΣA   (lab)
+            double Vx = ks * qnx - spx + sax, Vy = ks * qny - spy + say, Vz = ks * qnz - spz + saz;
+            // segment body axes (current orientation): u, y, z=u×y
+            double ux = filUVec.get(s), uy = filUVec.get(nSeg + s), uz = filUVec.get(2 * nSeg + s);
+            double yx = filYVec.get(s), yy = filYVec.get(nSeg + s), yz = filYVec.get(2 * nSeg + s);
+            double zx = uy * yz - uz * yy, zy = uz * yx - ux * yz, zz = ux * yy - uy * yx;
+            double zl = 1.0 / Math.sqrt(zx * zx + zy * zy + zz * zz); zx *= zl; zy *= zl; zz *= zl;
+            // per body axis a: r_a = kdt/γ_a ; num_a = (q^e·â) + r_a·(V·â) ; den_a = 1 + r_a·Σ(1−B) ; q^imp_a = num/den
+            double rU = kdt / filBTransGam.get(s);
+            double rY = kdt / filBTransGam.get(nSeg + s);
+            double rZ = kdt / filBTransGam.get(2 * nSeg + s);
+            double qeU = qex * ux + qey * uy + qez * uz, VU = Vx * ux + Vy * uy + Vz * uz;
+            double qeY = qex * yx + qey * yy + qez * yz, VY = Vx * yx + Vy * yy + Vz * yz;
+            double qeZ = qex * zx + qey * zy + qez * zz, VZ = Vx * zx + Vy * zy + Vz * zz;
+            double qiU = (qeU + rU * VU) / (1.0 + rU * sInvB);
+            double qiY = (qeY + rY * VY) / (1.0 + rY * sInvB);
+            double qiZ = (qeZ + rZ * VZ) / (1.0 + rZ * sInvB);
+            // rotate q^imp back to lab
+            filCoord.set(s,            (float) (qiU * ux + qiY * yx + qiZ * zx));
+            filCoord.set(nSeg + s,     (float) (qiU * uy + qiY * yy + qiZ * zy));
+            filCoord.set(2 * nSeg + s, (float) (qiU * uz + qiY * yz + qiZ * zz));
+        }
+    }
+
+    /** COUPLED Phase 3 (per bound head, PURE): p_i^imp = A_i + B_i·q^imp, reading its segment's updated center. */
+    public static void coupleCorrectHead(FloatArray bodyCoord, IntArray boundSeg, FloatArray cplA, FloatArray cplB,
+                                         FloatArray filCoord, IntArray counts) {
+        int nB = bodyCoord.getSize() / 3;
+        int nM = nB / 3;
+        int nSeg = filCoord.getSize() / 3;
+        for (@Parallel int m = 0; m < nM; m++) {
+            int s = boundSeg.get(m);
+            if (s < 0) continue;
+            int h = 3 * m + 2;
+            double B = cplB.get(m);
+            double qx = filCoord.get(s), qy = filCoord.get(nSeg + s), qz = filCoord.get(2 * nSeg + s);
+            bodyCoord.set(h,          (float) (cplA.get(m)          + B * qx));
+            bodyCoord.set(nB + h,     (float) (cplA.get(nM + m)     + B * qy));
+            bodyCoord.set(2 * nB + h, (float) (cplA.get(2 * nM + m) + B * qz));
+        }
+    }
+
     /** Head self-write: apply the head-side force+torque to the head sub-body (3m+2), += (race-free). */
     public static void applyHeadForce(FloatArray bondData, FloatArray bodyForceSum, FloatArray bodyTorqueSum, IntArray counts) {
         int nB = bodyForceSum.getSize() / 3;

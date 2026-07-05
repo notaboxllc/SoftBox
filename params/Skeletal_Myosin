@@ -1,0 +1,51 @@
+# Skeletal_Myosin — fast skeletal muscle myosin II (the gliding-assay isoform)
+#
+# The MEASURED biochemical/mechanical constants for the Lymn–Taylor nucleotide cycle (`-lymntaylor`).
+# The cycle STRUCTURE is universal (NONE→ATP→ADP·Pi→ADP→NONE, detachment on the ATP-binding step, the
+# Guo–Guilford catch modulating the ADP-release rate); the RATES below are the per-isoform measured values
+# — the falsifiability boundary (RESEARCH_THESIS §6; MOTOR_PARAM_PROVENANCE.md PART C).
+#
+# STATUS (2026-07-03): this file is the authoritative provenance RECORD. The cycle currently reads these
+# same values from the hardcoded MotorStore.setNucParams / setKinParams (each field notes its file:line and
+# is byte-identical to this file). The `-isoform <name>` loader that reads this file at runtime is the
+# flagged follow-up (MOTOR_PARAM_PROVENANCE.md); introducing it must reproduce these arrays bit-identically.
+
+# ── NUCLEOTIDE CASCADE (Howard 2001, Mechanics of Motor Proteins, Table 14-2) ────────────────────────────
+# The Lymn–Taylor mechanochemical cycle. Detachment is the ATP-binding transition (NONE→ATP); ADP release
+# (ADP→NONE) is the rate-limiting, load-sensitive step where the catch acts.
+atpOn_NONE_ATP_s            2.0e4   # NONE→ATP: ATP binding to the rigor head ⇒ DETACHMENT. Fast at saturating
+                                    #   [ATP] (~1–4 mM). MotorStore.setNucParams:375 (nucParams[1]); Env atpOnMyo.
+                                    #   Lower to model low [ATP] (the extensibility seam).
+hydrolysis_ATP_ADPPi_on_s   100.0   # ATP→ADP·Pi (on-fil): hydrolysis (~10 ms). setNucParams:376 (nucParams[2]).
+hydrolysis_ATP_ADPPi_off_s  100.0   # ATP→ADP·Pi (off-fil): re-primes the lever to uncocked. :377 (nucParams[3]).
+powerstroke_ADPPi_ADP_on_s  1.0e4   # ADP·Pi→ADP (on-fil): Pi release = the power stroke (~0.1 ms; lever 0°→60°).
+                                    #   setNucParams:378 (nucParams[4]).
+powerstroke_ADPPi_ADP_off_s 0.0     # ADP·Pi→ADP (off-fil): 0 (head re-primes off-fil, waits primed in ADP·Pi).
+                                    #   setNucParams:379 (nucParams[5]).
+adpRelease_ADP_NONE_on_s    1.0e3   # ADP→NONE (on-fil): the rate-LIMITING, LOAD-SENSITIVE step (~1 ms unloaded,
+                                    #   skeletal-fast). BASE rate; the catch g(F) below multiplies it (NOT a gate,
+                                    #   NOT a second detachment). setNucParams:380 (nucParams[6]).
+adpRelease_ADP_NONE_off_s   1.0e3   # ADP→NONE (off-fil). setNucParams:381 (nucParams[7]).
+
+# ── CATCH-SLIP LOAD MODULATION of ADP release (Guo & Guilford 2006, PNAS 103:9844; Stam et al 2015) ──────
+# g(F) = alphaCatch·exp(−F·xCatch/kT) + alphaSlip·exp(+F·xSlip/kT), F = along-filament cross-bridge load.
+# g(0)=1 ⇒ unloaded ADP release runs at the base rate above; moderate resisting load SLOWS it (the catch,
+# lengthening dwell, ~6 pN peak); extreme load speeds it (the slip). This MODULATES the biochemical detach
+# rate — it is NOT an independent release pathway (that was the pre-LT catch-slip-as-sole-detachment bug).
+alphaCatch                  0.92    # Guo & Guilford 2006. setKinParams:250 (kinParams[1]).
+alphaSlip                   0.08    # Guo & Guilford 2006. setKinParams:251 (kinParams[2]).
+xCatch_m                    2.5e-9  # Guo & Guilford 2006 x_c = 2.5 nm. setKinParams:252 (kinParams[3]).
+xSlip_m                     0.4e-9  # Guo & Guilford 2006 x_s = 0.40 nm. setKinParams:253 (kinParams[4]).
+
+# ── FORCED-RUPTURE (rare extreme-load), separate from the biochemical cycle ──────────────────────────────
+myosinBreakForce_N          12.0e-12  # v1 Env.myosinBreakForce; the stiffness/rupture safety valve, NOT the
+                                      #   primary detachment. Default OFF (kinParams[12]=0); -faithfulrelease
+                                      #   enables it. setKinParams:266 (kinParams[11]).
+
+# ── MECHANICS (working stroke / stall; informational — set elsewhere, not by the cycle) ──────────────────
+step_nm                     6.96    # emergent working stroke (MotorStrokeHarness); skeletal ~5–11 nm (Finer 1994).
+stallForce_pN               5.0     # single-head stall (Finer et al 1994, Nature 368:113).
+
+# ── DERIVED skeletal anchors (checks, not set directly) ──────────────────────────────────────────────────
+# V0 = step × unloaded-detach-rate ≈ 6.96 nm × ~870/s ≈ 6 µm/s (skeletal 5–8 band).
+# duty_target ≈ 0.05 (fast skeletal is LOW-duty — most of the cycle is DETACHED ⇒ low avgBound at any instant).

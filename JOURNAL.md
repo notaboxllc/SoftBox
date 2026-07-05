@@ -1,5 +1,88 @@
 # Soft Box Project Journal
 
+## 2026-07-04 — COUPLED head+SITE implicit cross-bridge (`-xbimplicit2`): PARITY-preserving, UNBIASED, best partial — but does NOT converge at dt=1e-5. → sub-step fallback.
+The remaining blocker to a dt-robust physical glide is the coarse-dt F8 overshoot (numerics, not kinetics —
+NUCDETACH). Tested whether solving the bound head AND its filament site TOGETHER implicitly (not head-only, which
+IMPLICIT_XB_CONVERGENCE showed is site-motion-dominated and only partial) converges at production dt.
+**STEP 0 (parity — the go/no-go): GO.** F8 is a zero-rest-length Hookean spring (`F=k·d`) ⇒ the implicit step is
+LINEAR (no Newton); F8 never couples two segments (each head→1 segment; chain coupling is separate, held explicit)
+⇒ the stiffness BLOCK-DIAGONALIZES into per-segment **STARS** (1 segment + its k_s bound heads) with a CLOSED FORM
+(head isotropic sphere ⇒ scalar r_h; segment rod ⇒ diagonal drag in its body frame; the bond offset c_i CANCELS).
+Expressible as per-head-pure → CSR-gather → per-head-pure over the EXISTING `boundSeg` CSR-inverse
+(`segMotorOffsets`/`segMotorMyo`, the `segGather` template) — no atomics, no KernelContext, disjoint writes ⇒
+race-free CSR/`-cpu` parity PRESERVED. No global/iterative solve. **STEP 1: built (`-xbimplicit2`, 5 additive
+CrossBridgeSystem kernels + scratch; CPU stepOrig + GPU buildPlan default-branch, body-writes LATE per the PTX
+gotcha), default byte-identical (structural + the batch's flag-off `explicit_1e-5` reproduces NUCDETACH's B-dt to
+all digits), algebra EXACT vs a direct backward-Euler dense solve (max 8.9e-16 over k_s∈{1,2,3,5}, iso+aniso,
+nonzero offsets), CPU≡GPU aggregate-within-SEM.** **STEP 2 (convergence, `-full -grid` coltol10/d1000/seed0):
+NOT converged — still CLIMBS.** Coupled velFitX 2.020→6.279 (**3.1×**) & avgBound 2.774→3.615 (1.30×) as dt
+1e-5→2.5e-6. It IS the best partial (velFitX climb: explicit 5.75× / head-only 4.08× / coupled 3.11×; avgBound
+2.23×/2.07×/**1.30×**), it is UNBIASED (coupled@2.5e-6 ≈ explicit@2.5e-6 ⇒ same continuum limit), and it CONVERGES
+the binding + the detach clock (avgBound nearly flat; coupled@1e-5 dwell 0.62 ms/1616 /s ≈ explicit@2.5e-6). But
+making F8 **translation** implicit does NOT converge the **per-bound GLIDE** (velFitX/avgBound 0.73→1.73) — that
+residual lives in the still-explicit **stroke/rotation/force** couplings. **⇒ We do NOT get the dt-robust physical
+duty at production dt from the coupled implicit alone; FALL BACK to sub-stepping the cross-bridge**
+(`substep-feasibility-verdict`). Keep `-xbimplicit2` (free, unbiased, parity-clean partial; can pre-stabilize the
+F8 stretch inside a sub-step). STEP 3 (dt-honest velocity–density) SKIPPED (only if converged). Report:
+`COUPLED_IMPLICIT_XB_FINDINGS.md`. `BoA-v1ref` untouched; default byte-identical.
+
+## 2026-07-04 — NUCDETACH DUTY RECOVERY: the short dwell IS bind-in-ATP ejection churn (confirmed); the ADP·Pi bind-gate (`-adppibind`) makes it physical; capture radius recovers avgBound; but dt-robust-AND-physical duty is blocked on the cross-bridge sub-step, NOT the kinetics.
+STEP A — the binder `bindNearest` is PURELY GEOMETRIC (only gate = FREE_BINDABLE; `nucleotideState` never read;
+`BindingDetectionSystem.java:356-390`), NOT ADP·Pi-gated (jba's expectation false in code; the `cycleLymnTaylor`
+"bind in ADP·Pi" comment was aspirational). The realized dense-bed dwell ~0.036 ms (25× short of the biochemical
+cycle) IS the **bind-in-ATP ejection churn** the prior findings hypothesised — MEASURED and CONFIRMED: a
+just-detached head (in ATP, mid ~10 ms recovery) is geometrically re-bound and ejected the SAME step; **91 % of
+detach events are these ≤1-step churn ejections** (`mot.stats` 14098 releases vs 977 episode-tracker — the tracker
+had a bug: it counted only FREE_COOLDOWN releases, missing every same-step bind-eject; fixed to `bs<0` + a stats
+xcheck). Both `-grid` runners agree at 0.036 ms (NOT a CPU/GPU divergence, NOT a startup artifact — though the
+cumulative `STATS_ROW` IS contaminated by the all-heads-start-NONE startup avalanche; new `STATS_STEADY_ROW`
+snapshots a 0.2 s warmup cutoff). FIX = the ADP·Pi strong-bind gate `-adppibind` (kinParams[20], default
+byte-identical; the faithful weak→strong rule): dwell 0.036→0.344 ms, detach 27857→2909 /s — a clean
+ADP-release-limited clock. **Fork 1 confirmed.** BUT the gate does NOT recover avgBound/glide (churn heads were
+near-zero-engagement; the gate costs ~15 % glide) — engagement is a STEP-B lever, not the dwell-fix.
+STEP B — capture-radius × density × 3-seed sweep (gated, dt=1e-5, GPU `-full -grid`): capture radius raises
+avgBound monotonically & non-saturating (d1000 1.12→1.70, d500 0.49→0.78 for coltol 6→12 nm); glide plateaus
+~1.1–1.2 µm/s (d1000); density the stronger lever; threshold between d500 & d1000 (still above Uyeda). Duty stays
+LOW & PHYSICAL across the surface (dwell 0.34 ms, detach ~2900 /s, avgBound O(1), all ~constant vs radius/density
+— a per-bound kinetic clock; the ungated churn detach instead RISES with reach 19335→38698 /s ⇒ the churn is a
+geometric-rebind artifact). **dt RE-CONFIRM (coltol10/d1000) — the decisive result: NEITHER config is dt-robust in
+avgBound/glide** (both climb ~2×/~5.7× as dt 1e-5→2.5e-6). Ungated detach/dwell ARE dt-flat (churn clock, prior
+win) but avgBound/glide climb anyway (dwell flat ⇒ it's not the detachment); gated detach/dwell are dt-DEPENDENT
+(the catch `g(F)` reads the dt-dependent F8 overshoot). Root cause = the STANDING explicit cross-bridge overshoot,
+independent of the cycle. `-xbimplicit` (tested) raises the coarse-dt values toward converged (+56 % glide at 1e-5)
+but only shrinks the climb ~5.7×→~4.1× — the cheap local-implicit buys ~2× faithful-dt, NOT convergence; the fix
+is the **sub-step / coupled cross-bridge** (`substep-feasibility-verdict`). ⇒ nucleotide-detachment fixed the
+avgBound SATURATION; a dt-robust physical duty is an INTEGRATOR problem, not reachable from kinetics. Regression:
+dimerglide `-cpu` PASS (the `bindNearest`+kinParams 20→21 change is byte-safe cross-harness); default byte-identical;
+`BoA-v1ref` untouched. dt=5e-6 rerun of the full grid — DONE: the surface climbs UNIFORMLY (coltol10/d1000 gated
+velFitX 1.17→3.84→6.48, avgB 1.52→2.65→3.45 for dt 1e-5→5e-6→2.5e-6; avgB climb-rate decelerating 1.75×→1.30×,
+velFitX still fast; density gap narrows at finer dt). The 5e-6 grid spanned jba's parallel 18:19 `-xbimplicit2`
+rebuild but that change is provably ADDITIVE + flag-gated ⇒ the default/`-adppibind` path is byte-identical
+throughout (verified). jba's parallel COUPLED implicit XB (`-xbimplicit2`, `COUPLED_IMPLICIT_XB_FINDINGS.md`) —
+the exact fix this verdict points to — is the best partial (converges binding+detach clock, velFitX climb
+5.75×→3.11×) but STILL doesn't converge glide at 1e-5 (residual = the explicit stroke/force) ⇒ independently
+confirms even a coupled-implicit F8 isn't enough; needs a full cross-bridge sub-step. Report:
+`NUCDETACH_DUTY_RECOVERY_FINDINGS.md`.
+
+## 2026-07-03 — NUCLEOTIDE-DRIVEN DETACHMENT (Lymn–Taylor, `-lymntaylor`) PASSES the dt-convergence non-saturation gate: the duty cycle is now biochemically set + dt-ROBUST, not a coarse-dt force-overshoot artifact.
+STEP-0: the DEFAULT motor's SOLE detachment is F8-load catch-slip (`NucleotideCycleSystem.catchSlipRelease`); the
+cycle is cocking-only (`cycle` writes only `nucleotideState`). Saturation mechanism: as dt→0 the F8 overshoot
+vanishes ⇒ catch-slip detachment→0 ⇒ avgBound saturates (`DT_CONVERGENCE`: 17.88→216 @coltol8/d1000). STEP-1: the
+`-lymntaylor` cycle (`cycleLymnTaylor`) already implements the directive — detachment = the ATP-binding NONE→ATP
+Poisson transition (atpOn 2e4/s, Howard), the Guo–Guilford catch DEMOTED to load-modulation of the ADP→NONE rate
+(base onADP 1e3/s × g(F)), ONE release pathway; measured skeletal rates (Howard T14-2 + Guo&Guilford 2006)
+recorded in a new `params/Skeletal_Myosin` provenance file (loader = flagged follow-up). STEP-2 (the gate,
+coltol8/d1000, dt 1e-5→1.25e-6, matched 1.5 s): **PASS** — LT avgBound stays O(1) (1.26/1.11/3.11/0.92, ~50–200×
+below the default's 17.88/69/158/216 at matched dt, NO saturation) and detach-rate is dt-robust FLAT ~25000/s
+(26136/22704/25541/26636); dwell flat ~0.038 ms. (Velocity single-seed-noisy; the two finest dts drifted off-bed
+— a coverage caveat only, not the gate.) STEP-3 (velocity-density, native reach, dt=1e-5, 3 seeds): correct
+monotonic threshold+rise, glide ∝ avgBound, threshold ~500–1000 (above Uyeda 100–300), reaches ~1.6–1.7 µm/s
+@d2000 (low edge of skeletal 1.5–4, at 100× drag), duty <1 % (low/physical, honestly duty-starved) — the standing
+binding-density / transport / drag residuals, NOT worsened. v1 note: v1 has NO nucleotide-driven detachment
+(cocking-only cycle + catch-slip release, = the v2 default) ⇒ this is a MEASURED-biochemistry model improvement,
+not a v1 faithfulness fix. Added a measurement-only `STATS_ROW` (detach-rate/dwell); `-lymntaylor` default-off ⇒
+non-LT paths byte-identical; no stroke/force change; `BoA-v1ref` byte-clean. Report: `NUCLEOTIDE_DETACH_FINDINGS.md`.
+
 ## 2026-07-03 — dt-convergence at the capture-radius split (coltol8/d1000, the widest BoA↔v2 split): v2's per-bound drift CRATERS 16× as dt→0 — it does NOT rise toward BoA (FORK BRANCH 2).
 Refined dt 1e-5→5e-6→2.5e-6→1.25e-6 at the widest split (coltol8, d1000, -full, seed 0, matched 1.5 s sim time).
 per-bound drift 0.0900→0.0193→0.0077→0.0056 (16×, monotone) while avgBound EXPLODES 17.88→69.10→157.93→216.27
