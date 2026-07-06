@@ -227,6 +227,15 @@ public final class CrossBridgeSystem {
         int nM = nB / 3;
         double k = swingParams.get(0), dt = swingParams.get(1);
         double thetaU = swingParams.get(2), thetaC = swingParams.get(3);
+        // -strokerate (STROKE_DT_RATE_DIAGNOSIS): convert the per-STEP swing fraction k into a per-TIME rate so the
+        // stroke's sim-time DURATION is dt-independent. Default (size 4) ⇒ k unchanged, byte-identical. When
+        // swingParams[4]=refDt>0: k_eff = 1 − (1−k)^(dt/refDt) = 1 − exp((dt/refDt)·log(1−k)); at dt=refDt k_eff==k
+        // (preserves the coarse/production-dt physical stroke duration); at finer dt the per-step fraction shrinks so
+        // the stroke takes more STEPS but the same SIM-TIME. Math.exp/Math.log lower on the PTX backend.
+        if (swingParams.getSize() > 4) {
+            double refDt = swingParams.get(4);
+            if (refDt > 0.0) k = 1.0 - Math.exp((dt / refDt) * Math.log(1.0 - k));
+        }
         double DEG2RAD = Math.PI / 180.0;
         for (@Parallel int m = 0; m < nM; m++) {
             int s = boundSeg.get(m);
@@ -372,6 +381,15 @@ public final class CrossBridgeSystem {
         int nM = nB / 3;
         double k = swingParams.get(0), dt = swingParams.get(1);
         double thetaU = swingParams.get(2), thetaC = swingParams.get(3);
+        // -strokerate (STROKE_DT_RATE_DIAGNOSIS): convert the per-STEP swing fraction k into a per-TIME rate so the
+        // stroke's sim-time DURATION is dt-independent. Default (size 4) ⇒ k unchanged, byte-identical. When
+        // swingParams[4]=refDt>0: k_eff = 1 − (1−k)^(dt/refDt) = 1 − exp((dt/refDt)·log(1−k)); at dt=refDt k_eff==k
+        // (preserves the coarse/production-dt physical stroke duration); at finer dt the per-step fraction shrinks so
+        // the stroke takes more STEPS but the same SIM-TIME. Math.exp/Math.log lower on the PTX backend.
+        if (swingParams.getSize() > 4) {
+            double refDt = swingParams.get(4);
+            if (refDt > 0.0) k = 1.0 - Math.exp((dt / refDt) * Math.log(1.0 - k));
+        }
         double DEG2RAD = Math.PI / 180.0;
         for (@Parallel int m = 0; m < nM; m++) {
             int s = boundSeg.get(m);
@@ -1052,6 +1070,59 @@ public final class CrossBridgeSystem {
             bodyCoord.set(h,          (float) (cplA.get(m)          + B * qx));
             bodyCoord.set(nB + h,     (float) (cplA.get(nM + m)     + B * qy));
             bodyCoord.set(2 * nB + h, (float) (cplA.get(2 * nM + m) + B * qz));
+        }
+    }
+
+    // ============= DIAGONAL per-segment IMPLICIT loaded cross-bridge force (-segimplicit) ============
+    // EOM_STABILITY_FINDINGS: the explicit-Euler instability at production dt is the COLLECTIVE loaded
+    // cross-bridge force a segment sees (dt_crit ∝ γ/(k_ext+k_F8), rigid worst case marginal ~1.4 /
+    // blow-up ~3.8 pN/nm at 1e-5). The cure is backward-Euler on that per-segment self-stiffness, with the
+    // HEAD held EXPLICIT (rigid) — the DIAGONAL of the coupled operator. This is exactly the proven
+    // `-extimplicit` control (ExternalSpringSystem.applyExternalSpringImplicit) applied to the REAL
+    // per-segment cross-bridge sum instead of a test spring: a post-integrate scalar (per body axis) divide,
+    //     q_imp,a = (q_e,a + rK_a·q_n,a) / (1 + rK_a),   rK_a = K_tot·dt·1e6 / γ_a
+    // where q_e = the FULL explicit integrate output (cross-bridge force already gathered in), q_n = the
+    // pre-integrate center (segImplPrev snapshot), K_tot = Σ_bond k = k_s·myoSpring (rigid head ⇒ full F8
+    // stiffness, NOT the coupled solve's head-softened Σ(1−B)). Derivation: linearize F_xb(q)=F_xb(q_n)−
+    // K_tot(q−q_n), backward-Euler F_xb / explicit F_other ⇒ q_imp(1+rK)=q_e+rK·q_n (the c_i/head-tip terms
+    // fold into q_e; anchor is the OLD center q_n, as in applyExternalSpringImplicit with eq→q_n).
+    // K_tot isotropic (zero-rest-length F8 ⇒ k·I in lab) but γ diagonal in the body frame ⇒ rotate to body
+    // axes, divide per axis, rotate back — the SAME body-frame handling as coupleSolveSeg. Per-segment PURE
+    // (reads its own CSR count from segMotorOffsets, writes only its own center) ⇒ race-free, no atomics,
+    // no KernelContext, CPU≡GPU-capable. DIAGONAL only: off-diagonal (motor-body cross-segment, chain F3/F4)
+    // stay EXPLICIT — the harness showed the chain is soft and -extimplicit (diagonal) stabilized every
+    // k_ext. Runs at end-of-step (after integrate+derive of the filament); caller re-derives. ADDITIVE /
+    // flag-gated ⇒ byte-identical default. See SEG_IMPLICIT_FINDINGS.md.
+    public static void segImplicitSolve(IntArray segMotorOffsets,
+                                        FloatArray filCoord, FloatArray filUVec, FloatArray filYVec, FloatArray filBTransGam,
+                                        FloatArray segPrev, FloatArray xbImplParams, IntArray counts) {
+        int nSeg = counts.get(3);
+        double myoSpring = xbImplParams.get(0), dt = xbImplParams.get(1);
+        double kdt = myoSpring * dt * 1.0e6;   // per-bond k·dt·1e6 ; K_tot·dt·1e6 = k_s·kdt
+        for (@Parallel int s = 0; s < nSeg; s++) {
+            int ks = segMotorOffsets.get(s + 1) - segMotorOffsets.get(s);   // K_tot = Σ_bond k = ks·myoSpring
+            if (ks <= 0) continue;
+            double kdtTot = ks * kdt;                                       // = K_tot·dt·1e6 (rigid head)
+            double qnx = segPrev.get(s), qny = segPrev.get(nSeg + s), qnz = segPrev.get(2 * nSeg + s);
+            double qex = filCoord.get(s), qey = filCoord.get(nSeg + s), qez = filCoord.get(2 * nSeg + s);
+            // segment body axes (current orientation): u, y, z=u×y
+            double ux = filUVec.get(s), uy = filUVec.get(nSeg + s), uz = filUVec.get(2 * nSeg + s);
+            double yx = filYVec.get(s), yy = filYVec.get(nSeg + s), yz = filYVec.get(2 * nSeg + s);
+            double zx = uy * yz - uz * yy, zy = uz * yx - ux * yz, zz = ux * yy - uy * yx;
+            double zl = 1.0 / Math.sqrt(zx * zx + zy * zy + zz * zz); zx *= zl; zy *= zl; zz *= zl;
+            double rU = kdtTot / filBTransGam.get(s);
+            double rY = kdtTot / filBTransGam.get(nSeg + s);
+            double rZ = kdtTot / filBTransGam.get(2 * nSeg + s);
+            // project q_e and q_n onto body axes; backward-Euler divide toward q_n (the old center) per axis
+            double qeU = qex * ux + qey * uy + qez * uz, qnU = qnx * ux + qny * uy + qnz * uz;
+            double qeY = qex * yx + qey * yy + qez * yz, qnY = qnx * yx + qny * yy + qnz * yz;
+            double qeZ = qex * zx + qey * zy + qez * zz, qnZ = qnx * zx + qny * zy + qnz * zz;
+            double qiU = (qeU + rU * qnU) / (1.0 + rU);
+            double qiY = (qeY + rY * qnY) / (1.0 + rY);
+            double qiZ = (qeZ + rZ * qnZ) / (1.0 + rZ);
+            filCoord.set(s,            (float) (qiU * ux + qiY * yx + qiZ * zx));
+            filCoord.set(nSeg + s,     (float) (qiU * uy + qiY * yy + qiZ * zy));
+            filCoord.set(2 * nSeg + s, (float) (qiU * uz + qiY * yz + qiZ * zz));
         }
     }
 

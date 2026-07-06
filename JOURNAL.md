@@ -1,5 +1,139 @@
 # Soft Box Project Journal
 
+## 2026-07-05 — BUILT the DIAGONAL per-segment IMPLICIT loaded cross-bridge force (`-segimplicit`): correct + cheap + parity-clean, but a DENSE/RING-regime cure, NOT the gliding dt-fix (the low-duty gliding regime is SUB-THRESHOLD for the collective-load instability).
+The production version of `-extimplicit` (EOM_STABILITY control): backward-Euler on the per-segment COLLECTIVE
+cross-bridge stiffness, `q_imp,a=(q_e,a+rK_a·q_n,a)/(1+rK_a)`, `rK_a=K_tot·dt·1e6/γ_a`, `K_tot=k_s·myoSpring`
+(RIGID head — the full F8 stiffness, NOT `-xbimplicit2`'s head-softened `Σ(1−B)`), body-frame rotate like
+`coupleSolveSeg`. **`k_s` is free from the existing `boundSeg` CSR-inverse** ⇒ ONE new PURE per-segment kernel
+(`CrossBridgeSystem.segImplicitSolve`), no matrix/iteration/atomics/KernelContext, disjoint writes.
+**STEP 1 — built, default byte-identical, CPU≡GPU.** Flag-gated `-segimplicit`; wired into stepOrig + buildPlan.
+The explicit baseline reproduces NUCDETACH's B-dt numbers to the digit (1.126/1.501 @1e-5, 6.477/3.365 @2.5e-6) ⇒
+byte-identical default CONFIRMED. CPU≡GPU aggregate-within-SEM (v1box 20k: velFitX 2.35/2.64, avgB 1.87/2.14);
+`segImplicitSolve` lowers on PTX; seed-0 deterministic.
+**STEP 3 (the framing) — the instability is a DENSE-regime phenomenon.** New read-only `-ktotcensus` instrument
+(per-segment `K_tot=k_s·myoSpring` vs the EOM ~1.4/~3.8 pN/nm thresholds). Under the dt-faithful LOW-duty kinetics
+(`-lymntaylor -adppibind`, the dt-ladder's regime) `K_tot` is dominated by k_s=1 (~1 pN/nm), maxK_tot=3.0, and the
+**blow-up threshold (3.8) is NEVER reached** (0.00 % of segments; marginal 1.4 only 1–4 %) — invariant to density
+(×2) and capture radius (10→14 nm). Under DEFAULT high-duty kinetics (avgBound 15–22) the mean load is ~2.2 pN/nm
+and **4–13 % of segments exceed blow-up** (maxK_tot 6–7). ⇒ the collective-load instability is barely triggered in
+the low-duty gliding assay; it bites in the DENSE / high-binding / contractile / RING regime.
+**STEP 2 (the test) — `-segimplicit` does NOT flatten the gliding dt-climb.** Clean ISOLATION A/B (`-segimplicit`
+vs pure explicit, seed 0, dt 1e-5/2.5e-6): it RAISES binding/glide ~20 % at production dt (correct direction — the
+implicit segment doesn't overshoot away from its bound heads) but the dt-climb ratio is essentially UNCHANGED
+(velFitX 5.75×→5.42×, avgBound 2.24×→2.16×) — NOT dt-robust. Exactly STEP-3's prediction: the gliding regime is
+sub-threshold, so curing the collective load shifts the operating point but leaves the climb, which is the
+still-explicit **per-bound stroke** (COUPLED_IMPLICIT_XB's target). **Single seed** (velFitX noisy, avgBound
+robust); the 3-seed ladder was NOT run because the climb didn't flatten (task's staged gate) + STEP-3 is decisive.
+**FLAG — `-segimplicit` + `-xbimplicit2` do NOT compose cleanly on the segment** (both correct the center; the
+retained `-xbimplicit2` head phases read the rigid q with coupled A_i/B_i ⇒ over-damps binding at fine dt, a false
+"flattening" artifact). **Use `-segimplicit` STANDALONE.** **STEP 4 (dt-honest v–density) SKIPPED** (STEP 2 didn't
+converge). **⇒ `-segimplicit` is the DENSE/contractile/RING-regime cure (built, validated, default-off); the
+gliding dt residual still needs the cross-bridge sub-step.** No kinetics/stroke/rate change; `BoA-v1ref` untouched;
+production byte-unchanged. Report: `SEG_IMPLICIT_FINDINGS.md`; logs `RUN_LOGS/2026-07-05_{segimpl_isolation,
+segimpl_probe,ktot_census_clean}.txt`. New: `CrossBridgeSystem.segImplicitSolve` + `GlidingHarness` `-segimplicit`/
+`-ktotcensus`.
+
+## 2026-07-05 — dt-CONVERGENCE ARC RESOLVED: the instability is explicit-Euler on the COLLECTIVE LOADED cross-bridge force (threshold ~4 pN/nm); cure = implicit loaded force. Localized cleanly by the external-spring EOM-stability harness.
+
+The long dt-convergence chase (glide/avgBound climbing as dt→0) is now **diagnosed to root cause with the cure demonstrated as a control.** The chase was slow because it was run through the dense gliding assay, where `net = avgBound × per-bound-drift` and *every* factor carries its own dt-dependence — binding count, dwell, tug-of-war cancellation, filament relaxation, and (separately) rate-convention bugs. That signal is unreadable. A single-motor / single-filament **external-spring EOM-stability harness** (Brownian off, deterministic, no transport inferred) stripped all confounds and gave a textbook answer.
+
+### The finding (EOM_STABILITY_FINDINGS)
+- **The explicit forward-Euler integration of the filament EOM is genuinely unstable at production dt=1e-5 under a realistic elastic load.** `dt_crit ∝ γ/(k_ext + k_F8)` — `k_eff/γ` perfectly linear in k_ext (slope 4.19e4/pN·nm⁻¹, intercept = the 1 pN/nm bound-F8): the canonical explicit-Euler load-stiffness fingerprint. Rigid pure-elastic load ⇒ marginal (ring) at **k_ext ≈ 1.4 pN/nm**, blow-up at **≈ 3.8 pN/nm**. A dense-ensemble-scale rigid load (~15–20 pN/nm) sits at α ≈ 7–11 ≫ 2 — deep in the growing-oscillation regime.
+- **The stiff coupling is the collective LOADED force a segment sees — NOT any motor-internal coupling.** Three toggles localize it by elimination, all reproducing the same load-stiffness law: `-rot` (motor rotation/F9/F10/stroke free) **identical** ⇒ rotational couplings don't set it; `-nof8` shifts the intercept by exactly 1 pN/nm ⇒ F8 is a fixed additive term, not the limiter (so the per-motor coupled-F8 star removes only ~1 of ~15–20 pN/nm); `-chain 10` soft (dt_crit ~3e-4 at k_ext=0) ⇒ **the filament internal DOFs (bending/torsion) are NOT the bottleneck** — this closes jba's filament-stiffening question.
+- **Cure demonstrated (`-extimplicit`, control):** making the loaded force implicit (backward-Euler operator split) removes the k_ext dependence of the boundary — the entire production dt=1e-5 column is stable at every realistic k_ext. The only residual limit is the still-explicit F8 at dt≥5e-5 (far above production).
+- **CPU≡GPU:** the instability is bit-identical on both runners (ρ=−5.699 both) — a genuine property of the explicit scheme, not a runner artifact.
+
+### What this resolves, and what it re-scopes
+- **The fix target MOVED.** All prior implicit work (the coupled F8 star, `COUPLED_IMPLICIT_XB`) was **per-motor** — one head's own stretch (~1 pN/nm). The instability is the **sum** of cross-bridge loads on a segment from **all** its bound heads. So the implicit/sub-step must cover the **collective loaded cross-bridge force per segment** (the seg-gather aggregate), not per-bond. That is the real, singular remaining build.
+- **Exonerated (done chasing):** motor rotational couplings, F8-alone, filament chain bending/torsion — none set the stability limit. The per-step-fraction PAIRS rate conventions (`STROKE_DT_RATE_DIAGNOSIS`, `PAIRS_RATE_AUDIT`) are a *separate, real* model-definition dt-dependence (`-ratefix` cut the residual 3.07×→~1.8×) — a keeper flag, and likely more relevant in dense/buckling/contractile assays — but they are NOT this instability.
+- **The ~1.8× PAIRS residual is now understood as a MIX:** part genuine loaded-force instability (this finding), part model-changing-with-dt (rate conventions + tug-of-war/binding-count scaling). The harness separates the mechanism from the confounds.
+
+### Caveat (do not over-read)
+The harness load is a **rigid, pure-elastic worst case.** The real ensemble is compliant, mobile, and load-shared across a filament's segments, so the *effective* per-segment stiffness is softer than a literal 15–20 pN/nm anchor. So this proves the **mechanism and the ~4 pN/nm threshold** — not that every dense scene crosses it. Whether a given scene's dt-climb is this instability vs the model-definition confounds depends on its effective load. Not the "phantom" verdict (the mechanism is real and cheap to trigger), and not motor-internal.
+
+### Standing plan
+1. **Build:** implicit (or sub-step) treatment of the **collective loaded cross-bridge force per filament segment** — reusing the race-free CSR-inverse gather that already aggregates those per-segment loads. Sized against the ~4 pN/nm threshold. (`-extimplicit` is the proven control; the production version applies the same operator split to the real per-segment cross-bridge sum.)
+2. **Keep** `-ratefix` (per-step→per-time PAIRS conversion) as a flagged instrument — real dt-robustness win, load-bearing for dense/ring assays, default-off pending sign-off.
+3. **Then** the dt-honest velocity–density validation number (finally meaningful once the loaded-force instability is cured at production dt).
+4. Deferred: the flag-cleanup pass (strip speculative side-mechanisms to a single default path, keep Brownian-off/`-cpu`/legacy-motor) once the motor + integrator restabilize.
+
+**Bottom line:** a many-day confounded dt-chase is now a one-line stability law (`dt_crit ∝ γ/(k_ext+k_F8)`) with a demonstrated cure. The remaining integrator work is singular and scoped: make the per-segment collective cross-bridge load implicit.
+
+## 2026-07-05 — EOM-STABILITY probe (external-spring-loaded single-motor/single-filament): the explicit filament EOM IS a GENUINE LOAD-STIFFNESS instability at dt=1e-5; the stiff coupling is the LOADED force, NOT the motor rotational couplings / F8 / chain.
+A numerical-stability test (NOT a transport measurement) that strips the dense-assay confound (`net = avgBound ×
+per-bound-drift`, every factor dt-dependent): single filament + one PERMANENTLY-bound motor + an external elastic COM
+tether (stiffness `k_ext`, standing in for the ensemble load), Brownian OFF ⇒ deterministic. **PRIMARY (relaxation/
+impulse):** settle → anchor spring at eq → displace +2 nm → release → classify the overdamped decay (MONO/RING/GROW as
+`α=1e6·k_eff·dt/γ` crosses 1,2). **Headline: `dt_crit ∝ γ/(k_ext+k_F8)`** — `k_eff/γ` PERFECTLY LINEAR in k_ext (slope
+4.19e4/pN·nm, intercept = the 1 pN/nm bound-F8), the textbook explicit-Euler load-stiffness fingerprint. Under a rigid
+elastic load, dt=1e-5 goes MARGINAL at k_ext≈1.4 and UNSTABLE (blows) at ≈3.8 pN/nm; a dense-ensemble load ~15–20 pN/nm
+⇒ α≈7–11 ≫ 2, deep in the growing regime. **Toggles localize decisively (all SAME load scaling):** `-rot` (motor body
++ fil rotation free) IDENTICAL ⇒ rotational couplings don't set the limit; `-nof8` shifts the intercept by exactly
+1 pN/nm ⇒ F8 is a fixed additive term, not the limiter (so F8-implicit removes only ~1 of ~15–20 pN/nm); `-chain 10`
+(F3/F4 on) same load law, chain's own bending mode soft (dt_crit ~3e-4) ⇒ filament internal DOFs not the bottleneck
+(answers jba's filament-stiffening Q). **CURE (`-extimplicit`, control):** making the LOADED force implicit
+(backward-Euler split) REMOVES the k_ext dependence — the whole production dt=1e-5 column is STABLE at every k_ext; only
+the still-explicit F8 limits (dt_crit_F8 ~2.4e-5 ≫ production). **SECONDARY (`-drive`):** the driven stroke vs 15 pN/nm
+DIVERGES explicitly across 2e-5…5e-6 (the unstable regime the map predicts), stays bounded/settles with the loaded
+force implicit (residual pm-scale dt-drift = the known stroke per-step-fraction confound, STROKE_DT_RATE, not the
+solver). **CPU≡GPU parity:** bit-identical (4.66e-7), both diverge identically ⇒ genuine scheme property. **⇒ the fix
+is an implicit/sub-step of the COLLECTIVE LOADED cross-bridge force** (sharper than the prior arc: the limiter is the
+load MAGNITUDE, not a motor-internal coupling), consistent with `substep-feasibility-verdict`. **Caveat:** rigid
+pure-elastic = the worst case; the real ensemble is compliant/mobile/load-shared (softer effective per-seg stiffness),
+so this fixes the threshold+mechanism; whether a scene's dt-climb is this instability depends on whether its effective
+load crosses ~4 pN/nm. NOT the "phantom" verdict (mechanism genuine + cheap to trigger), NOT motor-internal. New files
+only (`ExternalSpringSystem`, `EomStabilityHarness`, `run_eomstab.sh`); default byte-identical; `BoA-v1ref` untouched.
+Report: `EOM_STABILITY_FINDINGS.md`; log `RUN_LOGS/2026-07-05_eom_stability.txt`.
+
+## 2026-07-05 — Audit ALL per-step-fraction PAIRS coefficients (motor + FILAMENT), convert to per-time (`-filrate`/`-ratefix`): the residual dt-climb REDUCES 3.07×→~1.8× but SURVIVES → genuine rotational-integration stiffness (sized against ~1.8×, not the inflated 2.24×).
+jba's generalization of STROKE_DT_RATE: the per-step-fraction bug is the master **PAIRS torque-law convention**, not
+just the motor — so the FILAMENT's own bending/torsion coefficients carry the same ∝1/dt bias (and stiffer filaments
+glide faster). **STEP 1 (audit):** confirmed the filament F3 link+bending (`chainParams[1]` fracMove=0.5) and F4
+torsion (`chainParams[3]` fracMoveTorq=0.2, filTorqSpringActive=0 damped branch) ARE per-step fractions (`fracMove·
+strain/(dt·mobility)`, the `/dt` cancels the integrator `·dt`) — the same convention as the motor swing/alignment;
+`fracR`=0.1 is geometry (not a rate); catch g(F) is per-time. Motor structural joints (J1/J2 position, anchor)
+per-step but structural (torsions OFF in gliding). **v1-INHERITED** (CLAUDE.md 5a: the `/dt`-cancels design is v1's)
+⇒ a shared latent dt-convention issue, a **model improvement, NOT a v2 faithfulness divergence** (flagged,
+default-byte-identical, opt-in). **STEP 2:** `-filrate` (build-time `k_eff=1−(1−k)^(dt/refDt)` on chainParams[1]/[3],
+no kernel change), `-ratefix` = strokerate+alignrate+filrate. **STEP 3 (3-seed SEM, coltol10/d1000 -xbimplicit2):**
+coupled residual (velFitX 2.5e-6/1e-5) **3.07× ± 0.19** (n=3); `-ratefix` **~1.8×** (velFitX 2.5e-6 6.85→3.9, −43 %;
+per-seed 2.07/1.37, n=2 at 2.5e-6). **Single-seed was MISLEADING** — seed-0 looked like "filament null, residual
+2.1×"; multi-seed shows a bigger, noisier reduction to ~1.8×. **⇒ converting ALL per-step fractions is a REAL
+dt-robustness win (3.07×→~1.8×) but NOT dt-robust at production dt (~1.8× ≫ flat) — a genuine explicit
+rotational-integration stiffness survives.** WHICH PATH: scope the rotational implicit (extend the COUPLED_IMPLICIT_XB
+F8-translation star to head/segment ROTATION) or sub-step, **sized against the REDUCED ~1.8× residual, not 2.24×/
+3.11×**. **Open (flagged):** the filament-vs-motor split is UNRESOLVED (allrate multi-seeded at seed-0 only; the extra
+reduction may be filament OR motor-rate noise — the rate fixes raise variance; ratefix@2.5e-6 n=2, seed-2 pending);
+jba's stiffer-filament-glides-faster not clearly borne out for this SPARSE single-filament axial glide (likely bites
+harder in dense/buckling/contractile assays — `-filrate` is the instrument). Report: `PAIRS_RATE_AUDIT_FINDINGS.md`.
+`BoA-v1ref` untouched; default byte-identical.
+
+## 2026-07-05 — Stroke-RATE vs rotational-STIFFNESS diagnosis: the residual glide dt-climb is BOTH (a real F9/F10 alignment-RATE component + a residual rotational STIFFNESS) — the cheap rate fix is NOT sufficient → scope the rotational implicit/sub-step.
+Ruling out a dt-dependent per-step-fraction RATE before scoping full-motor-implicit-vs-sub-step for the residual
+per-bound glide climb that COUPLED_IMPLICIT_XB left (velFitX/avgBound 0.73→1.74→2.40 across dt 1e-5/2.5e-6/1.25e-6).
+**STEP 1 (code read, decisive on mechanism):** the master torque law scales swing/alignment torques as
+`|τ| = k·(θ−θ0)/((1/γ_a+1/γ_b)·dt)` ⇒ the integrator's `Δθ=τ·dt/γ` makes the `·dt` CANCEL ⇒ the relaxation is a
+FIXED FRACTION PER STEP (k=0.4), dt-independent per step ⇒ the sim-time stroke/alignment DURATION shrinks ∝dt ⇒ the
+**rate scales ∝1/dt BY CONSTRUCTION**. This holds for the directedSwing power stroke (swingParams[0]=0.4) AND the
+F9/F10/axlock alignment torques (xbParams[2]=0.4). The catch `g(F)` is a PROPER per-time rate (`u<rate·dt`,
+dt-correct) — not implicated (its dt-dependence was via F8, already fixed by the coupled star). **STEP 3 (the fix,
+flag-gated, default byte-identical):** `-strokerate` (in-kernel `k_eff=1−(1−k)^(dt/refDt)`) + `-alignrate`
+(build-time `xbParams[2]`, DT fixed ⇒ constant, no kernel change). dt series (coltol10/d1000 -xbimplicit2, seed 0):
+**velFitX 1e-5/2.5e-6/1.25e-6 — coupled 2.02/6.28/10.06, -strokerate 2.46/4.70/9.68, -strokerate -alignrate
+2.46/5.50/5.88.** Reads (vs ~20% single-seed noise, set by the 1e-5 no-op point): (1) the **stroke** rate is
+NEGLIGIBLE for the steady glide (strokerate≈coupled) — the glide is set by the sustained F8 pull over the ~600-step
+dwell, not the ~6-step stroke transient; (2) the **F9/F10 alignment** rate is a REAL contributor — allrate/coupled
+velFitX drops 1.22→0.88→**0.58** as dt→0 (allrate 42% below coupled at 1.25e-6, beyond noise; the ∝1/dt fingerprint
+grows with refinement); (3) **but even all rotational rates converted does NOT reach dt-robustness — allrate still
+climbs 2.24× from 1e-5→2.5e-6** (beyond noise). **⇒ BOTH: a real, cheaply-mitigable alignment-rate component + a
+residual rotational STIFFNESS** (the explicit forward-Euler rotational integration `Δθ=τ·dt/γ` of the head/segment
+orientation — the `R×F8` tip torque + alignment — under-resolves the stiff orientation dynamics that set the F8-stretch
+tip geometry, converging only as dt→0). **WHICH PATH: the cheap rate fix (esp. -alignrate, −40% fine-dt) is a
+worthwhile REAL PARTIAL but NOT sufficient; scope the full-motor (rotational) implicit — extend the coupled star to
+the head/segment ROTATION — or the sub-step.** Keep `-strokerate`/`-alignrate` as flag-gated instruments (default
+byte-identical). Caveat: single-seed noise limits the precise rate/stiffness split (multi-seed would sharpen, doesn't
+change the path). Report: `STROKE_DT_RATE_DIAGNOSIS.md`. `BoA-v1ref` untouched.
+
 ## 2026-07-04 — COUPLED head+SITE implicit cross-bridge (`-xbimplicit2`): PARITY-preserving, UNBIASED, best partial — but does NOT converge at dt=1e-5. → sub-step fallback.
 The remaining blocker to a dt-robust physical glide is the coarse-dt F8 overshoot (numerics, not kinetics —
 NUCDETACH). Tested whether solving the bound head AND its filament site TOGETHER implicitly (not head-only, which

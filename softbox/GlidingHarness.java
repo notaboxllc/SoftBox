@@ -51,6 +51,7 @@ public final class GlidingHarness {
     // ---- IMPLICIT_CROSSBRIDGE (flag-gated; default-off ⇒ explicit Hookean, byte-identical) ----
     static boolean XB_IMPLICIT = false;          // -xbimplicit: locally-implicit bound-head cross-bridge spring (c_imp=(c_exp+r·c_n)/(1+r))
     static boolean XB_IMPLICIT2 = false;         // -xbimplicit2: COUPLED head+SITE implicit F8 (per-segment star; COUPLED_IMPLICIT_XB_FINDINGS)
+    static boolean SEG_IMPLICIT = false;         // -segimplicit: DIAGONAL per-segment implicit COLLECTIVE loaded cross-bridge force (rigid head; SEG_IMPLICIT_FINDINGS)
     static boolean CANONICAL = false;            // -canonical: PHASE-2 Version-B two-point canonical motor (bindCanonicalTwoPoint + bondForcesCanonical). Default off ⇒ byte-identical.
     static boolean CANON_DIAG = false;           // -canondiag: instrument the Version-B binder (formation rate, snap magnitude, legal-pose, lever-strain under thermal load). Implies -canonical.
     static boolean CONFIG1 = false;              // -config1: PHASE-2 Config-1 composed architecture (PAIRS attachments + Hookean J1 load). Implies -canonical.
@@ -99,10 +100,16 @@ public final class GlidingHarness {
     static final double FIL_Z = 0.0;            // gliding filament z (v1)
     static double DENSITY = 500.0;              // motors / µm² (-density overrides for the speed-density trend)
     static double NECK_ANGLE = 60.0;            // -neckangle <deg>: cocked neck-stroke rest angle (swingParams[3]); default 60 ⇒ byte-identical. STEP-2 step-size lever (step ≈ 2·L·sin(θ/2)).
+    static boolean STROKE_RATE = false;         // -strokerate: express the directedSwing per-STEP fraction as a per-TIME rate (dt-independent stroke duration; STROKE_DT_RATE_DIAGNOSIS)
+    static boolean ALIGN_RATE = false;          // -alignrate: ALSO convert the F9/F10/axlock alignment per-STEP fraction (xbParams[2]) to a per-TIME rate, at build time (DT fixed ⇒ k_eff is a constant)
+    static boolean FIL_RATE = false;            // -filrate: convert the FILAMENT PAIRS per-STEP fractions (fracMove chainParams[1] = F3 link+bending, fracMoveTorq chainParams[3] = F4 torsion) to per-TIME rates (build time). PAIRS_RATE_AUDIT
+    static boolean RATE_FIX = false;            // -ratefix: convenience = -strokerate + -alignrate + -filrate (ALL glide-relevant per-step fractions → per-time)
+    static double STROKE_REF_DT = 1.0e-5;       // -strokerefdt <s>: reference dt at which k_eff==0.4 (the coarse/production-dt physical stroke duration to preserve); default 1e-5
     static double RATE_SCALE = 1.0;             // -ratescale <x>: scale catch-slip kOff + ALL nucleotide cycle rates by x (faster kinetics = V₀ = step·detach-rate); default 1 ⇒ byte-identical. STEP-3 cycle-rate lever.
     static double COL_TOL = 0.006;              // -coltol <nm>: myosin bind capture radius (kinParams[7], perp tip-to-axis reach); default 6 nm ⇒ byte-identical. CAPTURE-RADIUS sweep (the engagement/duty master knob). PHYSICAL param, not a free speed dial.
     static double AETA = Constants.aeta;        // -aeta <Pa·s>: filament/medium viscosity (drag γ ∝ aeta, diffusion ∝ 1/aeta). Default 0.1 ⇒ byte-identical. VISCOSITY DIAGNOSTIC: is the glide cycle-limited (η↓ flat) or drag-limited (η↓ raises speed)? PHYSICAL param, NOT a speed dial.
     static boolean STRETCHCENSUS = false;       // -stretchcensus: read-only census of the BOUND population's anchor-spring extension (forceMag/myoSpring), per-head axial force (forceDotFil), + aggregate dwell (stats). STEP-3 geometry check; no force change; default-off byte-identical.
+    static boolean KTOT_CENSUS = false;         // -ktotcensus: read-only census of the per-segment collective cross-bridge stiffness K_tot=k_s·myoSpring vs the EOM ~1.4/~3.8 pN/nm instability thresholds. STEP-3 (SEG_IMPLICIT_FINDINGS); no force change; default-off byte-identical.
     static final int    FIL_SEGS = 11;          // ~2 µm of 64-monomer segments
     static final int    FIL_MONO = 64;          // filSegLength (gliding override)
     // bed geometry: bX0 = filament +x end; the bed spans x∈[bXlo,bXhi], y∈[-bYhalf,bYhalf].
@@ -167,6 +174,12 @@ public final class GlidingHarness {
             else if (args[i].equals("-xbdashmech")) DASH_MECH = true;  // dashpot mechanical force only (catch reads spring load)
             else if (args[i].equals("-xbimplicit")) XB_IMPLICIT = true;  // IMPLICIT_CROSSBRIDGE locally-implicit bound-head spring
             else if (args[i].equals("-xbimplicit2")) XB_IMPLICIT2 = true; // COUPLED_IMPLICIT head+SITE implicit F8 (mutually exclusive with -xbimplicit)
+            else if (args[i].equals("-segimplicit")) SEG_IMPLICIT = true;  // DIAGONAL per-segment implicit collective loaded cross-bridge (composes with -xbimplicit2)
+            else if (args[i].equals("-strokerate")) STROKE_RATE = true;   // STROKE_DT_RATE: stroke swing as a per-TIME rate (dt-independent stroke duration)
+            else if (args[i].equals("-alignrate")) ALIGN_RATE = true;      // STROKE_DT_RATE: F9/F10 alignment torques as per-TIME rates too (build-time xbParams[2])
+            else if (args[i].equals("-filrate")) FIL_RATE = true;          // PAIRS_RATE_AUDIT: FILAMENT fracMove/fracMoveTorq → per-time rates (build-time chainParams[1]/[3])
+            else if (args[i].equals("-ratefix")) { RATE_FIX = true; STROKE_RATE = true; ALIGN_RATE = true; FIL_RATE = true; }  // ALL glide per-step fractions → per-time
+            else if (args[i].equals("-strokerefdt")) STROKE_REF_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-canonical")) CANONICAL = true;     // PHASE-2 Version-B two-point canonical motor
             else if (args[i].equals("-canondiag")) { CANONICAL = true; CANON_DIAG = true; }  // + instrument the binder
             else if (args[i].equals("-config1")) { CANONICAL = true; CONFIG1 = true; }       // PHASE-2 Config-1 (PAIRS + Hookean J1)
@@ -213,6 +226,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-coltol")) COL_TOL = Double.parseDouble(args[++i]) * 1.0e-3;  // CAPTURE-RADIUS sweep: bind reach in nm → µm (kinParams[7])
             else if (args[i].equals("-aeta")) AETA = Double.parseDouble(args[++i]);   // VISCOSITY DIAGNOSTIC: filament/medium viscosity (Pa·s); default 0.1 ⇒ byte-identical
             else if (args[i].equals("-stretchcensus")) STRETCHCENSUS = true;                       // STEP-3 read-only bound-population geometry census
+            else if (args[i].equals("-ktotcensus")) KTOT_CENSUS = true;                            // STEP-3 read-only per-segment K_tot vs instability-threshold census
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
@@ -264,6 +278,20 @@ public final class GlidingHarness {
                 "  -xbimplicit2: COUPLED head+SITE implicit F8 ON — per-segment closed-form star (reuses the boundSeg CSR-inverse). r_head=k·dt/γ_head≈%.3f; the SEGMENT (site) is now implicit too (r_seg,∥≈%.3f, r_seg,⊥≈%.3f — the head-only-unconverged half). Torque/rotation + chain explicit. See COUPLED_IMPLICIT_XB_FINDINGS.md.%n",
                 rh, kSI * DT / 2.3885e-8, kSI * DT / 3.3088e-8);
         }
+        if (SEG_IMPLICIT) {
+            double kSI = MYO_SPRING * 1.0e6;
+            System.out.printf(java.util.Locale.US,
+                "  -segimplicit: DIAGONAL per-segment IMPLICIT collective loaded cross-bridge ON — backward-Euler on K_tot=k_s·myoSpring (RIGID head, full F8 stiffness), q_imp,a=(q_e,a+rK_a·q_n,a)/(1+rK_a), rK_a=K_tot·dt·1e6/γ_a (per body axis). Off-diagonal (motor-body cross-seg, chain) explicit. myoSpring=%.2f pN/nm ⇒ per-bond rK_∥≈%.3f at dt=%.0e (k_s bonds ⇒ ×k_s). Composes with -xbimplicit2 (segment solve replaces coupleSolveSeg; head phases kept). See SEG_IMPLICIT_FINDINGS.md.%n",
+                MYO_SPRING * 1.0e9, kSI * DT / 2.3885e-8, DT);
+        }
+        if (STROKE_RATE) {
+            double kEff = 1.0 - Math.exp((DT / STROKE_REF_DT) * Math.log(1.0 - 0.4));
+            System.out.printf(java.util.Locale.US,
+                "  -strokerate: directedSwing per-STEP fraction → per-TIME rate. refDt=%.2e (k_eff==0.4 there); at dt=%.2e k_eff=%.4f (per-step). Sim-time stroke duration now dt-independent (stroke takes more STEPS at finer dt, same sim-time). STROKE MAGNITUDE unchanged.%n",
+                STROKE_REF_DT, DT, kEff);
+        }
+        if (ALIGN_RATE) System.out.printf(java.util.Locale.US, "  -alignrate: F9/F10/axlock 0.4/step → per-time; k_eff=%.4f at dt=%.2e (build-time xbParams[2]).%n", rateFix(0.4), DT);
+        if (FIL_RATE) System.out.printf(java.util.Locale.US, "  -filrate: FILAMENT fracMove 0.5→%.4f, fracMoveTorq 0.2→%.4f (per-time, build-time chainParams) at dt=%.2e (refDt=%.2e). fracR (geometry) unchanged. Filament STIFFNESS magnitude preserved at refDt.%n", rateFix(0.5), rateFix(0.2), DT, STROKE_REF_DT);
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
         if (CSRECAL) { catchSlipRecal(Math.max(M, 14000)); return; }
         if (DCALIB) { dCalib(Math.max(M, 25000)); return; }
@@ -291,6 +319,11 @@ public final class GlidingHarness {
         FloatArray segImplPrev;               // -xbimplicit2: per-segment pre-integration center q_n (planar 3·nSeg)
         double segL, x0;
     }
+
+    /** PAIRS_RATE_AUDIT: convert a per-STEP fraction k (relaxes fraction k/step, dt-independent) into the
+     *  per-STEP fraction that reproduces the SAME per-TIME relaxation at the current DT as k does at STROKE_REF_DT:
+     *  k_eff = 1 − (1−k)^(DT/refDt). At DT==refDt ⇒ k_eff==k (byte-identical). Math.exp/log lower on PTX. */
+    static float rateFix(double k) { return (float) (1.0 - Math.exp((DT / STROKE_REF_DT) * Math.log(1.0 - k))); }
 
     static Scene buildScene() {
         Scene sc = new Scene();
@@ -321,8 +354,14 @@ public final class GlidingHarness {
         // Langevin force/γ·dt — auto-scale); the fracMove family is held at its operating values for BOTH
         // codes (per planner direction — do NOT scale fracMove). The v2/v1 RATIO at each dt isolates the
         // integration-scheme (update-order/staleness) difference.
-        fil.chainParams.set(0, (float) DT); fil.chainParams.set(1, 0.5f); fil.chainParams.set(2, 0.1f);
-        fil.chainParams.set(3, 0.2f); fil.chainParams.set(4, 0f); fil.chainParams.set(5, 1.0e-20f);
+        // -filrate (PAIRS_RATE_AUDIT): the FILAMENT PAIRS per-STEP fractions → per-TIME rates at BUILD time (DT
+        // fixed ⇒ k_eff constant, no kernel change). fracMove (F3 link + lever-arm bending) + fracMoveTorq (F4
+        // torsion). fracR (chainParams[2]=0.1) is geometry (lever arm), NOT a rate ⇒ unchanged. Default 0.5/0.2 ⇒
+        // byte-identical. k_eff = 1−(1−k)^(DT/refDt) == k at refDt (production-dt filament stiffness preserved).
+        float filFracMove = FIL_RATE ? rateFix(0.5) : 0.5f;
+        float filFracMoveTorq = FIL_RATE ? rateFix(0.2) : 0.2f;
+        fil.chainParams.set(0, (float) DT); fil.chainParams.set(1, filFracMove); fil.chainParams.set(2, 0.1f);
+        fil.chainParams.set(3, filFracMoveTorq); fil.chainParams.set(4, 0f); fil.chainParams.set(5, 1.0e-20f);
         fil.chainParams.set(6, (float) Constants.actinMonoRadius);
         DerivedGeometrySystem.derive(fil.coord, fil.uVec, fil.yVec, fil.zVec, fil.end1, fil.end2, fil.segLength, fil.counts);
 
@@ -386,6 +425,9 @@ public final class GlidingHarness {
 
         int MAXC = SpatialGrid.MAX_CAND;
         sc.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
+        // -alignrate: F9/F10/axlock alignment per-STEP fraction (0.4) → per-TIME rate, computed at BUILD time (DT fixed
+        // ⇒ k_eff constant, no kernel change). Default 0.4f ⇒ byte-identical.
+        float alignK = ALIGN_RATE ? rateFix(0.4) : 0.4f;
         sc.xbParams = SPHEREHEAD
             // SPHERE-HEAD: freeze F9's rest at 90° (xbParams[9]=1) ⇒ the head-vs-actin ANGLE stops switching
             // (no F9 power stroke; F9 becomes the compliant ⊥ perp-MAINTAINER), so the J1 converter neck-swing
@@ -393,13 +435,13 @@ public final class GlidingHarness {
             // or -axlock ⇒ [10]=1 retargets it to ŝ=normalize(n̂bed×seg.uVec) head-only (the axial swing lock).
             ? (AXLOCK
                 ? (ROLLSIGN
-                    ? FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS, 0f, 0f, 0f, 1f, 1f, 1f)
-                    : FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS, 0f, 0f, 0f, 1f, 1f))
-                : FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS, 0f, 0f, 0f, 1f))
+                    ? FloatArray.fromElements((float) MYO_SPRING, 90f, alignK, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS, 0f, 0f, 0f, 1f, 1f, 1f)
+                    : FloatArray.fromElements((float) MYO_SPRING, 90f, alignK, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS, 0f, 0f, 0f, 1f, 1f))
+                : FloatArray.fromElements((float) MYO_SPRING, 90f, alignK, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS, 0f, 0f, 0f, 1f))
             : XBSAT_MODE != 0
-            ? FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS,
+            ? FloatArray.fromElements((float) MYO_SPRING, 90f, alignK, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS,
                                       (float) XBSAT_MODE, (float) XBSAT_FMAX, (float) XBSAT_ONSET)
-            : FloatArray.fromElements((float) MYO_SPRING, 90f, 0.4f, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS);
+            : FloatArray.fromElements((float) MYO_SPRING, 90f, alignK, (float) DT, (float) MotorStore.HEAD_LEN, (float) FORCE_BIAS);
         // CONFIG 1: PAIRS attachments + Hookean J1. xbParamsC1 = [fracMove, κ, leverLen, dt, HEAD_LEN]; the
         // size-14 jointParams (Hookean J1) via enableConfig1. Not config1 ⇒ jointParams = mot.jointParams (byte-id).
         if (CONFIG1) {
@@ -420,7 +462,9 @@ public final class GlidingHarness {
         // -dirswing: the deterministic polarity-directed power stroke replaces the J1 angular converter (whose
         // cross(lever,head) axis is degenerate at the straight rest ⇒ ill-defined swing direction). Turn the J1
         // TORSION off (jointParams[3]=0; the J1 position spring stays) so directedSwing is the sole stroke driver.
-        sc.swingParams = FloatArray.fromElements(0.4f, (float) DT, 0f, (float) NECK_ANGLE);   // STEP-2: [3]=cocked neck angle (default 60°)
+        sc.swingParams = STROKE_RATE
+                ? FloatArray.fromElements(0.4f, (float) DT, 0f, (float) NECK_ANGLE, (float) STROKE_REF_DT)   // -strokerate: [4]=refDt>0 ⇒ per-time-rate swing
+                : FloatArray.fromElements(0.4f, (float) DT, 0f, (float) NECK_ANGLE);   // STEP-2: [3]=cocked neck angle (default 60°)
         if (DIRSWING) sc.jointParams.set(3, 0f);
         if (SPHEREHEAD && HEADLOCK != 1.0) sc.xbParams.set(2, (float) (0.4 * HEADLOCK));   // -headlock: stiffen the F9 ⊥ hold + F10 axial/roll lock (diagnostic; the stroke coeff swingParams[0] is untouched)
         if (TWISTCENSUS) { sc.twistHist = new IntArray(6 * nMot); sc.twistHist.init(0); sc.prevBoundTw = new IntArray(nMot); sc.prevBoundTw.init(-1); }
@@ -531,16 +575,21 @@ public final class GlidingHarness {
         CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
         CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
         sliceNs[GATHER] += tns() - _g;
-        if (XB_IMPLICIT2) CrossBridgeSystem.snapshotSegCenter(f.coord, sc.segImplPrev);
+        if (XB_IMPLICIT2 || SEG_IMPLICIT) CrossBridgeSystem.snapshotSegCenter(f.coord, sc.segImplPrev);
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
-        // -xbimplicit2: COUPLED head+SITE implicit F8 (per-segment star; COUPLED_IMPLICIT_XB_FINDINGS). Runs after
-        // BOTH integrates; reuses the boundSeg CSR-inverse built above (segMotorOffsets/segMotorMyo); re-derives both.
-        if (XB_IMPLICIT2) {
-            CrossBridgeSystem.coupleComputeA(b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, sc.segImplPrev, mot.xbCplA, mot.xbCplB, mot.xbImplParams);
-            CrossBridgeSystem.coupleSolveSeg(sc.segMotorOffsets, sc.segMotorMyo, mot.xbImplPrev, mot.xbCplA, mot.xbCplB, f.coord, f.uVec, f.yVec, f.bTransGam, sc.segImplPrev, mot.xbImplParams, mot.counts);
-            CrossBridgeSystem.coupleCorrectHead(b.coord, mot.boundSeg, mot.xbCplA, mot.xbCplB, f.coord, mot.counts);
-            DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        // -xbimplicit2 (COUPLED head+SITE star) and/or -segimplicit (DIAGONAL per-segment collective, rigid head).
+        // Both run after BOTH integrates and reuse the boundSeg CSR-inverse. When both are on, -segimplicit's rigid
+        // segment solve REPLACES coupleSolveSeg (avoids double-correcting the center); the -xbimplicit2 head phases
+        // are kept (head follows the rigid-corrected center via B). Re-derive both bodies (whichever were written).
+        if (XB_IMPLICIT2 || SEG_IMPLICIT) {
+            if (XB_IMPLICIT2) CrossBridgeSystem.coupleComputeA(b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, sc.segImplPrev, mot.xbCplA, mot.xbCplB, mot.xbImplParams);
+            if (SEG_IMPLICIT) CrossBridgeSystem.segImplicitSolve(sc.segMotorOffsets, f.coord, f.uVec, f.yVec, f.bTransGam, sc.segImplPrev, mot.xbImplParams, mot.counts);
+            else CrossBridgeSystem.coupleSolveSeg(sc.segMotorOffsets, sc.segMotorMyo, mot.xbImplPrev, mot.xbCplA, mot.xbCplB, f.coord, f.uVec, f.yVec, f.bTransGam, sc.segImplPrev, mot.xbImplParams, mot.counts);
+            if (XB_IMPLICIT2) {
+                CrossBridgeSystem.coupleCorrectHead(b.coord, mot.boundSeg, mot.xbCplA, mot.xbCplB, f.coord, mot.counts);
+                DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+            }
             DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
         }
     }
@@ -617,6 +666,7 @@ public final class GlidingHarness {
         if (DASH_ON) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.xbPrevStretch, mot.xbDashInit, mot.dashParams);
         if (XB_IMPLICIT) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.xbImplPrev, mot.xbImplParams);
         if (XB_IMPLICIT2) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.xbImplPrev, mot.xbImplParams, mot.xbCplA, mot.xbCplB, sc.segImplPrev);
+        if (SEG_IMPLICIT && !XB_IMPLICIT2) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.xbImplParams, sc.segImplPrev);
         if (CANONICAL) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.bindArc2, mot.canonSnap);
         if (CONFIG1) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.xbParamsC1, sc.jointParams);
         if (DIRSWING) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.swingParams);
@@ -731,19 +781,21 @@ public final class GlidingHarness {
                 .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo)
                 .task("gather", CrossBridgeSystem::segGather, sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
             if (BOX) tg = tg.task("confineFil", ContainmentSystem::confine, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, sc.boxParams, f.counts);
-            if (XB_IMPLICIT2) tg = tg.task("segSnap", CrossBridgeSystem::snapshotSegCenter, f.coord, sc.segImplPrev);
+            if (XB_IMPLICIT2 || SEG_IMPLICIT) tg = tg.task("segSnap", CrossBridgeSystem::snapshotSegCenter, f.coord, sc.segImplPrev);
             tg = tg
                 .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
                 .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
-            // -xbimplicit2: COUPLED head+SITE implicit F8 — LATE body writes (after deriveFil), satisfying the
-            // body-write-must-be-late PTX gotcha. Reuses the boundSeg CSR-inverse (segMotorOffsets/segMotorMyo).
-            if (XB_IMPLICIT2) {
-                tg = tg
-                    .task("cplA", CrossBridgeSystem::coupleComputeA, b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, sc.segImplPrev, mot.xbCplA, mot.xbCplB, mot.xbImplParams)
-                    .task("cplSeg", CrossBridgeSystem::coupleSolveSeg, sc.segMotorOffsets, sc.segMotorMyo, mot.xbImplPrev, mot.xbCplA, mot.xbCplB, f.coord, f.uVec, f.yVec, f.bTransGam, sc.segImplPrev, mot.xbImplParams, mot.counts)
+            // -xbimplicit2 (COUPLED star) / -segimplicit (DIAGONAL collective, rigid head) — LATE body writes (after
+            // deriveFil), satisfying the body-write-must-be-late PTX gotcha. Reuse the boundSeg CSR-inverse. When both
+            // are set, -segimplicit's rigid segment solve replaces cplSeg; the -xbimplicit2 head phases are kept.
+            if (XB_IMPLICIT2 || SEG_IMPLICIT) {
+                if (XB_IMPLICIT2) tg = tg.task("cplA", CrossBridgeSystem::coupleComputeA, b.coord, mot.boundSeg, b.bTransGam, mot.xbImplPrev, sc.segImplPrev, mot.xbCplA, mot.xbCplB, mot.xbImplParams);
+                if (SEG_IMPLICIT) tg = tg.task("segImpl", CrossBridgeSystem::segImplicitSolve, sc.segMotorOffsets, f.coord, f.uVec, f.yVec, f.bTransGam, sc.segImplPrev, mot.xbImplParams, mot.counts);
+                else tg = tg.task("cplSeg", CrossBridgeSystem::coupleSolveSeg, sc.segMotorOffsets, sc.segMotorMyo, mot.xbImplPrev, mot.xbCplA, mot.xbCplB, f.coord, f.uVec, f.yVec, f.bTransGam, sc.segImplPrev, mot.xbImplParams, mot.counts);
+                if (XB_IMPLICIT2) tg = tg
                     .task("cplHead", CrossBridgeSystem::coupleCorrectHead, b.coord, mot.boundSeg, mot.xbCplA, mot.xbCplB, f.coord, mot.counts)
-                    .task("deriveMot2", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts)
-                    .task("deriveFil2", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+                    .task("deriveMot2", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+                tg = tg.task("deriveFil2", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
             }
         }
         tg = tg.transferToHost(DataTransferMode.UNDER_DEMAND, f.coord, f.uVec, f.end1, f.end2, mot.boundSeg,
@@ -758,10 +810,14 @@ public final class GlidingHarness {
         if (MHATSET) addW("gliding.mhatSet", pad(nM));
         if (DASH_ON) addW("gliding.dash", pad(nM));
         if (XB_IMPLICIT) { addW("gliding.xbSnap", pad(nM)); addW("gliding.xbImpl", pad(nM)); }
-        if (XB_IMPLICIT2) {
-            addW("gliding.xbSnap", pad(nM)); addW("gliding.segSnap", pad(nSeg));
-            addW("gliding.cplA", pad(nM)); addW("gliding.cplSeg", pad(nSeg)); addW("gliding.cplHead", pad(nM));
-            addW("gliding.deriveMot2", pad(nB)); addW("gliding.deriveFil2", pad(nSeg));
+        if (XB_IMPLICIT2 || SEG_IMPLICIT) {
+            addW("gliding.segSnap", pad(nSeg)); addW("gliding.deriveFil2", pad(nSeg));
+            if (SEG_IMPLICIT) addW("gliding.segImpl", pad(nSeg));
+            else addW("gliding.cplSeg", pad(nSeg));
+            if (XB_IMPLICIT2) {
+                addW("gliding.xbSnap", pad(nM)); addW("gliding.cplA", pad(nM)); addW("gliding.cplHead", pad(nM));
+                addW("gliding.deriveMot2", pad(nB));
+            }
         }
         for (String t : new String[]{ "zeroMot","brownMot","joints","integMot","deriveMot" }) addW("gliding." + t, pad(nB));
         for (String t : new String[]{ "zeroFil","brownFil","chain","gather","integFil","deriveFil" }) addW("gliding." + t, pad(nSeg));
@@ -2244,6 +2300,29 @@ public final class GlidingHarness {
         }
     }
 
+    /** -ktotcensus tally (STEP-3): per-segment collective cross-bridge stiffness K_tot = k_s·myoSpring, where
+     *  k_s = #{heads bound to segment s}. Bins the k_s distribution and counts how many segments exceed the EOM
+     *  instability thresholds (marginal ~1.4 / blow-up ~3.8 pN/nm at dt=1e-5). acc = {segSamples, engagedSamples
+     *  (k_s≥1), aboveMarginal (K_tot≥1.4pN/nm), aboveBlow (K_tot≥3.8), sumKs, maxKs}. ksHist[0..10]=k_s counts
+     *  (over engaged segments), [11]=overflow. Read-only (boundSeg + f.n). */
+    static void ktotTally(Scene sc, double[] acc, long[] ksHist) {
+        int nSeg = sc.fil.n, nM = sc.mot.nMotors;
+        int[] ks = new int[nSeg];
+        for (int m = 0; m < nM; m++) { int s = sc.mot.boundSeg.get(m); if (s >= 0 && s < nSeg) ks[s]++; }
+        double kSpring = MYO_SPRING * 1.0e9;               // pN/nm per bond
+        double kMarg = 1.4 / kSpring, kBlow = 3.8 / kSpring;   // k_s thresholds for K_tot ≥ 1.4 / 3.8 pN/nm
+        for (int s = 0; s < nSeg; s++) {
+            acc[0] += 1;                                    // all segment-samples
+            if (ks[s] >= 1) {
+                acc[1] += 1; acc[4] += ks[s];
+                if (ks[s] > acc[5]) acc[5] = ks[s];
+                int b = ks[s]; if (b > 10) b = 11; ksHist[b]++;
+            }
+            if (ks[s] >= kMarg) acc[2] += 1;
+            if (ks[s] >= kBlow) acc[3] += 1;
+        }
+    }
+
     /** -mhatcensus tally: {#bound heads with head.uVec·n̂bed ≥ 0 (+ẑ, productive pole), #with < 0 (−ẑ)}; n̂bed=+Z. */
     static long[] mhatTally(Scene sc) {
         RigidRodBody b = sc.mot.body; int nB = b.uVec.getSize() / 3;
@@ -2327,6 +2406,8 @@ public final class GlidingHarness {
         double[] stxAcc = new double[5];
         long[] extHist = new long[11];   // anchor-spring extension bins: 0-20 nm, 2 nm each, [10]=overflow
         long[] fdHist  = new long[17];   // forceDotFil bins: −8..+8 pN, 1 pN each, [0]=≤−8 [16]=≥+8
+        double[] ktAcc = new double[6];     // -ktotcensus acc {segSamples, engaged(k_s≥1), aboveMarginal(≥1.4pN/nm), aboveBlow(≥3.8), sumKs, maxKs}
+        long[] ksHist = new long[12];       // -ktotcensus per-segment k_s histogram (engaged segments), [11]=overflow
         double[] strAcc = new double[7];    // -strokecensus acc {boundSamples,strokedSamples,barbedProductive,axialFracSum_stroked,swingSinSum_bound,axialFracSum_bound,N_bound}
         long[] axFracHist = new long[11];   // -strokecensus swing-axial-fraction histogram over STROKED heads, 0.0-1.0 in 0.1 bins
         long rollPlus = 0, rollMinus = 0;   // -rollcensus accumulators (bound-head roll sign, over all samples)
@@ -2349,6 +2430,7 @@ public final class GlidingHarness {
                     mnx[k] = minCoordX(sc.fil); mxx[k] = maxCoordX(sc.fil); mny[k] = minCoordY(sc.fil); mxy[k] = maxCoordY(sc.fil); k++;
                     if (t >= warmStep) { res.transferToHost(sc.reachCount); long r = 0; for (int i = 0; i < sc.mot.nMotors; i++) if (sc.reachCount.get(i) > 0) r++; reachSum += r; reachN++; }
                     if (STRETCHCENSUS) { res.transferToHost(sc.mot.forceMag, sc.mot.forceDotFil, sc.mot.boundSeg); stretchTally(sc, stxAcc, extHist, fdHist); }
+                    if (KTOT_CENSUS && t >= warmStep) { res.transferToHost(sc.mot.boundSeg); ktotTally(sc, ktAcc, ksHist); }
                     if (STROKECENSUS) { res.transferToHost(sc.mot.body.uVec, sc.mot.boundSeg, sc.fil.uVec); strokeTally(sc, strAcc, axFracHist); }
                     if (ROLLCENSUS) { res.transferToHost(sc.mot.body.yVec, sc.fil.uVec); long[] pm = rollTally(sc); rollPlus += pm[0]; rollMinus += pm[1]; }
                     if (MHATCENSUS) { res.transferToHost(sc.mot.body.uVec, sc.mot.boundSeg); long[] pm = mhatTally(sc); mhatPlus += pm[0]; mhatMinus += pm[1];
@@ -2389,6 +2471,7 @@ public final class GlidingHarness {
                     mnx[k] = minCoordX(sc.fil); mxx[k] = maxCoordX(sc.fil); mny[k] = minCoordY(sc.fil); mxy[k] = maxCoordY(sc.fil); k++;
                     if (t >= warmStep) { long r = 0; for (int i = 0; i < sc.mot.nMotors; i++) if (sc.reachCount.get(i) > 0) r++; reachSum += r; reachN++; }
                     if (STRETCHCENSUS) stretchTally(sc, stxAcc, extHist, fdHist);   // CPU host arrays already current
+                    if (KTOT_CENSUS && t >= warmStep) ktotTally(sc, ktAcc, ksHist);  // CPU boundSeg already current
                     if (STROKECENSUS) strokeTally(sc, strAcc, axFracHist);          // CPU host arrays already current
                 }
             }
@@ -2513,6 +2596,22 @@ public final class GlidingHarness {
             StringBuilder fh = new StringBuilder("  STRETCH_FD_HIST(pN ≤−8,−7,...,+7,≥+8):");
             for (int b6 = 0; b6 < fdHist.length; b6++) fh.append(' ').append(fdHist[b6]);
             System.out.println(fh);
+        }
+        if (KTOT_CENSUS) {
+            long segSamp = (long) ktAcc[0], eng = (long) ktAcc[1];
+            double kSpring = MYO_SPRING * 1.0e9;
+            double meanKsEng = eng > 0 ? ktAcc[4] / eng : 0;          // mean k_s over ENGAGED segments
+            double meanKsAll = segSamp > 0 ? ktAcc[4] / segSamp : 0;  // mean k_s over ALL segment-samples
+            double fMargAll = segSamp > 0 ? ktAcc[2] / segSamp : 0;   // fraction of ALL segments with K_tot≥1.4pN/nm
+            double fBlowAll = segSamp > 0 ? ktAcc[3] / segSamp : 0;   // fraction of ALL segments with K_tot≥3.8pN/nm
+            double fMargEng = eng > 0 ? ktAcc[2] / eng : 0;           // fraction of ENGAGED segments ≥1.4pN/nm
+            double fBlowEng = eng > 0 ? ktAcc[3] / eng : 0;           // fraction of ENGAGED segments ≥3.8pN/nm
+            System.out.printf(java.util.Locale.US,
+                "  KTOT_ROW seed=0x%X coltol=%.1fnm density=%.0f dt=%.2e myoSpring=%.2fpN/nm segSamples=%d engaged=%d meanKtot_eng=%.3fpN/nm meanKtot_all=%.3f maxKtot=%.2fpN/nm fracAll>=1.4=%.4f fracAll>=3.8=%.4f fracEng>=1.4=%.4f fracEng>=3.8=%.4f%n",
+                SEED, COL_TOL * 1e3, DENSITY, DT, kSpring, segSamp, eng, meanKsEng * kSpring, meanKsAll * kSpring, ktAcc[5] * kSpring, fMargAll, fBlowAll, fMargEng, fBlowEng);
+            StringBuilder kh = new StringBuilder("  KTOT_KS_HIST(engaged segs, k_s=1,2,...,10,>10):");
+            for (int b6 = 1; b6 < ksHist.length; b6++) kh.append(' ').append(ksHist[b6]);
+            System.out.println(kh);
         }
         if (TWISTCENSUS && sc.twistHist != null) {
             long[] hb = new long[6]; long binds = 0; double angSum = 0; long far = 0;
