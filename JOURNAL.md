@@ -1,5 +1,59 @@
 # Soft Box Project Journal
 
+## 2026-07-06 — CONVERGED-dt (5e-7) glide vs CAPTURE RADIUS (2–6 nm): velFitX 5.4→7.2 µm/s is ENGAGEMENT-driven (avgBound 2.6→4.0), per-bound ≈2.0 RADIUS-INVARIANT; the ~2–3× skeletal-Vmax overshoot is present at every radius. Two opt-in levers (mat-shrink + early-stop), default byte-identical. `GLIDING_RADIUS_SWEEP_FINDINGS.md`.
+**Two levers built (flag-gated, default byte-identical; `BoA-v1ref` untouched).** (a) `-earlystop` — host-side
+batch-means-SEM monitor on the steady-window (2nd-half) velFitX (the reported metric), stops at relSEM<5% (≥5
+batches ≥5 ms each; min-window 0.03 s; hard cap 0.15 s → `NOT-CONVERGED@cap`); thresholds all args
+(`-esthresh/-esminwin/-escap/-esbatch/-esinterval`). (b) `-matband <excµm>` — density-preserving **subset**
+shrink of the never-visited −x motor tail: seed the full bed RNG, DROP motors with anchor x<bandXlo (kept motors
+keep identical draws ⇒ strict subset, same areal density); dropped motors sit a margin > motor-x-reach+capture
+below the −x-most swept point ⇒ provably never in capture range; runtime edge-guard flags an undersized band.
+`bXhi`/`bYhalf` kept full (ends-over-motors physics untouched). **STEP-2 gate (coltol4, seed0, dt5e-7) PASS:**
+mat-shrink parity — shrunk (7532 mot) velFitX 5.578±0.543 / avgB 2.863 vs full-mat (26740) 5.678±0.679 / 2.865
+(Δ0.10 ≪ SEM; the residual = motor re-indexing decorrelating the per-motor wang-hash RNG, chaotic within-SEM),
+**1.7× faster** (394 vs 230 st/s); early-stop sound (metric==reported, no premature stop) but 5% unreachable in
+0.15 s at avgB≈2.9 ⇒ points cap at ~8–12% single-seed relSEM (accepted). **STEP-3 sweep (coltol 2/3/4/5/6,
+shrunk+ES, dt5e-7, seed0):** velFitX 5.36/6.11/5.58/6.59/7.15 µm/s (±~10%, all @cap), avgBsteady
+2.61/2.79/2.86/3.28/3.98, **per-bound velFitX/avgB = 2.05/2.19/1.95/2.01/1.80 — FLAT ≈2.0, radius-invariant.**
+⇒ **capture radius is an ENGAGEMENT knob (sets avgBound), NOT a per-bound-efficiency knob.** `-ktotcensus`:
+meanK_tot(eng)≈1.1 pN/nm, maxK_tot 3–4, fracEng≥3.8≈0 at EVERY radius ⇒ gliding is **sub-threshold** for the
+collective-load instability (explicit stable at 5e-7; residual = per-bound stroke/rotational stiffness, not load;
+consistent with SEG_IMPLICIT). **coltol6 rejoins the ROTIMPLICIT Part-B ref** (velFitX 7.15≈7.3–8, per-bound
+1.80≈1.78, avgB 3.98≈4.1–4.3). **Plain read:** converged-dt glide sits **above skeletal Vmax≈2.9 at every
+radius** (~1.85× @2 nm → ~2.5× @6 nm); tightening the radius LOWERS absolute speed (fewer bound heads) but does
+**NOT** remove the per-bound ~2.0 overshoot — the ~2–3× overshoot is a **per-bound** (rotational-stroke
+stiffness) property, not an over-wide-capture artifact; narrowing the search radius won't pull converged-dt glide
+into the skeletal band. Edge-guard clear all points. New: `GlidingHarness` `-earlystop`/`-matband`/`esMonitor`,
+`run_radiussweep.sh`; log `RUN_LOGS/2026-07-06_radiussweep.txt`.
+
+## 2026-07-06 — SCOPING: `-rotimplicit` feasibility (Part A code-read) + the explicit `-ratefix` convergence reference (Part B ladder). NO edits (scoping only). `ROTIMPLICIT_FEASIBILITY.md`.
+**Part A (feasibility, code read) — CLEAN but a NEW dense 6-DOF star, sufficiency UNPROVEN.** The F8 tip-torque
+`T_H=R_H×F8=k·R_H×(site−hc)` linearizes about the current orientation into `K_rot=k[(R_H·w)I−R_H wᵀ]` (`w=site−hc`)
+— a closed-form backward-Euler solve, **no Newton**, and it **stays on-block** (F8 never couples two segments/heads
+⇒ per-segment CSR Schur elimination still valid; chain torsion held explicit as in the translation star). **So NOT
+FORCED/off-block.** BUT: (1) `K_rot` is dense/non-symmetric (not the translation star's isotropic `k·I`) ⇒ NOT a
+scalar-per-axis divide but a dense **6×6** (center+orientation) solve; (2) the coupling `w=site−hc` **re-introduces
+the translation↔rotation `c_i` offset that CANCELLED in `-xbimplicit2`** — the per-segment central unknown grows
+3→6, so it's a genuinely new coupled star, materially heavier than `-xbimplicit2`; (3) scoped to the F8 tip-torque
+it does NOT implicitize the F9/F10/directedSwing alignment torques (0.4/step ≈24°/stroke-step — constraint-like,
+NOT small-angle-linearizable ⇒ Newton if folded in; they stay on `-alignrate`), so its ability to close the full
+STROKE_DT 2.24× residual is **unmeasured**. Default `-full` path confirmed = SPHEREHEAD+AXLOCK+DIRSWING
+(`GlidingHarness:244-246`) ⇒ `bondForces` (axlock) + `directedSwing` is the analyzed law. Bail NOT triggered (the
+stiff term IS orientation and IS explicit). **Recommend a targeted F8-tip-only rotational isolation before building
+— if the F8-tip fraction of the residual is small, the sub-step (exact nonlinear stroke, no linearization gamble)
+beats the heavy star.**
+**Part B (convergence reference, GPU device-resident, seed 0) — the `-ratefix` stack CONVERGES, flat by 6.25e-7.**
+`-full -grid -lymntaylor -adppibind -xbimplicit2 -ratefix`, coltol10/d1000, dt 1e-5/2.5e-6/1.25e-6/6.25e-7
+(120k/480k/960k/1920k). **Per-bound drift (velFitX/avgBound) 0.822 → 1.381 → 1.642 → 1.783**, climb DECAYING
+(1.68× → 1.19× → **1.086×** per refine); avgBound 2.99 → 3.69 → 3.59 → 4.11 (last step 1.145×). Both robust metrics
+≤~1.15 across 1.25e-6→6.25e-7 ⇒ **flat — did NOT extend to 3.125e-7** (velFitX alone still 1.24× but that's the
+single-seed-noisy metric, driven by the avgBound dip-recovery). **This EXTENDS STROKE_DT** (it stopped at 2.5e-6 /
+"2.24× residual"): the residual rotational stiffness is real but **BOUNDED — a finite ~2.2× overshoot that flattens
+by 6.25e-7**, not a runaway. **Converged reference: per-bound ≈1.78 (→~1.9), avgBound ≈4.1–4.3, velFitX ≈7.3–8 µm/s.**
+Explicit production dt=1e-5 UNDER-shoots the converged by **~2.2× per-bound / ~3× velFitX** — that ~2.2× is the
+`-rotimplicit`/sub-step target. **Fallback cost of "just run at 6.25e-7" = 16× dt ⇒ ~16× wall/sim-s** (~7 → ~118
+min/sim-s; ~230 steps/s throughout). Raw `RUN_LOGS/2026-07-05_rotimpl_conv.txt`; batch `run_rotimpl_conv.sh`.
+
 ## 2026-07-05 — BUILT the DIAGONAL per-segment IMPLICIT loaded cross-bridge force (`-segimplicit`): correct + cheap + parity-clean, but a DENSE/RING-regime cure, NOT the gliding dt-fix (the low-duty gliding regime is SUB-THRESHOLD for the collective-load instability).
 The production version of `-extimplicit` (EOM_STABILITY control): backward-Euler on the per-segment COLLECTIVE
 cross-bridge stiffness, `q_imp,a=(q_e,a+rK_a·q_n,a)/(1+rK_a)`, `rK_a=K_tot·dt·1e6/γ_a`, `K_tot=k_s·myoSpring`

@@ -130,6 +130,19 @@ public final class GlidingHarness {
     // HEAD-ANGLE SWEEP — settled-state metrics captured by decompRun (for the Stage-1 sweep table)
     static double DEC_axialPN, DEC_transvPN, DEC_headAngDeg, DEC_leverAngDeg, DEC_j1Deg;
 
+    // ---- GLIDING_RADIUS_SWEEP levers (both opt-in; default byte-identical) ----
+    // (a) early-stop monitor: stop a grid run when the batch-means SEM of the steady-window glide speed is precise.
+    static boolean EARLYSTOP = false;            // -earlystop: enable the host-side batch-means SEM monitor + break
+    static double ES_THRESH  = 0.05;             // -esthresh <rel>: rel-SEM stop threshold (default 5%)
+    static double ES_MINWIN  = 0.03;             // -esminwin <s>: minimum steady-window span before stopping
+    static double ES_CAP     = 0.15;             // -escap <s>: hard cap sim-time (stop regardless; NOT-CONVERGED@cap if 5% unmet)
+    static double ES_BATCH   = 0.005;            // -esbatch <s>: minimum per-batch span (autocorrelation floor); ≥5 batches required
+    static double ES_INTERVAL = 0.005;           // -esinterval <s>: monitor check cadence
+    // (b) mat-shrink: trim the never-visited −x motor tail to a band around the filament's swept path, same density.
+    static boolean MATBAND = false;              // -matband <excursionBudgetµm>: enable the density-preserving −x band shrink
+    static double  MATBAND_EXC = 1.2;            // −x glide excursion budget (µm) sizing the band's −x extent
+    static final double MATBAND_MARGIN = 0.15;   // extra −x margin (µm) beyond swept extent (> motor x-reach + capture) ⇒ dropped motors provably never bind
+
     public static void main(String[] args) {
         int M = 2000;
         String viz = null;
@@ -228,6 +241,13 @@ public final class GlidingHarness {
             else if (args[i].equals("-stretchcensus")) STRETCHCENSUS = true;                       // STEP-3 read-only bound-population geometry census
             else if (args[i].equals("-ktotcensus")) KTOT_CENSUS = true;                            // STEP-3 read-only per-segment K_tot vs instability-threshold census
             else if (args[i].equals("-outerdt")) OUTER_DT = Double.parseDouble(args[++i]);
+            else if (args[i].equals("-earlystop")) EARLYSTOP = true;                            // GLIDING_RADIUS_SWEEP lever (a)
+            else if (args[i].equals("-esthresh")) ES_THRESH = Double.parseDouble(args[++i]);
+            else if (args[i].equals("-esminwin")) ES_MINWIN = Double.parseDouble(args[++i]);
+            else if (args[i].equals("-escap")) ES_CAP = Double.parseDouble(args[++i]);
+            else if (args[i].equals("-esbatch")) ES_BATCH = Double.parseDouble(args[++i]);
+            else if (args[i].equals("-esinterval")) ES_INTERVAL = Double.parseDouble(args[++i]);
+            else if (args[i].equals("-matband")) { MATBAND = true; MATBAND_EXC = Double.parseDouble(args[++i]); }  // GLIDING_RADIUS_SWEEP lever (b)
             else if (args[i].equals("-forcetest")) { /* handled before buildScene */ }
             else pos.add(args[i]);
         }
@@ -318,12 +338,39 @@ public final class GlidingHarness {
         IntArray reachSeg; IntArray reachCount;
         FloatArray segImplPrev;               // -xbimplicit2: per-segment pre-integration center q_n (planar 3·nSeg)
         double segL, x0;
+        double bandXlo = Double.NEGATIVE_INFINITY;   // -matband: −x mat boundary (motors below it were dropped); edge-guard reference
     }
 
     /** PAIRS_RATE_AUDIT: convert a per-STEP fraction k (relaxes fraction k/step, dt-independent) into the
      *  per-STEP fraction that reproduces the SAME per-TIME relaxation at the current DT as k does at STROKE_REF_DT:
      *  k_eff = 1 − (1−k)^(DT/refDt). At DT==refDt ⇒ k_eff==k (byte-identical). Math.exp/log lower on PTX. */
     static float rateFix(double k) { return (float) (1.0 - Math.exp((DT / STROKE_REF_DT) * Math.log(1.0 - k))); }
+
+    /** GLIDING_RADIUS_SWEEP early-stop monitor: batch-means SEM of the steady-window (2nd-half) glide speed.
+     *  velFitX = −LS slope of cx over [n/2, n) (the SAME estimator measureGrid reports at stop). Uncertainty via
+     *  batch means over the SAME window (each batch ≥ ES_BATCH span; ≥5 batches required) — NOT the OLS slope SEM,
+     *  which underestimates for an autocorrelated trajectory. Returns {relSEM, velFitX, batchMean, nBatches, winSec}
+     *  or null if there is not yet enough steady data (window < ES_MINWIN, or < 5 valid batches). */
+    static double[] esMonitor(double[] cx, int n, double dtInt) {
+        int h = n / 2, ns = n - h;
+        double winSec = (ns - 1) * dtInt;
+        if (winSec < ES_MINWIN) return null;
+        double st = 0, stt = 0, sxx = 0, stx = 0; int nf = 0;
+        for (int i = h; i < n; i++) { double ti = i * dtInt; st += ti; stt += ti * ti; sxx += cx[i]; stx += ti * cx[i]; nf++; }
+        double den = nf * stt - st * st;
+        double velFit = den != 0 ? -(nf * stx - st * sxx) / den : 0.0;
+        int spb = Math.max(2, (int) Math.floor(ES_BATCH / dtInt));   // samples per batch
+        int nb = (ns - 1) / spb;                                      // full non-overlapping batches over [h, h+nb·spb]
+        if (nb < 5) return null;
+        double[] vb = new double[nb]; double sum = 0;
+        for (int b = 0; b < nb; b++) { int i0 = h + b * spb, i1 = h + (b + 1) * spb; vb[b] = -(cx[i1] - cx[i0]) / (spb * dtInt); sum += vb[b]; }
+        double mean = sum / nb, var = 0;
+        for (double v : vb) { double d = v - mean; var += d * d; }
+        var /= (nb - 1);
+        double sem = Math.sqrt(var) / Math.sqrt(nb);
+        double relSEM = Math.abs(velFit) > 1e-9 ? sem / Math.abs(velFit) : Double.POSITIVE_INFINITY;
+        return new double[]{relSEM, velFit, mean, nb, winSec};
+    }
 
     static Scene buildScene() {
         Scene sc = new Scene();
@@ -387,6 +434,33 @@ public final class GlidingHarness {
                 float ax = (float) (cx + (rngS.nextDouble() - 0.5) * 0.6);   // over the middle of the filament
                 float ay = (float) ((rngS.nextDouble() - 0.5) * 0.004);      // tight under the line
                 mot.assembleArticulated(m, ax, ay, (float) anchorZ, 0f, 0f, 1f, (float) Constants.BTransCoeff);
+            }
+        } else if (MATBAND) {
+            // -matband: density-preserving −x band shrink. Seed the FULL bed RNG exactly as the un-shrunk path,
+            // but DROP motors whose anchor x < bandXlo (the never-visited −x tail). Kept motors get the SAME RNG
+            // draws (and thus the SAME placement) as the full bed ⇒ the shrunk mat is a strict SUBSET of the full
+            // mat. With bandXlo set a margin below the filament's −x-most swept point (> motor x-reach + capture),
+            // every dropped motor is provably out of capture range throughout the run ⇒ binding is unchanged
+            // (validated by the STEP-2 parity gate + the run-time edge-guard). Areal density preserved exactly.
+            double filEndToEnd = (nSeg - 1) * L + L;                     // pointed→barbed end-to-end (center span + 2·½seg)
+            double sweptXmin = x0 - filEndToEnd - MATBAND_EXC;           // most −x point the filament can reach
+            double bandXlo = sweptXmin - MATBAND_MARGIN;                 // drop motors below this
+            sc.bandXlo = bandXlo;
+            int nFull = (int) Math.round(DENSITY * bedX * bedY);
+            java.util.Random rngCount = new java.util.Random(SEED);      // pass 1: count kept (deterministic)
+            int kept = 0;
+            for (int m = 0; m < nFull; m++) {
+                double ax = bedXlo + rngCount.nextDouble() * bedX; rngCount.nextDouble();  // consume ay draw too
+                if (ax >= bandXlo) kept++;
+            }
+            nMot = kept;
+            mot = new MotorStore(nMot);
+            java.util.Random rng = new java.util.Random(SEED);           // pass 2: identical stream, assemble kept
+            int idx = 0;
+            for (int m = 0; m < nFull; m++) {
+                float ax = (float) (bedXlo + rng.nextDouble() * bedX);
+                float ay = (float) (-bedYhalf + rng.nextDouble() * bedY);
+                if (ax >= bandXlo) mot.assembleArticulated(idx++, ax, ay, (float) ANCHOR_Z, 0f, 0f, 1f, (float) Constants.BTransCoeff);
             }
         } else {
         nMot = (int) Math.round(DENSITY * bedX * bedY);
@@ -2378,6 +2452,9 @@ public final class GlidingHarness {
     static void measureGrid(Scene sc, int M, boolean gpu) {
         final int OUT_INT = 100;
         final double dtInt = OUT_INT * DT;
+        // -earlystop: clamp the loop to the hard cap (arrays sized to the cap; the monitor breaks earlier if precise).
+        if (EARLYSTOP) M = Math.min(M, (int) Math.round(ES_CAP / DT));
+        final int esCheckSamples = EARLYSTOP ? Math.max(1, (int) Math.round(ES_INTERVAL / dtInt)) : Integer.MAX_VALUE;
         final int bufCap = Math.max(2, (int) Math.round(1.0 / dtInt));   // v1 LONG_WINDOW_SECONDS=1.0
         int nInt = M / OUT_INT;
         double[] cx = new double[nInt + 1], cy = new double[nInt + 1], cz = new double[nInt + 1];
@@ -2388,7 +2465,13 @@ public final class GlidingHarness {
         // the primed ADPPi free pool), which crushes the whole-run STATS_ROW dwell (the illusory 0.04 ms). Snapshot
         // stats at a warmup cutoff (t0LA=0.20 s, matching the LONG_ROW on-bed window) and report the STEADY delta.
         // Purely host-side (stats is measurement-only, never read by a kernel) ⇒ no physics/RNG touch.
-        final int warmStep = Math.min(M - 1, (int) Math.round(0.20 / DT));
+        // -earlystop: a 0.20 s warmup won't fit a ≤0.15 s early-stopped run ⇒ use a small fixed warmup (0.03 s) so
+        // the STATS_STEADY snapshot still brackets a meaningful steady window. velFitX/avgBsteady use the 2nd-half
+        // (h=n/2) and are unaffected by this choice.
+        final int warmStep = EARLYSTOP ? Math.min(M - 1, (int) Math.round(0.03 / DT))
+                                       : Math.min(M - 1, (int) Math.round(0.20 / DT));
+        // -earlystop bookkeeping
+        int esStopStep = M; boolean esConverged = false; double[] esFinal = null;
         long[] statsWarm = new long[2 * sc.mot.nMotors];
         double reachSum = 0; int reachN = 0;   // duty: mean # engageable heads (reachCount>0), steady window
         System.out.printf("%n--- grid measurement (%s, %d motors, box x∈[%.1f,%.1f] y±%.1f, seed=0x%X, myoColTol=%.1f nm) ---%n",
@@ -2435,8 +2518,13 @@ public final class GlidingHarness {
                     if (ROLLCENSUS) { res.transferToHost(sc.mot.body.yVec, sc.fil.uVec); long[] pm = rollTally(sc); rollPlus += pm[0]; rollMinus += pm[1]; }
                     if (MHATCENSUS) { res.transferToHost(sc.mot.body.uVec, sc.mot.boundSeg); long[] pm = mhatTally(sc); mhatPlus += pm[0]; mhatMinus += pm[1];
                         long tt = pm[0] + pm[1]; if (tt > 0 && mhatNT < mhatFracT.length) mhatFracT[mhatNT++] = (double) pm[0] / tt; }
+                    if (EARLYSTOP && k % esCheckSamples == 0) {
+                        double[] mon = esMonitor(cx, k, dtInt);
+                        if (mon != null) { esFinal = mon; if (mon[0] < ES_THRESH) { esConverged = true; esStopStep = t + 1; break; } }
+                    }
                 }
             }
+            if (EARLYSTOP && !esConverged) esStopStep = Math.min(esStopStep, M);   // reached the hard cap
             // §6.10 firing-rate pull. LT has no break-force cap task ⇒ capStats is not a device variable (skip it).
             if (res != null) { if (LYMN_TAYLOR) res.transferToHost(sc.mot.stats); else res.transferToHost(sc.mot.capStats, sc.mot.stats); }
             if (ROLLCENSUS) {
@@ -2473,8 +2561,13 @@ public final class GlidingHarness {
                     if (STRETCHCENSUS) stretchTally(sc, stxAcc, extHist, fdHist);   // CPU host arrays already current
                     if (KTOT_CENSUS && t >= warmStep) ktotTally(sc, ktAcc, ksHist);  // CPU boundSeg already current
                     if (STROKECENSUS) strokeTally(sc, strAcc, axFracHist);          // CPU host arrays already current
+                    if (EARLYSTOP && k % esCheckSamples == 0) {
+                        double[] mon = esMonitor(cx, k, dtInt);
+                        if (mon != null) { esFinal = mon; if (mon[0] < ES_THRESH) { esConverged = true; esStopStep = t + 1; break; } }
+                    }
                 }
             }
+            if (EARLYSTOP && !esConverged) esStopStep = Math.min(esStopStep, M);
         }
         int n = k;   // number of samples (intervals + 1)
 
@@ -2540,6 +2633,29 @@ public final class GlidingHarness {
         System.out.printf("  avgBound                      :  %7.3f     %7.3f%n", avgBall, avgBsteady);
         System.out.printf("  GRID_ROW seed=0x%X nMot=%d density=%.0f velFitX=%.3f inst=%.3f instSteady=%.3f netXY=%.3f netSteady=%.3f netX=%.3f lwXY=%.3f avgB=%.3f avgBsteady=%.3f%n",
                 SEED, sc.mot.nMotors, DENSITY, velFitX, instAll/instN, instSteady/Math.max(1,instNs), netXY, netXYsteady, netX, longWindowSpeedXY, avgBall, avgBsteady);
+        // ---- GLIDING_RADIUS_SWEEP: early-stop verdict + mat-band edge-guard ----
+        if (EARLYSTOP || MATBAND) {
+            double stopSec = (esStopStep) * DT;
+            // recompute the monitor on the FINAL collected samples so the reported SEM matches the reported velFitX exactly
+            double[] mon = esMonitor(cx, n, dtInt);
+            double relSEM = mon != null ? mon[0] : Double.NaN, batchMean = mon != null ? mon[2] : Double.NaN;
+            int nb = mon != null ? (int) mon[3] : 0; double winSec = mon != null ? mon[4] : 0;
+            double sem = Double.isNaN(relSEM) ? Double.NaN : relSEM * Math.abs(velFitX);
+            boolean conv = EARLYSTOP ? (esConverged && relSEM < ES_THRESH) : (mon != null && relSEM < ES_THRESH);
+            // edge-guard: did any segment come within (capture + guard) of the −x mat boundary during the run?
+            double edgeGuard = COL_TOL + 0.10;   // capture radius + 100 nm slack (> motor x-reach)
+            double minSegX = 1e30; for (int i = 0; i < n; i++) minSegX = Math.min(minSegX, mnx[i]);
+            boolean edgeTrip = MATBAND && Double.isFinite(sc.bandXlo) && (minSegX < sc.bandXlo + edgeGuard);
+            System.out.printf(java.util.Locale.US,
+                "  EARLYSTOP_ROW coltol=%.1fnm seed=0x%X velFitX=%.3f±%.3f (relSEM=%.4f) batchMean=%.3f nBatches=%d avgBsteady=%.3f window=%.4fs stopSec=%.4fs stopStep=%d status=%s%n",
+                COL_TOL * 1e3, SEED, velFitX, sem, relSEM, batchMean, nb, avgBsteady, winSec, stopSec, esStopStep,
+                conv ? "CONVERGED@5%" : "NOT-CONVERGED@cap");
+            if (MATBAND) {
+                System.out.printf(java.util.Locale.US,
+                    "  MATBAND_ROW bandXlo=%.3f bXhi=%.2f bYhalf=%.2f nMot=%d excBudget=%.2fµm minSegX=%.3f edgeGuard=%.3f edgeTrip=%s%n",
+                    sc.bandXlo, bXhi, bYhalf, sc.mot.nMotors, MATBAND_EXC, minSegX, sc.bandXlo + edgeGuard, edgeTrip ? "*TRIPPED-band-undersized*" : "clear");
+            }
+        }
         // §6.10 break-force release firing rate: cap fires / bound-motor-steps (whole run).
         long capFires = 0, boundStepsTot = 0;
         for (int m = 0; m < sc.mot.nMotors; m++) { capFires += sc.mot.capStats.get(m); boundStepsTot += sc.mot.stats.get(2*m); }
