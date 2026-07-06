@@ -1,5 +1,23 @@
 # Soft Box Project Journal
 
+## 2026-07-06 — PROBE: does making ONLY the F8-tip orientation implicit collapse the per-bound dt-bias? → STEP 1 BAILS (the bias is NOT a standalone per-motor stroke property). `STROKE_TIP_IMPLICIT_PROBE.md`.
+**Driven single-motor probe** (`EomStabilityHarness -stroke`): one anchored motor drives ONE deterministic power
+stroke (SPHEREHEAD+AXLOCK+DIRSWING, rate-fix on, Brownian off) into a **FREE** filament (viscous-drag-only load).
+**STEP-1 GATE = BAIL:** the per-stroke net displacement is **dt-FLAT** — −1.723 nm @1e-5 → −1.760 nm @3.125e-7,
+**1.02× over 32× dt** vs the ~2.2× gliding per-bound bias (0.82→1.78). A free permanently-bound head relaxes its
+delivered stroke to a **dt-independent geometric endpoint** (F8→0 at equilibrium ⇒ tip=site, fixed by the
+rate-fixed head orientation, not the step size). The real forward-Euler dt-dependence lives in the **transient**
+(the 5·τ position swings +0.083→−0.718 nm, converging **first-order in dt**) but decays to the same endpoint ⇒
+nets to zero over a single equilibrated stroke. **⇒ STEP 2 (the F8-tip implicit) NOT built** — there is no
+isolated single-stroke bias to collapse (it's already its own converged value). **Verdict: NULL-in-isolation** —
+a pure F8-tip implicit does not address the per-bound bias; the ~2.2× is a **loaded, non-equilibrium,
+cycling-ensemble transport** effect (the gliding filament never relaxes), so the **sub-step must act on the
+collective loaded transport, not one motor's F8-tip stiffness**. Answers ROTIMPLICIT's open F8-tip-fraction
+question (not isolably large ⇒ favors the sub-step over the heavy dense 6-DOF rotational star); consistent with
+`EOM_STABILITY_FINDINGS` (limiter = collective loaded force) + `jacobi-cobound-scheme-risk`. New code path only;
+default byte-identical (the default relaxation grid reproduces `EOM_STABILITY_FINDINGS` exactly); `BoA-v1ref`
+byte-clean. Log `RUN_LOGS/2026-07-06_stroke_tip_implicit_probe.txt`.
+
 ## 2026-07-06 — CONVERGED-dt (5e-7) glide vs CAPTURE RADIUS (2–6 nm): velFitX 5.4→7.2 µm/s is ENGAGEMENT-driven (avgBound 2.6→4.0), per-bound ≈2.0 RADIUS-INVARIANT; the ~2–3× skeletal-Vmax overshoot is present at every radius. Two opt-in levers (mat-shrink + early-stop), default byte-identical. `GLIDING_RADIUS_SWEEP_FINDINGS.md`.
 **Two levers built (flag-gated, default byte-identical; `BoA-v1ref` untouched).** (a) `-earlystop` — host-side
 batch-means-SEM monitor on the steady-window (2nd-half) velFitX (the reported metric), stops at relSEM<5% (≥5
