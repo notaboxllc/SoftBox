@@ -1,5 +1,110 @@
 # Soft Box Project Journal
 
+# 2026-07-08 — `-allnoise` is dead: a GPU execution artifact, not a correction; and the corrected convergence picture
+
+Purpose: record the resolution of the `-allnoise` puzzle (it was never applying its stated physics), correct
+the convergence picture that follows, and flag a genuine reproducibility exposure the diagnosis surfaced.
+
+## What `-allnoise` turned out to be
+
+`-allnoise` scaled the injected Brownian noise on the cross-bridge bond ends by √((2−α)/2) — the
+equipartition variance correction. On the GPU (the runner every A/B table used) its apparent effect was **not
+the noise physics at all**. Decisive test: force the applied scale to **exactly 1.0** (multiply the noise by
+1 — arithmetically a no-op) with the code path active. On the CPU that is byte-identical to OFF, as it must
+be. On the GPU it reproduced the **entire** `-allnoise` per-bound "recovery" (per-bound 1.286 at scale-1.0 vs
+1.259 for the real factor vs 0.774 OFF). A change that changes nothing cannot cause an effect — so the effect
+was never the correction.
+
+Mechanism: enabling the code path adds two tasks to the GPU TaskGraph; TornadoVM recompiles/reschedules,
+which perturbs unrelated kernels at the last-bit (ULP) level. That is normally nothing — but the gliding
+steady state at this operating point is **chaotic and bistable** (two glide regimes), so a last-bit nudge
+deterministically tips it into a low-avgBound / high-per-bound basin (landing tightly across all three seeds:
+per-bound 1.29/1.29/1.27 — systematic, not scatter). The `√((2−α)/2)` factor's genuine contribution measured
+≈ 0.
+
+## Consequences
+
+- **Drop `-allnoise`.** It was inert; removing it costs nothing. The earlier "63% recovered / required
+  correction / overshoot" narrative was the artifact, not physics.
+- **Both proposed fix paths are closed by measurement.** The isolated F8 bond is a clean *linear*
+  (Ornstein–Uhlenbeck) mode with a *variance-only* Euler–Maruyama error and *no* mean/drift bias, so: the
+  exact OU propagator equals `-allnoise` equals a faithful variance fix (path 1 — a "better/correct EM
+  scheme" — offers nothing new), and the mode is linear (path 2 — implicit rotation for a nonlinear coupling
+  — does not apply). Nothing to build on the cross-bridge integration for the convergence question.
+- **The equilibrium-gate physics still stands** — the F8 bond genuinely obeys kT/k and the correction target
+  was right. It is just that the *implementation's measured effect* was an execution artifact, and, with the
+  convergent skeleton, there was no per-bound gap for it to close in the first place.
+
+## The corrected convergence picture (what is actually true at 1e-5)
+
+- The per-bound (**per-head efficiency**) at production dt is **nearly converged** — arm A per-bound sits in a
+  ~0.76–0.88 band across 1e-5→5e-7 with no systematic climb. (Reported as a *band*, not a sharp value: the
+  fine points did not razor-flatten and were 2-seed — partial bail. So "within ~10%" is a loose band, not a
+  pinned convergence.)
+- The remaining production-dt gap has moved into **avgBound (engagement)**: 1e-5 binds ~27% fewer heads than
+  the fine-dt limit, which drives **absolute glide (velFitX) low by ~35–50%**. If absolute gliding speed is
+  the validation target, this engagement deficit — NOT any per-bound/efficiency error, and nothing to do with
+  `-allnoise` — is the real open item.
+- Net: the old "~2× dt-bias" is gone (it was the frozen-skeleton artifact, fixed by `-structrate`); what
+  remains is an engagement (avgBound) deficit at production dt.
+
+## Reproducibility exposure flagged (separate from `-allnoise`)
+
+The gliding steady state at this operating point is **bistable, and a last-bit perturbation flips it.** That is
+a property of the model/operating point, not of `-allnoise`. It means *any* change that alters GPU kernel
+scheduling (a new task, a compiler/driver update, a reordered buffer) can silently move which basin a
+production run lands in — a real reproducibility risk for the gliding assay, and grounds for a skeptical
+re-read of any GPU A/B whose two arms differed in *graph structure* (some prior "effects" may have been basin
+flips). Open question, not chased yet: is the bistability physical (two real gliding regimes) or a fragility
+of this parameter point? Noted for awareness; deferred by choice.
+
+## Next (jba's call)
+
+Plod ahead on the **avgBound (engagement) deficit** — why production dt binds ~27% fewer heads than the
+converged limit. First concrete test requested: strip the fraction-per-step PAIRS coefficients and `-ratefix`
+out entirely and replace every such constraint (chain, alignment, structural) with genuine **linear and
+torsional springs** (fixed stiffness), to see the model's behavior with no per-step-fraction rate machinery
+anywhere. The bistability is acknowledged but deferred (unclear what to do about it, and it does not block the
+engagement question).
+
+## Addendum (2026-07-08) — diagnosis re-run independently + reproducible instruments persisted
+Re-ran the full STEP 1→4 diagnosis from clean and **reproduced every number** above (60k×3-seed GPU:
+scale-1.0 per-bound 1.286 [1.294/1.294/1.271] ≈ real 1.259 [1.397/1.080/1.299] ≫ OFF 0.774 [0.736/0.791/0.796];
+CPU scale-1.0 ≡ OFF byte-identical; STEP-3/4 isolated F8 mode variance-only + mean-unbiased + linear ⇒
+OU≡`-allnoise`). Added STEP-2 on the deterministic runner: the genuine factor IS a real but **small,
+threshold-like/non-monotonic** lever (CPU `-allnoisescale 0.90` avgB −29%, real `-allnoise` −12%, per-bound
+0.532→0.659 +24% — vs the GPU factor-1.0 artifact's +66%), dt-vanishing — confirming the near-bistable "two
+glide regimes" and that the large GPU offset is the factor-independent graph-split artifact. Instruments now
+persisted (were missing): `GlidingHarness -allnoisescale <x>` (force applied factors, code path active),
+`EomStabilityHarness -varmean` (isolated-mode Var+mean OFF/ON/OU). Detailed report:
+`CONSTRAINED_VARIANCE_PROBE.md` §`-allnoise` DIAGNOSIS; log `RUN_LOGS/2026-07-08_allnoise_diagnosis.txt`.
+Default byte-identical (real `-allnoise` reproduces the prior table's 1.397); `BoA-v1ref` byte-clean.
+
+# 2026-07-08 — GLIDING RE-CONVERGENCE (4 dt × 2 arm, convergent skeleton): the dt→0 limit MOVED DOWN ~2×
+Re-measured the gliding dt-convergence now that `-structrate` makes the motor skeleton dt-convergent (every
+prior number — per-bound 0.736→~1.57, "63% recovered," "~37% coupled residual" — predated it, i.e. was measured
+with the J1/J2/anchor springs FREEZING at fine dt). Sweep 1e-5/5e-6/1e-6/5e-7, matched sim-time 0.6s, 2–3 seeds,
+GPU device-resident, `-ratefix -structrate` throughout. Arm A = uncorrected; Arm B = + `-allnoise` (the gate's
+REQUIRED both-F8-bond-end correction, factor dt-adaptive ×0.857@1e-5→×0.993@5e-7 confirmed). **HEADLINE: the
+dt→0 limit MOVED DOWN ~2×.** Clean natural control (arm A byte-identical to the stale uncorr curve @1e-5):
+arm A(`structrate`) @5e-7 = velFitX 3.638 / per-bound 0.884 vs the STALE no-structrate @6.25e-7 = velFitX 7.086
+/ per-bound 1.592. **Reason:** raw fracMove structural springs stiffen ∝1/dt ⇒ the stale fine-dt runs had an
+ARTIFICIALLY RIGID skeleton (over-reacts the stroke against the anchor → inflated glide); `-structrate` pins them
+at production stiffness ⇒ the honest, ~2× lower limit. **The stale ~1.57 per-bound limit was a frozen-skeleton
+artifact.** **(1) dt→0 limit:** approximately dt-STABLE but NOT razor-flat (partial bail) — per-bound band
+~0.76–0.88 (mean ~0.81, wobble ±0.06, part 2-seed noise), avgB cleanly flattening ~4.1, velFitX ~3.1–3.6; NO
+systematic 2× climb. **(2) production gap:** uncorrected per-bound 0.774 → limit ~0.85 ≈ **within ~10% — per-HEAD
+efficiency is NEARLY dt-honest at 1e-5**; the remaining dt-gap is in avgBound (+27%, under-binds) and velFitX
+(+35–50%, under-glides) ⇒ **the gap moved OUT of efficiency, INTO engagement/absolute-glide** (opposite of the
+stale decomposition). **(3) required correction:** does NOT shrink a gap — it OVERSHOOTS the new lower limit
+(production per-bound 0.774→1.259 = ~48% ABOVE ~0.85); the A/B offset (+0.49→+0.63) does NOT close at fine dt
+even as `-allnoise`'s factor→1 — an OPEN PUZZLE (a nominally dt-vanishing correction with a non-vanishing ~0.63
+per-bound offset, insensitive to factor magnitude ⇒ accumulated/hysteretic, not instantaneous; arm A & B should
+meet as dt→0 but haven't by 5e-7 — flagged, not resolved). **(4) monotonicity:** cleaner than the frozen skeleton
+(no fine-end mush) but residual ~10–15% scatter. **Do NOT re-commit to the old "37% coupled residual" — redefined
+against the inflated limit; on per-bound the residual is now ~10%.** Report: `GLIDING_RECONVERGENCE.md`; logs
+`RUN_LOGS/reconv/`. Follow-ups: 3rd seed at fine points; root-cause the A/B non-convergence. Diagnostic, no promotion.
+
 # 2026-07-07 — STRUCTURAL-MODE REFORMULATION (`-structrate`): the motor skeleton is now uniformly dt-convergent
 The `-vargate` flagged the motor's passive structural joints (J2 hinge + tail anchor) as NEEDS-REFORMULATION —
 equilibrium but dt-FLAT (fracMove α=frac) ⇒ their variance FREEZES ∝dt toward zero as dt→0 (the driven

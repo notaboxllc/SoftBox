@@ -51,6 +51,7 @@ public final class GlidingHarness {
     // ---- IMPLICIT_CROSSBRIDGE (flag-gated; default-off ⇒ explicit Hookean, byte-identical) ----
     static boolean XB_IMPLICIT = false;          // -xbimplicit: locally-implicit bound-head cross-bridge spring (c_imp=(c_exp+r·c_n)/(1+r))
     static boolean XB_IMPLICIT2 = false;         // -xbimplicit2: COUPLED head+SITE implicit F8 (per-segment star; COUPLED_IMPLICIT_XB_FINDINGS)
+    static boolean XB_TRAP = false;              // -xbtrap: TRAPEZOIDAL (Crank–Nicolson midpoint) re-timing of the -xbimplicit2 coupled F8 star (r→r/2; XBTRAP_PROBE)
     static boolean SEG_IMPLICIT = false;         // -segimplicit: DIAGONAL per-segment implicit COLLECTIVE loaded cross-bridge force (rigid head; SEG_IMPLICIT_FINDINGS)
     static boolean CANONICAL = false;            // -canonical: PHASE-2 Version-B two-point canonical motor (bindCanonicalTwoPoint + bondForcesCanonical). Default off ⇒ byte-identical.
     static boolean CANON_DIAG = false;           // -canondiag: instrument the Version-B binder (formation rate, snap magnitude, legal-pose, lever-strain under thermal load). Implies -canonical.
@@ -92,6 +93,39 @@ public final class GlidingHarness {
     static boolean STROKECENSUS = false;         // -strokecensus: read-only per-bound-head neck-POWERSTROKE-fidelity census. swing_perp = uLever − (uLever·mhat)mhat (the neck's tilt off the head axis; |swing_perp|=sin(lever–head angle)=stroke magnitude). Reports: stroked fraction (|swing_perp|>sin40°); barbed-sweep fraction (swing_perp·f̂<0 ⇒ tip pointed / rear barbed = productive, mirrors BoA NECK_STROKE_POLARITY 99.6%); swing AXIAL fraction |swing_perp·f̂|/|swing_perp| (1.0=purely axial). f̂=bound seg.uVec. No force/RNG/integration; default-off byte-identical. STROKE_FIDELITY_CENSUS.
     static boolean MHATSET = false;              // -mhatset: BIND-TIME stereospecific head-axis init — at each fresh bind set head.uVec to +n̂bed (productive pole), consistent with the +ŝ roll. Init only, NO persistent torque. Implies -rollsign. Default-off ⇒ byte-identical.
     static double HEADLOCK = 1.0;                 // -headlock <mult>: scale the head orientation-lock coeff (xbParams[2], the F9 ⊥ hold + F10 axial/roll lock). >1 stiffens (diagnostic for the head-noise claim). Default 1 ⇒ byte-identical.
+    // CONSTRAINED-VARIANCE bond-noise correction (CONSTRAINED_VARIANCE_PROBE.md): a BOUND head is in the F8
+    // harmonic well, not free ⇒ explicit Euler over-fluctuates its thermal variance 2/(2−α)×, α=k_F8·dt/γ_head.
+    // Restore Var→kT/k by scaling the bound head's TRANSLATIONAL Brownian by √((2−α)/2) (dt-adaptive → 1 as dt→0).
+    static boolean BOND_NOISE = false;            // -bondnoise : enable the bound-head √((2−α)/2) noise correction
+    static double  BOND_NOISE_FAC = -1.0;         // -bondnoisefac <x> : override the factor directly (else computed from α_head; e.g. 0.534 = the assembled empirical α_eff≈1.43)
+    // FULL constrained-mode correction (-allnoise): correct EVERY constrained mode of a bound motor + its bound
+    // segment (the CEILING test). Real-spring TRANSLATION (head+segment F8, dt-vanishing) = arm 3; +fracnoise adds
+    // the fracMove modes (head rotation F9/F10, anchored rod tail/J2 — dt-independent RE-BASELINE) = arm 4.
+    static boolean ALL_NOISE = false;             // -allnoise : head-trans + segment-trans F8 correction (real-spring ceiling)
+    static boolean FRAC_NOISE = false;            // -fracnoise : ALSO the fracMove modes (head rot + rod); implies -allnoise (re-baseline)
+    // -allnoise DIAGNOSIS (CONSTRAINED_VARIANCE_PROBE.md §-allnoise DIAGNOSIS). STEP 1/2: force the APPLIED
+    // -allnoise factors (head-trans htf + seg-trans stf, and hrf/rtf) to a FIXED value while keeping the
+    // -allnoise CODE PATH fully active (the motNoise/segNoise tasks run every step). -allnoisescale 1.0 is
+    // the STEP-1 identity test: does -allnoise-with-scale-1.0 reproduce OFF byte-for-byte? (NO ⇒ a code-path/
+    // RNG artifact; YES ⇒ genuinely the noise, proceed to the factor-response sweep.) Default -1 = off (use
+    // the principled per-mode √((2−α)/2) factors). Setting it implies -allnoise.
+    static double ALL_NOISE_SCALE = -1.0;         // -allnoisescale <x> : force applied head+seg (and rot/rod) factors to x, code path active
+    // COMPREHENSIVE correction (-thermcorr <level>): per-body α from each body's TOTAL constraint stiffness.
+    // level 3 = load-aware segment α (K_tot=N·k_F8) + head-trans; 4 = + chain-link stiffness on ALL segments
+    // (incl unbound neighbors); 5 = + motor modes (head rot + rod). All dt-adaptive (→1 as dt→0). Default 0/off.
+    static int THERM_CORR = 0;                     // -thermcorr <level> : 3/4/5 (0 = off)
+    // UNIFORM noise control (-uninoise <fac>): a FLAT multiply on brownianForceMag (params[1]=sqrt(2kT/dt)) for
+    // BOTH stores ⇒ scales ALL Brownian force (trans+rot, every body) by <fac>, NO per-mode α, NO topology. The
+    // A2 disambiguation control (OVERSHOOT_DIAGNOSIS): if a flat ×0.98 reproduces thermcorr4's fine-dt swing ⇒
+    // genuine noise-amplitude hypersensitivity; if it moves glide ~2% ⇒ thermcorr4 isn't applying a clean 2%.
+    // Default 1.0 ⇒ byte-identical (params[1] unmultiplied).
+    static double UNI_NOISE = 1.0;                 // -uninoise <fac> : flat uniform Brownian-amplitude scale
+    // SYSTEM-WIDE correction (-syswide): the FAITHFUL system-wide thermostat done with single-constraint α (NOT
+    // the N·k summed -thermcorr). Covers: F8 head-trans + F8 seg-trans (single-bond) + F9/F10 head-rot (ratefixed)
+    // + filament chain-links on ALL segs (ratefixed) — all dt-vanishing. -syswiderb ALSO adds the free-standing
+    // motor chain (J1/J2/tail-anchor fracMove modes, incl UNBOUND motors) = the RE-BASELINE arm (dt-flat).
+    static boolean SYSWIDE = false;                // -syswide : faithful system-wide correction (single-constraint α)
+    static boolean SYSWIDE_RB = false;             // -syswiderb : + the free-motor-chain fracMove re-baseline (implies -syswide)
     static boolean LYMN_TAYLOR = false;          // -lymntaylor (jba 2026-06-29): the VALIDATED canonical Lymn-Taylor cycle. ONE release pathway (NONE→ATP = detachment, fast/nucleotide-driven); the 4c catch MODULATES the ADP→NONE rate (not a release). Replaces the -atprecharge experiments. Default-off ⇒ byte-identical; overrides ATP_RECHARGE/ATP_RELEASE when on.
     static boolean ADPPI_BIND = false;           // -adppibind (STEP A dwell fix): strong-bind gate — a head binds actin ONLY in the pre-stroke ADP·Pi state (kinParams[20]=1). Kills the bind-in-ATP ejection churn (a just-detached ATP head geometrically rebound before its ~10 ms recovery). Faithful to the cycleLymnTaylor "bind in ADP·Pi" design intent. Default-off ⇒ byte-identical.
     static boolean BRAKEDIAG = false;            // -brakediag (PART B, measurement-only): per-bound-head axial seg-force (assist −x / brake +x) vs signed catch load forceDotFil, binned by time-since-stroke; release-vs-signed-load histogram. CPU runner, default-off.
@@ -104,6 +138,7 @@ public final class GlidingHarness {
     static boolean ALIGN_RATE = false;          // -alignrate: ALSO convert the F9/F10/axlock alignment per-STEP fraction (xbParams[2]) to a per-TIME rate, at build time (DT fixed ⇒ k_eff is a constant)
     static boolean FIL_RATE = false;            // -filrate: convert the FILAMENT PAIRS per-STEP fractions (fracMove chainParams[1] = F3 link+bending, fracMoveTorq chainParams[3] = F4 torsion) to per-TIME rates (build time). PAIRS_RATE_AUDIT
     static boolean RATE_FIX = false;            // -ratefix: convenience = -strokerate + -alignrate + -filrate (ALL glide-relevant per-step fractions → per-time)
+    static boolean STRUCT_RATE = false;         // -structrate: bring the PASSIVE STRUCTURAL fraction-per-step position springs (J1/J2 connection + tail anchor, jointParams[1]/[5]/[9]) to per-TIME rates (build-time rateFix). Makes the motor SKELETON dt-convergent (α∝dt) instead of dt-flat/frozen. Default OFF; at dt=refDt byte-identical. CONSTRAINED_VARIANCE_PROBE §STRUCTURAL-MODE REFORMULATION
     static double STROKE_REF_DT = 1.0e-5;       // -strokerefdt <s>: reference dt at which k_eff==0.4 (the coarse/production-dt physical stroke duration to preserve); default 1e-5
     static double RATE_SCALE = 1.0;             // -ratescale <x>: scale catch-slip kOff + ALL nucleotide cycle rates by x (faster kinetics = V₀ = step·detach-rate); default 1 ⇒ byte-identical. STEP-3 cycle-rate lever.
     static double COL_TOL = 0.006;              // -coltol <nm>: myosin bind capture radius (kinParams[7], perp tip-to-axis reach); default 6 nm ⇒ byte-identical. CAPTURE-RADIUS sweep (the engagement/duty master knob). PHYSICAL param, not a free speed dial.
@@ -187,11 +222,13 @@ public final class GlidingHarness {
             else if (args[i].equals("-xbdashmech")) DASH_MECH = true;  // dashpot mechanical force only (catch reads spring load)
             else if (args[i].equals("-xbimplicit")) XB_IMPLICIT = true;  // IMPLICIT_CROSSBRIDGE locally-implicit bound-head spring
             else if (args[i].equals("-xbimplicit2")) XB_IMPLICIT2 = true; // COUPLED_IMPLICIT head+SITE implicit F8 (mutually exclusive with -xbimplicit)
+            else if (args[i].equals("-xbtrap")) { XB_IMPLICIT2 = true; XB_TRAP = true; }  // TRAPEZOIDAL/CN re-timing of the coupled F8 star (r→r/2)
             else if (args[i].equals("-segimplicit")) SEG_IMPLICIT = true;  // DIAGONAL per-segment implicit collective loaded cross-bridge (composes with -xbimplicit2)
             else if (args[i].equals("-strokerate")) STROKE_RATE = true;   // STROKE_DT_RATE: stroke swing as a per-TIME rate (dt-independent stroke duration)
             else if (args[i].equals("-alignrate")) ALIGN_RATE = true;      // STROKE_DT_RATE: F9/F10 alignment torques as per-TIME rates too (build-time xbParams[2])
             else if (args[i].equals("-filrate")) FIL_RATE = true;          // PAIRS_RATE_AUDIT: FILAMENT fracMove/fracMoveTorq → per-time rates (build-time chainParams[1]/[3])
             else if (args[i].equals("-ratefix")) { RATE_FIX = true; STROKE_RATE = true; ALIGN_RATE = true; FIL_RATE = true; }  // ALL glide per-step fractions → per-time
+            else if (args[i].equals("-structrate")) STRUCT_RATE = true;    // STRUCTURAL-MODE REFORMULATION: J1/J2/anchor position springs → per-time rates (build-time jointParams[1]/[5]/[9]); NOT folded into -ratefix (keeps the baseline stable)
             else if (args[i].equals("-strokerefdt")) STROKE_REF_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-canonical")) CANONICAL = true;     // PHASE-2 Version-B two-point canonical motor
             else if (args[i].equals("-canondiag")) { CANONICAL = true; CANON_DIAG = true; }  // + instrument the binder
@@ -231,6 +268,15 @@ public final class GlidingHarness {
             else if (args[i].equals("-mhatset")) { SPHEREHEAD = true; AXLOCK = true; DIRSWING = true; HFSWING = true; ROLLSIGN = true; MHATSET = true; }   // bind-time stereospecific head-axis init (+n̂); implies -rollsign
             else if (args[i].equals("-legacymotor")) LEGACYMOTOR = true;    // restore the OLD default motor (v1-port F9 head-swing); sphere-head stack OFF
             else if (args[i].equals("-headlock")) HEADLOCK = Double.parseDouble(args[++i]);   // head orientation-lock stiffness multiplier (diagnostic)
+            else if (args[i].equals("-bondnoise")) BOND_NOISE = true;   // bound-head √((2−α)/2) Brownian correction (F8 over-fluctuation)
+            else if (args[i].equals("-bondnoisefac")) { BOND_NOISE = true; BOND_NOISE_FAC = Double.parseDouble(args[++i]); }   // explicit factor override
+            else if (args[i].equals("-allnoise")) ALL_NOISE = true;   // FULL correction: head-trans + segment-trans F8 (real-spring ceiling)
+            else if (args[i].equals("-allnoisescale")) { ALL_NOISE = true; ALL_NOISE_SCALE = Double.parseDouble(args[++i]); }   // DIAGNOSIS STEP 1/2: force applied factors to x, code path active
+            else if (args[i].equals("-fracnoise")) { ALL_NOISE = true; FRAC_NOISE = true; }   // + fracMove modes (head rot + rod); re-baseline
+            else if (args[i].equals("-thermcorr")) THERM_CORR = Integer.parseInt(args[++i]);   // COMPREHENSIVE per-body-α correction, level 3/4/5
+            else if (args[i].equals("-uninoise")) UNI_NOISE = Double.parseDouble(args[++i]);   // A2 control: flat uniform Brownian-amplitude scale (all bodies, no per-mode)
+            else if (args[i].equals("-syswide")) SYSWIDE = true;   // faithful system-wide correction (single-constraint α; bond + head-rot + chain-links)
+            else if (args[i].equals("-syswiderb")) { SYSWIDE = true; SYSWIDE_RB = true; }   // + free-motor-chain fracMove re-baseline (J1/J2/anchor, incl unbound)
             else if (args[i].equals("-atprecharge")) ATP_RECHARGE = true;    // jba: catch-slip-ONLY release + ATP recharge on release + bound head locked out of ATP uptake (no dice-roll detach)
             else if (args[i].equals("-boundgeom")) { CONFIG1 = true; BOUNDGEOM = true; }      // bound-state geometry report (single motor, transport topology)
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
@@ -275,6 +321,11 @@ public final class GlidingHarness {
         if (CANONICAL && FRESH_READ) { System.out.println("ERROR: -canonical is only wired for the default step order (not -freshread)."); System.exit(2); }
         System.out.println("=== Soft Box increment 4b-iv — gliding assay (cheap probe)" + (CANONICAL ? " [PHASE-2 CANONICAL Version-B two-point motor]" : "") + " ===");
         Scene sc = buildScene();
+        if (UNI_NOISE != 1.0) {   // A2 uniform control: flat multiply on brownianForceMag for BOTH stores (all bodies, trans+rot)
+            sc.fil.params.set(1, (float) (sc.fil.params.get(1) * UNI_NOISE));
+            sc.mot.bodyParams.set(1, (float) (sc.mot.bodyParams.get(1) * UNI_NOISE));
+            System.out.printf(java.util.Locale.US, "  -uninoise: FLAT uniform Brownian-amplitude ×%.4f on ALL bodies (both stores, trans+rot; no per-mode α, no topology).%n", UNI_NOISE);
+        }
         System.out.printf("config: %d-seg filament (%.2f µm) at z=%.3f, %d motors @ %.0f/µm² strip, dt=%.0e%n",
                 sc.fil.n, sc.fil.n * sc.segL, FIL_Z, sc.mot.nMotors, DENSITY, DT);
         if (DASH_ON) {
@@ -293,10 +344,15 @@ public final class GlidingHarness {
         }
         if (XB_IMPLICIT2) {
             if (XB_IMPLICIT) throw new IllegalArgumentException("-xbimplicit2 and -xbimplicit are mutually exclusive");
-            double kSI = MYO_SPRING * 1.0e6, rh = kSI * DT / 1.885e-8;
+            if (XB_TRAP && SEG_IMPLICIT) throw new IllegalArgumentException("-xbtrap and -segimplicit are mutually exclusive (both re-time the segment solve)");
+            double theta = XB_TRAP ? 0.5 : 1.0;   // -xbtrap: midpoint (r→r/2); -xbimplicit2: backward-Euler (r)
+            double kSI = MYO_SPRING * 1.0e6, rh = theta * kSI * DT / 1.885e-8;
             System.out.printf(java.util.Locale.US,
-                "  -xbimplicit2: COUPLED head+SITE implicit F8 ON — per-segment closed-form star (reuses the boundSeg CSR-inverse). r_head=k·dt/γ_head≈%.3f; the SEGMENT (site) is now implicit too (r_seg,∥≈%.3f, r_seg,⊥≈%.3f — the head-only-unconverged half). Torque/rotation + chain explicit. See COUPLED_IMPLICIT_XB_FINDINGS.md.%n",
-                rh, kSI * DT / 2.3885e-8, kSI * DT / 3.3088e-8);
+                "  %s: COUPLED head+SITE implicit F8 ON — per-segment closed-form star (reuses the boundSeg CSR-inverse). %s: r_head=%s·k·dt/γ_head≈%.3f; the SEGMENT (site) is implicit too (r_seg,∥≈%.3f, r_seg,⊥≈%.3f). Torque/rotation + chain explicit. See %s.%n",
+                XB_TRAP ? "-xbtrap" : "-xbimplicit2",
+                XB_TRAP ? "TRAPEZOIDAL/Crank–Nicolson midpoint (θ=½ ⇒ r→r/2; the STEP-1-validated 2nd-order re-timing of the SAME coupled star)" : "backward-Euler (θ=1)",
+                XB_TRAP ? "½" : "", rh, theta * kSI * DT / 2.3885e-8, theta * kSI * DT / 3.3088e-8,
+                XB_TRAP ? "XBTRAP_PROBE.md" : "COUPLED_IMPLICIT_XB_FINDINGS.md");
         }
         if (SEG_IMPLICIT) {
             double kSI = MYO_SPRING * 1.0e6;
@@ -311,6 +367,7 @@ public final class GlidingHarness {
                 STROKE_REF_DT, DT, kEff);
         }
         if (ALIGN_RATE) System.out.printf(java.util.Locale.US, "  -alignrate: F9/F10/axlock 0.4/step → per-time; k_eff=%.4f at dt=%.2e (build-time xbParams[2]).%n", rateFix(0.4), DT);
+        if (STRUCT_RATE) System.out.printf(java.util.Locale.US, "  -structrate: STRUCTURAL position springs J1/J2/anchor 0.4/step → per-time; k_eff=%.4f at dt=%.2e (build-time jointParams[1]/[5]/[9]). fracR geometry + angular converters (OFF in glide) unchanged. dt-convergent skeleton (α∝dt).%n", rateFix(0.4), DT);
         if (FIL_RATE) System.out.printf(java.util.Locale.US, "  -filrate: FILAMENT fracMove 0.5→%.4f, fracMoveTorq 0.2→%.4f (per-time, build-time chainParams) at dt=%.2e (refDt=%.2e). fracR (geometry) unchanged. Filament STIFFNESS magnitude preserved at refDt.%n", rateFix(0.5), rateFix(0.2), DT, STROKE_REF_DT);
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
         if (CSRECAL) { catchSlipRecal(Math.max(M, 14000)); return; }
@@ -337,6 +394,12 @@ public final class GlidingHarness {
         IntArray segMotorCount, segMotorOffsets, segMotorMyo;
         IntArray reachSeg; IntArray reachCount;
         FloatArray segImplPrev;               // -xbimplicit2: per-segment pre-integration center q_n (planar 3·nSeg)
+        FloatArray bondNoiseParams;           // -bondnoise: [baseScale, √((2−α)/2)] for scaleBoundHeadNoise
+        FloatArray motorNoiseParams;          // -allnoise: [base, headTransFac, headRotFac, rodTransFac, doHeadRot, doRod]
+        FloatArray segNoiseParams;            // -allnoise: [base, segTransFac] for scaleBoundSegNoise
+        FloatArray thermSegParams;            // -thermcorr: [base, aPerMotor, aPerNbr, doChain, clampA] for scaleThermCorrSeg
+        FloatArray sysMotorParams;            // -syswide: [base, htf, hrf, rb, doRB] for scaleSysWideMotor
+        FloatArray sysSegParams;              // -syswide: [base, aF8single, aChain, clampA] for scaleSysWideSeg
         double segL, x0;
         double bandXlo = Double.NEGATIVE_INFINITY;   // -matband: −x mat boundary (motors below it were dropped); edge-guard reference
     }
@@ -345,6 +408,9 @@ public final class GlidingHarness {
      *  per-STEP fraction that reproduces the SAME per-TIME relaxation at the current DT as k does at STROKE_REF_DT:
      *  k_eff = 1 − (1−k)^(DT/refDt). At DT==refDt ⇒ k_eff==k (byte-identical). Math.exp/log lower on PTX. */
     static float rateFix(double k) { return (float) (1.0 - Math.exp((DT / STROKE_REF_DT) * Math.log(1.0 - k))); }
+
+    /** rateFix at an ARBITRARY dt (STEP-1b classification: report the ratefixed-mode α at 1e-5 and 6.25e-7). */
+    static double rateFixAlpha(double k, double dt) { return 1.0 - Math.exp((dt / STROKE_REF_DT) * Math.log(1.0 - k)); }
 
     /** GLIDING_RADIUS_SWEEP early-stop monitor: batch-means SEM of the steady-window (2nd-half) glide speed.
      *  velFitX = −LS slope of cx over [n/2, n) (the SAME estimator measureGrid reports at stop). Uncertainty via
@@ -486,7 +552,11 @@ public final class GlidingHarness {
         mot.setFaithfulRelease(FAITHFUL_RELEASE, 0.0);  // §6.10 default off (v1 12 pN threshold)
         mot.setFaithfulRefractory(FAITHFUL_REFRACTORY); // §6.11 default off (HEAD 100%/1-step block)
         mot.setDashpot(XBDASH_MULT, DT, DASH_MECH);     // CROSSBRIDGE_DASHPOT: γ_xb = mult·γ_head (mult=0 ⇒ off)
-        mot.setImplicit(MYO_SPRING, DT);                // IMPLICIT_CROSSBRIDGE params (only consumed when -xbimplicit wired)
+        // IMPLICIT_CROSSBRIDGE params (only consumed by the implicit-correction kernels). -xbtrap re-times the
+        // coupled F8 star to the trapezoidal midpoint (θ=½): the correction's r=k·dt·1e6/γ becomes r/2, which is
+        // exactly Crank–Nicolson (STEP-1-validated). The EXPLICIT F8 impulse uses xbParams (NOT xbImplParams), so
+        // halving myoSpring HERE halves r in coupleComputeA/coupleSolveSeg ONLY — the star kernels stay byte-unchanged.
+        mot.setImplicit(XB_TRAP ? MYO_SPRING * 0.5 : MYO_SPRING, DT);
         // STEP-3 cycle-rate lever (-ratescale, default 1.0 ⇒ no-op/byte-identical): scale the catch-slip kOff AND
         // every nucleotide cycle rate (atpOn, on/off ATP→ADPPi→ADP→NONE) by the same factor. V₀ = step·detach-rate,
         // so faster kinetics raises the single-molecule ceiling; the sweep exposes the duty×turnover tradeoff.
@@ -540,11 +610,94 @@ public final class GlidingHarness {
                 ? FloatArray.fromElements(0.4f, (float) DT, 0f, (float) NECK_ANGLE, (float) STROKE_REF_DT)   // -strokerate: [4]=refDt>0 ⇒ per-time-rate swing
                 : FloatArray.fromElements(0.4f, (float) DT, 0f, (float) NECK_ANGLE);   // STEP-2: [3]=cocked neck angle (default 60°)
         if (DIRSWING) sc.jointParams.set(3, 0f);
+        if (STRUCT_RATE) {   // STRUCTURAL-MODE REFORMULATION: the PASSIVE structural position springs (J1/J2 connection +
+            // tail anchor) are fraction-per-step (dt-flat α=frac ⇒ the motor skeleton FREEZES as dt→0). Bring them to
+            // dt-convergent per-TIME rates (same build-time rateFix as -filrate/-alignrate). fracR [2]/[6] is geometry
+            // (untouched); the angular converters [3]/[7] are already OFF in glide (dirswing / j2FracMoveTorq=0). At
+            // dt=refDt rateFix(0.4)=0.4 ⇒ byte-identical. Scalar consts into UNCHANGED kernels ⇒ race-free, CPU≡GPU.
+            sc.jointParams.set(1, rateFix(sc.jointParams.get(1)));   // J1 lever-motor connection spring
+            sc.jointParams.set(5, rateFix(sc.jointParams.get(5)));   // J2 rod-lever connection spring
+            sc.jointParams.set(9, rateFix(sc.jointParams.get(9)));   // tail-anchor spring
+        }
         if (SPHEREHEAD && HEADLOCK != 1.0) sc.xbParams.set(2, (float) (0.4 * HEADLOCK));   // -headlock: stiffen the F9 ⊥ hold + F10 axial/roll lock (diagnostic; the stroke coeff swingParams[0] is untouched)
         if (TWISTCENSUS) { sc.twistHist = new IntArray(6 * nMot); sc.twistHist.init(0); sc.prevBoundTw = new IntArray(nMot); sc.prevBoundTw.init(-1); }
         if (MHATSET) { sc.prevBoundMh = new IntArray(nMot); sc.prevBoundMh.init(-1); }
         sc.segMotorCount = new IntArray(nSeg); sc.segMotorOffsets = new IntArray(nSeg + 1); sc.segMotorMyo = new IntArray(nMot);
         sc.segImplPrev = new FloatArray(3 * nSeg); sc.segImplPrev.init(0f);   // -xbimplicit2 segment-center snapshot
+        // -bondnoise: the bound-head F8 √((2−α)/2) correction. α_head = k_F8·dt/γ_head,∥ (the low-drag sphere head
+        // in the F8 well). BOND_NOISE_FAC override lets jba dial the empirical assembled α_eff (≈1.43 ⇒ fac≈0.534).
+        {
+            double gHead = DragTensorSystem.sphereDragSI(MotorStore.HEAD_R)[0];
+            double alphaHead = 1.0e6 * MYO_SPRING * DT / gHead;
+            double fac = (BOND_NOISE_FAC > 0) ? BOND_NOISE_FAC : Math.sqrt(Math.max(0.0, (2.0 - alphaHead) / 2.0));
+            sc.bondNoiseParams = FloatArray.fromElements((float) Constants.BTransCoeff, (float) fac);
+            if (BOND_NOISE) System.out.printf(java.util.Locale.US,
+                    "  -bondnoise: bound-head F8 noise ×%.4f (α_head=k_F8·dt/γ_head=%.4f, γ_head=%.3e; %s). Corrects the F8-bond over-fluctuation toward kT/k.%n",
+                    fac, alphaHead, gHead, BOND_NOISE_FAC > 0 ? "explicit override" : "√((2−α)/2)");
+        }
+        // -allnoise: the FULL constrained-mode correction. Per-mode α from each mode's own k/γ.
+        {
+            double gHead  = DragTensorSystem.sphereDragSI(MotorStore.HEAD_R)[0];   // sphere head translation
+            double gSeg   = DragTensorSystem.rodDragSI((Constants.stdSegLength + 1) * Constants.actinMonoRadius, Constants.radius)[0];  // seg ∥
+            double aHead  = 1.0e6 * MYO_SPRING * DT / gHead;    // head trans F8 (real-spring)
+            double aSeg   = 1.0e6 * MYO_SPRING * DT / gSeg;     // segment trans F8 (real-spring)
+            double aAlign = alignK;                             // F9/F10 orientation per-step fraction (fracMove) — head/seg rotation
+            double aAnch  = 0.4;                                // tail-anchor + J2 fracMove (jointParams[9]) — rod (fracMove)
+            float htf = (float) Math.sqrt(Math.max(0.0, (2.0 - aHead)  / 2.0));
+            float hrf = (float) Math.sqrt(Math.max(0.0, (2.0 - aAlign) / 2.0));
+            float rtf = (float) Math.sqrt(Math.max(0.0, (2.0 - aAnch)  / 2.0));
+            float stf = (float) Math.sqrt(Math.max(0.0, (2.0 - aSeg)   / 2.0));
+            if (ALL_NOISE_SCALE >= 0.0) {   // DIAGNOSIS STEP 1/2: force applied factors to a fixed value, code path stays active
+                htf = hrf = rtf = stf = (float) ALL_NOISE_SCALE;
+                System.out.printf(java.util.Locale.US,
+                    "  -allnoisescale %.4f: DIAGNOSIS — applied head+seg (and rot/rod) factors FORCED to %.4f (code path active). STEP-1 identity iff 1.0.%n",
+                    ALL_NOISE_SCALE, ALL_NOISE_SCALE);
+            }
+            boolean motRotRod = FRAC_NOISE || THERM_CORR >= 5;
+            sc.motorNoiseParams = FloatArray.fromElements((float) Constants.BTransCoeff, htf, hrf, rtf, motRotRod ? 1f : 0f, motRotRod ? 1f : 0f);
+            sc.segNoiseParams   = FloatArray.fromElements((float) Constants.BTransCoeff, stf);
+            if (ALL_NOISE) System.out.printf(java.util.Locale.US,
+                    "  -allnoise: FULL correction — head-trans ×%.4f (α=%.3f, real-spring) + seg-trans ×%.4f (α=%.3f, real-spring)%s.%n",
+                    htf, aHead, stf, aSeg,
+                    FRAC_NOISE ? String.format(java.util.Locale.US, " + head-rot ×%.4f + rod ×%.4f (α=%.2f/%.2f, fracMove RE-BASELINE)", hrf, rtf, aAlign, aAnch) : " (real-spring ceiling; no fracMove)");
+            // -thermcorr: LOAD-AWARE segment α = N·aPerMotor (+chain nNbr·aPerNbr). Both dt-vanishing.
+            double aPerMotor = 1.0e6 * MYO_SPRING * DT / gSeg;          // per bound motor: k_F8·dt/γ_seg,∥ (real spring)
+            double chainFrac = 0.5, chainRefDt = 1e-5;                  // F3 fracMove (chainParams[1]); ratefixed fixed stiffness
+            double aPerNbr = chainFrac * (DT / chainRefDt) / 2.0;       // per chain neighbor: k_F3·dt/γ_seg,∥ (axial moveC≈1/γ_seg)
+            sc.thermSegParams = FloatArray.fromElements((float) Constants.BTransCoeff, (float) aPerMotor, (float) aPerNbr, THERM_CORR >= 4 ? 1f : 0f, 1.98f);
+            if (THERM_CORR > 0) System.out.printf(java.util.Locale.US,
+                    "  -thermcorr %d: LOAD-AWARE seg α = N·%.4f%s (dt-vanishing, clamp 1.98) + head-trans ×%.4f%s.%n",
+                    THERM_CORR, aPerMotor, THERM_CORR >= 4 ? String.format(java.util.Locale.US, " + nNbr·%.4f (chain, ALL segs)", aPerNbr) : " (no chain)",
+                    htf, THERM_CORR >= 5 ? String.format(java.util.Locale.US, " + head-rot ×%.4f + rod ×%.4f (motor modes)", hrf, rtf) : "");
+        }
+        // -syswide: the FAITHFUL system-wide correction, single-constraint α per mode (STEP 1 + STEP 1b).
+        {
+            double gHead = DragTensorSystem.sphereDragSI(MotorStore.HEAD_R)[0];
+            double gSeg  = DragTensorSystem.rodDragSI((Constants.stdSegLength + 1) * Constants.actinMonoRadius, Constants.radius)[0];
+            double aHead  = 1.0e6 * MYO_SPRING * DT / gHead;         // F8 head-trans (real spring ∝dt)
+            double aSeg   = 1.0e6 * MYO_SPRING * DT / gSeg;          // F8 seg-trans single-bond (real spring ∝dt)
+            double aAlign = alignK;                                  // F9/F10 head-rot (ratefixed via -alignrate ⇒ ∝dt if ratefix, else 0.4 flat)
+            double aChain = (FIL_RATE ? 0.5 * (DT / STROKE_REF_DT) : 0.5) / 2.0;   // chain-link per neighbor (ratefixed ⇒ ∝dt; else fracMove 0.5 flat)
+            double aRB    = 0.4;                                     // J1/J2/tail-anchor fracMove (dt-FLAT ⇒ re-baseline)
+            float htf = (float) Math.sqrt(Math.max(0.0, (2.0 - aHead)  / 2.0));
+            float hrf = (float) Math.sqrt(Math.max(0.0, (2.0 - aAlign) / 2.0));
+            float rbf = (float) Math.sqrt(Math.max(0.0, (2.0 - aRB)    / 2.0));
+            sc.sysMotorParams = FloatArray.fromElements((float) Constants.BTransCoeff, htf, hrf, rbf, SYSWIDE_RB ? 1f : 0f);
+            sc.sysSegParams   = FloatArray.fromElements((float) Constants.BTransCoeff, (float) aSeg, (float) aChain, 1.98f);
+            if (SYSWIDE) {
+                double r5 = 1.0e-5 / DT, r6 = 6.25e-7 / DT;   // α∝dt scaling to the reference dts
+                double align5 = rateFixAlpha(0.4, 1.0e-5), align6 = rateFixAlpha(0.4, 6.25e-7);
+                double chain5 = (FIL_RATE ? 0.5 * (1.0e-5 / STROKE_REF_DT) : 0.5) / 2.0;
+                double chain6 = (FIL_RATE ? 0.5 * (6.25e-7 / STROKE_REF_DT) : 0.5) / 2.0;
+                System.out.printf(java.util.Locale.US, "  -syswide%s: single-constraint α (NO N·k). Per-mode classification (α@1e-5 / α@6.25e-7):%n", SYSWIDE_RB ? "rb" : "");
+                System.out.printf(java.util.Locale.US, "    [FAITHFUL, dt-vanishing] F8 head-trans %.3f/%.4f | F8 seg-trans(single-bond) %.3f/%.4f | F9/F10 head-rot %.3f/%.4f | chain-link/nbr %.3f/%.4f%n",
+                        aHead * r5, aHead * r6, aSeg * r5, aSeg * r6, align5, align6, chain5, chain6);
+                System.out.printf(java.util.Locale.US, "    [RE-BASELINE, dt-flat fracMove] J1/J2/tail-anchor free-motor chain α %.3f/%.3f  (%s)%n",
+                        aRB, aRB, SYSWIDE_RB ? "INCLUDED (-syswiderb)" : "EXCLUDED (faithful-only)");
+                System.out.printf(java.util.Locale.US, "    factors: head-trans ×%.4f, head-rot ×%.4f, seg (F8+chain, clamp 1.98), free-motor-chain ×%.4f%s%n",
+                        htf, hrf, rbf, FIL_RATE ? "" : "  [WARN: -filrate OFF ⇒ chain-link is fracMove 0.5-FLAT re-baseline, not dt-vanishing]");
+            }
+        }
         sc.reachSeg = new IntArray(nMot * MAXC); sc.reachSeg.init(-1); sc.reachCount = new IntArray(nMot);
         // in-vitro chamber matching the bed (v1 MyoMiniFilament.checkOuterBugCollision law): [tau, boxX, boxY, boxZ, R, coeff, checkInt]
         sc.boxParams = FloatArray.fromElements(1.0e-4f, (float) (bXhi - bXlo), (float) (2 * bYhalf), 0.5f, 0.005f, 0.5f, 10f);
@@ -599,6 +752,9 @@ public final class GlidingHarness {
             NucleotideCycleSystem.cycle(mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
         ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
         long _mb = tns();
+        if (BOND_NOISE) BrownianForceSystem.scaleBoundHeadNoise(b.brownTransScale, mot.boundSeg, sc.bondNoiseParams, mot.counts);
+        if (SYSWIDE) BrownianForceSystem.scaleSysWideMotor(b.brownTransScale, b.brownRotScale, mot.boundSeg, sc.sysMotorParams, mot.counts);
+        else if (ALL_NOISE || THERM_CORR > 0) BrownianForceSystem.scaleMotorNoise(b.brownTransScale, b.brownRotScale, mot.boundSeg, sc.motorNoiseParams, mot.counts);
         BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
         sliceNs[MOTADV] += tns() - _mb;
         MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, sc.jointParams, mot.counts);
@@ -641,6 +797,9 @@ public final class GlidingHarness {
         sliceNs[REGISTER] += tns() - _rf;
         // --- filament dynamics: chain + Brownian + the gathered cross-bridge, then integrate ---
         ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+        if (SYSWIDE) BrownianForceSystem.scaleSysWideSeg(f.brownTransScale, sc.segMotorCount, f.end1NbrSlot, f.end2NbrSlot, sc.sysSegParams, f.counts);
+        else if (THERM_CORR > 0) BrownianForceSystem.scaleThermCorrSeg(f.brownTransScale, sc.segMotorCount, f.end1NbrSlot, f.end2NbrSlot, sc.thermSegParams, f.counts);
+        else if (ALL_NOISE) BrownianForceSystem.scaleBoundSegNoise(f.brownTransScale, sc.segMotorCount, sc.segNoiseParams, f.counts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
         ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
         long _g = tns();
@@ -682,6 +841,9 @@ public final class GlidingHarness {
         BindingDetectionSystem.bruteReachable(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.kinParams, mot.counts);
         // --- motor forces (use the prior nucleotide state, like v1's addForces before biochemStep) ---
         ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
+        if (BOND_NOISE) BrownianForceSystem.scaleBoundHeadNoise(b.brownTransScale, mot.boundSeg, sc.bondNoiseParams, mot.counts);
+        if (SYSWIDE) BrownianForceSystem.scaleSysWideMotor(b.brownTransScale, b.brownRotScale, mot.boundSeg, sc.sysMotorParams, mot.counts);
+        else if (ALL_NOISE || THERM_CORR > 0) BrownianForceSystem.scaleMotorNoise(b.brownTransScale, b.brownRotScale, mot.boundSeg, sc.motorNoiseParams, mot.counts);
         BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
         MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts);
         TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts);
@@ -698,6 +860,9 @@ public final class GlidingHarness {
         else if (DIRSWING) CrossBridgeSystem.directedSwing(b.uVec, b.torqueSum, b.bRotGam, f.uVec, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
         // --- filament forces + gather (pre-release bound set ⇒ Newton's 3rd law preserved) ---
         ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+        if (SYSWIDE) BrownianForceSystem.scaleSysWideSeg(f.brownTransScale, sc.segMotorCount, f.end1NbrSlot, f.end2NbrSlot, sc.sysSegParams, f.counts);
+        else if (THERM_CORR > 0) BrownianForceSystem.scaleThermCorrSeg(f.brownTransScale, sc.segMotorCount, f.end1NbrSlot, f.end2NbrSlot, sc.thermSegParams, f.counts);
+        else if (ALL_NOISE) BrownianForceSystem.scaleBoundSegNoise(f.brownTransScale, sc.segMotorCount, sc.segNoiseParams, f.counts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
         ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
         CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sc.segMotorCount);
@@ -748,6 +913,9 @@ public final class GlidingHarness {
         if (MHATSET) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.prevBoundMh);
         if (PERPHEAD) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.perpRest, mot.headTiltCS);
         if (TAU_AVG > 0 || LYMN_TAYLOR) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.forceDotAvg, mot.avgInit);
+        if (BOND_NOISE) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.bondNoiseParams);
+        if (ALL_NOISE) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.motorNoiseParams, sc.segNoiseParams);
+        if (THERM_CORR > 0) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.motorNoiseParams, sc.thermSegParams);
         // reach (common)
         tg = tg
             .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
@@ -755,7 +923,11 @@ public final class GlidingHarness {
         if (FRESH_READ) {
             // -freshread: compute force + register BEFORE release/cycle (v1's reconciled order); integrate last.
             tg = tg
-                .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
+                .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts);
+            if (BOND_NOISE) tg = tg.task("bondNoise", BrownianForceSystem::scaleBoundHeadNoise, b.brownTransScale, mot.boundSeg, sc.bondNoiseParams, mot.counts);
+            if (SYSWIDE) tg = tg.task("sysMot", BrownianForceSystem::scaleSysWideMotor, b.brownTransScale, b.brownRotScale, mot.boundSeg, sc.sysMotorParams, mot.counts);
+            else if (ALL_NOISE || THERM_CORR > 0) tg = tg.task("motNoise", BrownianForceSystem::scaleMotorNoise, b.brownTransScale, b.brownRotScale, mot.boundSeg, sc.motorNoiseParams, mot.counts);
+            tg = tg
                 .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
                 .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, mot.jointParams, mot.counts)
                 .task("anchor", TailAnchorSystem::anchor, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, mot.jointParams, mot.counts)
@@ -768,7 +940,11 @@ public final class GlidingHarness {
             if (HFSWING) tg = tg.task("dirSwing", CrossBridgeSystem::directedSwingHeadFrame, b.uVec, b.yVec, b.torqueSum, b.bRotGam, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
             else if (DIRSWING) tg = tg.task("dirSwing", CrossBridgeSystem::directedSwing, b.uVec, b.torqueSum, b.bRotGam, f.uVec, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
             tg = tg
-                .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
+                .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts);
+            if (SYSWIDE) tg = tg.task("sysSeg", BrownianForceSystem::scaleSysWideSeg, f.brownTransScale, sc.segMotorCount, f.end1NbrSlot, f.end2NbrSlot, sc.sysSegParams, f.counts);
+            else if (THERM_CORR > 0) tg = tg.task("thermSeg", BrownianForceSystem::scaleThermCorrSeg, f.brownTransScale, sc.segMotorCount, f.end1NbrSlot, f.end2NbrSlot, sc.thermSegParams, f.counts);
+            else if (ALL_NOISE) tg = tg.task("segNoise", BrownianForceSystem::scaleBoundSegNoise, f.brownTransScale, sc.segMotorCount, sc.segNoiseParams, f.counts);
+            tg = tg
                 .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
                 .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
                 .task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, sc.segMotorCount)
@@ -816,7 +992,11 @@ public final class GlidingHarness {
             else
                 tg = tg.task("cycle", NucleotideCycleSystem::cycle, mot.nucleotideState, mot.boundSeg, mot.forceDotHist, mot.nucParams, mot.counts);
             tg = tg
-                .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts)
+                .task("zeroMot", ChainBendingForceSystem::zeroAccumulators, b.forceSum, b.torqueSum, mot.counts);
+            if (BOND_NOISE) tg = tg.task("bondNoise", BrownianForceSystem::scaleBoundHeadNoise, b.brownTransScale, mot.boundSeg, sc.bondNoiseParams, mot.counts);
+            if (SYSWIDE) tg = tg.task("sysMot", BrownianForceSystem::scaleSysWideMotor, b.brownTransScale, b.brownRotScale, mot.boundSeg, sc.sysMotorParams, mot.counts);
+            else if (ALL_NOISE || THERM_CORR > 0) tg = tg.task("motNoise", BrownianForceSystem::scaleMotorNoise, b.brownTransScale, b.brownRotScale, mot.boundSeg, sc.motorNoiseParams, mot.counts);
+            tg = tg
                 .task("brownMot", BrownianForceSystem::brownianForce, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts)
                 .task("joints", MotorJointSystem::joints, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, sc.jointParams, mot.counts)
                 .task("anchor", TailAnchorSystem::anchor, b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, sc.jointParams, mot.counts);
@@ -847,7 +1027,11 @@ public final class GlidingHarness {
             if (MHATSET) tg = tg.task("mhatSet", CrossBridgeSystem::setBindMhat, b.coord, b.uVec, b.yVec, f.uVec, mot.boundSeg, sc.prevBoundMh, mot.counts);   // bind-time head-axis init, LATE (body-write gotcha)
             tg = tg
                 .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
-                .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
+                .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts);
+            if (SYSWIDE) tg = tg.task("sysSeg", BrownianForceSystem::scaleSysWideSeg, f.brownTransScale, sc.segMotorCount, f.end1NbrSlot, f.end2NbrSlot, sc.sysSegParams, f.counts);
+            else if (THERM_CORR > 0) tg = tg.task("thermSeg", BrownianForceSystem::scaleThermCorrSeg, f.brownTransScale, sc.segMotorCount, f.end1NbrSlot, f.end2NbrSlot, sc.thermSegParams, f.counts);
+            else if (ALL_NOISE) tg = tg.task("segNoise", BrownianForceSystem::scaleBoundSegNoise, f.brownTransScale, sc.segMotorCount, sc.segNoiseParams, f.counts);
+            tg = tg
                 .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
                 .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
                 .task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, sc.segMotorCount)
@@ -893,6 +1077,9 @@ public final class GlidingHarness {
                 addW("gliding.deriveMot2", pad(nB));
             }
         }
+        if (BOND_NOISE) addW("gliding.bondNoise", pad(nM));
+        if (ALL_NOISE) { addW("gliding.motNoise", pad(nM)); addW("gliding.segNoise", pad(nSeg)); }
+        if (THERM_CORR > 0) { addW("gliding.motNoise", pad(nM)); addW("gliding.thermSeg", pad(nSeg)); }
         for (String t : new String[]{ "zeroMot","brownMot","joints","integMot","deriveMot" }) addW("gliding." + t, pad(nB));
         for (String t : new String[]{ "zeroFil","brownFil","chain","gather","integFil","deriveFil" }) addW("gliding." + t, pad(nSeg));
         for (String t : new String[]{ "csrHist","csrScan","csrScatter" }) addS("gliding." + t);

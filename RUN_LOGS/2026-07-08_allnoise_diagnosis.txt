@@ -1,0 +1,77 @@
+=== -allnoise DIAGNOSIS (2026-07-08) ===
+
+## STEP 1 CPU byte-identity (2000 steps): -allnoisescale 1.0 vs OFF
+OFF:
+  velFitX (−slope cx, steady)   :    1.220   <== V for the MM fit (directed −x glide)  µm/s
+  avgBound                      :    3.429       3.636
+  GRID_ROW seed=0x6111D nMot=26740 density=1000 velFitX=1.220 inst=5.711 instSteady=5.314 netXY=2.847 netSteady=1.270 netX=-2.538 lwXY=2.847 avgB=3.429 avgBsteady=3.636
+  STATS_STEADY_ROW seed=0x6111D coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=0 releases=0 detachRatePerS=0.0 dwellMs=0.0000 avgBoundSteady=0.000 meanReach=5.0 duty=0.0000
+SCALE1.0:
+  velFitX (−slope cx, steady)   :    1.220   <== V for the MM fit (directed −x glide)  µm/s
+  avgBound                      :    3.429       3.636
+  GRID_ROW seed=0x6111D nMot=26740 density=1000 velFitX=1.220 inst=5.711 instSteady=5.314 netXY=2.847 netSteady=1.270 netX=-2.538 lwXY=2.847 avgB=3.429 avgBsteady=3.636
+  STATS_STEADY_ROW seed=0x6111D coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=0 releases=0 detachRatePerS=0.0 dwellMs=0.0000 avgBoundSteady=0.000 meanReach=5.0 duty=0.0000
+
+## STEP 1 decisive 60k GPU x3 seed (OFF/SCALE1/ALLNOISE)
+### arm=OFF seed=0 ###
+OFF s0   GRID_ROW seed=0x6111D nMot=26740 density=1000 velFitX=2.112 inst=6.786 instSteady=6.818 netXY=2.492 netSteady=2.172 netX=-2.474 lwXY=2.492 avgB=3.088 avgBsteady=2.870
+OFF s0   STATS_STEADY_ROW seed=0x6111D coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=118877 releases=1931 detachRatePerS=1624.4 dwellMs=0.6156 avgBoundSteady=2.972 meanReach=3.7 duty=0.8114
+### arm=SCALE1 seed=0 ###
+SCALE1 s0   GRID_ROW seed=0x6111D nMot=26740 density=1000 velFitX=1.905 inst=6.692 instSteady=6.633 netXY=2.186 netSteady=1.842 netX=-2.179 lwXY=2.186 avgB=1.820 avgBsteady=1.472
+SCALE1 s0   STATS_STEADY_ROW seed=0x6111D coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=65818 releases=688 detachRatePerS=1045.3 dwellMs=0.9567 avgBoundSteady=1.645 meanReach=2.8 duty=0.5819
+### arm=ALLNOISE seed=0 ###
+ALLNOISE s0   GRID_ROW seed=0x6111D nMot=26740 density=1000 velFitX=3.770 inst=6.933 instSteady=7.166 netXY=3.330 netSteady=3.657 netX=-3.329 lwXY=3.330 avgB=2.622 avgBsteady=2.698
+ALLNOISE s0   STATS_STEADY_ROW seed=0x6111D coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=108546 releases=1013 detachRatePerS=933.2 dwellMs=1.0715 avgBoundSteady=2.714 meanReach=4.5 duty=0.5994
+### arm=OFF seed=1 ###
+OFF s1   GRID_ROW seed=0x6300C nMot=26740 density=1000 velFitX=2.338 inst=6.832 instSteady=6.923 netXY=2.452 netSteady=2.633 netX=-2.448 lwXY=2.452 avgB=2.792 avgBsteady=2.957
+OFF s1   STATS_STEADY_ROW seed=0x6300C coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=120397 releases=1979 detachRatePerS=1643.7 dwellMs=0.6084 avgBoundSteady=3.010 meanReach=3.9 duty=0.7773
+### arm=SCALE1 seed=1 ###
+SCALE1 s1   GRID_ROW seed=0x6300C nMot=26740 density=1000 velFitX=3.352 inst=6.848 instSteady=7.090 netXY=2.717 netSteady=3.220 netX=-2.709 lwXY=2.717 avgB=2.180 avgBsteady=2.591
+SCALE1 s1   STATS_STEADY_ROW seed=0x6300C coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=96506 releases=946 detachRatePerS=980.2 dwellMs=1.0201 avgBoundSteady=2.413 meanReach=4.0 duty=0.5987
+### arm=ALLNOISE seed=1 ###
+ALLNOISE s1   GRID_ROW seed=0x6300C nMot=26740 density=1000 velFitX=2.601 inst=6.722 instSteady=6.776 netXY=2.702 netSteady=2.607 netX=-2.696 lwXY=2.702 avgB=2.323 avgBsteady=2.409
+ALLNOISE s1   STATS_STEADY_ROW seed=0x6300C coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=100074 releases=964 detachRatePerS=963.3 dwellMs=1.0381 avgBoundSteady=2.502 meanReach=4.1 duty=0.6128
+### arm=OFF seed=2 ###
+OFF s2   GRID_ROW seed=0x64EFB nMot=26740 density=1000 velFitX=2.525 inst=6.759 instSteady=6.725 netXY=2.721 netSteady=2.485 netX=-2.714 lwXY=2.721 avgB=3.336 avgBsteady=3.173
+OFF s2   STATS_STEADY_ROW seed=0x64EFB coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=130343 releases=2112 detachRatePerS=1620.3 dwellMs=0.6172 avgBoundSteady=3.259 meanReach=4.2 duty=0.7703
+### arm=SCALE1 seed=2 ###
+SCALE1 s2   GRID_ROW seed=0x64EFB nMot=26740 density=1000 velFitX=2.361 inst=6.668 instSteady=6.807 netXY=2.207 netSteady=2.369 netX=-2.207 lwXY=2.207 avgB=1.772 avgBsteady=1.857
+SCALE1 s2   STATS_STEADY_ROW seed=0x64EFB coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=73064 releases=714 detachRatePerS=977.2 dwellMs=1.0233 avgBoundSteady=1.827 meanReach=3.2 duty=0.5655
+### arm=ALLNOISE seed=2 ###
+ALLNOISE s2   GRID_ROW seed=0x64EFB nMot=26740 density=1000 velFitX=3.411 inst=6.809 instSteady=7.056 netXY=2.947 netSteady=3.344 netX=-2.944 lwXY=2.947 avgB=2.396 avgBsteady=2.625
+ALLNOISE s2   STATS_STEADY_ROW seed=0x64EFB coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=109427 releases=992 detachRatePerS=906.5 dwellMs=1.1031 avgBoundSteady=2.736 meanReach=4.4 duty=0.6203
+DONE
+
+## STEP 2 CPU deterministic 10k factor sweep
+### arm=OFF (CPU, 10k) ###
+OFF   GRID_ROW seed=0x6111D nMot=26740 density=1000 velFitX=1.941 inst=6.662 instSteady=6.625 netXY=2.476 netSteady=2.206 netX=-2.475 lwXY=2.476 avgB=3.307 avgBsteady=3.647
+OFF   STATS_STEADY_ROW seed=0x6111D coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=0 releases=0 detachRatePerS=0.0 dwellMs=0.0000 avgBoundSteady=0.000 meanReach=5.0 duty=0.0000
+### arm=SCALE0.90 (CPU, 10k) ###
+SCALE0.90   GRID_ROW seed=0x6111D nMot=26740 density=1000 velFitX=1.494 inst=6.585 instSteady=6.138 netXY=1.754 netSteady=1.439 netX=-1.751 lwXY=1.754 avgB=2.960 avgBsteady=2.588
+SCALE0.90   STATS_STEADY_ROW seed=0x6111D coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=0 releases=0 detachRatePerS=0.0 dwellMs=0.0000 avgBoundSteady=0.000 meanReach=2.0 duty=0.0000
+### arm=ALLNOISE (CPU, 10k) ###
+ALLNOISE   GRID_ROW seed=0x6111D nMot=26740 density=1000 velFitX=2.120 inst=6.186 instSteady=5.953 netXY=2.442 netSteady=2.108 netX=-2.415 lwXY=2.442 avgB=3.356 avgBsteady=3.216
+ALLNOISE   STATS_STEADY_ROW seed=0x6111D coltol=10.0nm density=1000 dt=1.00e-05 boundSteps=0 releases=0 detachRatePerS=0.0 dwellMs=0.0000 avgBoundSteady=0.000 meanReach=3.0 duty=0.0000
+DONE
+=== Soft Box — EOM STABILITY probe (relaxation/impulse; NOT a transport measurement) ===
+config: rigid single filament (1 seg), motor body FROZEN (fixed head anchor), fil rotation FROZEN (clean translational mode), F8=on (1 pN/nm), ext-spring=explicit
+
+=== -allnoise DIAGNOSIS STEP 3/4 — isolated F8 bond mode: MEAN + variance, OFF vs ON vs dt (single motor) ===
+  kT/k_F8 = 4.1164 nm² (equipartition target) ; γ_∥ = 2.3885e-08 N·s/m ; k_F8 = 1.00 pN/nm
+  Modes: OFF = explicit EM (×1.0) ; ON = -allnoise (×√((2−α)/2)) ; OU = exact linear propagator.
+
+  dt(s)     α        | Var_OFF   Var_ON    Var_OU    | meanOFF(nm) meanON(nm)  | meanOU(nm) 
+  4.00e-05  1.6747   |   25.3564    4.1245    4.1155 |    -0.00282    -0.00114     0.00183
+  2.00e-05  0.8373   |    7.1191    4.1385    4.1148 |    -0.00373    -0.00284     0.00236
+  1.00e-05  0.4187   |    5.2610    4.1597    4.1777 |    -0.01498    -0.01332    -0.01316
+  5.00e-06  0.2093   |    4.6454    4.1592    4.2094 |    -0.05239    -0.04958     0.02485
+  2.50e-06  0.1047   |    4.3592    4.1311    4.1808 |     0.00014     0.00013    -0.00977
+  1.25e-06  0.0523   |    4.2373    4.1264    4.1224 |    -0.01308    -0.01291     0.01390
+  6.25e-07  0.0262   |    4.2219    4.1667    4.0979 |    -0.00407    -0.00404     0.06198
+  3.13e-07  0.0131   |    4.1991    4.1717    4.0991 |    -0.02757    -0.02748     0.06275
+
+  READ (STEP 3): Var_OFF tracks (kT/k)·2/(2−α) (over-fluctuates at coarse dt); Var_ON≈Var_OU≈kT/k (restored).
+  The MEAN displacement is ~0 (sub-pm) and dt-flat for ALL THREE ⇒ the isolated F8 mode's EM error is
+  VARIANCE-ONLY (no mean/drift bias). STEP 4: OU and -allnoise give the SAME mean AND the same restored
+  variance ⇒ OU offers nothing beyond -allnoise for this LINEAR mode ⇒ path-1 (correct-EM/OU) is RULED OUT
+  for the bond mode; the ensemble per-bound offset is NOT a mode-integration error (see STEP 1: GPU graph-split).
