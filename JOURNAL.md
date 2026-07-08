@@ -1,5 +1,47 @@
 # Soft Box Project Journal
 
+# 2026-07-08 — CANONICAL COLLAPSE STAGE 1: the ratified canonical set is now the DEFAULT (byte-identical verified; tag = rollback index)
+Baked jba's ratified canonical gliding model as the sole/default path, gated on byte-identical acceptance (both
+runners). **Rollback tag `pre-canonical-collapse-2026-07-08` (`5b60b0a`) pushed FIRST.** **State finding:** at the tag,
+springs AND the sphere-head motor were ALREADY default-on — only `LYMN_TAYLOR` and `XB_IMPLICIT2` were genuinely
+default-OFF, so this stage makes two real flips, one byte-identical refactor (sphere-head stack → explicit field
+defaults, post-parse promotion block REMOVED), and one confirm-unchanged (springs). **Flips:** `LYMN_TAYLOR=true`,
+`XB_IMPLICIT2=true`, `SPHEREHEAD/AXLOCK/DIRSWING=true`. **D1a weld:** `if (LYMN_TAYLOR && !ALLOW_BIND_ANY) ADPPI_BIND=true`
+welds ADP·Pi-only binding into the canonical cycle (drives `kinParams[20]=1`). **Opt-outs added:** `-legacycycle`
+(legacy catch-slip cycle), `-explicitxb` (explicit Hookean F8), `-allowbindany` (marked diagnostic — permissive binding
+under the canonical cycle). PART-3 resolution: the cycle and the bind-gate are INDEPENDENT in the code, so `-legacycycle`
+does NOT cleanly isolate permissive binding (it bundles the cycle swap) ⇒ `-allowbindany` was needed and added as the
+clean counterfactual. **NO deletions/renames/param-changes/diagnostic-re-routing (all Stage 2). `BoA-v1ref` untouched;
+only GlidingHarness.java edited.** **ACCEPTANCE — all PASS, byte-identical:** Test A (new bare default ≡ old-tag
+`-lymntaylor -adppibind -xbimplicit2`): CPU velFitX 4.583 / GPU 4.584, new≡old to every digit on EACH runner (GPU
+byte-identity ⇒ no kernel-graph difference introduced). Test B (new `-legacycycle -explicitxb -nosprings -legacymotor`
+≡ old-tag `-nosprings -legacymotor`): CPU velFitX 13.057 identical. Test B2 (new `-legacycycle -explicitxb` ≡ old bare
+default): CPU velFitX −2.605 identical. **The task's literal Test-B RHS (combo vs old BARE default) correctly differs —
+springs+sphere were already-on defaults, not this stage's flips; documented, not a failure.** No BAIL. Report:
+`CANONICAL_COLLAPSE_STAGE1.md`. **Stage 2 (deletions / rename `-faithfulrelease`→`-forcecapdetach`+`-detachcap` /
+coltol-density reclassification / diagnostic-own-scene policy) awaits verification sign-off + planner scoping.**
+
+# 2026-07-08 — CANONICAL MANIFEST: complete model-fork enumeration produced (READ-ONLY; collapse awaits jba's ratification)
+Produced `CANONICAL_MANIFEST.md` — every physics/model fork in the gliding code, each with current default, code
+site(s) that read it (file:line), alternatives, physical effect, and a ratification category (1 SETTLED-CANONICAL /
+2 CHOICE-NOT-PROOF / 3 PARAMETER / 4 DEAD-ARTIFACT / 5 DIAGNOSTIC). Purpose: kill the silent-mis-mapping failure mode
+(the way `-ratefix` LOW basin masqueraded as baseline) BEFORE any collapse to a single path. **No edits/deletions/
+hardcoding this session; `BoA-v1ref` untouched.** **Headline finding — the bare code default ≠ the config jba treats
+as canonical:** `run_gliding.sh` with no flags = sphere-head motor (promoted POST-PARSE at `GH:336–340`, not via field
+defaults) + springs (default-on) + LEGACY catch-slip cycle + EXPLICIT cross-bridge; the SPRINGS_PROMOTION GATE-2 /
+active dt-study "reference" config adds `-lymntaylor -adppibind -xbimplicit2 -coltol 10 -density 1000` — a FOUR-FORK
+gap, and Lymn-Taylor (jba's stated canonical kinetics) is DEFAULT-OFF. **CHOICE-NOT-PROOF forks flagged for explicit
+decision:** (i) Lymn-Taylor+adppibind (canonical by framing, off in code); (ii) `-xbimplicit2` — GATE-2 uses it but
+THESIS §11 banks EXPLICIT as the validation operating decision (direct contradiction); (iii) springs-continuum
+calibration (freezes an un-retuned fine-dt limit, SPRINGS_PROMOTION §DEFERRED); (iv) sphere-head vs the phase-2
+canonical two-point motor; (v) `-faithfulrelease` (own task, re-baselines avgBound). **Collapse-time divergence risks
+listed:** 8 diagnostic modes build their OWN scene (`headTiltSweep`/`boundGeom`/`forceDecomp`/`stiffnessAngleSweep`/
+`dCalib`/`catchSlipRecal`/`singleMolecule`/`swingKProbe`) with raw chainParams, bypassing the springs freeze. **Dead
+paths to remove:** the noise-correction family (all inert/artifact), `-xbimplicit`/`-xbdash*`/`-xbsat`, `-atprecharge`/
+`-tauavg`, the `-ratefix` rate machinery, `-freshread`, and the documented-negative recasts. Report ends with the
+proposed sole-path set, the tunables to preserve, the dead list, and the 7 explicit decisions jba must make. **No
+collapse this session.**
+
 # 2026-07-08 — SPRINGS PROMOTED TO DEFAULT: the deterministic, transcendental-free canonical gliding formulation (gated, verified, jba re-baseline sign-off flagged)
 Promoted the pure-springs formulation to the gliding default — the fix for the GPU reproducibility hazard
 (BISTABILITY_ORIGIN: the -ratefix swing exp/log perturbs PTX scheduling → tips the bistable basin to LOW; springs

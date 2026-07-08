@@ -51,7 +51,8 @@ public final class GlidingHarness {
     static boolean DASH_MECH = false;            // -xbdashmech: dashpot mechanical force only (catch reads spring load)
     // ---- IMPLICIT_CROSSBRIDGE (flag-gated; default-off ⇒ explicit Hookean, byte-identical) ----
     static boolean XB_IMPLICIT = false;          // -xbimplicit: locally-implicit bound-head cross-bridge spring (c_imp=(c_exp+r·c_n)/(1+r))
-    static boolean XB_IMPLICIT2 = false;         // -xbimplicit2: COUPLED head+SITE implicit F8 (per-segment star; COUPLED_IMPLICIT_XB_FINDINGS)
+    static boolean XB_IMPLICIT2 = true;          // CANONICAL DEFAULT (2026-07-08 collapse Stage 1): COUPLED head+SITE implicit F8 (per-segment star; COUPLED_IMPLICIT_XB_FINDINGS). -explicitxb opt-out restores the explicit Hookean F8.
+    static boolean EXPLICIT_XB = false;          // -explicitxb: opt-out of the canonical implicit cross-bridge ⇒ explicit Hookean F8 (the legacy default). Resolved after arg-parse.
     static boolean XB_TRAP = false;              // -xbtrap: TRAPEZOIDAL (Crank–Nicolson midpoint) re-timing of the -xbimplicit2 coupled F8 star (r→r/2; XBTRAP_PROBE)
     static boolean SEG_IMPLICIT = false;         // -segimplicit: DIAGONAL per-segment implicit COLLECTIVE loaded cross-bridge force (rigid head; SEG_IMPLICIT_FINDINGS)
     static boolean CANONICAL = false;            // -canonical: PHASE-2 Version-B two-point canonical motor (bindCanonicalTwoPoint + bondForcesCanonical). Default off ⇒ byte-identical.
@@ -83,9 +84,9 @@ public final class GlidingHarness {
     static int VIZ_FRAMES = 400;                 // -vizframes <n>: number of -3js viewer frames (cadence = M/n)
     static double REBIND_TIME = 0.0;             // -rebindtime <s>: override the post-release rebind refractory (0 ⇒ v1 myoRebindTime, byte-identical)
     static boolean LEGACYMOTOR = false;          // -legacymotor: restore the OLD default motor (v1-port F9 head-swing, 90°↔120°; sphere-head stack OFF). Kept for regression/oracle. See the 2026-07-01 promotion.
-    static boolean SPHEREHEAD = false;           // -spherehead: freeze F9 at 90° (perp-maintainer) ⇒ the J1 neck-swing is the stroke (the three-body sphere-head, on the real dense-mat GPU path). NOW DEFAULT-ON (see the promotion block after arg-parse).
-    static boolean AXLOCK = false;               // -axlock: retarget F10 to ŝ=normalize(n̂bed×seg.uVec) head-only (the axial swing-plane lock, §9.4c). Implies -spherehead. Default-off ⇒ byte-identical.
-    static boolean DIRSWING = false;             // -dirswing: DETERMINISTIC polarity-directed power stroke (CrossBridgeSystem.directedSwing) — neck rear sweeps barbed-ward; J1 angular converter OFF. Implies -axlock. Default-off ⇒ byte-identical.
+    static boolean SPHEREHEAD = true;            // CANONICAL DEFAULT (2026-07-08 collapse Stage 1; formerly a post-parse promotion): freeze F9 at 90° (perp-maintainer) ⇒ the J1 neck-swing is the stroke (the three-body sphere-head). -legacymotor restores the v1-port F9 head-swing; -canonical/-config1/-perphead select their own bond law (sphere stack cleared in the resolution block).
+    static boolean AXLOCK = true;                // CANONICAL DEFAULT: retarget F10 to ŝ=normalize(n̂bed×seg.uVec) head-only (the axial swing-plane lock, §9.4c). Part of the sphere-head canonical stack.
+    static boolean DIRSWING = true;              // CANONICAL DEFAULT: DETERMINISTIC polarity-directed power stroke (CrossBridgeSystem.directedSwing) — neck rear sweeps barbed-ward; J1 angular converter OFF. Part of the sphere-head canonical stack.
     static boolean HFSWING = false;              // -hfswing: HEAD-FRAME converter (directedSwingHeadFrame) — swing target derived from the head's own locked frame (no f̂ in the swing law). Implies -dirswing. Biologically-defensible recast; should reproduce -dirswing.
     static boolean ROLLCENSUS = false;           // -rollcensus: after a grid run, census bound heads' roll sign (head.yVec·ŝ) — the fraction locked to −ŝ (which sweep pointed-ward under -hfswing). Diagnostic only.
     static boolean ROLLSIGN = false;             // -rollsign: STEREOSPECIFIC roll — lock head.yVec to +ŝ specifically (from polarity), not nearer-of-±ŝ. Implies -hfswing. Fixes the head-frame swing's roll-sign DOF.
@@ -127,8 +128,10 @@ public final class GlidingHarness {
     // motor chain (J1/J2/tail-anchor fracMove modes, incl UNBOUND motors) = the RE-BASELINE arm (dt-flat).
     static boolean SYSWIDE = false;                // -syswide : faithful system-wide correction (single-constraint α)
     static boolean SYSWIDE_RB = false;             // -syswiderb : + the free-motor-chain fracMove re-baseline (implies -syswide)
-    static boolean LYMN_TAYLOR = false;          // -lymntaylor (jba 2026-06-29): the VALIDATED canonical Lymn-Taylor cycle. ONE release pathway (NONE→ATP = detachment, fast/nucleotide-driven); the 4c catch MODULATES the ADP→NONE rate (not a release). Replaces the -atprecharge experiments. Default-off ⇒ byte-identical; overrides ATP_RECHARGE/ATP_RELEASE when on.
-    static boolean ADPPI_BIND = false;           // -adppibind (STEP A dwell fix): strong-bind gate — a head binds actin ONLY in the pre-stroke ADP·Pi state (kinParams[20]=1). Kills the bind-in-ATP ejection churn (a just-detached ATP head geometrically rebound before its ~10 ms recovery). Faithful to the cycleLymnTaylor "bind in ADP·Pi" design intent. Default-off ⇒ byte-identical.
+    static boolean LYMN_TAYLOR = true;           // CANONICAL DEFAULT (2026-07-08 collapse Stage 1; jba-signed): the VALIDATED Lymn-Taylor cycle. ONE release pathway (NONE→ATP = detachment, fast/nucleotide-driven); the 4c catch MODULATES the ADP→NONE rate (not a release). ADP·Pi-only binding is WELDED in (D1a; see resolution block). -legacycycle opt-out restores the legacy catch-slip nucleotide cycle. Overrides ATP_RECHARGE/ATP_RELEASE when on.
+    static boolean LEGACY_CYCLE = false;         // -legacycycle: opt-out of the canonical Lymn-Taylor cycle ⇒ the legacy catch-slip nucleotide cycle (permissive binding). Resolved after arg-parse.
+    static boolean ADPPI_BIND = false;           // -adppibind (STEP A dwell fix): strong-bind gate — a head binds actin ONLY in the pre-stroke ADP·Pi state (kinParams[20]=1). Kills the bind-in-ATP ejection churn. WELDED into the canonical Lymn-Taylor cycle (forced true when LYMN_TAYLOR ∧ ¬ALLOW_BIND_ANY, in the resolution block); still settable standalone as a diagnostic. Default-off field ⇒ legacy path stays permissive.
+    static boolean ALLOW_BIND_ANY = false;       // -allowbindany (marked diagnostic): reintroduce permissive binding (bind from any nucleotide state — the diagnosed bind-in-ATP churn) EVEN under the canonical Lymn-Taylor cycle, by suppressing the D1a ADP·Pi weld. The clean counterfactual to the weld (isolates the bind-gate from the cycle swap; -legacycycle would confound them). Default-off ⇒ byte-identical.
     static boolean BRAKEDIAG = false;            // -brakediag (PART B, measurement-only): per-bound-head axial seg-force (assist −x / brake +x) vs signed catch load forceDotFil, binned by time-since-stroke; release-vs-signed-load histogram. CPU runner, default-off.
     static boolean ATP_RECHARGE = false;         // -atprecharge (jba 2026-06-29): the CORRECTED nucleotide↔release coupling. (1) a BOUND head is locked out of ATP uptake (NONE→ATP only when FREE); (2) the ONLY release is the force-based Guo–Guilford catch-slip (NO dice-roll detach — overrides ATP_RELEASE); (3) on release the head is recharged nucleotideState←ATP (debugging form). Default-off ⇒ every existing path byte-identical.
     static final double ANCHOR_Z = -0.05;       // fixedMyosinZValue
@@ -281,8 +284,11 @@ public final class GlidingHarness {
             else if (args[i].equals("-headtiltsweep")) { HEADTILT_SWEEP = true; CANONICAL = true; CONFIG1 = true; PERPHEAD = true; FORCEDECOMP = true; }  // Stage-1 θ sweep (single-motor force decomp, off-axis bind)
             else if (args[i].equals("-offaxis")) OFFAXIS_DEG = Double.parseDouble(args[++i]);  // off-axis bind angle for the decomp/sweep setup
             else if (args[i].equals("-noatprelease")) ATP_RELEASE = false;  // A/B control: DISABLE the ATP-transition→detach coupling (old decoupled cycle) for config1/perphead
-            else if (args[i].equals("-lymntaylor") || args[i].equals("-lt")) LYMN_TAYLOR = true;   // jba: the validated canonical cycle (single nucleotide-driven release)
-            else if (args[i].equals("-adppibind")) ADPPI_BIND = true;   // STEP A: ADP·Pi strong-bind gate (kills bind-in-ATP ejection churn)
+            else if (args[i].equals("-lymntaylor") || args[i].equals("-lt")) LYMN_TAYLOR = true;   // jba: the validated canonical cycle (single nucleotide-driven release). CANONICAL DEFAULT since collapse Stage 1; kept for explicitness.
+            else if (args[i].equals("-legacycycle")) LEGACY_CYCLE = true;   // COLLAPSE Stage-1 opt-out: force the legacy catch-slip nucleotide cycle (opt-out of canonical Lymn-Taylor)
+            else if (args[i].equals("-explicitxb")) EXPLICIT_XB = true;     // COLLAPSE Stage-1 opt-out: force the explicit Hookean F8 (opt-out of the canonical -xbimplicit2)
+            else if (args[i].equals("-allowbindany")) ALLOW_BIND_ANY = true;  // COLLAPSE Stage-1 marked diagnostic: permissive binding (bind from any state) under the canonical cycle — suppresses the D1a ADP·Pi weld
+            else if (args[i].equals("-adppibind")) ADPPI_BIND = true;   // STEP A: ADP·Pi strong-bind gate (kills bind-in-ATP ejection churn). WELDED into canon; kept standalone as a diagnostic.
             else if (args[i].equals("-spherehead")) SPHEREHEAD = true;   // freeze F9 at 90° ⇒ J1 neck-swing is the stroke (sphere-head on the dense-mat GPU path)
             else if (args[i].equals("-axlock")) { SPHEREHEAD = true; AXLOCK = true; }   // axial swing-plane lock (F10 → ŝ, head-only); implies -spherehead
             else if (args[i].equals("-dirswing")) { SPHEREHEAD = true; AXLOCK = true; DIRSWING = true; }   // + deterministic polarity-directed power stroke; implies -axlock
@@ -326,18 +332,27 @@ public final class GlidingHarness {
         }
         if (!pos.isEmpty()) M = Integer.parseInt(pos.get(0));
 
-        // ── MOTOR PROMOTION (2026-07-01) ── the f̂-referenced sphere-head neck-powerstroke is the DEFAULT myosin:
-        //   frozen-F9-90° (SPHEREHEAD) + axial swing lock F10→ŝ (AXLOCK) + f̂-directed neck stroke (DIRSWING).
-        // Enabled with NO flags, on BOTH the GPU TaskGraph and the -cpu runner. This block sets exactly the same
-        // three booleans as the explicit `-dirswing` path ⇒ the new default reproduces old `-dirswing` bit-for-bit.
-        // `-legacymotor` restores the OLD default (v1-port F9 head-swing, sphere-head stack OFF). Alternative motors
-        // (-canonical / -config1 / -perphead) select their own bond law and are NOT overridden. -hfswing/-rollsign/
-        // -mhatset (documented negatives) already set the three true + their extras, so they still take precedence.
+        // ── CANONICAL COLLAPSE Stage 1 (2026-07-08) — resolve the canonical model + its opt-outs ──────────────────
+        // The four ratified canonical defaults are now FIELD defaults (springs already-on; SPHEREHEAD/AXLOCK/DIRSWING,
+        // XB_IMPLICIT2, LYMN_TAYLOR flipped true above). This block applies the opt-outs and the D1a bind weld.
+        //
+        // MOTOR: the f̂-referenced sphere-head neck-powerstroke (SPHEREHEAD+AXLOCK+DIRSWING) is the explicit default
+        // (formerly a post-parse promotion — removed, byte-identical). -legacymotor restores the v1-port F9 head-swing;
+        // -canonical/-config1/-perphead select their own bond law ⇒ clear the sphere stack (they never combined with it).
+        // This transform is byte-identical to the old promotion for every path (default/legacy/canonical/-spherehead/…).
         if (LEGACYMOTOR) {
             SPHEREHEAD = false; AXLOCK = false; DIRSWING = false; HFSWING = false; ROLLSIGN = false; MHATSET = false;
-        } else if (!CANONICAL && !CONFIG1 && !PERPHEAD) {
-            SPHEREHEAD = true; AXLOCK = true; DIRSWING = true;
+        } else if (CANONICAL || CONFIG1 || PERPHEAD) {
+            SPHEREHEAD = false; AXLOCK = false; DIRSWING = false;
         }
+        // CYCLE / CROSS-BRIDGE opt-outs.
+        if (LEGACY_CYCLE) LYMN_TAYLOR = false;   // -legacycycle: legacy catch-slip nucleotide cycle
+        if (EXPLICIT_XB)  XB_IMPLICIT2 = false;  // -explicitxb: explicit Hookean F8
+        // D1a WELD: the canonical Lymn-Taylor cycle binds actin ONLY from the ADP·Pi pre-stroke state (kinParams[20]=1,
+        // set in buildScene from ADPPI_BIND). -allowbindany reintroduces permissive binding under the canonical cycle
+        // as a marked diagnostic (the clean counterfactual to the weld). -legacycycle ⇒ LYMN_TAYLOR false ⇒ the weld does
+        // not fire ⇒ ADPPI_BIND stays at its field default (false) ⇒ the legacy path is permissive (restores the old default).
+        if (LYMN_TAYLOR && !ALLOW_BIND_ANY) ADPPI_BIND = true;
 
         for (String a : args) if (a.equals("-forcetest")) { forceTest(); return; }
         if (STIFFSWEEP) { stiffnessAngleSweep(); return; }   // step-4d: builds its own minimal one-shot scenes
