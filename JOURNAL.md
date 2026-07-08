@@ -1,5 +1,87 @@
 # Soft Box Project Journal
 
+# 2026-07-08 — SPRINGS PROMOTED TO DEFAULT: the deterministic, transcendental-free canonical gliding formulation (gated, verified, jba re-baseline sign-off flagged)
+Promoted the pure-springs formulation to the gliding default — the fix for the GPU reproducibility hazard
+(BISTABILITY_ORIGIN: the -ratefix swing exp/log perturbs PTX scheduling → tips the bistable basin to LOW; springs
+use a transcendental-free MULTIPLY swing, same production-dt physics). Gated on two gates, both PASS. **GATE 1
+(hazard map, agent-assisted):** the ONLY flag-dependent hot-kernel transcendental in the raw/ratefix/springs toggle
+is the swing exp/log (`directedSwing:237`); all other rate flags bake coeffs HOST-side (data, not kernel structure);
+the default-config toggle adds/removes NO TaskGraph task (isolates the hazard to that one branch). **Springs
+introduces ZERO flag-dependent hot-kernel transcendental** (swing→multiply `:241`; chain/align/struct coeffs
+host-baked bit-identical) — CONFIRMED clean, it REMOVES the offending exp/log. Springs does NOT cover the OTHER
+scheduling hazards (noise-correction -bondnoise/-allnoise/-thermcorr/-syswide add sqrt tasks; -xbimplicit*/-segimplicit/
+-canonical/-config1/-lymntaylor/-tauavg/-freshread add/swap tasks) → those stay CPU-arbiter-gated. **GATE 2 (trust
+test, GPU==CPU, -full 20k ×3 seeds):** GPU-springs mean velFitX 3.215/pb 1.089 vs CPU-springs 3.180/1.093 — **same
+HIGH basin, ~1% aggregate agreement** (far within SEM), and **STABLE** (no NaN/blow-up across density 500/1000/2000,
+coltol 6). **GATE 3 (standing rule):** added the "GPU-number trust rule" to CLAUDE.md (CPU-arbiter cross-check when
+arms differ in hot-kernel structure / for absolute validation numbers / periodic baseline spot-check; GPU=explore,
+CPU=basin arbiter) with the GATE-1 hazard-flag list. **PROMOTION APPLIED:** `PAIRS/ALIGN/STRUCT_SPRINGS` default
+true; `-nosprings` opt-out restores raw (`-nosprings -ratefix -structrate` for the rate path); disclosures print
+"SPRINGS DEFAULT-ON" + a redundant-rate-flag note. **Verified BYTE-IDENTICAL at production dt=1e-5** (default ≡
+-nosprings ≡ explicit-springs = velFitX 8.225/avgB 4.000/netX −6.341 to the digit). Springs flags read ONLY in
+buildScene ⇒ other harnesses + the fine-dt decompRun modes UNTOUCHED. **Re-baseline (jba sign-off flagged):**
+numerically identical at production dt ⇒ all prior production-dt validation numbers STAND; the fine-dt convergence
+reference moves to the springs continuum (differs from the rate continuum by −ln(1−frac)/frac); the GPU gliding
+baseline is now the transcendental-free HIGH basin (velFitX ~3.2/pb ~1.0), NOT the -ratefix-seeded LOW (2.11/0.74) of
+every prior table; cleanly reversible (three booleans / -nosprings). **DEFERRED (tracked, NOT done):** filament
+retuning — springs' fixed stiffnesses are numerically identical to current at production dt (no retune now); needed
+only if production runs BELOW refDt or the stiffnesses are given physical meaning (Lp/bending-modulus calibration).
+Report: `SPRINGS_PROMOTION.md`; logs `RUN_LOGS/2026-07-08_promo_gate2_*.txt`.
+
+# 2026-07-08 — GLIDING BISTABILITY = a GPU EXECUTION ARTIFACT (deterministic PTX-scheduling nudge from exp/log), not a real two-basin feature
+Localized the origin of the GPU raw-HIGH vs `-ratefix`-LOW gliding split (PURE_SPRINGS). Added measurement/debug knobs
+only (`-swingkprobe` extract the exact runner swing coeff; `-swingkbits <int|0x..>` force it, size-4, both runners);
+default byte-identical; `BoA-v1ref` untouched. **VERDICT: GPU EXECUTION ARTIFACT, not a real chaotic bistability.**
+**PART A (crux):** the ratefix in-kernel swing coeff `k=1−exp((dt/refDt)·log(1−0.4))` computes to **bit-identical
+`0.4f` — 0 DOUBLE residual — on the GPU exactly as CPU** (probe). There is NO coefficient ULP to seed a real basin
+selection. Forcing the CPU to the GPU coeff (`-swingkbits 0x3ecccccd`=raw) stays HIGH (velFitX 3.209/pb 0.920); the
+CPU's own ratefix path (same bit-identical k) is bit-identical to raw ⇒ **A-HIGH** (the flip is beyond the coefficient).
+**The trigger is the exp/log INSTRUCTIONS, not the value/buffer:** GPU-springs (size-5 swingParams, *multiply* branch,
+same 0.4f) ≡ raw/HIGH; GPU-ratefix (size-5, *transcendental* branch, same 0.4f) = LOW ⇒ the exp/log perturbs PTX
+scheduling/FMA-contraction of the surrounding torque math at ULP → tips the sensitive operating point. **PART C:** GPU
+raw ×3 and ratefix ×3 **bit-identical run-to-run** ⇒ the flip is a **deterministic** compiler-scheduling artifact (NOT
+a race; which is why it read as a stable "effect" across the `-allnoise`/`-thermcorr` tables). **PART B:** CPU is
+**mono-stable HIGH** — all 3 seeds HIGH (velFitX 3.0–3.6/pb ≥0.92); sweeping swing k down (0.40→0.10) smoothly declines
+glide but per-bound stays ~0.9–1.2 and NEVER reproduces the GPU-LOW signature (avgB ~2.87 *with* pb ~0.74); LOW is not
+CPU-reachable by the coefficient. **BAILED (reported):** B2 (seed CPU from a GPU-LOW microstate) + true D-hysteresis
+both need state-dump/continuation infra that doesn't exist — and D's premise (real/CPU-reachable basin) wasn't met.
+Can't fully exclude a CPU-un-occupied attractor reachable only from the exact GPU microstate, but no evidence supports
+it. **Practical rule:** basin selection by a last-bit PTX-scheduling nudge is not physically controlled ⇒ run a
+deterministic transcendental-free swing path (springs multiply, or CPU-verified); **the honest gliding number is the
+CPU/HIGH-basin value (velFitX ~3.2, pb ~0.9), NOT the ratefix-seeded LOW (2.11/0.74)** that every prior GPU table
+called "baseline." Report: `BISTABILITY_ORIGIN.md`; logs `RUN_LOGS/2026-07-08_bistab_*.txt`. Default byte-identical.
+
+# 2026-07-08 — PURE-SPRING reformulation: production-dt engagement is FORMULATION-INDEPENDENT (springs≡rates≡raw bit-identical @refDt)
+Rebuilt EVERY fraction-per-step constraint as a genuine fixed spring — chain F3/F4 (`-pairsprings`), motor
+F9/F10/swing (`-alignsprings`), and the NEW structural J1/J2/tail-anchor (`-structsprings`, mirrors `-structrate`
+with `springify`) — with the rate machinery (`-ratefix`/`-structrate`) OFF, to test jba's Q: is the production-dt
+avgBound (engagement) deficit driven by the constraint FORMULATION? Ported the springs flags into the
+`dt-convergence-study` tree; additive, flag-gated, default byte-identical; replace-NOT-compose verified (spring
+flags take precedence over the matching rate flag; in the pure-spring arm the rate flags are off ⇒ no mode
+double-treated); `BoA-v1ref` untouched. **ANSWER: NO — and it CANNOT, by construction.** At production dt=refDt=1e-5,
+`DT/refDt=1.0` exactly ⇒ `springify(k)=rateFix(k)=k`; the build-time coefficients are **bit-identical floats**
+(0x3f000000/0x3e4ccccd/0x3ecccccd for 0.5/0.2/0.4, computed directly). The three freeze-forms are *defined to
+coincide at refDt* and only diverge below it. **CPU ARBITER (basin-stable, mandatory), `-full` 26740 motors, dt=1e-5,
+20k, seed 0: raw ≡ pure-springs ≡ `-ratefix -structrate` BIT-IDENTICAL to every digit** (velFitX 3.264, avgBsteady
+3.307, netX −2.956). ⇒ engagement is formulation-INDEPENDENT; the ~27% avgBound deficit lives in kinetics/capture
+geometry, NOT the freeze-form. **STEP-1 parity** PASS (springs≡raw bit-identical, springify is an exact ×1.0).
+**STEP-2 powerstroke force** PRESERVED exactly (`-stretchcensus` fdFilPN 0.709/2.097 bit-identical all 3 arms — the
+whole production-dt dynamics is bit-identical). **STEP-3 GPU** (3 seeds, 60k): raw≡springs bit-identical EVERY seed
+(2.895/2.718/2.861), but `-ratefix` sits systematically in a LOWER basin (2.112/2.338/2.525, per-bound
+[0.736/0.791/0.796] = the JOURNAL `-allnoise` OFF baseline bit-for-bit) — the ONLY difference from raw at refDt is
+the ratefix in-kernel swing `exp/log`, whose GPU-**float** ULP tips the bistable glide basin. On CPU (double exp/log
+= exact 0.4) it vanishes ⇒ **a BASIN FLIP, not a formulation effect** (springs — the real formulation change — does
+NOT move off raw; only the transcendental path does). **Reproducibility exposure surfaced:** the prior gliding
+baseline (velFitX 2.112 / per-bound 0.736, in every `-allnoise`/`-thermcorr`/re-convergence table) was always run
+WITH `-ratefix` ⇒ it was the ratefix-seeded LOW basin; GPU raw/springs + the CPU-deterministic value sit in a HIGHER
+basin (extends the 2026-07-08 bistability note — GPU gliding baselines' basin is decided by last-bit scheduling; any
+GPU A/B whose arms differ in a transcendental-bearing flag is contaminated; trust the CPU). **STEP-4 moved limit**
+(CPU v1box, basin-stable, matched 0.06s): at 1e-6 the forms DIVERGE — raw FREEZES high (velFitX 2.072→9.094, 4.4×,
+frozen-skeleton ∝1/dt artifact), springs (2.542/4.455) vs ratefix (3.148/5.073) differ by the `−ln(1−k)/k` continuum
+factor (springs ~0.81× velFitX, the expected re-baseline, not a regression); BOTH convergent arms bind MORE at 1e-6
+(avgB +33%/+51% vs the 3.355 @1e-5) ⇒ the engagement deficit is dt-related + formulation-independent. Report:
+`PURE_SPRINGS.md`; logs `RUN_LOGS/2026-07-08_puresprings_*.txt`. Diagnostic, default byte-identical, NOT promoted.
+
 # 2026-07-08 — `-allnoise` is dead: a GPU execution artifact, not a correction; and the corrected convergence picture
 
 Purpose: record the resolution of the `-allnoise` puzzle (it was never applying its stated physics), correct

@@ -10,3 +10,5 @@ threejs_v1*/
 threejs_v2*/
 threejs_*/
 .last_run_status
+hs_err_pid*.log
+scratch_*/

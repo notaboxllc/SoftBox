@@ -6,6 +6,7 @@ import uk.ac.manchester.tornado.api.TornadoExecutionPlan;
 import uk.ac.manchester.tornado.api.TornadoExecutionResult;
 import uk.ac.manchester.tornado.api.WorkerGrid;
 import uk.ac.manchester.tornado.api.WorkerGrid1D;
+import uk.ac.manchester.tornado.api.annotations.Parallel;
 import uk.ac.manchester.tornado.api.enums.DataTransferMode;
 import uk.ac.manchester.tornado.api.types.arrays.FloatArray;
 import uk.ac.manchester.tornado.api.types.arrays.IntArray;
@@ -139,9 +140,29 @@ public final class GlidingHarness {
     static boolean FIL_RATE = false;            // -filrate: convert the FILAMENT PAIRS per-STEP fractions (fracMove chainParams[1] = F3 link+bending, fracMoveTorq chainParams[3] = F4 torsion) to per-TIME rates (build time). PAIRS_RATE_AUDIT
     static boolean RATE_FIX = false;            // -ratefix: convenience = -strokerate + -alignrate + -filrate (ALL glide-relevant per-step fractions → per-time)
     static boolean STRUCT_RATE = false;         // -structrate: bring the PASSIVE STRUCTURAL fraction-per-step position springs (J1/J2 connection + tail anchor, jointParams[1]/[5]/[9]) to per-TIME rates (build-time rateFix). Makes the motor SKELETON dt-convergent (α∝dt) instead of dt-flat/frozen. Default OFF; at dt=refDt byte-identical. CONSTRAINED_VARIANCE_PROBE §STRUCTURAL-MODE REFORMULATION
+    // ---- PURE_SPRINGS: the fraction-per-step → FIXED-STIFFNESS-SPRING reformulation. PROMOTED TO DEFAULT-ON (2026-07-08,
+    //      SPRINGS_PROMOTION.md; GATE-1 hazard map + GATE-2 GPU==CPU basin + stability verified; jba re-baseline sign-off flagged). ----
+    // WHY DEFAULT: springs is the CANONICAL, deterministic, TRANSCENDENTAL-FREE production formulation. The -ratefix swing
+    // recompute uses in-kernel exp/log whose PRESENCE (not value) perturbs PTX scheduling → tips the bistable GPU glide basin
+    // to LOW (BISTABILITY_ORIGIN). The springs swing is a plain MULTIPLY (k·dt/refDt) ⇒ same production-dt physics, no
+    // transcendental, GPU stays in the HIGH basin (== the CPU). -filrate/-alignrate/-strokerate/-structrate convert a per-STEP
+    // fraction k into a per-TIME geometric-decay RATE k_eff=1−(1−k)^(DT/refDt); springs instead freeze it as a FIXED spring
+    // k=frac·γ_red/refDt via springify(frac)=frac·(DT/refDt), fed into the SAME kernel ⇒ dt cancels to refDt (a fixed stiffness).
+    // At DT==refDt=1e-5 springify(k)==k ⇒ BYTE-IDENTICAL to raw/rates (all prior production-dt validation numbers STAND); the
+    // formulations diverge only BELOW refDt (the fine-dt convergence reference moves to the springs continuum). OPT-OUT: -nosprings
+    // restores the raw fraction-per-step default; comparison rate path = -nosprings -ratefix -structrate. Spring flags take
+    // PRECEDENCE over the matching rate flag for the SAME slots (replace, NOT compose).
+    static boolean PAIRS_SPRINGS = true;        // -pairsprings (DEFAULT-ON): FILAMENT PAIRS (chainParams[1] fracMove F3, chainParams[3] fracMoveTorq F4) → fixed springs. -nosprings to disable.
+    static boolean ALIGN_SPRINGS = true;        // -alignsprings (DEFAULT-ON): MOTOR alignment (xbParams[2] F9/F10/axlock + directedSwing MULTIPLY branch) → fixed springs. THE transcendental-free swing. -nosprings to disable.
+    static boolean STRUCT_SPRINGS = true;       // -structsprings (DEFAULT-ON): STRUCTURAL J1/J2 connection + tail-anchor position springs (jointParams[1]/[5]/[9]) → fixed springs. -nosprings to disable.
     static double STROKE_REF_DT = 1.0e-5;       // -strokerefdt <s>: reference dt at which k_eff==0.4 (the coarse/production-dt physical stroke duration to preserve); default 1e-5
     static double RATE_SCALE = 1.0;             // -ratescale <x>: scale catch-slip kOff + ALL nucleotide cycle rates by x (faster kinetics = V₀ = step·detach-rate); default 1 ⇒ byte-identical. STEP-3 cycle-rate lever.
     static double COL_TOL = 0.006;              // -coltol <nm>: myosin bind capture radius (kinParams[7], perp tip-to-axis reach); default 6 nm ⇒ byte-identical. CAPTURE-RADIUS sweep (the engagement/duty master knob). PHYSICAL param, not a free speed dial.
+    // BISTABILITY_ORIGIN: force the directedSwing coefficient swingParams[0] to an EXACT float (by its int bits), size-4
+    // (NO in-kernel recompute) ⇒ BOTH runners use that exact float k. Replicates the GPU ratefix swing-ULP on the CPU:
+    // the GPU-ratefix flip's only in-kernel difference from raw is this coefficient. Default -1 ⇒ untouched/byte-identical.
+    static int SWING_K_BITS = -1;               // -swingkbits <int|0x..>: swingParams[0] = Float.intBitsToFloat(bits); 0x3ecccccd = 0.4f exact
+    static boolean SWING_K_PROBE = false;       // -swingkprobe: extract the EXACT float the GPU computes for the ratefix in-kernel swing k (1−exp(1·log(0.6))) vs Java double vs 0.4f
     static double AETA = Constants.aeta;        // -aeta <Pa·s>: filament/medium viscosity (drag γ ∝ aeta, diffusion ∝ 1/aeta). Default 0.1 ⇒ byte-identical. VISCOSITY DIAGNOSTIC: is the glide cycle-limited (η↓ flat) or drag-limited (η↓ raises speed)? PHYSICAL param, NOT a speed dial.
     static boolean STRETCHCENSUS = false;       // -stretchcensus: read-only census of the BOUND population's anchor-spring extension (forceMag/myoSpring), per-head axial force (forceDotFil), + aggregate dwell (stats). STEP-3 geometry check; no force change; default-off byte-identical.
     static boolean KTOT_CENSUS = false;         // -ktotcensus: read-only census of the per-segment collective cross-bridge stiffness K_tot=k_s·myoSpring vs the EOM ~1.4/~3.8 pN/nm instability thresholds. STEP-3 (SEG_IMPLICIT_FINDINGS); no force change; default-off byte-identical.
@@ -229,6 +250,12 @@ public final class GlidingHarness {
             else if (args[i].equals("-filrate")) FIL_RATE = true;          // PAIRS_RATE_AUDIT: FILAMENT fracMove/fracMoveTorq → per-time rates (build-time chainParams[1]/[3])
             else if (args[i].equals("-ratefix")) { RATE_FIX = true; STROKE_RATE = true; ALIGN_RATE = true; FIL_RATE = true; }  // ALL glide per-step fractions → per-time
             else if (args[i].equals("-structrate")) STRUCT_RATE = true;    // STRUCTURAL-MODE REFORMULATION: J1/J2/anchor position springs → per-time rates (build-time jointParams[1]/[5]/[9]); NOT folded into -ratefix (keeps the baseline stable)
+            else if (args[i].equals("-pairsprings")) PAIRS_SPRINGS = true;  // PURE_SPRINGS: FILAMENT PAIRS → fixed springs (precedence over -filrate)
+            else if (args[i].equals("-alignsprings")) ALIGN_SPRINGS = true; // PURE_SPRINGS: motor alignment → fixed springs (precedence over -alignrate/-strokerate)
+            else if (args[i].equals("-structsprings")) STRUCT_SPRINGS = true; // PURE_SPRINGS: structural J1/J2/anchor → fixed springs (precedence over -structrate)
+            else if (args[i].equals("-nosprings")) { PAIRS_SPRINGS = false; ALIGN_SPRINGS = false; STRUCT_SPRINGS = false; }  // SPRINGS_PROMOTION opt-out: restore the raw fraction-per-step default (comparison rate path = -nosprings -ratefix -structrate)
+            else if (args[i].equals("-swingkbits")) SWING_K_BITS = Integer.decode(args[++i]); // BISTABILITY_ORIGIN: force swing coeff to exact float bits (both runners)
+            else if (args[i].equals("-swingkprobe")) SWING_K_PROBE = true;   // BISTABILITY_ORIGIN: extract the exact GPU-computed ratefix swing k
             else if (args[i].equals("-strokerefdt")) STROKE_REF_DT = Double.parseDouble(args[++i]);
             else if (args[i].equals("-canonical")) CANONICAL = true;     // PHASE-2 Version-B two-point canonical motor
             else if (args[i].equals("-canondiag")) { CANONICAL = true; CANON_DIAG = true; }  // + instrument the binder
@@ -369,6 +396,13 @@ public final class GlidingHarness {
         if (ALIGN_RATE) System.out.printf(java.util.Locale.US, "  -alignrate: F9/F10/axlock 0.4/step → per-time; k_eff=%.4f at dt=%.2e (build-time xbParams[2]).%n", rateFix(0.4), DT);
         if (STRUCT_RATE) System.out.printf(java.util.Locale.US, "  -structrate: STRUCTURAL position springs J1/J2/anchor 0.4/step → per-time; k_eff=%.4f at dt=%.2e (build-time jointParams[1]/[5]/[9]). fracR geometry + angular converters (OFF in glide) unchanged. dt-convergent skeleton (α∝dt).%n", rateFix(0.4), DT);
         if (FIL_RATE) System.out.printf(java.util.Locale.US, "  -filrate: FILAMENT fracMove 0.5→%.4f, fracMoveTorq 0.2→%.4f (per-time, build-time chainParams) at dt=%.2e (refDt=%.2e). fracR (geometry) unchanged. Filament STIFFNESS magnitude preserved at refDt.%n", rateFix(0.5), rateFix(0.2), DT, STROKE_REF_DT);
+        if (PAIRS_SPRINGS) System.out.printf(java.util.Locale.US, "  -pairsprings: FILAMENT PAIRS frozen as FIXED SPRINGS. fracMove 0.5→%.4f, fracMoveTorq 0.2→%.4f (springify=k·DT/refDt, build-time chainParams[1]/[3]) at dt=%.2e (refDt=%.2e). Precedence over -filrate. Byte-identical at refDt.%n", springify(0.5), springify(0.2), DT, STROKE_REF_DT);
+        if (ALIGN_SPRINGS) System.out.printf(java.util.Locale.US, "  -alignsprings: MOTOR alignment frozen as FIXED SPRINGS. F9/F10/axlock 0.4→%.4f (build-time xbParams[2]); swing via swingParams[4]=−refDt (springify in-kernel). Precedence over -alignrate/-strokerate. Byte-identical at refDt.%n", springify(0.4), DT);
+        if (STRUCT_SPRINGS) System.out.printf(java.util.Locale.US, "  -structsprings: STRUCTURAL J1/J2/anchor frozen as FIXED SPRINGS. 0.4→%.4f (springify, build-time jointParams[1]/[5]/[9]) at dt=%.2e (refDt=%.2e). Precedence over -structrate. Byte-identical at refDt.%n", springify(0.4), DT, STROKE_REF_DT);
+        if (PAIRS_SPRINGS && ALIGN_SPRINGS && STRUCT_SPRINGS) System.out.printf(java.util.Locale.US, "  [SPRINGS DEFAULT-ON: canonical transcendental-free formulation (SPRINGS_PROMOTION). Byte-identical to raw/-ratefix at production dt=1e-5; diverges only below refDt. Use -nosprings to restore raw; -nosprings -ratefix -structrate for the rate path.]%n");
+        if ((FIL_RATE || ALIGN_RATE || STROKE_RATE || STRUCT_RATE) && (PAIRS_SPRINGS || ALIGN_SPRINGS || STRUCT_SPRINGS)) System.out.printf(java.util.Locale.US, "  [NOTE: a -ratefix/-filrate/-alignrate/-strokerate/-structrate flag is set but springs (default-on) OVERRIDES it for the shared slots. At dt=1e-5 identical anyway; below refDt pass -nosprings to actually use the rate path.]%n");
+        if (SWING_K_BITS != -1) System.out.printf(java.util.Locale.US, "  -swingkbits: swing coeff FORCED to %s (bits 0x%08x), size-4 (no in-kernel recompute); both runners. (0.4f=0x3ecccccd.)%n", ""+Float.intBitsToFloat(SWING_K_BITS), SWING_K_BITS);
+        if (SWING_K_PROBE) { swingKProbe(gpu); return; }
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
         if (CSRECAL) { catchSlipRecal(Math.max(M, 14000)); return; }
         if (DCALIB) { dCalib(Math.max(M, 25000)); return; }
@@ -411,6 +445,57 @@ public final class GlidingHarness {
 
     /** rateFix at an ARBITRARY dt (STEP-1b classification: report the ratefixed-mode α at 1e-5 and 6.25e-7). */
     static double rateFixAlpha(double k, double dt) { return 1.0 - Math.exp((dt / STROKE_REF_DT) * Math.log(1.0 - k)); }
+
+    /** PURE_SPRINGS: freeze a per-STEP fraction k as a FIXED-STIFFNESS spring. The PAIRS/alignment/structural kernels
+     *  compute F = k_code·gap/((moveC1+moveC2)·dt); returning k·(DT/refDt) makes the running dt cancel to refDt ⇒
+     *  F = (k·γ_red/refDt)·gap = k_spring·gap, a dt-invariant fixed stiffness (γ_red=1/(moveC1+moveC2) supplied PER-PAIR
+     *  in-kernel ⇒ pinned bodies 1/γ→0 honoured). Forward-Euler ⇒ Δ = k·(DT/refDt)·gap; at DT==refDt Δ==k·gap
+     *  (byte-identical to the raw law and to rateFix); at finer DT a strictly smaller, monotone-stable (α=k·DT/refDt≤k<1) step. */
+    static float springify(double k) { return (float) (k * (DT / STROKE_REF_DT)); }
+
+    /** BISTABILITY_ORIGIN probe kernel: compute the ratefix in-kernel swing coefficient EXACTLY as
+     *  directedSwing does (k=(double)0.4f; k=1−exp((dt/refDt)·log(1−k))), and write (float)k. Run on the
+     *  GPU it reveals the float the PTX exp/log actually produces; run on the CPU it is Java double. Two-way
+     *  compare (out[0]=recomputed k, out[1]=raw 0.4f, out[2]=1−k input to log). */
+    public static void swingKProbeKernel(FloatArray out) {
+        for (@Parallel int i = 0; i < 1; i++) {
+            double k = 0.4f;                 // swingParams[0]=0.4f promoted to double (raw's k)
+            double dt = 1.0e-5f, refDt = 1.0e-5f;
+            double kr = 1.0 - Math.exp((dt / refDt) * Math.log(1.0 - k));
+            out.set(0, (float) kr);
+            out.set(1, (float) k);
+            out.set(2, (float) (1.0 - k));
+            out.set(3, (float) ((kr - k) * 1.0e12));   // DOUBLE-level residual (kr − raw), amplified ×1e12: 0 ⇒ even double-identical
+        }
+    }
+
+    /** BISTABILITY_ORIGIN: extract the EXACT float the (GPU or CPU) runner computes for the ratefix in-kernel
+     *  swing k, vs Java double vs the raw 0.4f. Prints hex bits so a ULP difference is visible. */
+    static void swingKProbe(boolean gpu) {
+        FloatArray out = new FloatArray(4); out.init(0f);
+        if (gpu) {
+            TaskGraph tg = new TaskGraph("swingkprobe")
+                .transferToDevice(DataTransferMode.FIRST_EXECUTION, out)
+                .task("k", GlidingHarness::swingKProbeKernel, out)
+                .transferToHost(DataTransferMode.EVERY_EXECUTION, out);
+            WorkerGrid wg = new WorkerGrid1D(1); wg.setLocalWork(1, 1, 1);
+            GridScheduler gs = new GridScheduler("swingkprobe.k", wg);
+            new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(gs).execute();
+        } else {
+            swingKProbeKernel(out);
+        }
+        float gpuK = out.get(0), rawK = out.get(1), oneMinusK = out.get(2);
+        double jK = 0.4f; double jRecomp = 1.0 - Math.exp((1.0e-5f / 1.0e-5f) * Math.log(1.0 - jK));
+        System.out.printf(java.util.Locale.US, "%n=== SWING_K PROBE (%s runner) ===%n", gpu ? "GPU" : "CPU");
+        System.out.printf(java.util.Locale.US, "  raw     k = 0.4f                = %s  bits=0x%08x%n", ""+rawK, Float.floatToIntBits(rawK));
+        System.out.printf(java.util.Locale.US, "  %s recomputed 1-exp(log(1-k)) = %s  bits=0x%08x%n", gpu?"GPU":"CPU", ""+gpuK, Float.floatToIntBits(gpuK));
+        System.out.printf(java.util.Locale.US, "  Java double recompute → float = %s  bits=0x%08x%n", ""+(float)jRecomp, Float.floatToIntBits((float)jRecomp));
+        System.out.printf(java.util.Locale.US, "  (1-k) input to log             = %s  bits=0x%08x%n", ""+oneMinusK, Float.floatToIntBits(oneMinusK));
+        int dBits = Float.floatToIntBits(gpuK) - Float.floatToIntBits(rawK);
+        System.out.printf(java.util.Locale.US, "  ⇒ recomputed-k − raw-k = %d float-ULP  (0 ⇒ coefficient identical; ≠0 ⇒ the swing-ULP seed)%n", dBits);
+        System.out.printf(java.util.Locale.US, "  ⇒ (recomputed-k − raw-k)×1e12 [DOUBLE residual] = %s  (0 ⇒ double-identical too)%n", ""+out.get(3));
+        System.out.printf(java.util.Locale.US, "  reproduce the flip: -swingkbits 0x%08x (force CPU to this k)%n", Float.floatToIntBits(gpuK));
+    }
 
     /** GLIDING_RADIUS_SWEEP early-stop monitor: batch-means SEM of the steady-window (2nd-half) glide speed.
      *  velFitX = −LS slope of cx over [n/2, n) (the SAME estimator measureGrid reports at stop). Uncertainty via
@@ -471,8 +556,9 @@ public final class GlidingHarness {
         // fixed ⇒ k_eff constant, no kernel change). fracMove (F3 link + lever-arm bending) + fracMoveTorq (F4
         // torsion). fracR (chainParams[2]=0.1) is geometry (lever arm), NOT a rate ⇒ unchanged. Default 0.5/0.2 ⇒
         // byte-identical. k_eff = 1−(1−k)^(DT/refDt) == k at refDt (production-dt filament stiffness preserved).
-        float filFracMove = FIL_RATE ? rateFix(0.5) : 0.5f;
-        float filFracMoveTorq = FIL_RATE ? rateFix(0.2) : 0.2f;
+        // -pairsprings (fixed spring) takes PRECEDENCE over -filrate (per-time rate) for the SAME PAIRS slots (replace, not compose).
+        float filFracMove = PAIRS_SPRINGS ? springify(0.5) : (FIL_RATE ? rateFix(0.5) : 0.5f);
+        float filFracMoveTorq = PAIRS_SPRINGS ? springify(0.2) : (FIL_RATE ? rateFix(0.2) : 0.2f);
         fil.chainParams.set(0, (float) DT); fil.chainParams.set(1, filFracMove); fil.chainParams.set(2, 0.1f);
         fil.chainParams.set(3, filFracMoveTorq); fil.chainParams.set(4, 0f); fil.chainParams.set(5, 1.0e-20f);
         fil.chainParams.set(6, (float) Constants.actinMonoRadius);
@@ -571,7 +657,8 @@ public final class GlidingHarness {
         sc.bondData = new FloatArray(nMot * CrossBridgeSystem.STRIDE); sc.bondData.init(0f);
         // -alignrate: F9/F10/axlock alignment per-STEP fraction (0.4) → per-TIME rate, computed at BUILD time (DT fixed
         // ⇒ k_eff constant, no kernel change). Default 0.4f ⇒ byte-identical.
-        float alignK = ALIGN_RATE ? rateFix(0.4) : 0.4f;
+        // -alignsprings (fixed spring) takes PRECEDENCE over -alignrate (per-time rate) for the F9/F10/axlock coeff (replace, not compose).
+        float alignK = ALIGN_SPRINGS ? springify(0.4) : (ALIGN_RATE ? rateFix(0.4) : 0.4f);
         sc.xbParams = SPHEREHEAD
             // SPHERE-HEAD: freeze F9's rest at 90° (xbParams[9]=1) ⇒ the head-vs-actin ANGLE stops switching
             // (no F9 power stroke; F9 becomes the compliant ⊥ perp-MAINTAINER), so the J1 converter neck-swing
@@ -606,11 +693,23 @@ public final class GlidingHarness {
         // -dirswing: the deterministic polarity-directed power stroke replaces the J1 angular converter (whose
         // cross(lever,head) axis is degenerate at the straight rest ⇒ ill-defined swing direction). Turn the J1
         // TORSION off (jointParams[3]=0; the J1 position spring stays) so directedSwing is the sole stroke driver.
-        sc.swingParams = STROKE_RATE
+        sc.swingParams = ALIGN_SPRINGS
+                ? FloatArray.fromElements(0.4f, (float) DT, 0f, (float) NECK_ANGLE, (float) (-STROKE_REF_DT))  // -alignsprings: [4]=−refDt ⇒ FIXED-SPRING swing (springify in-kernel; precedence over -strokerate)
+                : STROKE_RATE
                 ? FloatArray.fromElements(0.4f, (float) DT, 0f, (float) NECK_ANGLE, (float) STROKE_REF_DT)   // -strokerate: [4]=refDt>0 ⇒ per-time-rate swing
                 : FloatArray.fromElements(0.4f, (float) DT, 0f, (float) NECK_ANGLE);   // STEP-2: [3]=cocked neck angle (default 60°)
+        if (SWING_K_BITS != -1) {   // BISTABILITY_ORIGIN: force the swing coeff to an EXACT float, size-4 ⇒ NO in-kernel recompute
+            // ⇒ both runners use this exact k. 0x3ecccccd = 0.4f ⇒ ≡ raw. Overrides -strokerate/-alignsprings/-ratefix swing.
+            sc.swingParams = FloatArray.fromElements(Float.intBitsToFloat(SWING_K_BITS), (float) DT, 0f, (float) NECK_ANGLE);
+        }
         if (DIRSWING) sc.jointParams.set(3, 0f);
-        if (STRUCT_RATE) {   // STRUCTURAL-MODE REFORMULATION: the PASSIVE structural position springs (J1/J2 connection +
+        if (STRUCT_SPRINGS) {   // PURE_SPRINGS: freeze the SAME structural position springs (J1/J2 connection + tail anchor)
+            // as FIXED stiffnesses via springify (precedence over -structrate). Mirrors the -structrate block but with the
+            // fixed-spring freeze-form instead of the geometric-rate; at dt=refDt springify(0.4)=0.4 ⇒ byte-identical.
+            sc.jointParams.set(1, springify(sc.jointParams.get(1)));   // J1 lever-motor connection spring
+            sc.jointParams.set(5, springify(sc.jointParams.get(5)));   // J2 rod-lever connection spring
+            sc.jointParams.set(9, springify(sc.jointParams.get(9)));   // tail-anchor spring
+        } else if (STRUCT_RATE) {   // STRUCTURAL-MODE REFORMULATION: the PASSIVE structural position springs (J1/J2 connection +
             // tail anchor) are fraction-per-step (dt-flat α=frac ⇒ the motor skeleton FREEZES as dt→0). Bring them to
             // dt-convergent per-TIME rates (same build-time rateFix as -filrate/-alignrate). fracR [2]/[6] is geometry
             // (untouched); the angular converters [3]/[7] are already OFF in glide (dirswing / j2FracMoveTorq=0). At

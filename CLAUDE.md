@@ -124,6 +124,24 @@ oracle, but its role changes across the migration:
   decorrelates the microstate (Lyapunov divergence) — bit-identity is unattainable and is not the
   test. The standard there is **aggregate-statistical agreement within SEM**, matching how v1's own
   CPU-vs-GPU runs agree.
+- **GPU-number trust rule (the CPU is the basin arbiter — standing discipline, 2026-07-08).** The gliding
+  steady state at the production operating point is **chaotic AND bistable**, and a **last-bit GPU perturbation
+  deterministically tips which basin a run lands in** — including a *flag-dependent transcendental in a hot
+  kernel* (e.g. the `-ratefix` swing `exp/log`) whose mere presence changes PTX scheduling of the surrounding
+  float math, even when it computes a bit-identical value (`BISTABILITY_ORIGIN.md`; the `-allnoise` graph-split
+  artifact). The failure mode is **silent** — a wrong basin masquerades as a stable baseline. So: **a GPU
+  gliding result REQUIRES a CPU-arbiter cross-check when** (a) it is an A/B whose arms differ in **hot-kernel
+  structure** — any flag that adds/removes a TaskGraph task or toggles an in-kernel transcendental
+  (`-bondnoise`/`-allnoise`/`-thermcorr`/`-syswide`, `-xbimplicit*`/`-segimplicit`/`-xbdash`,
+  `-canonical`/`-config1`/`-perphead`/`-lymntaylor`/`-tauavg`/`-freshread`, and — pre-promotion — `-ratefix`),
+  (b) it is an **absolute number used for validation / a reported result**, or (c) as a **periodic spot-check**
+  of the production baseline. The CPU cross-check need not be full-scale — smallest scale/window that resolves
+  the basin. **GPU is for fast exploration; the deterministic CPU runner is the basin arbiter.** The default
+  gliding formulation is now the transcendental-free **springs** path (`SPRINGS_PROMOTION.md`; default-on,
+  `-nosprings` to opt out to raw, `-nosprings -ratefix -structrate` for the rate path) specifically so the
+  *default* is not exposed to the swing-`exp/log` hazard; the residual hazard flags above are NOT covered by
+  springs and stay arbiter-gated. When in doubt, run the same A/B on the CPU runner (or a same-graph factor-1.0
+  control) and trust it.
 
 ## Porting discipline (per v1 GPU_MIGRATION_LESSONS.md)
 - **Force-coverage audit** for every ported subsystem: every force applied on exactly one path —

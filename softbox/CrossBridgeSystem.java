@@ -235,6 +235,10 @@ public final class CrossBridgeSystem {
         if (swingParams.getSize() > 4) {
             double refDt = swingParams.get(4);
             if (refDt > 0.0) k = 1.0 - Math.exp((dt / refDt) * Math.log(1.0 - k));
+            // PURE_SPRINGS (-alignsprings): [4]=−refDt ⇒ FIXED-SPRING swing. springify k→k·(dt/|refDt|): fed into the
+            // ·ang/((…)·dt) law the dt cancels to |refDt| ⇒ a fixed rotational stiffness (forward-Euler). At dt=|refDt|
+            // this is k unchanged ⇒ byte-identical to the raw swing. Math.abs lowers on PTX.
+            else if (refDt < 0.0) k = k * (dt / (-refDt));
         }
         double DEG2RAD = Math.PI / 180.0;
         for (@Parallel int m = 0; m < nM; m++) {
@@ -389,6 +393,10 @@ public final class CrossBridgeSystem {
         if (swingParams.getSize() > 4) {
             double refDt = swingParams.get(4);
             if (refDt > 0.0) k = 1.0 - Math.exp((dt / refDt) * Math.log(1.0 - k));
+            // PURE_SPRINGS (-alignsprings): [4]=−refDt ⇒ FIXED-SPRING swing. springify k→k·(dt/|refDt|): fed into the
+            // ·ang/((…)·dt) law the dt cancels to |refDt| ⇒ a fixed rotational stiffness (forward-Euler). At dt=|refDt|
+            // this is k unchanged ⇒ byte-identical to the raw swing. Math.abs lowers on PTX.
+            else if (refDt < 0.0) k = k * (dt / (-refDt));
         }
         double DEG2RAD = Math.PI / 180.0;
         for (@Parallel int m = 0; m < nM; m++) {

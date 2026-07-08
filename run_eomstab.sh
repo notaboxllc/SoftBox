@@ -10,6 +10,8 @@
 #   ./run_eomstab.sh -extimplicit    # implicit external spring (the cure control)
 #   ./run_eomstab.sh -drive          # secondary: driven-stroke settled-displacement convergence
 #   ./run_eomstab.sh -gpu            # CPU≡GPU parity on the default frozen config
+#   ./run_eomstab.sh -varprobe       # constrained-variance probe (F8 gate + full per-mode over-fluctuation sweep)
+#   ./run_eomstab.sh -vargate        # UNIFORM EQUILIBRIUM GATE (every mode, drive-ON/OFF; REQUIRED/FORBIDDEN/reform)
 TORNADOVM_HOME="$HOME/Code/TornadoVM/dist/tornadovm-4.0.1-dev-ptx-linux-amd64/tornadovm-4.0.1-dev-ptx"
 TDIR="$TORNADOVM_HOME/share/java/tornado"
 java @$TORNADOVM_HOME/tornado-argfile --enable-preview -Xmx4G \
