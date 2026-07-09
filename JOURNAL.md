@@ -1,5 +1,30 @@
 # Soft Box Project Journal
 
+# 2026-07-08 — CANONICAL COLLAPSE STAGE 2: dead paths deleted + `-faithfulrelease`→`-forcecapdetach` rename + coltol/density reclassified (canonical byte-identical)
+Destructive pass: deleted the ratified dead gliding paths, renamed the force-cap flag, reclassified the two swept
+params — canonical default byte-identical before/after on BOTH runners. **Rollback tag `post-stage1-pre-deletion-2026-07-08`
+(`1b87c72`, = committed Stage 1) pushed FIRST.** **Deleted (harness entry points + orphaned harness code; git tag
+preserves all):** rate machinery (`-ratefix`/`-strokerate`/`-alignrate`/`-filrate`/`-structrate` + `rateFix`/`rateFixAlpha`),
+the noise family (`-bondnoise`/`-allnoise`/`-thermcorr`/`-syswide`/`-uninoise` + variants + 6 Scene noise-param fields),
+failed integrators (`-xbimplicit` head-only / `-xbdash`/`-xbsat`), `-atprecharge`, `-freshread` (+ its `stepFresh`),
+motor recasts (`-hfswing`/`-rollsign`/`-mhatset`). **Guard held — NO canonical kernel body edited** (dead branches left
+inside shared `bondForces`/`directedSwing` so PTX scheduling of the canonical path is byte-unchanged; the GPU
+byte-identity gate confirms). **Two guard-driven KEEPs flagged for jba:** `-tauavg` (live param of kept phase-2
+diagnostics dCalib/catchSlipRecal/singleMolecule) and `-noatprelease`/`ATP_RELEASE` (consumed only by the kept opt-in
+`-config1` motor) — deleting either breaks a KEEP path; canonical reads neither. **RENAME (D8): `-faithfulrelease` →
+`-forcecapdetach`** (field FAITHFUL_RELEASE→FORCE_CAP_DETACH), + new **`-detachcap <pN>` (default 12)** exposing the
+was-hardcoded threshold; wired through the shared `MotorStore.setFaithfulRelease(on,pN)` (11-harness API, method name
+UNCHANGED). Off-by-default byte-identical (`setFaithfulRelease(false,12)`≡ prior `(false,0.0)`). NOT promoted (own task).
+CAP_ROW label intentionally still prints `faithfulRelease=` for old-log traceability. **RECLASSIFY (D7):** `coltol`/`density`
+marked swept-parameter placeholders (NOT canonical values); strict obligatory-input enforcement deferred to Stage 3.
+**ACCEPTANCE — byte-identical before/after, both runners, both windows:** CPU velFitX 4.583(800)/3.268(6000), GPU
+4.584/3.269 — identical to the digit; KEEP paths intact (legacy 13.057 = Stage-1; `-segimplicit`/`-forcecapdetach`/
+`-detachcap`/`-stretchcensus` all run). **No BAIL.** **HONEST STEADY BASELINE (jba's ask, 60k steps=0.6s):** canonical
+glide velFitX **2.825±0.054** µm/s (GPU 3-seed), per-bound ~0.85, CPU spot-check 2.867 (CPU≡GPU ~1%, same HIGH basin)
+— **at Vmax of the skeletal band (~1.5–4, Vmax~2.9)**; the 800-step 4.583 was a settling transient, NOT a glide speed.
+Report: `CANONICAL_COLLAPSE_STAGE2.md`. **Stage 3 (diagnostic-own-scene policy + deferred obligatory density/coltol +
+optional orphaned-method sweep + `-tauavg`/`ATP_RELEASE` disposition) awaits scoping.**
+
 # 2026-07-08 — CANONICAL COLLAPSE STAGE 1: the ratified canonical set is now the DEFAULT (byte-identical verified; tag = rollback index)
 Baked jba's ratified canonical gliding model as the sole/default path, gated on byte-identical acceptance (both
 runners). **Rollback tag `pre-canonical-collapse-2026-07-08` (`5b60b0a`) pushed FIRST.** **State finding:** at the tag,
