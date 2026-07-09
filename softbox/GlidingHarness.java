@@ -94,6 +94,7 @@ public final class GlidingHarness {
     // explicitly for any reported run. 500 is a NEUTRAL PLACEHOLDER so the harness/diagnostics can run, not a
     // canonical value. (Strict obligatory-input enforcement + per-diagnostic condition handling = Stage 3.)
     static double DENSITY = 500.0;              // -density <motors/µm²>: SWEPT condition (placeholder default; see marker above)
+    static boolean DENSITY_SET = false;         // true ⇒ -density was passed explicitly (else the main gliding run warns it is a placeholder, D7 Stage 3)
     static double NECK_ANGLE = 60.0;            // -neckangle <deg>: cocked neck-stroke rest angle (swingParams[3]); default 60 ⇒ byte-identical. STEP-2 step-size lever (step ≈ 2·L·sin(θ/2)).
     // ---- PURE_SPRINGS: the fraction-per-step → FIXED-STIFFNESS-SPRING reformulation. PROMOTED TO DEFAULT-ON (2026-07-08,
     //      SPRINGS_PROMOTION.md; GATE-1 hazard map + GATE-2 GPU==CPU basin + stability verified; jba re-baseline sign-off flagged). ----
@@ -117,6 +118,7 @@ public final class GlidingHarness {
     // -coltol explicitly for any reported run. 6 nm is a NEUTRAL PLACEHOLDER the harness needs to run (it also
     // matches the setKinParams sentinel so kinParams[7] is untouched unless overridden), NOT a canonical value.
     static double COL_TOL = 0.006;              // -coltol <nm>: SWEPT condition (placeholder default; see marker above). kinParams[7], perp tip-to-axis reach.
+    static boolean COL_TOL_SET = false;         // true ⇒ -coltol was passed explicitly (else the main gliding run warns it is a placeholder, D7 Stage 3)
     // BISTABILITY_ORIGIN: force the directedSwing coefficient swingParams[0] to an EXACT float (by its int bits), size-4
     // (NO in-kernel recompute) ⇒ BOTH runners use that exact float k. Replicates the GPU ratefix swing-ULP on the CPU:
     // the GPU-ratefix flip's only in-kernel difference from raw is this coefficient. Default -1 ⇒ untouched/byte-identical.
@@ -220,7 +222,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-fext")) F_EXT = Double.parseDouble(args[++i]);                    // sustained external load (pN)
             else if (args[i].equals("-acorr")) ACORR = true;                                            // J1-strain autocorrelation diagnostic
             else if (args[i].equals("-xcatch")) XCATCH = Double.parseDouble(args[++i]);                  // catch distance d override (nm)
-            else if (args[i].equals("-density")) DENSITY = Double.parseDouble(args[++i]);                // motor density (speed-density trend)
+            else if (args[i].equals("-density")) { DENSITY = Double.parseDouble(args[++i]); DENSITY_SET = true; }   // motor density (SWEPT condition, D7)
             else if (args[i].equals("-dcalib")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; DCALIB = true; }  // catch force-sensitivity calibration
             else if (args[i].equals("-csrecal")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; CSRECAL = true; }  // step-4c catch-slip recalibration
             else if (args[i].equals("-stiffsweep")) { CONFIG1 = true; STIFFSWEEP = true; }   // step-4d κ+angle sensitivity (measurement-only)
@@ -249,7 +251,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
             else if (args[i].equals("-neckangle")) NECK_ANGLE = Double.parseDouble(args[++i]);   // STEP-2 step-size lever: cocked neck rest angle (deg)
             else if (args[i].equals("-ratescale")) RATE_SCALE = Double.parseDouble(args[++i]);   // STEP-3 cycle-rate lever: ×scale on kOff + all nucleotide rates
-            else if (args[i].equals("-coltol")) COL_TOL = Double.parseDouble(args[++i]) * 1.0e-3;  // CAPTURE-RADIUS sweep: bind reach in nm → µm (kinParams[7])
+            else if (args[i].equals("-coltol")) { COL_TOL = Double.parseDouble(args[++i]) * 1.0e-3; COL_TOL_SET = true; }  // CAPTURE-RADIUS sweep: bind reach nm→µm (kinParams[7], D7)
             else if (args[i].equals("-aeta")) AETA = Double.parseDouble(args[++i]);   // VISCOSITY DIAGNOSTIC: filament/medium viscosity (Pa·s); default 0.1 ⇒ byte-identical
             else if (args[i].equals("-stretchcensus")) STRETCHCENSUS = true;                       // STEP-3 read-only bound-population geometry census
             else if (args[i].equals("-ktotcensus")) KTOT_CENSUS = true;                            // STEP-3 read-only per-segment K_tot vs instability-threshold census
@@ -289,10 +291,10 @@ public final class GlidingHarness {
         if (LYMN_TAYLOR && !ALLOW_BIND_ANY) ADPPI_BIND = true;
 
         for (String a : args) if (a.equals("-forcetest")) { forceTest(); return; }
-        if (STIFFSWEEP) { stiffnessAngleSweep(); return; }   // step-4d: builds its own minimal one-shot scenes
-        if (HEADTILT_SWEEP) { headTiltSweep(); return; }     // Stage-1 θ sweep (single-motor force decomp, off-axis bind)
-        if (FORCEDECOMP) { forceDecomp(); return; }          // force decomposition: builds its own single-motor transport scene
-        if (BOUNDGEOM) { boundGeom(); return; }              // bound-state geometry: builds its own single-motor transport scene
+        if (STIFFSWEEP) { diagMark("stiffnessAngleSweep: analytic phase-2 κ/angle sensitivity (no dynamics scene)"); stiffnessAngleSweep(); return; }   // step-4d: builds its own minimal one-shot scenes
+        if (HEADTILT_SWEEP) { diagMark("headTiltSweep: config-1/perp single-motor force-decomp, RAW chainParams, dt=1e-6"); headTiltSweep(); return; }     // Stage-1 θ sweep (single-motor force decomp, off-axis bind)
+        if (FORCEDECOMP) { diagMark("forceDecomp: config-1/perp single-motor force-decomp, RAW chainParams, dt=1e-6"); forceDecomp(); return; }          // force decomposition: builds its own single-motor transport scene
+        if (BOUNDGEOM) { diagMark("boundGeom: config-1 single-motor bound geometry, RAW chainParams, dt=1e-6"); boundGeom(); return; }              // bound-state geometry: builds its own single-motor transport scene
 
         System.out.println("=== Soft Box increment 4b-iv — gliding assay (cheap probe)" + (CANONICAL ? " [PHASE-2 CANONICAL Version-B two-point motor]" : "") + " ===");
         Scene sc = buildScene();
@@ -320,15 +322,24 @@ public final class GlidingHarness {
         if (STRUCT_SPRINGS) System.out.printf(java.util.Locale.US, "  -structsprings: STRUCTURAL J1/J2/anchor frozen as FIXED SPRINGS. 0.4→%.4f (springify, build-time jointParams[1]/[5]/[9]) at dt=%.2e (refDt=%.2e). Byte-identical at refDt.%n", springify(0.4), DT, STROKE_REF_DT);
         if (PAIRS_SPRINGS && ALIGN_SPRINGS && STRUCT_SPRINGS) System.out.printf(java.util.Locale.US, "  [SPRINGS DEFAULT-ON: canonical transcendental-free formulation (SPRINGS_PROMOTION). Byte-identical at production dt=1e-5; diverges only below refDt. Use -nosprings to restore raw.]%n");
         if (SWING_K_BITS != -1) System.out.printf(java.util.Locale.US, "  -swingkbits: swing coeff FORCED to %s (bits 0x%08x), size-4 (no in-kernel recompute); both runners. (0.4f=0x3ecccccd.)%n", ""+Float.intBitsToFloat(SWING_K_BITS), SWING_K_BITS);
-        if (SWING_K_PROBE) { swingKProbe(gpu); return; }
+        if (SWING_K_PROBE) { diagMark("swingKProbe: kernel swing-coefficient extraction (no physics scene)"); swingKProbe(gpu); return; }
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
-        if (CSRECAL) { catchSlipRecal(Math.max(M, 14000)); return; }
-        if (DCALIB) { dCalib(Math.max(M, 25000)); return; }
-        if (SINGLE) { singleMolecule(sc, Math.max(M, 30000)); return; }
-        if (CANON_DIAG) { canonDiag(sc, Math.max(M, 12000)); return; }
+        if (CSRECAL) { diagMark("catchSlipRecal: phase-2 config-1 single-molecule catch-slip recalibration"); catchSlipRecal(Math.max(M, 14000)); return; }
+        if (DCALIB) { diagMark("dCalib: phase-2 config-1 single-molecule catch force-sensitivity"); dCalib(Math.max(M, 25000)); return; }
+        if (SINGLE) { diagMark("singleMolecule: phase-2 config-1 single-molecule duty assay"); singleMolecule(sc, Math.max(M, 30000)); return; }
+        if (CANON_DIAG) { diagMark("canonDiag: phase-2 canonical two-point binder instrument (config-1)"); canonDiag(sc, Math.max(M, 12000)); return; }
         if (diag) { diagnose(sc, Math.max(M, 8000)); return; }
         if (cycldiag) { cyclediag(sc, Math.max(M, 8000)); return; }
         if (BRAKEDIAG) { brakeDiagnose(sc, Math.max(M, 12000)); return; }
+        // D7 (Stage 3): density/coltol are SWEPT experimental conditions, not canonical operating points. The main
+        // gliding run loudly flags any un-passed one so a placeholder can never be silently reported as a chosen value.
+        // (Not a hard error — that would break run_gliding.sh's documented bare probe and several KEEP scripts.)
+        if (!DENSITY_SET || !COL_TOL_SET)
+            System.out.printf(java.util.Locale.US, "  [SWEPT-PARAM WARNING] %s%s%s — PLACEHOLDER value(s), NOT a canonical operating point. Pass %s explicitly for any REPORTED gliding run (D7).%n",
+                    (!DENSITY_SET ? "-density defaulted to " + DENSITY + "/µm²" : ""),
+                    (!DENSITY_SET && !COL_TOL_SET ? ", " : ""),
+                    (!COL_TOL_SET ? "-coltol defaulted to " + (COL_TOL * 1e3) + " nm" : ""),
+                    (!DENSITY_SET && !COL_TOL_SET ? "both" : (!DENSITY_SET ? "-density" : "-coltol")));
         if (grid) { measureGrid(sc, M, gpu); return; }
         if (ztrace) { ztrace(sc, M, gpu); return; }
         if (assistlog) { assistLog(sc, M, gpu); return; }
@@ -356,6 +367,15 @@ public final class GlidingHarness {
      *  in-kernel ⇒ pinned bodies 1/γ→0 honoured). Forward-Euler ⇒ Δ = k·(DT/refDt)·gap; at DT==refDt Δ==k·gap
      *  (byte-identical to the raw law); at finer DT a strictly smaller, monotone-stable (α=k·DT/refDt≤k<1) step. */
     static float springify(double k) { return (float) (k * (DT / STROKE_REF_DT)); }
+
+    /** CANONICAL COLLAPSE Stage 3: emit a visible banner so no diagnostic can be MISTAKEN for a canonical
+     *  production run. These probes deliberately run a NON-canonical model (phase-2 config-1/perp motor, a raw-law
+     *  fine-dt single-motor scene, or a bare kernel probe) — that is the correct thing for what they measure, but
+     *  it is NOT the canonical default (sphere-head + springs + Lymn-Taylor @ dt=1e-5). Label only — byte-identical. */
+    static void diagMark(String what) {
+        System.out.println("  [NON-CANONICAL DIAGNOSTIC] " + what
+            + " — does NOT run the canonical production model (sphere-head+springs+Lymn-Taylor @dt=1e-5). See CANONICAL_COLLAPSE_STAGE3.md.");
+    }
 
     /** BISTABILITY_ORIGIN probe kernel: compute the ratefix in-kernel swing coefficient EXACTLY as
      *  directedSwing does (k=(double)0.4f; k=1−exp((dt/refDt)·log(1−k))), and write (float)k. Run on the
@@ -2616,7 +2636,7 @@ public final class GlidingHarness {
         long capFires = 0, boundStepsTot = 0;
         for (int m = 0; m < sc.mot.nMotors; m++) { capFires += sc.mot.capStats.get(m); boundStepsTot += sc.mot.stats.get(2*m); }
         double capRate = boundStepsTot > 0 ? (double) capFires / boundStepsTot : 0.0;
-        System.out.printf("  CAP_ROW seed=0x%X faithfulRelease=%s capFires=%d boundSteps=%d capRatePerBoundStep=%.5f%n",
+        System.out.printf("  CAP_ROW seed=0x%X forcecapdetach=%s capFires=%d boundSteps=%d capRatePerBoundStep=%.5f%n",   // label mechanism-named 2026-07-08 (was faithfulRelease=; flag -faithfulrelease→-forcecapdetach)
                 SEED, FORCE_CAP_DETACH ? "ON" : "OFF", capFires, boundStepsTot, capRate);
         // dt-convergence (measurement-only): whole-run detachment rate + mean bound dwell from mot.stats
         // (stats[2m]=bound steps, stats[2m+1]=releases). detachRate = releases/(boundSteps·dt) is a per-second
