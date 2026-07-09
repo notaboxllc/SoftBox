@@ -429,7 +429,7 @@ catch-slip release, which at zero force = kOff·dt) reproduce the analytic off-r
 does NOT apply (v1 binds deterministically) and v1's avgBound≈7.6 needs the 4b power-stroke force —
 neither is a 4a gate (planner decision: faithful mechanism). FDT/deflection/chain/broad-phase all
 reproduce their pre-inc-4 numbers (bound motors apply no force — verified). New: `MotorStore`,
-`BindingDetectionSystem`, `MotorBindingHarness`, `run_motor.sh`; +`SpatialBodyView.STORE_MOTOR`. See
+`BindingDetectionSystem`, `MotorBindingHarness`, `scripts/run_motor.sh`; +`SpatialBodyView.STORE_MOTOR`. See
 JOURNAL 2026-06-14 (inc 4a).
 
 **Increment 4b-i — DONE.** Re-architected `MotorStore` from 4a's single point into v1's 3-body
@@ -447,7 +447,7 @@ on the aggregate joint statistics (microstate diverges only at float-noise level
 like v1's own CPU-vs-GPU gliding). FDT/deflection/chain/broad-phase/4a-binding all bit-identical
 (FilamentStore now embeds `RigidRodBody` via array aliasing; `DragTensorSystem` shares the rod-drag
 formula — verified D_par 1.11676e-1, deflection 0.99832 unchanged). New: `RigidRodBody`,
-`MotorJointSystem`, `TailAnchorSystem`, `MotorBodyHarness`, `run_motorbody.sh`. See JOURNAL 2026-06-14
+`MotorJointSystem`, `TailAnchorSystem`, `MotorBodyHarness`, `scripts/run_motorbody.sh`. See JOURNAL 2026-06-14
 (inc 4b-i).
 
 **Increment 4b-ii — DONE.** The myosin cross-bridge (`CrossBridgeSystem`: F8 spring + F9/F10 alignment
@@ -461,21 +461,21 @@ forceSum/torqueSum. Gated EXACT: the gathered force+torque == a brute-force per-
 (ΔF ~7e-19 N — float32 last-bit). 4a binding re-exercised on the new head sub-body (12/12 bound, 3/seg ⇒
 multi-motor gather). Force-coverage: F8 +F head / −F segment, F9/F10 −T head / +T segment, each once.
 Fixed rest angles + pinned filament ⇒ no stroke, no motion, no gliding. Existing paths unaffected (only
-new files added). New: `CrossBridgeSystem`, `MotorXBridgeHarness`, `run_xbridge.sh`; +CLAUDE.md CPU≡GPU
+new files added). New: `CrossBridgeSystem`, `MotorXBridgeHarness`, `scripts/run_xbridge.sh`; +CLAUDE.md CPU≡GPU
 validation-standard note. See JOURNAL 2026-06-14 (inc 4b-ii).
 
 **Increment 4b-iii (new physics) — DONE.** The nucleotide cycle (`NucleotideCycleSystem`, 4-state
 NONE→ATP→ADPPi→ADP, ~5 rates from Env.java, load-gated ADP→NONE via the forceDotFil 10-window average)
 + the state-dependent rest-angle switch (J1 0°↔60°, motor–actin 90°↔120°, by `isCocked()`) generate the
 power stroke (emergent, not an invented force) + the full force-dependent catch-slip release. Validated
-on a PINNED filament (the stroke checkpoint, `run_stroke.sh`), 5 sharpened gates PASS: (1) cycle dwell
+on a PINNED filament (the stroke checkpoint, `scripts/run_stroke.sh`), 5 sharpened gates PASS: (1) cycle dwell
 times == rate·dt (5.0/984/9.95/98.8 vs 5/1000/10/100 steps; cycle ≈0.011 s) — the 4-state analog of 4a's
 residence-time check; (2) regression guard — constant ADPPi reproduces 4b-i/ii exactly; (3) unloaded
 stroke ≈7 nm (realistic myosin working stroke, lever-scale); (4) the cycling motors pulse a net −x force
 into the pinned filament (the glide direction); (5) catch-slip unbind rate responds to forceDotFil load
 (100→59→37→20 /s at 0→4 pN); (6) CPU≡GPU aggregate-within-SEM (force-gated cycle decorrelates). New:
 `NucleotideCycleSystem` + state-switching in `MotorJointSystem`/`CrossBridgeSystem` + `MotorStrokeHarness`
-+ `run_stroke.sh`. Existing paths bit-identical (FDT/deflection/broad-phase/4a/4b-i/ii). See JOURNAL
++ `scripts/run_stroke.sh`. Existing paths bit-identical (FDT/deflection/broad-phase/4a/4b-i/ii). See JOURNAL
 2026-06-14 (inc 4b-iii).
 
 **Increment 4b-iv (gliding assay) — CLOSED (2026-06-16). Residual accepted.** Assembled 4a–4b-iii + the
@@ -569,7 +569,7 @@ torsion/Arp2/3 — 5b/5c/later). Validated vs `BoA-v1ref` on two co-developed st
 τ=273.84 steps matches the analytic-from-v1-arithmetic to **0.0012 %**, **dt-invariant to 0.0000 %**);
 gather==brute bit-identical; **CPU≡GPU** (force+gather bit-identical, pose float32 last-bit); **all-OFF≡HEAD**
 (crosslinker pipeline over nLinks=0 ≡ bare filament path, bit-identical). `GlidingHarness`/production
-**byte-unchanged**. New: `CrosslinkerStore`, `CrosslinkerSystem`, `CrosslinkerHarness`, `run_xlink.sh`,
+**byte-unchanged**. New: `CrosslinkerStore`, `CrosslinkerSystem`, `CrosslinkerHarness`, `scripts/run_xlink.sh`,
 `SpatialBodyView.STORE_CROSSLINKER=2`. Report: `docs/INC5A_CROSSLINKER_FINDINGS.md`; JOURNAL 2026-06-16 (5a).
 ```
 ./run_xlink.sh              # GPU TaskGraph + CPU cross-check (rest hold, decay constant, gather, all-OFF≡HEAD)
@@ -662,7 +662,7 @@ formation gate bit-faithful (funnel matches on identical config), **conc-scaling
 `xLinkConc`→halve formation, 2.0×). **Open/PAUSED: a residual ~3.5× walls-off link-count gap** (v1
 22.5±1.3 vs v2 6.5±1.0 @ step 1500, 6-seed ensemble) — NOT within SEM; excluded gate/diffusion/unbinding/
 conc-scaling as the cause; residual is in the crossing-population time-evolution (subtle coupling, not
-root-caused). New: `CrosslinkerBundleHarness`, `run_xlinkbundle.sh`; report `docs/INC5C-iii_PHASE2_FINDINGS.md`.
+root-caused). New: `CrosslinkerBundleHarness`, `scripts/run_xlinkbundle.sh`; report `docs/INC5C-iii_PHASE2_FINDINGS.md`.
 ```
 ./run_xlinkbundle.sh -cpu -nfil 200            # CPU assembled run + stability
 ./run_xlinkbundle.sh -cpugpu -nfil 200         # GPU mechanics vs CPU (aggregate-within-SEM)
@@ -708,7 +708,7 @@ fluctuation shift of the bounded θ coord, NOT drift — §8 posture: gated on F
 number); (E) CPU≡GPU det 3.5e-6 µm / Brownian Δ0.000°; (F) all-OFF≡HEAD bit-identical. **TornadoVM gotcha
 (reuse for 6b):** the rod-link math must be inlined into the top-level @Parallel kernel — a helper with 2×
 inlined `moveC` exceeds the 600-node inlined-callee cap. New: `DimerStore`, `DimerCouplingSystem`,
-`MyosinDimerHarness`, `run_dimer.sh`. Report: `docs/INC6A_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6a).
+`MyosinDimerHarness`, `scripts/run_dimer.sh`. Report: `docs/INC6A_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6a).
 ```
 ./run_dimer.sh              # GPU + CPU cross-check (32 dimers / 64 motors): gates A–F
 ./run_dimer.sh -cpu         # CPU runner only (triage)
@@ -736,7 +736,7 @@ at `myo1.myoRod.end1` → an **axial** backbone attach point + an align torque t
 hold (Brownian-off exact fixed point, Brownian-on bounded thermal); (C) **CPU≡GPU** det 4.5e-6 µm; (D) FDT
 self-consistency (stationary, dt-a-physics-param); (E) **all-OFF≡HEAD** bit-identical. `CrossBridgeSystem`
 byte-unchanged (CSR reused verbatim); production byte-unchanged; `BoA-v1ref` byte-clean. New:
-`MiniFilamentStore`, `MiniFilamentSystem`, `MiniFilamentHarness`, `run_minifil.sh`. Report:
+`MiniFilamentStore`, `MiniFilamentSystem`, `MiniFilamentHarness`, `scripts/run_minifil.sh`. Report:
 `docs/INC6B_MINIFILAMENT_FINDINGS.md`; JOURNAL 2026-06-17 (6b).
 ```
 ./run_minifil.sh            # GPU + CPU cross-check (8 backbones × 16 dimers): gates A–E
@@ -756,7 +756,7 @@ PASS GPU+CPU: (#1) force transmission — fil gather==brute bit-identical + mome
 both-bound =0); (#3) translocation — free dimer walks **+9.38 nm +x toward the actin plus-end** (the Newton
 reaction to 4b-iii's −x FILAMENT force; the free MOTOR walks opposite the surface-assay filament glide —
 emergent, v1 informational); (#5) **all-OFF≡HEAD** dimer-off ≡ single-motor/4b-iii path bit-identical. New:
-`DimerGlideHarness`, `run_dimerglide.sh`; modified `DimerCouplingSystem`/`MyosinDimerHarness`/
+`DimerGlideHarness`, `scripts/run_dimerglide.sh`; modified `DimerCouplingSystem`/`MyosinDimerHarness`/
 `MiniFilamentHarness` (+boundSeg gate, re-validated). `CrossBridge` + production byte-unchanged; `BoA-v1ref`
 byte-clean. Report: `docs/INC6_GLIDE_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6-glide part 1).
 ```
@@ -780,7 +780,7 @@ geometry, next). Two INDEPENDENT single-ended gathers/step (backbone-keyed + seg
 7.4e-7/1.1e-7 µm (300 loaded steps); (#2) binding gates at population scale — 16 dimers mixed states, align
 fires 11/suppressed 5, all match v1; (#3) bipolar collective (observe) — FREE backbone walks +10.85 nm, sign
 tracks the gathered net; (#5) all-OFF≡HEAD bit-identical + control. Regression guard: 6a/6b/dimer-glide all
-re-ran bit-identical PASS. New: `MiniGlideHarness`, `run_miniglide.sh`. Report:
+re-ran bit-identical PASS. New: `MiniGlideHarness`, `scripts/run_miniglide.sh`. Report:
 `docs/INC6_GLIDE_MINIFIL_FINDINGS.md`; JOURNAL 2026-06-17 (6-glide part 2).
 ```
 ./run_miniglide.sh         # GPU + CPU cross-check: #1 gather-under-load, #2 gates, #3 bipolar, #5 all-OFF
@@ -820,7 +820,7 @@ was the dominant fix — without it the free minifilament's drift over-stretched
 SHARED FAITHFUL PHYSICS, quantitatively matched** (no bug; the original low-tension was the deleted bespoke
 version, the bursty-high was the missing cap). Step-3 force-coverage audit (`-audit`): pin `forceSum` = chain +
 gather, residual 0, pin force purely chain-transmitted (the `jointForceSum`-omission gotcha cannot occur). New:
-`PinSystem`, `ContractileAssayHarness`, `run_contractile.sh`. Report: `docs/INC6_CONTRACTILE_ASSAY_FINDINGS.md`
+`PinSystem`, `ContractileAssayHarness`, `scripts/run_contractile.sh`. Report: `docs/INC6_CONTRACTILE_ASSAY_FINDINGS.md`
 (§4/§6b/§7b); spec: `docs/INC6_CONTRACTILITY_ASSAY_SURVEY.md`; JOURNAL 2026-06-17. Optional next: port v1's confining
 chamber box (removes the residual mild drift).
 ```
@@ -886,7 +886,7 @@ the real pathway; #3 the 12 pN cap fires on a 13 pN node bond (capStats=1); #4 c
 body (0.180→0.167 µm); #5 fixed anchor Δpose=0 under load; #6 all-OFF≡HEAD bit-identical + control.
 **TornadoVM:** 20 logical tether args → 15 via planar packing (`attachKey`=node|motor, `radial`=X|Y|Z,
 signed `attachCoeffK` carries atEnd1) + in-kernel zVec. **Seam #1 (separable motor/nucleation) kept OPEN**
-for Stage B. New files only: `NodeStore`, `NodeSystem`, `ProteinNodeHarness`, `run_node.sh`; no shared file
+for Stage B. New files only: `NodeStore`, `NodeSystem`, `ProteinNodeHarness`, `scripts/run_node.sh`; no shared file
 touched ⇒ prior harnesses byte-unchanged (minifil+dimer re-run PASS); `BoA-v1ref` byte-clean; production
 untouched; node default-off. Report: `docs/INC6C_NODE_STAGEA_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
@@ -976,7 +976,7 @@ minifilament ⇒ no v1 numeric oracle for a node, §8); #3 CPU≡GPU (determinis
 →0.00033 pN); #5 the chamber confines the free node (entity-agnostic, no-op inside bit-identical, inward
 past a wall). **Free (default) vs fixed-anchor (`-anchor`, the ring's mode)** both validated, same regime.
 Nucleation OFF (exercises the MOTOR-function). New files only (`NodeContractileHarness`,
-`run_nodecontract.sh`) ⇒ prior harnesses bit-identical (node/minifil/contractile/dimer re-run PASS);
+`scripts/run_nodecontract.sh`) ⇒ prior harnesses bit-identical (node/minifil/contractile/dimer re-run PASS);
 `BoA-v1ref` byte-clean; production untouched. Report: `docs/INC6_NODE_CONTRACTILE_FINDINGS.md`; JOURNAL
 2026-06-18. **Foreshadows the post-node fixed-anchor contractile RING.**
 ```
@@ -1010,7 +1010,7 @@ conservatively + slows as it drains; (4) growing-end (contour 0.086→2.50 µm/2
 0.00); (7) drag-clamp fidelity (3-monomer seed clamps to stdSegLength·mono — **faithful to v1
 FilSegment:409-419**, recon flag c); (8) participates + dt-stable (80k Brownian steps, bounded, chain
 reciprocal valid). **Default-OFF; B1/B2/node regressions bit-identical.** New files only:
-`GrowthSystem`/`GrowthStore`/`GrowthHarness`/`run_growth.sh` +3 Constants additions (no existing value
+`GrowthSystem`/`GrowthStore`/`GrowthHarness`/`scripts/run_growth.sh` +3 Constants additions (no existing value
 changed) ⇒ prior harnesses byte-unchanged; `BoA-v1ref` byte-clean; production untouched. Report:
 `docs/INC6C_POLYMERIZATION_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
@@ -1026,7 +1026,7 @@ length (split children persist without turnover; a tip with no free slot simply 
 
 **Increment 6c — Test B: the SCPR primitive (two nodes capture-and-pull) — Gate 0 PASS; Stage 1 assembled
 (2026-06-18).** The first **emergent** test (porting→emergence). **Pure COMPOSITION** of validated pieces —
-NO new force law / gather / shared-kernel edit; new files only (`TestBScprHarness`, `run_testb.sh`) ⇒ prior
+NO new force law / gather / shared-kernel edit; new files only (`TestBScprHarness`, `scripts/run_testb.sh`) ⇒ prior
 assays + production byte-unchanged, `BoA-v1ref` byte-clean. **Gate 0 (GATING) PASS — cross-node capture works:**
 the one real unknown was whether binding rejects a foreign-node segment / filters on `seedNode`; it does NOT —
 `seedNode` is **structurally absent** from `BindingDetectionSystem`/`CrossBridgeSystem`/`SpatialGrid`/
@@ -1136,7 +1136,7 @@ nucleation now FULLY initializes the newborn via `NodeNucleationSystem.initNewbo
 `segLength=seedLen`) + `AgingSystem.nucleateFreshAtp` (`nucFrac=(1,0,0)`) — additive, mirroring the split
 `splitWire`+`splitInheritNuc` precedent (the `tagSeeds` rank→slot iteration, race-free); drag via `recomputeDrag`.
 Audit found EXACTLY those two stale fields (+ geometry `segLength`), not a broad newborn-init. Validated by the
-**FIRST turnover + nucleation coexistence** (the ring precondition, `DeadSlotReuseHarness`/`run_deadslot.sh`): 2250
+**FIRST turnover + nucleation coexistence** (the ring precondition, `DeadSlotReuseHarness`/`scripts/run_deadslot.sh`): 2250
 dead-slot reuses all correct, **conservation EXACT** through the recycle, **CPU≡GPU bit-identical**, a fix-OFF
 control reproducing the exact `actinSeed·#reuse` deficit, turnover-only/nucleation-only regressions unchanged.
 `BoA-v1ref` byte-clean; production untouched; default-off. Report: `docs/INC7_DEADSLOT_FIX_FINDINGS.md`.
@@ -1146,7 +1146,7 @@ control reproducing the exact `actinSeed·#reuse` deficit, turnover-only/nucleat
 ```
 
 **Increment 7 → Ring — EXPERIMENT: a 3×3 net of nucleating, treadmilling nodes — DONE (2026-06-22). The net
-COALESCES.** The first multi-node SCPR coalescence test (`Ring3x3Harness`/`run_ring3x3.sh`): 9 free, box-confined
+COALESCES.** The first multi-node SCPR coalescence test (`Ring3x3Harness`/`scripts/run_ring3x3.sh`): 9 free, box-confined
 protein nodes in a 3×3 grid, each sprouting 4–6 **randomly-oriented treadmilling** formin filaments + the validated
 myosin shell, capture one another's filaments and **contract into a single connected 9-node cluster (RMS extent
 −41%)** via the **scheme-0 soft tether — SUFFICIENT (no scheme-1 signal)**. **Pure COMPOSITION** (generalises Test
@@ -1202,7 +1202,7 @@ barbed growth, or end2-aware recycling) — the formin-pinned single-tip mode ca
 ```
 
 **FULL-SYSTEM DEMONSTRATION — the maximal-composition contractile network — DONE (2026-06-22); NEXT: GET IT ON THE
-GPU.** `FullSystemDemoHarness` (+ `run_fulldemo.sh`) composes EVERY validated subsystem in one shallow in-vitro
+GPU.** `FullSystemDemoHarness` (+ `scripts/run_fulldemo.sh`) composes EVERY validated subsystem in one shallow in-vitro
 chamber at faithful KIN=1 rates: protein NODES nucleating biochemically-active treadmilling formin filaments
 (growth+depoly+aging+severing) + free myosin MINIFILAMENTS binding/contracting + O(N) CROSSLINKER bundling +
 CONTAINMENT, all on one shared `FilamentStore.forceSum`. PURE COMPOSITION (no new force law/gather/shared-kernel
