@@ -3,8 +3,8 @@
 #   ./view_run.sh [N [M]]      (defaults: N=200 rods, M=20000 steps)
 # Output-only: uses the -3js frame-dump path; does not run / affect the FDT validation.
 set -e
-cd "$(dirname "$0")"
-./build.sh
+cd "$(dirname "$0")/.."
+scripts/build.sh
 OUTDIR="threejs_output"
 TORNADOVM_HOME="$HOME/Code/TornadoVM/dist/tornadovm-4.0.1-dev-ptx-linux-amd64/tornadovm-4.0.1-dev-ptx"
 TDIR="$TORNADOVM_HOME/share/java/tornado"

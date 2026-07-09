@@ -191,8 +191,8 @@ package. Two helper scripts:
 > debug runner, and the expected steps/s. Never let a big run silently fall back to CPU.
 
 ```
-./build.sh                 # javac -g --release 21 --enable-preview, tornado-api on the classpath
-./run_gpu.sh [N [M_trans]] # java @tornado-argfile … softbox.DiffusionHarness   (FDT validation)
+./scripts/build.sh                 # javac -g --release 21 --enable-preview, tornado-api on the classpath
+./scripts/run_gpu.sh [N [M_trans]] # java @tornado-argfile … softbox.DiffusionHarness   (FDT validation)
 ```
 
 **CPU validation runner (`-cpu`).** Any harness mode accepts `-cpu`, which runs the *same* system
@@ -202,9 +202,9 @@ made executable: one physics implementation, two runners. It is a debug/triage i
 increment 3+ (physics-logic bug vs PTX-lowering bug), not a production path. Append `-cpu` to any
 invocation:
 ```
-./run_gpu.sh -cpu                  # FDT on the CPU runner
-./run_gpu.sh -deflect -cpu         # static deflection ratio on the CPU runner
-./run_gpu.sh -chain <dir> -cpu     # free chain / connectivity on the CPU runner
+./scripts/run_gpu.sh -cpu                  # FDT on the CPU runner
+./scripts/run_gpu.sh -deflect -cpu         # static deflection ratio on the CPU runner
+./scripts/run_gpu.sh -chain <dir> -cpu     # free chain / connectivity on the CPU runner
 ```
 GPU≡CPU agreement (validated): FDT D's bit-identical to printed precision; deflection ratio
 0.99831(GPU)/0.99832(CPU); chain joint-gap/end-to-end/bend-RMS bit-identical — all within float32
@@ -213,9 +213,9 @@ last-bit tolerance (see JOURNAL 2026-06-13, CPU validation runner).
 **Characterize a filament (inc 2b, manual tuning).** One command → `{deflection ratio, τ_meas/τ_theo,
 Lp_meas}` for the current coefficients (override `-fracR <v>`/`-fmt <v>`; BRotCoeff via Constants):
 ```
-./run_gpu.sh -characterize                 # ~40s; ratio + tau (Brownian off) + Lp (Brownian on)
-./run_gpu.sh -deflect 11 60000 -fracR 0.1  # just deflection ratio + tau
-./run_gpu.sh -lp 539 60000 -fmt 0.05       # just Lp (tangent-correlation C(s) + weighted log-fit)
+./scripts/run_gpu.sh -characterize                 # ~40s; ratio + tau (Brownian off) + Lp (Brownian on)
+./scripts/run_gpu.sh -deflect 11 60000 -fracR 0.1  # just deflection ratio + tau
+./scripts/run_gpu.sh -lp 539 60000 -fmt 0.05       # just Lp (tangent-correlation C(s) + weighted log-fit)
 ```
 Measurement/reporting only — the v1 auto-tune coefficient-search loop is deliberately NOT ported.
 Lp/τ are instruments validated against v1's *measurement* (fixtures/filament_characterization_v1.md),
@@ -225,8 +225,8 @@ not biological-target gates.
 v1 viewer's schema; off by default, the FDT path is byte-for-byte unaffected.
 
 ```
-./view_run.sh [N [M]]      # dump a small free-rod viz run (default N=200, M=20000) to threejs_output/
-./run_gpu.sh -chain <dir> [nSeg [M]]   # inc 2a: free Brownian filament chain (default 16 seg, 40000)
+./scripts/view_run.sh [N [M]]      # dump a small free-rod viz run (default N=200, M=20000) to threejs_output/
+./scripts/run_gpu.sh -chain <dir> [nSeg [M]]   # inc 2a: free Brownian filament chain (default 16 seg, 40000)
                                        #   dumps frames to <dir> + reports the joint-continuity gap
 python3 sim_server.py 8000 # serve from ~/Code/SoftBox; then open
                            #   http://localhost:8000/sim_viewer_boa.html  (Recent picker, newest)
@@ -237,8 +237,8 @@ broad-phase over the `SpatialBodyView` (bounding spheres), gated by exact set-eq
 brute force on both GPU and `-cpu`, CSR bit-identical CPU↔GPU, O(N) vs O(N²) scaling.
 **Infrastructure only — writes no forces** (first narrow-phase consumer is motors, inc 4):
 ```
-./run_grid.sh [N [M]]        # default 512 2000; GPU run + CPU cross-check (grid==brute, CSR bit-identity)
-./run_grid.sh -cpu [N [M]]   # CPU runner only (triage mode)
+./scripts/run_grid.sh [N [M]]        # default 512 2000; GPU run + CPU cross-check (grid==brute, CSR bit-identity)
+./scripts/run_grid.sh -cpu [N [M]]   # CPU runner only (triage mode)
 ```
 **Motor-binding test (inc 4a, first narrow-phase consumer).** Myosin motors as a second entity type +
 publisher into the SAME `SpatialBodyView`; `BindingDetectionSystem` consumes the broad-phase candidate
@@ -247,9 +247,9 @@ runs faithful v1 kinetics (deterministic bind, catch-slip release = kOff·dt at 
 reachable-set exactness vs brute force (both runners), the analytic off-rate, and CPU≡GPU bit-identity.
 **Bound motors apply NO force this increment** (no power stroke/surface/gliding — all 4b):
 ```
-./run_motor.sh                  # GPU + CPU cross-check (default M=3000): reachable exact, off-rate, CPU≡GPU
-./run_motor.sh -cpu             # CPU runner only (triage)
-./run_motor.sh -3js threejs_motor   # dump viewer frames (bound motors red + link to segment)
+./scripts/run_motor.sh                  # GPU + CPU cross-check (default M=3000): reachable exact, off-rate, CPU≡GPU
+./scripts/run_motor.sh -cpu             # CPU runner only (triage)
+./scripts/run_motor.sh -3js threejs_motor   # dump viewer frames (bound motors red + link to segment)
 ```
 The broad-phase + grid + FilamentStore are UNCHANGED — only new files (`MotorStore`,
 `BindingDetectionSystem`, `MotorBindingHarness`) + one `SpatialBodyView` constant (`STORE_MOTOR`).
@@ -261,9 +261,9 @@ bed of anchored motors holds its articulated shape under Brownian — NO filamen
 gliding (those are 4b-ii/4b-iii). Gated by bounded+non-growing joint gaps, J1 angle about its rest, and
 CPU≡GPU on the aggregate joint statistics:
 ```
-./run_motorbody.sh              # GPU + CPU cross-check (64 motors, M=5000, dt=1e-5)
-./run_motorbody.sh -cpu         # CPU runner only (triage)
-./run_motorbody.sh -3js threejs_motorbody -n 25   # dump viewer frames (articulated motors)
+./scripts/run_motorbody.sh              # GPU + CPU cross-check (64 motors, M=5000, dt=1e-5)
+./scripts/run_motorbody.sh -cpu         # CPU runner only (triage)
+./scripts/run_motorbody.sh -3js threejs_motorbody -n 25   # dump viewer frames (articulated motors)
 ```
 The SHARED systems (`BrownianForceSystem`/`RigidRodLangevinIntegrationSystem`/`DerivedGeometrySystem`)
 run over `MotorStore.body` UNCHANGED; only `MotorJointSystem` + `TailAnchorSystem` are motor-specific.
@@ -276,9 +276,9 @@ the segments through the **segment-side CSR-inverse gather** (the race-free, ato
 coupling — the template every future multi-store coupling reuses). FIXED rest angles + pinned filament
 ⇒ no stroke/motion/gliding (4b-iii). Gated by the gather exactly equalling a brute-force per-bond sum:
 ```
-./run_xbridge.sh               # GPU + CPU cross-check (4 pinned segs, 12 motors, 3/seg)
-./run_xbridge.sh -cpu          # CPU runner only (triage)
-./run_xbridge.sh -3js threejs_xbridge -b 0.3   # viewer (motors bound to the pinned filament)
+./scripts/run_xbridge.sh               # GPU + CPU cross-check (4 pinned segs, 12 motors, 3/seg)
+./scripts/run_xbridge.sh -cpu          # CPU runner only (triage)
+./scripts/run_xbridge.sh -3js threejs_xbridge -b 0.3   # viewer (motors bound to the pinned filament)
 ```
 The gather (`CrossBridgeSystem.csrHistogram/csrScan/csrScatter` → `segGather`) is general infrastructure
 — it builds the segment→bound-motors CSR-inverse (inc-3 pattern keyed by `boundSeg`) and each segment
@@ -290,8 +290,8 @@ rest-angle switch (J1 0°↔60° in `MotorJointSystem`, motor–actin 90°↔120
 by `isCocked()=!isADPPi`) generate the power stroke (it EMERGES, not a force law) + the full
 force-dependent catch-slip release. Validated on a PINNED filament (no unpinning/gliding yet):
 ```
-./run_stroke.sh                    # 5 gates: dwell times, catch-slip F-dependence, stroke, force dir, CPU≡GPU
-./run_stroke.sh -3js threejs_stroke   # viewer (cycling motors colored by state, stroking on a pinned filament)
+./scripts/run_stroke.sh                    # 5 gates: dwell times, catch-slip F-dependence, stroke, force dir, CPU≡GPU
+./scripts/run_stroke.sh -3js threejs_stroke   # viewer (cycling motors colored by state, stroking on a pinned filament)
 ```
 Constant-ADPPi reproduces 4b-i/ii exactly (the regression guard). The stochastic machine is exact
 (dwell times 5.0/984/9.95/98.8 vs 5/1000/10/100 steps); the unloaded stroke is ~7 nm (a realistic
@@ -490,13 +490,13 @@ specifically in **net directedness** (total motion/instantaneous + avgBound matc
 to forward glide — the §5 co-bound tug-of-war, now correctly sized ~0.87× not ~0.5×; the n=3→n=8 ensemble
 regressed the ratio from 0.76×/>5σ to 0.87×/~3–4σ). **No physics edits.**
 Full report + grid: `docs/GLIDING_4biv_FINDINGS.md`; raw `RUN_LOGS/2026-06-14_4biv_grid_reconciliation.txt`.
-New: `GlidingHarness` (+ `-grid` v1-style measurement), `BindingDetectionSystem.bindNearest`, `run_gliding.sh`:
+New: `GlidingHarness` (+ `-grid` v1-style measurement), `BindingDetectionSystem.bindNearest`, `scripts/run_gliding.sh`:
 ```
-./run_gliding.sh -gpu -v1box -grid -seed <n> 10000   # 4×1 box: v1-style grid (inst+net+longWindow)
-./run_gliding.sh -gpu -full  -grid -seed <n> 10000   # 14×2 box (~13.4k motors)
-./run_gliding.sh -gpu -full 10000    # full v1 14×2 box — probe + GPU throughput
-./run_gliding.sh -diag 10000         # mechanism instrument (state dist, force balance, advance/stroke)
-./run_gliding.sh -gpu -3js threejs_gliding 20000   # viewer (full motor carpet)
+./scripts/run_gliding.sh -gpu -v1box -grid -seed <n> 10000   # 4×1 box: v1-style grid (inst+net+longWindow)
+./scripts/run_gliding.sh -gpu -full  -grid -seed <n> 10000   # 14×2 box (~13.4k motors)
+./scripts/run_gliding.sh -gpu -full 10000    # full v1 14×2 box — probe + GPU throughput
+./scripts/run_gliding.sh -diag 10000         # mechanism instrument (state dist, force balance, advance/stroke)
+./scripts/run_gliding.sh -gpu -3js threejs_gliding 20000   # viewer (full motor carpet)
 ```
 **Full-scale GPU TaskGraph (23 kernels, device-resident, no per-step host pull):** full 14×2 box (~13.4k
 motors), stable; GPU throughput **386 steps/s @ 13.4k motors (~7.3× the CPU runner — measured: GPU 386 vs
@@ -572,9 +572,9 @@ gather==brute bit-identical; **CPU≡GPU** (force+gather bit-identical, pose flo
 **byte-unchanged**. New: `CrosslinkerStore`, `CrosslinkerSystem`, `CrosslinkerHarness`, `scripts/run_xlink.sh`,
 `SpatialBodyView.STORE_CROSSLINKER=2`. Report: `docs/INC5A_CROSSLINKER_FINDINGS.md`; JOURNAL 2026-06-16 (5a).
 ```
-./run_xlink.sh              # GPU TaskGraph + CPU cross-check (rest hold, decay constant, gather, all-OFF≡HEAD)
-./run_xlink.sh -cpu         # CPU runner only (triage)
-./run_xlink.sh -3js threejs_xlink   # viewer (off-rest crosslinked pair relaxing)
+./scripts/run_xlink.sh              # GPU TaskGraph + CPU cross-check (rest hold, decay constant, gather, all-OFF≡HEAD)
+./scripts/run_xlink.sh -cpu         # CPU runner only (triage)
+./scripts/run_xlink.sh -3js threejs_xlink   # viewer (off-rest crosslinked pair relaxing)
 ```
 **5a flag for the planner:** v1 `getLinkCt` accumulates per-step (order/thread-dependent for
 multi-link-per-segment); 5a uses the total static count (=1 ⇒ `fracMove`=0.4 exact). Multi-link-per-segment
@@ -664,10 +664,10 @@ formation gate bit-faithful (funnel matches on identical config), **conc-scaling
 conc-scaling as the cause; residual is in the crossing-population time-evolution (subtle coupling, not
 root-caused). New: `CrosslinkerBundleHarness`, `scripts/run_xlinkbundle.sh`; report `docs/INC5C-iii_PHASE2_FINDINGS.md`.
 ```
-./run_xlinkbundle.sh -cpu -nfil 200            # CPU assembled run + stability
-./run_xlinkbundle.sh -cpugpu -nfil 200         # GPU mechanics vs CPU (aggregate-within-SEM)
-./run_xlinkbundle.sh -3js threejs_xlinkbundle -nfil 150 -conc 3   # crosslinking demo
-./run_xlinkbundle.sh -singlelink               # Part B: single-link Brownian strain vs Boltzmann/equipartition
+./scripts/run_xlinkbundle.sh -cpu -nfil 200            # CPU assembled run + stability
+./scripts/run_xlinkbundle.sh -cpugpu -nfil 200         # GPU mechanics vs CPU (aggregate-within-SEM)
+./scripts/run_xlinkbundle.sh -3js threejs_xlinkbundle -nfil 150 -conc 3   # crosslinking demo
+./scripts/run_xlinkbundle.sh -singlelink               # Part B: single-link Brownian strain vs Boltzmann/equipartition
 ```
 
 **5c-iii residual RESOLVED (2026-06-16, §8) — crosslinkers PHYSICALLY VALIDATED; v1 is NOT a quantitative
@@ -710,9 +710,9 @@ number); (E) CPU≡GPU det 3.5e-6 µm / Brownian Δ0.000°; (F) all-OFF≡HEAD b
 inlined `moveC` exceeds the 600-node inlined-callee cap. New: `DimerStore`, `DimerCouplingSystem`,
 `MyosinDimerHarness`, `scripts/run_dimer.sh`. Report: `docs/INC6A_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6a).
 ```
-./run_dimer.sh              # GPU + CPU cross-check (32 dimers / 64 motors): gates A–F
-./run_dimer.sh -cpu         # CPU runner only (triage)
-./run_dimer.sh -3js threejs_dimer -n 9   # viewer (Y-shaped dimers)
+./scripts/run_dimer.sh              # GPU + CPU cross-check (32 dimers / 64 motors): gates A–F
+./scripts/run_dimer.sh -cpu         # CPU runner only (triage)
+./scripts/run_dimer.sh -3js threejs_dimer -n 9   # viewer (Y-shaped dimers)
 ```
 **Post-6a rotational-thermostat diagnostic (gate-D 1.40× RESOLVED).** Cut 1 (DECISIVE, `DiffusionHarness`
 Config R): free-rod rotational diffusion `D_rot` −1.8% vs FDT `kT/bRotGam` ⇒ **thermostat at ½kT**. Cut 3
@@ -739,9 +739,9 @@ byte-unchanged (CSR reused verbatim); production byte-unchanged; `BoA-v1ref` byt
 `MiniFilamentStore`, `MiniFilamentSystem`, `MiniFilamentHarness`, `scripts/run_minifil.sh`. Report:
 `docs/INC6B_MINIFILAMENT_FINDINGS.md`; JOURNAL 2026-06-17 (6b).
 ```
-./run_minifil.sh            # GPU + CPU cross-check (8 backbones × 16 dimers): gates A–E
-./run_minifil.sh -cpu       # CPU runner only (triage)
-./run_minifil.sh -3js threejs_minifil -n 4   # viewer (backbone + dimer carpet)
+./scripts/run_minifil.sh            # GPU + CPU cross-check (8 backbones × 16 dimers): gates A–E
+./scripts/run_minifil.sh -cpu       # CPU runner only (triage)
+./scripts/run_minifil.sh -3js threejs_minifil -n 4   # viewer (backbone + dimer carpet)
 ```
 
 **Increment 6 glide part 1 — DIMER-GLIDE — DONE (2026-06-17).** The dimer is now a FUNCTIONAL two-head
@@ -760,9 +760,9 @@ emergent, v1 informational); (#5) **all-OFF≡HEAD** dimer-off ≡ single-motor/
 `MiniFilamentHarness` (+boundSeg gate, re-validated). `CrossBridge` + production byte-unchanged; `BoA-v1ref`
 byte-clean. Report: `docs/INC6_GLIDE_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6-glide part 1).
 ```
-./run_dimerglide.sh         # GPU + CPU cross-check: #1 transmission, #2 gate, #3 walk, #5 all-OFF
-./run_dimerglide.sh -cpu    # CPU runner only (triage)
-./run_dimerglide.sh -3js threejs_dimerglide   # viewer (free dimers walking on a pinned filament)
+./scripts/run_dimerglide.sh         # GPU + CPU cross-check: #1 transmission, #2 gate, #3 walk, #5 all-OFF
+./scripts/run_dimerglide.sh -cpu    # CPU runner only (triage)
+./scripts/run_dimerglide.sh -3js threejs_dimerglide   # viewer (free dimers walking on a pinned filament)
 ```
 **Increment 6 glide part 2 — MINIFILAMENT-GLIDE — DONE (2026-06-17).** The 6b single-ended backbone gather
 is now **LOAD-BEARING**: a static minifilament's heads bind/walk on a pinned filament via `CrossBridge`
@@ -783,9 +783,9 @@ tracks the gathered net; (#5) all-OFF≡HEAD bit-identical + control. Regression
 re-ran bit-identical PASS. New: `MiniGlideHarness`, `scripts/run_miniglide.sh`. Report:
 `docs/INC6_GLIDE_MINIFIL_FINDINGS.md`; JOURNAL 2026-06-17 (6-glide part 2).
 ```
-./run_miniglide.sh         # GPU + CPU cross-check: #1 gather-under-load, #2 gates, #3 bipolar, #5 all-OFF
-./run_miniglide.sh -cpu    # CPU runner only (triage)
-./run_miniglide.sh -3js threejs_miniglide   # viewer (a minifilament's heads walking on a pinned filament)
+./scripts/run_miniglide.sh         # GPU + CPU cross-check: #1 gather-under-load, #2 gates, #3 bipolar, #5 all-OFF
+./scripts/run_miniglide.sh -cpu    # CPU runner only (triage)
+./scripts/run_miniglide.sh -3js threejs_miniglide   # viewer (a minifilament's heads walking on a pinned filament)
 ```
 **Increment 6 — MINIMAL CONTRACTILE ASSAY — DONE (2026-06-17).** The first genuinely contractile test: two
 anti-parallel pinned filament chains pulled toward each other by a central bipolar minifilament; contractile
@@ -824,10 +824,10 @@ gather, residual 0, pin force purely chain-transmitted (the `jointForceSum`-omis
 (§4/§6b/§7b); spec: `docs/INC6_CONTRACTILITY_ASSAY_SURVEY.md`; JOURNAL 2026-06-17. Optional next: port v1's confining
 chamber box (removes the residual mild drift).
 ```
-./run_contractile.sh            # GPU + CPU cross-check: #1 crux, #4 control, #5 no-op, #6 general, #7 box CPU≡GPU, #2 contracts, #3 CPU≡GPU
-./run_contractile.sh -cpu       # CPU runner only (triage)
-./run_contractile.sh -cpu -drift 50000   # matched box OFF vs ON (drift + tension)
-./run_contractile.sh -3js threejs_contractile -steps 30000   # viewer (the v1 contractility panel)
+./scripts/run_contractile.sh            # GPU + CPU cross-check: #1 crux, #4 control, #5 no-op, #6 general, #7 box CPU≡GPU, #2 contracts, #3 CPU≡GPU
+./scripts/run_contractile.sh -cpu       # CPU runner only (triage)
+./scripts/run_contractile.sh -cpu -drift 50000   # matched box OFF vs ON (drift + tension)
+./scripts/run_contractile.sh -3js threejs_contractile -steps 30000   # viewer (the v1 contractility panel)
 ```
 
 **Increment 6 — GENERAL IN-VITRO-CHAMBER CONTAINMENT BOX — DONE (2026-06-17).** A general,
@@ -890,9 +890,9 @@ for Stage B. New files only: `NodeStore`, `NodeSystem`, `ProteinNodeHarness`, `s
 touched ⇒ prior harnesses byte-unchanged (minifil+dimer re-run PASS); `BoA-v1ref` byte-clean; production
 untouched; node default-off. Report: `docs/INC6C_NODE_STAGEA_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
-./run_node.sh              # GPU + CPU cross-check (gather, gather-under-load, binding, cap, containment, anchor)
-./run_node.sh -cpu         # CPU runner only (triage)
-./run_node.sh -3js threejs_node -n 3   # viewer (radially-splayed nodes)
+./scripts/run_node.sh              # GPU + CPU cross-check (gather, gather-under-load, binding, cap, containment, anchor)
+./scripts/run_node.sh -cpu         # CPU runner only (triage)
+./scripts/run_node.sh -3js threejs_node -n 3   # viewer (radially-splayed nodes)
 ```
 **Increment 6c Stage B1 — the FilamentStore runtime-birth lifecycle — DONE (2026-06-18).** The **first dynamic
 filament creation in SoftBox** (`FilamentStore` was fully static through inc 6; recon §2 risk). v2-side
@@ -918,8 +918,8 @@ is not bound. **Regression (no-op-when-all-active):** node/minifil/dimer/dimergl
 motor/contractile/xlink all re-run PASS + foundational FDT within 5%. New files only + 1 additive `FilamentStore`
 edit; `BoA-v1ref` byte-clean; production untouched. Report: `docs/INC6C_NODE_STAGEB1_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
-./run_filbirth.sh           # GPU + CPU cross-check (allocator, born≡preplaced, inert free slot, binding+gather)
-./run_filbirth.sh -cpu      # CPU runner only (triage)
+./scripts/run_filbirth.sh           # GPU + CPU cross-check (allocator, born≡preplaced, inert free slot, binding+gather)
+./scripts/run_filbirth.sh -cpu      # CPU runner only (triage)
 ```
 **Increment 6c Stage B2 — the node NUCLEATION-FUNCTION (formin actin nucleation) — DONE (2026-06-18).** The
 node's implicit-formin nucleation (seam #1, additive over Stage A) — **the first dynamic actin CREATION in
@@ -955,8 +955,8 @@ filbirth/node/grid/motor/minifil/dimerglide/miniglide/contractile bit-identical.
 only; `BoA-v1ref` byte-clean; production a no-op (`forminsPerNode=0`). Report:
 `docs/INC6C_NODE_STAGEB2_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
-./run_nodenuc.sh           # GPU + CPU cross-check (rate, tether, dissolution, pool, no-op, damping, publish-guard, CPU≡GPU)
-./run_nodenuc.sh -cpu      # CPU runner only (triage)
+./scripts/run_nodenuc.sh           # GPU + CPU cross-check (rate, tether, dissolution, pool, no-op, damping, publish-guard, CPU≡GPU)
+./scripts/run_nodenuc.sh -cpu      # CPU runner only (triage)
 ```
 **Increment 6 — the NODE in the MINIMAL CONTRACTILE ASSAY (node ⇄ minifilament swap) — DONE
 (2026-06-18).** Qualitative "the node does contractile work": SWAP the free minifilament for a free,
@@ -980,9 +980,9 @@ Nucleation OFF (exercises the MOTOR-function). New files only (`NodeContractileH
 `BoA-v1ref` byte-clean; production untouched. Report: `docs/INC6_NODE_CONTRACTILE_FINDINGS.md`; JOURNAL
 2026-06-18. **Foreshadows the post-node fixed-anchor contractile RING.**
 ```
-./run_nodecontract.sh        # GPU + CPU: #2 contracts, #3 CPU≡GPU, #4 control, #5 containment
-./run_nodecontract.sh -cpu -diag                              # per-pole engagement diagnostic
-./run_nodecontract.sh -3js threejs_nodecontract -steps 30000  # viewer (v1 contractility panel, node centre)
+./scripts/run_nodecontract.sh        # GPU + CPU: #2 contracts, #3 CPU≡GPU, #4 control, #5 containment
+./scripts/run_nodecontract.sh -cpu -diag                              # per-pole engagement diagnostic
+./scripts/run_nodecontract.sh -3js threejs_nodecontract -steps 30000  # viewer (v1 contractility panel, node centre)
 ```
 
 **Increment 6c — actin POLYMERIZATION: barbed-end elongation (lengthen + split, growth-only) — DONE
@@ -1014,8 +1014,8 @@ reciprocal valid). **Default-OFF; B1/B2/node regressions bit-identical.** New fi
 changed) ⇒ prior harnesses byte-unchanged; `BoA-v1ref` byte-clean; production untouched. Report:
 `docs/INC6C_POLYMERIZATION_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
-./run_growth.sh            # GPU + CPU cross-check (lengthen, split@64, rate+pool, growing-end, no-op, drag-clamp, participates, CPU≡GPU)
-./run_growth.sh -cpu       # CPU runner only (triage)
+./scripts/run_growth.sh            # GPU + CPU cross-check (lengthen, split@64, rate+pool, growing-end, no-op, drag-clamp, participates, CPU≡GPU)
+./scripts/run_growth.sh -cpu       # CPU runner only (triage)
 ```
 **Flagged v1 divergences (behavior-faithful, not class-faithful):** formin kept on the stable tip slot G (v1
 `transferEnd2Plasmid` moves it to the child — topologically equivalent); **DEPOLYMERIZATION/TREADMILLING
@@ -1048,10 +1048,10 @@ Many-node ring condensation + ensemble confirmation = follow-on. **`-nodebrown`*
 node sphere's thermal wander to resolve the directed regime (node = large/slow complex in vivo; node-body scale
 only). Report: `docs/INC6C_TESTB_SCPR_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
-./run_testb.sh             # GPU + CPU: Gate 0 → CPU≡GPU → Stage 1 (distance trace + cross/self-capture readout)
-./run_testb.sh -cpu        # CPU runner only (triage)
-./run_testb.sh -gate0      # Gate 0 only (the cross-node-capture gating probe)
-./run_testb.sh -cpu -3js threejs_testb   # viewer (two nodes nucleating/growing/capturing)
+./scripts/run_testb.sh             # GPU + CPU: Gate 0 → CPU≡GPU → Stage 1 (distance trace + cross/self-capture readout)
+./scripts/run_testb.sh -cpu        # CPU runner only (triage)
+./scripts/run_testb.sh -gate0      # Gate 0 only (the cross-node-capture gating probe)
+./scripts/run_testb.sh -cpu -3js threejs_testb   # viewer (two nodes nucleating/growing/capturing)
 ```
 
 **Increment 6c — Test B′: clean AIMED SCPR (sparse, separated, SPECIFIED placement) — SUCCESS (2026-06-18).**
@@ -1069,7 +1069,7 @@ preclude it (the filament exits through its own node's partner-facing hemisphere
 cross-capture carries the net pull (jba's intuition holds operationally). **Post-min OVERRUN (OUT OF SCOPE):**
 monotonic growth + no depoly ⇒ the filament overruns the closed gap and the nodes drift back apart — this is the
 INITIAL-approach test; sustained contraction needs turnover (deferred; harness flags the overrun). Report:
-`docs/INC6C_TESTB_AIMED_SCPR_FINDINGS.md`; JOURNAL 2026-06-18. `./run_testb.sh -aimed` (`-cpu`, `-3js threejs_testb_aimed`).
+`docs/INC6C_TESTB_AIMED_SCPR_FINDINGS.md`; JOURNAL 2026-06-18. `./scripts/run_testb.sh -aimed` (`-cpu`, `-3js threejs_testb_aimed`).
 
 **Increment 6c — faithfulness fix: v1's node-held binding exclusion restored (2026-06-18).** The v1 audit
 (`docs/INC6C_V1_SELFCAPTURE_AUDIT_FINDINGS.md`) found v2 unfaithful: v1 excludes any node-held filament segment from
@@ -1141,8 +1141,8 @@ dead-slot reuses all correct, **conservation EXACT** through the recycle, **CPU�
 control reproducing the exact `actinSeed·#reuse` deficit, turnover-only/nucleation-only regressions unchanged.
 `BoA-v1ref` byte-clean; production untouched; default-off. Report: `docs/INC7_DEADSLOT_FIX_FINDINGS.md`.
 ```
-./run_deadslot.sh        # GPU + CPU (newborn correctness, conservation, fix-off control, regression, CPU≡GPU)
-./run_deadslot.sh -cpu   # CPU runner only (triage)
+./scripts/run_deadslot.sh        # GPU + CPU (newborn correctness, conservation, fix-off control, regression, CPU≡GPU)
+./scripts/run_deadslot.sh -cpu   # CPU runner only (triage)
 ```
 
 **Increment 7 → Ring — EXPERIMENT: a 3×3 net of nucleating, treadmilling nodes — DONE (2026-06-22). The net
@@ -1166,10 +1166,10 @@ is the cheapest next lever; FREE nodes clump into a BALL — turning it into a R
 **geometric constraint** (later increment; the net does NOT fly apart ⇒ constraint is geometry, not stability).
 Report: `docs/INC7_RING_3x3_FINDINGS.md`; JOURNAL 2026-06-22.
 ```
-./run_ring3x3.sh                          # CPU experiment (default 3×3, spacing 0.25, 6 formins, 30000 steps) — COALESCES
-./run_ring3x3.sh -gpu -steps 30000        # + GPU device-resident scale/no-crash/throughput check
-./run_ring3x3.sh -spacing 0.40 -formins 6 # the SPARSE regime (partial coalescence — the reach-vs-spacing edge)
-./run_ring3x3.sh -3js threejs_ring3x3     # viewer frames (the net sprouting, reaching, capturing, clumping)
+./scripts/run_ring3x3.sh                          # CPU experiment (default 3×3, spacing 0.25, 6 formins, 30000 steps) — COALESCES
+./scripts/run_ring3x3.sh -gpu -steps 30000        # + GPU device-resident scale/no-crash/throughput check
+./scripts/run_ring3x3.sh -spacing 0.40 -formins 6 # the SPARSE regime (partial coalescence — the reach-vs-spacing edge)
+./scripts/run_ring3x3.sh -3js threejs_ring3x3     # viewer frames (the net sprouting, reaching, capturing, clumping)
 ```
 
 **Increment 7 → Ring — 3×3 net + FULL turnover (treadmilling · aging · severing) + SPHERE nodes — DONE
@@ -1196,9 +1196,9 @@ structure need a growth source that replenishes whole severed segments (multi-si
 barbed growth, or end2-aware recycling) — the formin-pinned single-tip mode can't. Report:
 `docs/INC7_RING_3x3_TURNOVER_FINDINGS.md`; JOURNAL 2026-06-22.
 ```
-./run_ring3x3.sh                 # full turnover (winds down — the finding)  | -nosever → coalesces 39% | -noaging -nosever → 49%
-./run_ring3x3.sh -gpu -steps 30000           # + GPU device scale/no-crash/CPU≡GPU-aggregate
-./run_ring3x3.sh -3js threejs_ring3x3_turnover -steps 15000   # sphere nodes, ADP gradient, severing
+./scripts/run_ring3x3.sh                 # full turnover (winds down — the finding)  | -nosever → coalesces 39% | -noaging -nosever → 49%
+./scripts/run_ring3x3.sh -gpu -steps 30000           # + GPU device scale/no-crash/CPU≡GPU-aggregate
+./scripts/run_ring3x3.sh -3js threejs_ring3x3_turnover -steps 15000   # sphere nodes, ADP gradient, severing
 ```
 
 **FULL-SYSTEM DEMONSTRATION — the maximal-composition contractile network — DONE (2026-06-22); NEXT: GET IT ON THE
@@ -1223,10 +1223,10 @@ fine; only the monolithic single-graph assembly fails. **WHY IT MATTERS:** CPU i
 **~72 min wall-clock per 1 s of simulated time**; the GPU device-resident path is the whole point (DenseContractile
 GPU beat BoA GPU 5–7×). The `-gpu` flag attempts the full graph + reports this blocker cleanly.
 ```
-./run_fulldemo.sh -smoke                                       # cheap assembly/sanity
-./run_fulldemo.sh -steps 20000                                 # CPU demo + aberration hunt (KIN=1)
-./run_fulldemo.sh -dense -steps 200000 -3js threejs_fulldemo_dense   # dense render (~2 s sim time)
-./run_fulldemo.sh -gpu -steps 20000                            # attempts the full device graph ⇒ hits the Graph-resize blocker (the next task: split it)
+./scripts/run_fulldemo.sh -smoke                                       # cheap assembly/sanity
+./scripts/run_fulldemo.sh -steps 20000                                 # CPU demo + aberration hunt (KIN=1)
+./scripts/run_fulldemo.sh -dense -steps 200000 -3js threejs_fulldemo_dense   # dense render (~2 s sim time)
+./scripts/run_fulldemo.sh -gpu -steps 20000                            # attempts the full device graph ⇒ hits the Graph-resize blocker (the next task: split it)
 ```
 **Unified viewer (2026-06-22):** `sim_viewer_boa.html` is now ONE canonical file — `~/Code/BoA/sim_viewer_boa.html`
 (the superset: membrane/DTS + an additive crosslink channel, `MAX_MYOSINS`=24000) — and SoftBox's is a **symlink**
