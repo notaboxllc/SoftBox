@@ -1,5 +1,23 @@
 # Soft Box Project Journal
 
+# 2026-07-09 — First canonical velocity–density sweep (FIRST STAB — short window)
+Swept motor density {100,250,500,1000,2000} µm⁻² at coltol=10 nm, 3 seeds, M=60000 (0.6 s), canonical DEFAULT
+model on GPU (bare `run_gliding.sh -gpu -full -grid -coltol 10 -density D -seed s 60000` — springs+Lymn-Taylor+
+ADP·Pi-bind+xbimplicit2 all default-on; verified bare≡explicit-GATE2 byte-identical). STEP 1: the flagged
+`run_densesweep.sh` was a PRE-COLLAPSE GHOST (drives `DenseGlidingHarness -scale`, no density/coltol/GRID_ROW) —
+NOT reused; wrote a clean driver `scripts/run_canonical_density_sweep.sh`. **RESULT — sensible, biologically-
+plausible curve.** velFitX (µm/s) rises monotonically & saturates above d1000: 0.14→0.47→1.10→**2.83**→3.82
+(±SEM 0.03/0.06/0.19/0.05/0.36); d1000 reproduces the capstone baseline exactly (2.825±0.054, at Vmax of the
+skeletal band ~2.9). avgBound tracks it (0.17→0.57→1.44→3.32→5.34; deficit channel). **per-bound ~flat
+(0.72–0.87)** ⇒ the rise is ENGAGEMENT-driven, not motor-speed; **instantaneous speed ~density-independent
+(6.4→7.4, +15% over 20×)** — the classic gliding-assay signature (near v1's 8.33). Curve is SIGMOIDAL/threshold-
+like (slow foot <d500 where avgBound<1), NOT hyperbolic — MM over-predicts the low end 2–3× (rough Vmax~5.9/
+KM~1090/half-max~d1090, Vmax not reached at d2000). CPU d1000-arbiter: velFitX 2.867 vs GPU 2.895 (0.97%), avgB
+3.286 vs 3.332 (1.4%) — SAME HIGH basin, curve trustworthy. Flags: d500/d2000 wide seed scatter (short-window
+velFitX noise); first stab (0.6 s/3-seed) ⇒ longer+more-seeded confirm (+d4000) warranted. No BAIL. Report:
+`DENSITY_SWEEP.md`; raw `RUN_LOGS/2026-07-08_canonical_density_sweep.txt`; driver
+`scripts/run_canonical_density_sweep.sh`.
+
 # 2026-07-08 — CAPSTONE: canonical model established; the dt-convergence arc resolved
 
 This entry is the current state of the project. It supersedes the dt-convergence / thermostat / bistability /
