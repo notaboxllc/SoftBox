@@ -37,7 +37,7 @@ SoA primitive component arrays the canonical state and keeps that state device-r
 **Governing docs (define/record Soft Box):**
 - `CLAUDE.md` — cross-session context, invariants, build/run, status (this file)
 - `JOURNAL.md` — terse newest-first log
-- `GLIDING_4biv_FINDINGS.md` — gliding payoff (increment 4b-iv) findings + benchmarks
+- `docs/GLIDING_4biv_FINDINGS.md` — gliding payoff (increment 4b-iv) findings + benchmarks
 
 **v1-reference-only (inherited background — NEVER a Soft Box task):** these describe v1's code,
 biology, or measurements and do NOT live in this repo — they sit in the v1 tree (`~/Code/BoA`, frozen
@@ -113,11 +113,11 @@ oracle, but its role changes across the migration:
   The two force-law dt-carriers REQUIRE dt: `Constants.brownianForceMag(double dt)` (FDT amplitude
   `sqrt(2kT/dt)`; the no-arg form is deleted) and `FilamentStore.setChainParams(double dt)` (writes
   `chainParams[0]=dt`). This eliminates the chain-dt class (a stale `Constants.deltaT` silently
-  rescaling the physics when a harness steps at 1e-5 — the Test B / `DELTAT_AUDIT_FINDINGS.md`
+  rescaling the physics when a harness steps at 1e-5 — the Test B / `docs/DELTAT_AUDIT_FINDINGS.md`
   precedent). Faithful to v1 (`GPUMoveThing.java:6789` `sqrt(2kT/Env.deltaT)`; `chainParams[0]=dt`).
   Biochem rates use the declared cadence `biochemDeltaT` (= `N·deltaT`), KIN scales rate constants not
   the clock. Formin/node-anchored seed filaments get the **full FDT Brownian** (`BTransCoeff`, held by
-  the tether — v1 `FilSegment.java:621-642`), NOT a per-seed damping hack. See `CHAIN_DT_FIX_FINDINGS.md`.
+  the tether — v1 `FilSegment.java:621-642`), NOT a per-seed damping hack. See `docs/CHAIN_DT_FIX_FINDINGS.md`.
 - **CPU≡GPU validation standard.** Bit-identical (to printed precision) for non-chaotic or
   short-horizon checks (FDT, broad-phase set, static deflection, joint geometry). For **chaotic
   many-body dynamics over long horizons** (gliding, contractile networks), float32 op-ordering
@@ -128,7 +128,7 @@ oracle, but its role changes across the migration:
   steady state at the production operating point is **chaotic AND bistable**, and a **last-bit GPU perturbation
   deterministically tips which basin a run lands in** — including a *flag-dependent transcendental in a hot
   kernel* (e.g. the `-ratefix` swing `exp/log`) whose mere presence changes PTX scheduling of the surrounding
-  float math, even when it computes a bit-identical value (`BISTABILITY_ORIGIN.md`; the `-allnoise` graph-split
+  float math, even when it computes a bit-identical value (`docs/BISTABILITY_ORIGIN.md`; the `-allnoise` graph-split
   artifact). The failure mode is **silent** — a wrong basin masquerades as a stable baseline. So: **a GPU
   gliding result REQUIRES a CPU-arbiter cross-check when** (a) it is an A/B whose arms differ in **hot-kernel
   structure** — any flag that adds/removes a TaskGraph task or toggles an in-kernel transcendental
@@ -137,7 +137,7 @@ oracle, but its role changes across the migration:
   (b) it is an **absolute number used for validation / a reported result**, or (c) as a **periodic spot-check**
   of the production baseline. The CPU cross-check need not be full-scale — smallest scale/window that resolves
   the basin. **GPU is for fast exploration; the deterministic CPU runner is the basin arbiter.** The default
-  gliding formulation is now the transcendental-free **springs** path (`SPRINGS_PROMOTION.md`; default-on,
+  gliding formulation is now the transcendental-free **springs** path (`docs/SPRINGS_PROMOTION.md`; default-on,
   `-nosprings` to opt out to raw, `-nosprings -ratefix -structrate` for the rate path) specifically so the
   *default* is not exposed to the swing-`exp/log` hazard; the residual hazard flags above are NOT covered by
   springs and stay arbiter-gated. When in doubt, run the same A/B on the CPU runner (or a same-graph factor-1.0
@@ -173,9 +173,9 @@ oracle, but its role changes across the migration:
    4b-iv — **DONE + CLOSED** (2026-06-16): glides −x, stable, avgBound + instantaneousSpeed match v1; the
    net-glide velocity is a small **0.874× (−13%/−4σ) box-uniform residual** accepted as the **irreducible
    parallel-scheme remainder** (one-step-stale SoA forces vs v1's sequential fresh-force update), real but
-   within v1's chaotic envelope. Exclusion chain §6.8–6.12 (`GLIDING_4biv_FINDINGS.md`); consolidated in
-   `GLIDING_4biv_RESIDUAL_DOSSIER.md`.
-5. **Crosslinkers / Arp2/3 branching — ACTIVE/NEXT.** Recon: `INC5_CROSSLINKER_RECON.md`.
+   within v1's chaotic envelope. Exclusion chain §6.8–6.12 (`docs/GLIDING_4biv_FINDINGS.md`); consolidated in
+   `docs/GLIDING_4biv_RESIDUAL_DOSSIER.md`.
+5. **Crosslinkers / Arp2/3 branching — ACTIVE/NEXT.** Recon: `docs/INC5_CROSSLINKER_RECON.md`.
 6. Protein-node contractile path — validate against the v1 node-tension fixture.
 7. Membrane — StickyNode bodies + NodeLink springs + the iterative relaxation solver (the
    iterative-constraint-solver-as-a-system design case; v1 RULE_NODE covers only the single-eval
@@ -318,7 +318,7 @@ default block size overflows the register file → CUDA 701 (LAUNCH_OUT_OF_RESOU
 three per-component arrays (see the FilamentStore layout note + JOURNAL).
 
 Two further device-path design rules, both load-bearing on this toolchain (TornadoVM 4.0.1-dev PTX,
-RTX 5070), measured in `PROFILE_FULLDEMO_FINDINGS.md`:
+RTX 5070), measured in `docs/PROFILE_FULLDEMO_FINDINGS.md`:
 
 - **The device path is kernel-COUNT-bound, not work-bound (the ~8000-launch/s ceiling).** The per-step
   rate is ≈ `8000 / (kernels-per-step)` — a fixed ~115–130 µs host cost per kernel launch, confirmed two
@@ -367,7 +367,7 @@ RTX 5070), measured in `PROFILE_FULLDEMO_FINDINGS.md`:
   default's RESULTS exactly). **Caveat:** the dynamic round-trip's transfer is ∝ scale — **re-verify net-positive
   at ring-scale before a very large production run** (the ~`16·nSeg` bytes/step round-trip is well-amortized
   through 16× but un-measured past it; use `-devicecsr` if a very large run shows it dominating). The `-megakernel`
-  per-body fusion stays **OPT-IN** (neutral, §4). Report: `MEGAKERNEL_PROBE_FINDINGS.md`. **Note: prior v2
+  per-body fusion stays **OPT-IN** (neutral, §4). Report: `docs/MEGAKERNEL_PROBE_FINDINGS.md`. **Note: prior v2
   throughput numbers in `SCALE_SWEEP_FINDINGS`/`V1_MAXIMAL_BENCHMARK §3` predate this default (measured
   CSR-host-OFF); see their re-baseline banners.**
 
@@ -489,7 +489,7 @@ v2 reproduces v1's weak ~+2 % net box-scaling; v1's own NET @14×2 is **4.7, not
 specifically in **net directedness** (total motion/instantaneous + avgBound match; v2 converts less of it
 to forward glide — the §5 co-bound tug-of-war, now correctly sized ~0.87× not ~0.5×; the n=3→n=8 ensemble
 regressed the ratio from 0.76×/>5σ to 0.87×/~3–4σ). **No physics edits.**
-Full report + grid: `GLIDING_4biv_FINDINGS.md`; raw `RUN_LOGS/2026-06-14_4biv_grid_reconciliation.txt`.
+Full report + grid: `docs/GLIDING_4biv_FINDINGS.md`; raw `RUN_LOGS/2026-06-14_4biv_grid_reconciliation.txt`.
 New: `GlidingHarness` (+ `-grid` v1-style measurement), `BindingDetectionSystem.bindNearest`, `run_gliding.sh`:
 ```
 ./run_gliding.sh -gpu -v1box -grid -seed <n> 10000   # 4×1 box: v1-style grid (inst+net+longWindow)
@@ -503,7 +503,7 @@ motors), stable; GPU throughput **386 steps/s @ 13.4k motors (~7.3× the CPU run
 CPU 52.6 steps/s, difference-method)**. Binding + assembly +
 residency validated at scale; the gliding velocity is now a **small, sharp, correctly-sized ~0.87×
 box-uniform residual** in net directedness (re-scoped from the mis-framed 0.51×). See JOURNAL 2026-06-14
-(inc 4b-iv RECONCILED) + `GLIDING_4biv_FINDINGS.md`.
+(inc 4b-iv RECONCILED) + `docs/GLIDING_4biv_FINDINGS.md`.
 
 **4b-iv CLOSE (2026-06-16, §6.7–6.12).** The −13% / −4σ net-glide residual (v2 4.000 vs v1 4.578, 0.874×,
 box-uniform; n=24/16) is **accepted as the irreducible parallel-scheme remainder** — v2's one-step-stale
@@ -513,7 +513,7 @@ assist SD 3.3 pp; v2 bit-reproducible). The full exclusion chain (§6.8 precisio
 §6.9 no localized assist-balance constant; §6.10 force-cap net-flat; §6.11 refractory-rate ±0.16/≤1σ; §6.12
 refractory-race confound — gate failed + bounded 0.0σ by the v1-CPU 4.581 vs v1-GPU 4.578 control) all
 excluded or bounded small; net is decoupled from assist-balance, avgBound, and refractory rate.
-**Consolidated reference: `GLIDING_4biv_RESIDUAL_DOSSIER.md`** (Part 1 residual; Part 2 the BoA `bindTimer`
+**Consolidated reference: `docs/GLIDING_4biv_RESIDUAL_DOSSIER.md`** (Part 1 residual; Part 2 the BoA `bindTimer`
 bug for a future BoA-active fix). **Architectural, not a bug/precision/tunable-constant — not reopened
 without a >0.1% systematic signal.**
 
@@ -541,7 +541,7 @@ without a >0.1% systematic signal.**
   emergent mismatch where v2 is physics-correct (e.g. v2 at Boltzmann equilibrium, §8) is **v1's deviation, not a
   v2 bug** — do NOT chase it, do NOT import v1 artifacts to close it. (This posture is crosslinker-specific so
   far; filament/motor emergent behavior WAS frozen-fixture-validated through inc 4.)
-- **MOTOR CROSS-BRIDGE is EXEMPT from v1 bit-parity (2026-06-27; jba decision; `CANONICAL_MOTOR_FINDINGS.md`).**
+- **MOTOR CROSS-BRIDGE is EXEMPT from v1 bit-parity (2026-06-27; jba decision; `docs/CANONICAL_MOTOR_FINDINGS.md`).**
   The powerstroke read-out + arm-length sweep showed the default motor is **non-canonical** — the head pivots on
   actin (F9 90°→120°), the stroke is read at the F8 **tip**, and the **J1 converter swing is silent** for the tip
   ⇒ step ∝ HEAD_LEN, not lever length. **v1 (BoA-v1ref) implements this same non-canonical geometry.** Per jba, v2's
@@ -553,7 +553,7 @@ without a >0.1% systematic signal.**
   **default byte-identical**, calibration deferred to phase 2). `BoA-v1ref` stays **byte-clean/read-only** (we do NOT
   "fix" the frozen oracle).
 
-**Increment 5 (crosslinkers / Arp2/3) — ACTIVE.** Recon: `INC5_CROSSLINKER_RECON.md`.
+**Increment 5 (crosslinkers / Arp2/3) — ACTIVE.** Recon: `docs/INC5_CROSSLINKER_RECON.md`.
 
 **Increment 5a — DONE (2026-06-16).** Passive crosslinker static translational spring + the **double-ended
 filament↔filament gather** (the recon §2 design risk: the motor→segment CSR-inverse is single-ended).
@@ -570,7 +570,7 @@ torsion/Arp2/3 — 5b/5c/later). Validated vs `BoA-v1ref` on two co-developed st
 gather==brute bit-identical; **CPU≡GPU** (force+gather bit-identical, pose float32 last-bit); **all-OFF≡HEAD**
 (crosslinker pipeline over nLinks=0 ≡ bare filament path, bit-identical). `GlidingHarness`/production
 **byte-unchanged**. New: `CrosslinkerStore`, `CrosslinkerSystem`, `CrosslinkerHarness`, `run_xlink.sh`,
-`SpatialBodyView.STORE_CROSSLINKER=2`. Report: `INC5A_CROSSLINKER_FINDINGS.md`; JOURNAL 2026-06-16 (5a).
+`SpatialBodyView.STORE_CROSSLINKER=2`. Report: `docs/INC5A_CROSSLINKER_FINDINGS.md`; JOURNAL 2026-06-16 (5a).
 ```
 ./run_xlink.sh              # GPU TaskGraph + CPU cross-check (rest hold, decay constant, gather, all-OFF≡HEAD)
 ./run_xlink.sh -cpu         # CPU runner only (triage)
@@ -595,7 +595,7 @@ guard (`segGatherA`/`B` + the `bruteGather` reference) — the CSR template stay
 pipeline); **CPU≡GPU break path bit-identical** (854=854 dead, 0 mismatched); all-OFF≡HEAD (unbind off ≡
 5a, bit-identical). `BoA-v1ref` byte-clean; production byte-unchanged. New: `CrosslinkerSystem.unbind` +
 lifecycle/strain fields in `CrosslinkerStore` + 5b checks in `CrosslinkerHarness`. Report:
-`INC5A_CROSSLINKER_FINDINGS.md` (§5b appended); JOURNAL 2026-06-16 (5b).
+`docs/INC5A_CROSSLINKER_FINDINGS.md` (§5b appended); JOURNAL 2026-06-16 (5b).
 **5b flag for the planner:** the **running-v1 oracle stays DEFERRED to 5c** (formation steady-state — link-count
 plateau / formation≈dissolution — is where a running v1 bundle is genuinely needed; 5a/5b were analytic-oracle).
 `k_off(strain 0) = const+coeff = 2 /s` (not `linkOffConst` alone). fracMove-on-death deferred to 5c.
@@ -616,7 +616,7 @@ free-list correctness; death→same-step reuse + fresh ring; overflow clamp; slo
 bit-identical (0 mismatches, 400 churn steps)**; all-OFF≡HEAD (K=0 ≡ 5b path; 5a/5b gates reproduce).
 `BoA-v1ref` byte-clean; production byte-unchanged. New: `CrosslinkerSystem.freeFlags/freeScatter/allocate`
 + formation block in `CrosslinkerStore` + 5c-i checks in `CrosslinkerHarness`. Report:
-`INC5A_CROSSLINKER_FINDINGS.md` (§5c-i appended); JOURNAL 2026-06-16 (5c-i).
+`docs/INC5A_CROSSLINKER_FINDINGS.md` (§5c-i appended); JOURNAL 2026-06-16 (5c-i).
 **5c-i flag for the planner:** 5c-ii replaces ONLY the synthetic `fillRequests` (broad-phase FIL×FIL +
 `checkToLink` gates + `P_form` RNG fill the same `req*`/`acceptFlag` arrays; the allocator rides
 underneath unchanged — RNG ⇒ localWork=64). v2 does **same-step** death→reuse vs v1's form-at-collision /
@@ -639,7 +639,7 @@ candidates spanning both boundaries, 0 mismatches); #3 P_form formula (Δ=0%) + 
 case dense focal bundle** (contention ∝ N²·P_form², realistic ≪ this); #5 CPU≡GPU bit-identical (full
 pipeline, 400 churn steps, 0 mismatches); #6 all-OFF≡HEAD (pForm=0 ≡ 5b/5c-i path). New: 6
 `CrosslinkerSystem` kernels + formation block in `CrosslinkerStore` + 5c-ii checks. Report:
-`INC5A_CROSSLINKER_FINDINGS.md` (§5c-ii appended); JOURNAL 2026-06-16 (5c-ii).
+`docs/INC5A_CROSSLINKER_FINDINGS.md` (§5c-ii appended); JOURNAL 2026-06-16 (5c-ii).
 **5c-ii flags for the planner:** (a) **`Math.acos` does NOT lower on the PTX backend** — `fastAcos`'s middle
 branch uses the `accurateAcos` poly (decision-bit-exact for the default π/12 threshold, which lives in the
 ported sqrt branch); reuse `accurateAcos`, not `Math.acos`, in any future GPU kernel. (b) v1's
@@ -662,7 +662,7 @@ formation gate bit-faithful (funnel matches on identical config), **conc-scaling
 `xLinkConc`→halve formation, 2.0×). **Open/PAUSED: a residual ~3.5× walls-off link-count gap** (v1
 22.5±1.3 vs v2 6.5±1.0 @ step 1500, 6-seed ensemble) — NOT within SEM; excluded gate/diffusion/unbinding/
 conc-scaling as the cause; residual is in the crossing-population time-evolution (subtle coupling, not
-root-caused). New: `CrosslinkerBundleHarness`, `run_xlinkbundle.sh`; report `INC5C-iii_PHASE2_FINDINGS.md`.
+root-caused). New: `CrosslinkerBundleHarness`, `run_xlinkbundle.sh`; report `docs/INC5C-iii_PHASE2_FINDINGS.md`.
 ```
 ./run_xlinkbundle.sh -cpu -nfil 200            # CPU assembled run + stability
 ./run_xlinkbundle.sh -cpugpu -nfil 200         # GPU mechanics vs CPU (aggregate-within-SEM)
@@ -682,14 +682,14 @@ drag-independent; CPU≡GPU bit-identical on the deterministic relaxation). v2 s
 (strain ~1.13 ON-COM / ~0.93 realistic ≈ the bundle's ~0.89); v1's ~0.42 is FAR BELOW it ⇒ **v1 is the
 sub-thermal deviation, not v2.** ⇒ **ACCEPT v2, NO production fix.** The confined ≈49 plateau is **reframed**
 as a future-increment **v2 self-consistency / physical-plausibility** check (formation≈dissolution at
-confinement), **NOT a "hit 49" target** (v1 uncalibrated). Report `INC5C-iii_PHASE2_FINDINGS.md` §8.
+confinement), **NOT a "hit 49" target** (v1 uncalibrated). Report `docs/INC5C-iii_PHASE2_FINDINGS.md` §8.
 
 Next: **5d (Arp2/3).** (The `STORE_CROSSLINKER` broad-phase publisher seam exists; 5c-ii/Phase-2 used a
 self-contained FIL×FIL candidate generator over the filament pose — wiring the production SpatialGrid publisher
 is an integration step.)
 
 **Increment 6 (myosin structures: dimers / minifilaments / nodes) — recon DONE; 6a DONE.** Recon:
-`INC6_MYOSTRUCT_RECON.md` (the coupling-cost map: **dimer = no gather**, **minifilament = single-ended one-pass
+`docs/INC6_MYOSTRUCT_RECON.md` (the coupling-cost map: **dimer = no gather**, **minifilament = single-ended one-pass
 gather** — less than the crosslinker two-pass, **node = reachable WITHOUT membrane** on a fixed anchor but
 fails the settledness gate; snapshot-currency: dimer/minifilament CURRENT @ 06-13, nodes NOT settled — fresh
 snapshot needed). Suggested staging **6a dimer → 6b minifilament → 6c node**.
@@ -708,7 +708,7 @@ fluctuation shift of the bounded θ coord, NOT drift — §8 posture: gated on F
 number); (E) CPU≡GPU det 3.5e-6 µm / Brownian Δ0.000°; (F) all-OFF≡HEAD bit-identical. **TornadoVM gotcha
 (reuse for 6b):** the rod-link math must be inlined into the top-level @Parallel kernel — a helper with 2×
 inlined `moveC` exceeds the 600-node inlined-callee cap. New: `DimerStore`, `DimerCouplingSystem`,
-`MyosinDimerHarness`, `run_dimer.sh`. Report: `INC6A_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6a).
+`MyosinDimerHarness`, `run_dimer.sh`. Report: `docs/INC6A_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6a).
 ```
 ./run_dimer.sh              # GPU + CPU cross-check (32 dimers / 64 motors): gates A–F
 ./run_dimer.sh -cpu         # CPU runner only (triage)
@@ -720,7 +720,7 @@ Config R): free-rod rotational diffusion `D_rot` −1.8% vs FDT `kT/bRotGam` ⇒
 equipartition** `4kT·dt/(γ·c(2−c))` (0.992); the apparent 1.24× vs the continuum `2kT/k_θ` is the
 `1/(1−c/2)=1.25` discrete correction for `c=coeff=0.4`. Cut 2: `⟨θ²⟩∝dt` (fracMove `k_θ=coeff·γ/dt`),
 exactly the scheme's own equipartition at each fixed dt. ⇒ the dimer 1.40× = discrete-vs-continuum factor ×
-residual gate-D AR(1) crudeness — **benign, no thermostat fix.** Report: `INC6A_DIMER_FINDINGS.md` §6a-thermo.
+residual gate-D AR(1) crudeness — **benign, no thermostat fix.** Report: `docs/INC6A_DIMER_FINDINGS.md` §6a-thermo.
 
 **Increment 6b — DONE (2026-06-17).** The myosin MINIFILAMENT (a rigid-rod backbone OWNING N dimers),
 isometric bed, static, heads free. The **central favorable recon finding realized: SINGLE-ENDED, one pass**
@@ -737,7 +737,7 @@ hold (Brownian-off exact fixed point, Brownian-on bounded thermal); (C) **CPU≡
 self-consistency (stationary, dt-a-physics-param); (E) **all-OFF≡HEAD** bit-identical. `CrossBridgeSystem`
 byte-unchanged (CSR reused verbatim); production byte-unchanged; `BoA-v1ref` byte-clean. New:
 `MiniFilamentStore`, `MiniFilamentSystem`, `MiniFilamentHarness`, `run_minifil.sh`. Report:
-`INC6B_MINIFILAMENT_FINDINGS.md`; JOURNAL 2026-06-17 (6b).
+`docs/INC6B_MINIFILAMENT_FINDINGS.md`; JOURNAL 2026-06-17 (6b).
 ```
 ./run_minifil.sh            # GPU + CPU cross-check (8 backbones × 16 dimers): gates A–E
 ./run_minifil.sh -cpu       # CPU runner only (triage)
@@ -758,7 +758,7 @@ reaction to 4b-iii's −x FILAMENT force; the free MOTOR walks opposite the surf
 emergent, v1 informational); (#5) **all-OFF≡HEAD** dimer-off ≡ single-motor/4b-iii path bit-identical. New:
 `DimerGlideHarness`, `run_dimerglide.sh`; modified `DimerCouplingSystem`/`MyosinDimerHarness`/
 `MiniFilamentHarness` (+boundSeg gate, re-validated). `CrossBridge` + production byte-unchanged; `BoA-v1ref`
-byte-clean. Report: `INC6_GLIDE_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6-glide part 1).
+byte-clean. Report: `docs/INC6_GLIDE_DIMER_FINDINGS.md`; JOURNAL 2026-06-17 (6-glide part 1).
 ```
 ./run_dimerglide.sh         # GPU + CPU cross-check: #1 transmission, #2 gate, #3 walk, #5 all-OFF
 ./run_dimerglide.sh -cpu    # CPU runner only (triage)
@@ -781,7 +781,7 @@ geometry, next). Two INDEPENDENT single-ended gathers/step (backbone-keyed + seg
 fires 11/suppressed 5, all match v1; (#3) bipolar collective (observe) — FREE backbone walks +10.85 nm, sign
 tracks the gathered net; (#5) all-OFF≡HEAD bit-identical + control. Regression guard: 6a/6b/dimer-glide all
 re-ran bit-identical PASS. New: `MiniGlideHarness`, `run_miniglide.sh`. Report:
-`INC6_GLIDE_MINIFIL_FINDINGS.md`; JOURNAL 2026-06-17 (6-glide part 2).
+`docs/INC6_GLIDE_MINIFIL_FINDINGS.md`; JOURNAL 2026-06-17 (6-glide part 2).
 ```
 ./run_miniglide.sh         # GPU + CPU cross-check: #1 gather-under-load, #2 gates, #3 bipolar, #5 all-OFF
 ./run_miniglide.sh -cpu    # CPU runner only (triage)
@@ -820,8 +820,8 @@ was the dominant fix — without it the free minifilament's drift over-stretched
 SHARED FAITHFUL PHYSICS, quantitatively matched** (no bug; the original low-tension was the deleted bespoke
 version, the bursty-high was the missing cap). Step-3 force-coverage audit (`-audit`): pin `forceSum` = chain +
 gather, residual 0, pin force purely chain-transmitted (the `jointForceSum`-omission gotcha cannot occur). New:
-`PinSystem`, `ContractileAssayHarness`, `run_contractile.sh`. Report: `INC6_CONTRACTILE_ASSAY_FINDINGS.md`
-(§4/§6b/§7b); spec: `INC6_CONTRACTILITY_ASSAY_SURVEY.md`; JOURNAL 2026-06-17. Optional next: port v1's confining
+`PinSystem`, `ContractileAssayHarness`, `run_contractile.sh`. Report: `docs/INC6_CONTRACTILE_ASSAY_FINDINGS.md`
+(§4/§6b/§7b); spec: `docs/INC6_CONTRACTILITY_ASSAY_SURVEY.md`; JOURNAL 2026-06-17. Optional next: port v1's confining
 chamber box (removes the residual mild drift).
 ```
 ./run_contractile.sh            # GPU + CPU cross-check: #1 crux, #4 control, #5 no-op, #6 general, #7 box CPU≡GPU, #2 contracts, #3 CPU≡GPU
@@ -859,10 +859,10 @@ cap (c7a2257) already keeps the minifilament inside the chamber. So the chamber 
 and ready (gate #6 proves it fires the instant a body crosses a wall) but does not engage here — it
 neither tightens the axial residual nor perturbs the within-SEM match (the safe outcome; the cap was the
 steadiness fix, the box is the general primitive for its own sake). New: `ContainmentSystem` + contractile
-`-drift` mode + gates #5/#6/#7. Report: `INC6_CONTAINMENT_FINDINGS.md`; JOURNAL 2026-06-17.
+`-drift` mode + gates #5/#6/#7. Report: `docs/INC6_CONTAINMENT_FINDINGS.md`; JOURNAL 2026-06-17.
 
 **Increment 6c Stage A — the protein NODE entity (radial motor-bundle, fixed anchor) — DONE (2026-06-18).**
-The protein node built FRESH as a motor-bundle (recon `INC6_NODE_RECON.md`): a fixed-anchor sphere node —
+The protein node built FRESH as a motor-bundle (recon `docs/INC6_NODE_RECON.md`): a fixed-anchor sphere node —
 the **4th `RigidRodBody`** (isotropic sphere drag, radius 0.05 µm, NEVER integrated = the v1 `AnchorNode`
 immobilization) — owning **radially-splayed singlet myosins + dimers**. The node mechanism IS the
 minifilament's (a rigid body owning motor-children via a fracMove tether + a single-ended backbone-side
@@ -888,7 +888,7 @@ body (0.180→0.167 µm); #5 fixed anchor Δpose=0 under load; #6 all-OFF≡HEAD
 signed `attachCoeffK` carries atEnd1) + in-kernel zVec. **Seam #1 (separable motor/nucleation) kept OPEN**
 for Stage B. New files only: `NodeStore`, `NodeSystem`, `ProteinNodeHarness`, `run_node.sh`; no shared file
 touched ⇒ prior harnesses byte-unchanged (minifil+dimer re-run PASS); `BoA-v1ref` byte-clean; production
-untouched; node default-off. Report: `INC6C_NODE_STAGEA_FINDINGS.md`; JOURNAL 2026-06-18.
+untouched; node default-off. Report: `docs/INC6C_NODE_STAGEA_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
 ./run_node.sh              # GPU + CPU cross-check (gather, gather-under-load, binding, cap, containment, anchor)
 ./run_node.sh -cpu         # CPU runner only (triage)
@@ -916,7 +916,7 @@ slot inert (stays exactly parked) + non-J filaments unperturbed (Δ=0) + partici
 (C) a born filament is bound (0→8 motors) + gathers cross-bridge load (gather==brute Δ=0), a parked FREE filament
 is not bound. **Regression (no-op-when-all-active):** node/minifil/dimer/dimerglide/miniglide/stroke/xbridge/
 motor/contractile/xlink all re-run PASS + foundational FDT within 5%. New files only + 1 additive `FilamentStore`
-edit; `BoA-v1ref` byte-clean; production untouched. Report: `INC6C_NODE_STAGEB1_FINDINGS.md`; JOURNAL 2026-06-18.
+edit; `BoA-v1ref` byte-clean; production untouched. Report: `docs/INC6C_NODE_STAGEB1_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
 ./run_filbirth.sh           # GPU + CPU cross-check (allocator, born≡preplaced, inert free slot, binding+gather)
 ./run_filbirth.sh -cpu      # CPU runner only (triage)
@@ -953,7 +953,7 @@ an elevated 2000/s — v1's 0.001/s ⇒ 1e-8 unobservable, validated by formula;
 1.30e-3 undamped); publish-guard (FREE→STORE_NONE, no-op when all-active). Regression:
 filbirth/node/grid/motor/minifil/dimerglide/miniglide/contractile bit-identical. New files + additive edits
 only; `BoA-v1ref` byte-clean; production a no-op (`forminsPerNode=0`). Report:
-`INC6C_NODE_STAGEB2_FINDINGS.md`; JOURNAL 2026-06-18.
+`docs/INC6C_NODE_STAGEB2_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
 ./run_nodenuc.sh           # GPU + CPU cross-check (rate, tether, dissolution, pool, no-op, damping, publish-guard, CPU≡GPU)
 ./run_nodenuc.sh -cpu      # CPU runner only (triage)
@@ -977,7 +977,7 @@ minifilament ⇒ no v1 numeric oracle for a node, §8); #3 CPU≡GPU (determinis
 past a wall). **Free (default) vs fixed-anchor (`-anchor`, the ring's mode)** both validated, same regime.
 Nucleation OFF (exercises the MOTOR-function). New files only (`NodeContractileHarness`,
 `run_nodecontract.sh`) ⇒ prior harnesses bit-identical (node/minifil/contractile/dimer re-run PASS);
-`BoA-v1ref` byte-clean; production untouched. Report: `INC6_NODE_CONTRACTILE_FINDINGS.md`; JOURNAL
+`BoA-v1ref` byte-clean; production untouched. Report: `docs/INC6_NODE_CONTRACTILE_FINDINGS.md`; JOURNAL
 2026-06-18. **Foreshadows the post-node fixed-anchor contractile RING.**
 ```
 ./run_nodecontract.sh        # GPU + CPU: #2 contracts, #3 CPU≡GPU, #4 control, #5 containment
@@ -987,7 +987,7 @@ Nucleation OFF (exercises the MOTOR-function). New files only (`NodeContractileH
 
 **Increment 6c — actin POLYMERIZATION: barbed-end elongation (lengthen + split, growth-only) — DONE
 (2026-06-18).** The **first dynamic actin GROWTH in SoftBox** (filaments were static-length through inc 6).
-Filaments elongate at the **node-side barbed end** (recon `INC6C_POLYMERIZATION_RECON.md`, granularity fork
+Filaments elongate at the **node-side barbed end** (recon `docs/INC6C_POLYMERIZATION_RECON.md`, granularity fork
 resolved favorably): **the granularity mapping is "lengthen the terminal segment, then split"** — v1 and
 SoftBox are the SAME shape (a length-mutable rod carrying `monomerCount`, `segLength=(monomerCount+1)·
 actinMonoRadius`, the drag-from-`monomerCount` recompute on both sides), so growth turned on a **dormant,
@@ -1012,7 +1012,7 @@ FilSegment:409-419**, recon flag c); (8) participates + dt-stable (80k Brownian 
 reciprocal valid). **Default-OFF; B1/B2/node regressions bit-identical.** New files only:
 `GrowthSystem`/`GrowthStore`/`GrowthHarness`/`run_growth.sh` +3 Constants additions (no existing value
 changed) ⇒ prior harnesses byte-unchanged; `BoA-v1ref` byte-clean; production untouched. Report:
-`INC6C_POLYMERIZATION_FINDINGS.md`; JOURNAL 2026-06-18.
+`docs/INC6C_POLYMERIZATION_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
 ./run_growth.sh            # GPU + CPU cross-check (lengthen, split@64, rate+pool, growing-end, no-op, drag-clamp, participates, CPU≡GPU)
 ./run_growth.sh -cpu       # CPU runner only (triage)
@@ -1046,7 +1046,7 @@ geometric artifact, NOT a sign bug — the pull direction is validated by Gate 0
 `CrossBridgeSystem`; cross-capture needs the foreign filament to nearly bridge to the partner per `rodDotFil≥0`).
 Many-node ring condensation + ensemble confirmation = follow-on. **`-nodebrown`** (default 0.05) damps the tiny
 node sphere's thermal wander to resolve the directed regime (node = large/slow complex in vivo; node-body scale
-only). Report: `INC6C_TESTB_SCPR_FINDINGS.md`; JOURNAL 2026-06-18.
+only). Report: `docs/INC6C_TESTB_SCPR_FINDINGS.md`; JOURNAL 2026-06-18.
 ```
 ./run_testb.sh             # GPU + CPU: Gate 0 → CPU≡GPU → Stage 1 (distance trace + cross/self-capture readout)
 ./run_testb.sh -cpu        # CPU runner only (triage)
@@ -1069,10 +1069,10 @@ preclude it (the filament exits through its own node's partner-facing hemisphere
 cross-capture carries the net pull (jba's intuition holds operationally). **Post-min OVERRUN (OUT OF SCOPE):**
 monotonic growth + no depoly ⇒ the filament overruns the closed gap and the nodes drift back apart — this is the
 INITIAL-approach test; sustained contraction needs turnover (deferred; harness flags the overrun). Report:
-`INC6C_TESTB_AIMED_SCPR_FINDINGS.md`; JOURNAL 2026-06-18. `./run_testb.sh -aimed` (`-cpu`, `-3js threejs_testb_aimed`).
+`docs/INC6C_TESTB_AIMED_SCPR_FINDINGS.md`; JOURNAL 2026-06-18. `./run_testb.sh -aimed` (`-cpu`, `-3js threejs_testb_aimed`).
 
 **Increment 6c — faithfulness fix: v1's node-held binding exclusion restored (2026-06-18).** The v1 audit
-(`INC6C_V1_SELFCAPTURE_AUDIT_FINDINGS.md`) found v2 unfaithful: v1 excludes any node-held filament segment from
+(`docs/INC6C_V1_SELFCAPTURE_AUDIT_FINDINGS.md`) found v2 unfaithful: v1 excludes any node-held filament segment from
 myosin binding (`BoA-v1ref/boxOfActin/MyoMotor.java:391-392`, `if (soaNodeAtEnd2) return;`) and v2's
 `reachTestDistSq` dropped it in inc 4a (no nodes then) and never restored it. **Restored** as additive
 `BindingDetectionSystem.bruteReachableNodeAware`/`bindNearestNodeAware` — one data-driven line `if
@@ -1085,15 +1085,15 @@ self-capture is entirely on OUTER (`seedNode<0`) segments ~0.124 µm from the ow
 (~0.183 µm) — a v2 geometry divergence (v1's exclusion is also tip-only; the gap is likely closed by the
 **force-dependent formin RELEASE**, the flagged next piece — Test B set `detachRate=0`). So `seedNode`/v1
 `nodeAtEnd2` now has **THREE roles**: (1) nucleation bond, (2) the elastic tether, (3) **binding exclusion** —
-role 3 is the one the node recon missed (`INC6_NODE_RECON.md:128,136`). Report:
-`INC6C_SELFCAPTURE_RULE_FINDINGS.md`; JOURNAL 2026-06-18.
+role 3 is the one the node recon missed (`docs/INC6_NODE_RECON.md:128,136`). Report:
+`docs/INC6C_SELFCAPTURE_RULE_FINDINGS.md`; JOURNAL 2026-06-18.
 
 **Increment 6c — BARBED-END CONVENTION SWAP: v2 now uniformly barbed=end2 (= v1) (2026-06-19).** The
-self-grab's ROOT CAUSE (`INC6C_BINDING_ORIENTATION_DIAGNOSIS_FINDINGS.md`): v2 was internally **inconsistent** —
+self-grab's ROOT CAUSE (`docs/INC6C_BINDING_ORIENTATION_DIAGNOSIS_FINDINGS.md`): v2 was internally **inconsistent** —
 all shared systems + non-node assays used **barbed=end2** (uVec→plus, = v1), but the inc-6c node/growth/nucleation
 subsystem used **barbed=end1** (node-filament uVec OUTWARD), which **inverted the `rodDotFil≥0` gate** for a node's
 own filament ⇒ self-grab. **FIXED at the root** by realigning ONLY the node subsystem to barbed=end2 (the survey
-`INC6C_CONVENTION_SWAP_SURVEY.md`): the node-attached filament's `uVec` now points **INWARD** (barbed end2 at the
+`docs/INC6C_CONVENTION_SWAP_SURVEY.md`): the node-attached filament's `uVec` now points **INWARD** (barbed end2 at the
 node), so v2's **UNMODIFIED** bind gate computes `rodDotFil<0` for own outward myosins and rejects self-grab as v1
 does — **NO gate / §A shared-system edit.** Atomic §B swap (`NodeNucleationSystem` emit/seedTether; `GrowthSystem`
 grow/markSplits/splitWire — coord-shift signs negated, parent keeps end2 fixed, 3-slot rewire mirrored;
@@ -1104,7 +1104,7 @@ paths); §B gates re-pass (growth/nodenuc/filbirth/node; split@64 rewire valid +
 lifecycle); **Test B′ self-grab GONE** (self-capture 0.00 / 0.000 pN, was 12.4; cross-capture survives peak 10;
 nodes approach 0.600→0.483 µm ~27× noise) — reproduces v1's clean-coalescing twoNodeFormin. The §6c
 SELFCAPTURE_RULE "geometry caveat" (residual outer-segment self-grab) is **resolved by this swap** (not the deferred
-formin release). Report: `INC6C_CONVENTION_SWAP_FINDINGS.md`; JOURNAL 2026-06-19. **The convention is now settled
+formin release). Report: `docs/INC6C_CONVENTION_SWAP_FINDINGS.md`; JOURNAL 2026-06-19. **The convention is now settled
 codebase-wide before the contractile ring builds on it.**
 
 **Seams registry (parameterized extension points kept OPEN):** **#1 motor/nucleation** (the node's
@@ -1131,7 +1131,7 @@ minifilament assembly/`myoMiniLifetime`.
 
 **Increment 7 (actin turnover) — Stage 0/1 depoly+death, AGING proxy, cofilin SEVERING, viewer — DONE (see JOURNAL
 2026-06-19/06-20). DEAD-SLOT REUSE FIX — DONE (2026-06-21).** The flagged hazard (a nucleation-reused dead slot
-born `monomerCount=0` + stale-ADP `nucFrac`, INC7_STAGE1_FINDINGS.md §"Reused-slot monomerCount") is closed:
+born `monomerCount=0` + stale-ADP `nucFrac`, docs/INC7_STAGE1_FINDINGS.md §"Reused-slot monomerCount") is closed:
 nucleation now FULLY initializes the newborn via `NodeNucleationSystem.initNewborn` (`monomerCount=actinSeed`,
 `segLength=seedLen`) + `AgingSystem.nucleateFreshAtp` (`nucFrac=(1,0,0)`) — additive, mirroring the split
 `splitWire`+`splitInheritNuc` precedent (the `tagSeeds` rank→slot iteration, race-free); drag via `recomputeDrag`.
@@ -1139,7 +1139,7 @@ Audit found EXACTLY those two stale fields (+ geometry `segLength`), not a broad
 **FIRST turnover + nucleation coexistence** (the ring precondition, `DeadSlotReuseHarness`/`run_deadslot.sh`): 2250
 dead-slot reuses all correct, **conservation EXACT** through the recycle, **CPU≡GPU bit-identical**, a fix-OFF
 control reproducing the exact `actinSeed·#reuse` deficit, turnover-only/nucleation-only regressions unchanged.
-`BoA-v1ref` byte-clean; production untouched; default-off. Report: `INC7_DEADSLOT_FIX_FINDINGS.md`.
+`BoA-v1ref` byte-clean; production untouched; default-off. Report: `docs/INC7_DEADSLOT_FIX_FINDINGS.md`.
 ```
 ./run_deadslot.sh        # GPU + CPU (newborn correctness, conservation, fix-off control, regression, CPU≡GPU)
 ./run_deadslot.sh -cpu   # CPU runner only (triage)
@@ -1164,7 +1164,7 @@ turnover + the shared pool). **Reveals for the ring:** mechanisms compose at sca
 loss is **3D-random orientation in a planar net** ⇒ an in-plane/toward-neighbour nucleation bias (seam-#3 SPECIFIED)
 is the cheapest next lever; FREE nodes clump into a BALL — turning it into a RING needs the membrane/cortex
 **geometric constraint** (later increment; the net does NOT fly apart ⇒ constraint is geometry, not stability).
-Report: `INC7_RING_3x3_FINDINGS.md`; JOURNAL 2026-06-22.
+Report: `docs/INC7_RING_3x3_FINDINGS.md`; JOURNAL 2026-06-22.
 ```
 ./run_ring3x3.sh                          # CPU experiment (default 3×3, spacing 0.25, 6 formins, 30000 steps) — COALESCES
 ./run_ring3x3.sh -gpu -steps 30000        # + GPU device-resident scale/no-crash/throughput check
@@ -1194,7 +1194,7 @@ Stage-1 deferral (fragments turn over + conserve but shrink only from the pointe
 faithful machinery's honest behaviour (not a bug). **For the ring:** sustained severing + a persistent contractile
 structure need a growth source that replenishes whole severed segments (multi-site/branched nucleation, faster
 barbed growth, or end2-aware recycling) — the formin-pinned single-tip mode can't. Report:
-`INC7_RING_3x3_TURNOVER_FINDINGS.md`; JOURNAL 2026-06-22.
+`docs/INC7_RING_3x3_TURNOVER_FINDINGS.md`; JOURNAL 2026-06-22.
 ```
 ./run_ring3x3.sh                 # full turnover (winds down — the finding)  | -nosever → coalesces 39% | -noaging -nosever → 49%
 ./run_ring3x3.sh -gpu -steps 30000           # + GPU device scale/no-crash/CPU≡GPU-aggregate
@@ -1209,7 +1209,7 @@ CONTAINMENT, all on one shared `FilamentStore.forceSum`. PURE COMPOSITION (no ne
 edit). Aberration hunt (KIN=1, 20k steps) CLEAN: conservation EXACT, 0 phantoms, no crash, gentle contraction;
 behaviors surfaced+explained (t=0 warm-start transient ×aeta drag, rare wall-contact containment kicks,
 sparse-network binding at faithful 0.025µm reach, the `filID`-must-be-chain-id crosslinker fix). Report:
-`FULL_SYSTEM_DEMO_FINDINGS.md`; JOURNAL 2026-06-22. **Renders:** `threejs_fulldemo` (KIN=1), `threejs_fulldemo_lifecycle`
+`docs/FULL_SYSTEM_DEMO_FINDINGS.md`; JOURNAL 2026-06-22. **Renders:** `threejs_fulldemo` (KIN=1), `threejs_fulldemo_lifecycle`
 (KIN=30 viewing-speed), `threejs_fulldemo_dense` (`-dense`).
 **⇒ THE GPU BLOCKER (the next task):** the FULL merged device graph (~100 tasks: turnover+nucleation+node-shell+
 free-minifil+grid-binding) is **already written** in `FullSystemDemoHarness.buildPlan()`, but **TornadoVM throws
