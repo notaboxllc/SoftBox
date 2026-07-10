@@ -209,7 +209,9 @@ public final class MotorStore {
         headTiltCS = new FloatArray(3);            // PHASE-2 HEAD-ANGLE SWEEP θ (default unused; setFlag 0)
         stats    = new IntArray(2 * nMotors);
         capStats = new IntArray(nMotors);          // §6.10 break-force release fires per motor (measurement only)
-        kinParams = new FloatArray(21);   // [0..17] kinetics; [18]=F_ext (N, measurement); [19]=-nobind; [20]=-adppibind (ADP·Pi bind-gate)
+        kinParams = new FloatArray(28);   // [0..17] kinetics; [18]=F_ext (N, measurement); [19]=-nobind; [20]=-adppibind (ADP·Pi bind-gate)
+        // AZIMUTHAL (Inc 2): [22]=cos(Δ accept), [23]=twistRate rad/µm (signed, LEFT-handed), [24]=monomer spacing µm, [25]=azGate(0/1). Default 0 ⇒ gate off ⇒ byte-identical.
+        // AZIMUTHAL (Inc 3): [26]=falloff steepness n (graded orientational affinity a=b^n, b=max_s (1−headU·n̂)/2). n=0 ⇒ a≡1 ⇒ baseline.
         cooldown  = new IntArray(nMotors);
         counts    = new IntArray(4);
         publishParams = new IntArray(1);

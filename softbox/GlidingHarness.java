@@ -136,6 +136,8 @@ public final class GlidingHarness {
     static int SEED = 0x6111D;   // varied across an ensemble (placement + RNG)
     static boolean BOX = false;      // -box: wire the ContainmentSystem chamber over the gliding filament (v1-faithful: anchored motors un-boxed)
     static boolean BOX_ALL = false;  // -boxall: additionally confine every motor sub-body (upper-bound box-check load at 3·nMotors bodies)
+    static double  ZCONFINE = 0;     // -zconfine <nm>: FILAMENT-ONLY tight-z chamber half-width (nm→µm); 0 = off (byte-identical). Mechanism test: pin the filament near the z=0 motor plane (motors stay un-boxed — they are tethered) to close the out-of-plane disengagement runaway. See docs/GLIDING_OUTOFPLANE_DISENGAGEMENT_FINDINGS.md.
+    static double  MATBOX_Z = 0;     // -matbox <nm>: MAT-SIZED reach-preserving chamber (COLTOL_REGIME_SWEEP PART 0). z half-width = nm (LOOSE, ~order the motor z-reach ~50 nm ⇒ inactive in the engaged state, only bites an out-of-plane wander — isolation, not a plane pin); y walls at the mat extent ±bYhalf (bed is y-symmetric about 0 ⇒ keeps the filament over the lawn, fixing the y-coverage escape that corrupts high-density points); x FREE (∞, preserves the −x glide runway). 0 = off (byte-identical). Distinct from -zconfine (which sets x/y→∞).
     // ---- SUBSTEP_FEASIBILITY (MEASUREMENT-ONLY): bound fraction + bound-cross-bridge slice X + per-outer-dt site motion ----
     static boolean SUBSTEP = false;              // -substep
     static double  OUTER_DT = 1.0e-4;            // -outerdt <s>
@@ -160,6 +162,20 @@ public final class GlidingHarness {
     static double  MATBAND_EXC = 1.2;            // −x glide excursion budget (µm) sizing the band's −x extent
     static final double MATBAND_MARGIN = 0.15;   // extra −x margin (µm) beyond swept extent (> motor x-reach + capture) ⇒ dropped motors provably never bind
 
+    // ---- AZIMUTHAL BINDING (increment 2): the springs-continuum roll spring (Inc 1/1b) wired into the gliding
+    //      filament path + the orientational binding gate. Default OFF ⇒ canonical byte-identical. ----
+    static boolean ROLL_SPRING = false;   // -rollonly (PART-A checkpoint) / -azimbind: torsional-roll spring on the gliding filament (coherent helical frame)
+    static boolean AZ_GATE = false;       // -azimbind: the orientational bind gate (head uVec antiparallel to the presented actin-site radial within Δ)
+    static double AZ_ACCEPT_DEG = 45.0;   // -azaccept <deg>: acceptance half-window Δ (Inc-2 hard cutoff)
+    static boolean AZ_FALLOFF = false;    // -azfalloff <n>: GRADED orientational affinity (Inc 3) — replaces the hard cutoff with a=b^n falloff + MAX-combine + a race-free bind draw
+    static double AZ_FALLOFF_N = 0.0;     // falloff steepness n (0 ⇒ a≡1 ⇒ baseline)
+    static double ROLL_STIFF = 0.5;       // roll-spring fraction stiffness f (springs: k=f·γ_red/refDt)
+    static double BRAKE_HOLD = 1.0;       // -brakehold <s>: RECRUIT/SHED BALANCE diagnostic — scale ×s on the SIGNED catch-slip CATCH term strength (kinParams[1]=αCatch, the term e^(−F·xCatch/kT) that EXPLODES for a back-strained brake head F<0 ⇒ sheds resisting heads). s<1 slows brake shedding (brakes persist longer); s=1 = skeletal ⇒ canonical byte-identical. Diagnostic only, no default rate change.
+    static double ROLL_DAMP = 0.1;        // roll thermostat: fraction of the roll Brownian kick retained
+    static final double TWIST_PER_MON_DEG = -166.5;   // actin 13/6, LEFT-handed (Inc 1); handedness sets the gated azimuths
+    static final double ROLL_REF_DT = 1.0e-5;         // springs reference dt (dt-honest, Inc 1b)
+    static double wrapPi(double a) { double T = 2*Math.PI; a -= T*Math.floor((a+Math.PI)/T); if (a > Math.PI) a -= T; return a; }
+
     public static void main(String[] args) {
         int M = 2000;
         String viz = null;
@@ -175,6 +191,11 @@ public final class GlidingHarness {
             if (args[i].equals("-3js")) viz = args[++i];
             else if (args[i].equals("-vizframes")) VIZ_FRAMES = Integer.parseInt(args[++i]);
             else if (args[i].equals("-rebindtime")) REBIND_TIME = Double.parseDouble(args[++i]);   // post-release refractory in seconds (big = can't rebind in the same spot)
+            else if (args[i].equals("-rollonly")) ROLL_SPRING = true;                 // PART-A checkpoint: roll spring on, gate OFF
+            else if (args[i].equals("-azimbind")) { ROLL_SPRING = true; AZ_GATE = true; }  // roll spring + orientational bind gate
+            else if (args[i].equals("-azaccept")) AZ_ACCEPT_DEG = Double.parseDouble(args[++i]);
+            else if (args[i].equals("-azfalloff")) { ROLL_SPRING = true; AZ_FALLOFF = true; AZ_FALLOFF_N = Double.parseDouble(args[++i]); }  // Inc 3: graded affinity (implies roll spring for the coherent frame)
+            else if (args[i].equals("-brakehold")) BRAKE_HOLD = Double.parseDouble(args[++i]);   // RECRUIT/SHED BALANCE: scale ×s on the signed catch-slip CATCH term (sheds back-strained brakes); s<1 = brakes persist longer; default 1.0 ⇒ byte-identical
             else if (args[i].equals("-diag")) diag = true;
             else if (args[i].equals("-cycldiag")) cycldiag = true;
             else if (args[i].equals("-brakediag")) BRAKEDIAG = true;   // PART B brake decomposition
@@ -191,6 +212,8 @@ public final class GlidingHarness {
             }
             else if (args[i].equals("-box")) BOX = true;            // ContainmentSystem over the filament (v1-faithful)
             else if (args[i].equals("-boxall")) { BOX = true; BOX_ALL = true; }  // + over every motor sub-body (load upper bound)
+            else if (args[i].equals("-zconfine")) { BOX = true; ZCONFINE = Double.parseDouble(args[++i]) * 1.0e-3; }  // FILAMENT-ONLY tight-z chamber (mechanism test): half-width nm→µm; only z-walls bite (x/y set ∞)
+            else if (args[i].equals("-matbox")) { BOX = true; MATBOX_Z = Double.parseDouble(args[++i]) * 1.0e-3; }      // MAT-SIZED reach-preserving chamber: z half-width nm (loose), y at mat ±bYhalf, x free (COLTOL_REGIME_SWEEP PART 0)
             else if (args[i].equals("-seed")) SEED = 0x6111D + 7919 * Integer.parseInt(args[++i]);
             else if (args[i].equals("-dt")) DT = Double.parseDouble(args[++i]);   // dt-convergence test
             else if (args[i].equals("-myospring")) MYO_SPRING = Double.parseDouble(args[++i]) * 1.0e-9;  // MEASUREMENT-ONLY: cross-bridge stiffness in pN/nm (1 = default). Hookean F8 unchanged; production default unchanged.
@@ -321,6 +344,12 @@ public final class GlidingHarness {
         if (ALIGN_SPRINGS) System.out.printf(java.util.Locale.US, "  -alignsprings: MOTOR alignment frozen as FIXED SPRINGS. F9/F10/axlock 0.4→%.4f (build-time xbParams[2]); swing via swingParams[4]=−refDt (springify in-kernel). Byte-identical at refDt.%n", springify(0.4), DT);
         if (STRUCT_SPRINGS) System.out.printf(java.util.Locale.US, "  -structsprings: STRUCTURAL J1/J2/anchor frozen as FIXED SPRINGS. 0.4→%.4f (springify, build-time jointParams[1]/[5]/[9]) at dt=%.2e (refDt=%.2e). Byte-identical at refDt.%n", springify(0.4), DT, STROKE_REF_DT);
         if (PAIRS_SPRINGS && ALIGN_SPRINGS && STRUCT_SPRINGS) System.out.printf(java.util.Locale.US, "  [SPRINGS DEFAULT-ON: canonical transcendental-free formulation (SPRINGS_PROMOTION). Byte-identical at production dt=1e-5; diverges only below refDt. Use -nosprings to restore raw.]%n");
+        if (ROLL_SPRING) System.out.printf(java.util.Locale.US, "  AZIMBIND: roll spring ON (springs f=%.2f rolldamp=%.2f rest=%.1f°/joint, twistPerMon=%.1f° LEFT-handed); bind accept = %s.%n",
+                ROLL_STIFF, ROLL_DAMP, Math.toDegrees(wrapPi(FIL_MONO * TWIST_PER_MON_DEG * Math.PI / 180.0)), TWIST_PER_MON_DEG,
+                AZ_FALLOFF ? String.format("GRADED FALLOFF n=%.1f (Inc 3, MAX-combine + draw)", AZ_FALLOFF_N)
+                          : AZ_GATE ? String.format("HARD gate Δ=%.0f° (Inc 2)", AZ_ACCEPT_DEG) : "none (PART-A roll-only checkpoint)");
+        if (MATBOX_Z > 0) System.out.printf(java.util.Locale.US, "  -matbox: MAT-SIZED reach-preserving chamber ON — z half-width %.1f nm (loose, isolation-not-pin), y-walls at mat ±%.2f µm, x free. Keeps the filament over the lawn (y-coverage) + suppresses the out-of-plane runaway. Flag-gated, default-off byte-identical.%n", MATBOX_Z * 1e3, bYhalf);
+        else if (ZCONFINE > 0) System.out.printf(java.util.Locale.US, "  -zconfine: FILAMENT-ONLY tight-z chamber ON — z half-width %.1f nm, x/y → ∞. Mechanism test (out-of-plane runaway).%n", ZCONFINE * 1e3);
         if (SWING_K_BITS != -1) System.out.printf(java.util.Locale.US, "  -swingkbits: swing coeff FORCED to %s (bits 0x%08x), size-4 (no in-kernel recompute); both runners. (0.4f=0x3ecccccd.)%n", ""+Float.intBitsToFloat(SWING_K_BITS), SWING_K_BITS);
         if (SWING_K_PROBE) { diagMark("swingKProbe: kernel swing-coefficient extraction (no physics scene)"); swingKProbe(gpu); return; }
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
@@ -356,6 +385,7 @@ public final class GlidingHarness {
         IntArray segMotorCount, segMotorOffsets, segMotorMyo;
         IntArray reachSeg; IntArray reachCount;
         FloatArray segImplPrev;               // -xbimplicit2: per-segment pre-integration center q_n (planar 3·nSeg)
+        FloatArray rollParams;                // -azimbind/-rollonly: the springs-continuum roll spring params [dt,f,rest,mode,kHooke,rolldamp,refDt]
         double segL, x0;
         double bandXlo = Double.NEGATIVE_INFINITY;   // -matband: −x mat boundary (motors below it were dropped); edge-guard reference
     }
@@ -456,9 +486,17 @@ public final class GlidingHarness {
         FilamentStore fil = new FilamentStore(nSeg);
         double x0 = bX0;               // filament +x end; glides −x with room for a long run
         sc.x0 = x0;
+        // AZIMUTHAL (Inc 2): the helix azimuthal rate (rad/µm), signed by the LEFT-handed actin convention. The roll
+        // spring's per-joint rest = twistRate·segLen (center-to-center) EXACTLY equals the gate's intra-segment φ
+        // accumulation crossing a joint ⇒ n̂(s) is continuous across segment boundaries (single source of the rate).
+        // Seed the yVec frames at the TWISTED REST (Inc-1: a straight start is a degenerate saddle) ⇒ coherent from step 0.
+        double twistRatePerUm = TWIST_PER_MON_DEG * Math.PI / 180.0 / Constants.actinMonoRadius;   // rad/µm (LEFT-handed ⇒ negative)
+        double rollRest = ROLL_SPRING ? wrapPi(twistRatePerUm * L) : 0.0;
         for (int s = 0; s < nSeg; s++) {
             fil.monomerCount.set(s, FIL_MONO);
-            fil.setUVec(s, 1f, 0f, 0f); fil.setYVec(s, 0f, 1f, 0f);     // plus-end +x
+            fil.setUVec(s, 1f, 0f, 0f);                                 // plus-end +x
+            if (ROLL_SPRING) { double a = s * rollRest; fil.setYVec(s, 0f, (float) Math.cos(a), (float) Math.sin(a)); }
+            else fil.setYVec(s, 0f, 1f, 0f);
             fil.setCoord(s, (float) (x0 - (nSeg - 1 - s) * L), 0f, (float) FIL_Z);
             fil.brownTransScale.set(s, (float) Constants.BTransCoeff);   // 1.0
             boolean end = (s == 0 || s == nSeg - 1);
@@ -487,6 +525,13 @@ public final class GlidingHarness {
         fil.chainParams.set(3, filFracMoveTorq); fil.chainParams.set(4, 0f); fil.chainParams.set(5, 1.0e-20f);
         fil.chainParams.set(6, (float) Constants.actinMonoRadius);
         DerivedGeometrySystem.derive(fil.coord, fil.uVec, fil.yVec, fil.zVec, fil.end1, fil.end2, fil.segLength, fil.counts);
+
+        // AZIMUTHAL (Inc 2): the springs-continuum roll-spring params (mode 2 = dt-honest fixed stiffness, Inc 1b).
+        sc.rollParams = new FloatArray(7);
+        sc.rollParams.set(0, (float) DT);          sc.rollParams.set(1, (float) ROLL_STIFF);
+        sc.rollParams.set(2, (float) rollRest);    sc.rollParams.set(3, 2f);   // mode 2 = springs
+        sc.rollParams.set(4, 0f);                  sc.rollParams.set(5, (float) ROLL_DAMP);
+        sc.rollParams.set(6, (float) ROLL_REF_DT);
 
         // ---- motor bed: density-faithful patch around the filament's −x path. Wide enough in y that
         //      the filament's ends stay over motors as it rotates/wanders (v1's bed is the full 2µm-wide
@@ -552,6 +597,16 @@ public final class GlidingHarness {
         mot.setBodyParams(DT); mot.setJointParams(DT); mot.setKinParams(0.006, -0.4, DT); mot.setNucParams(DT);
         if (COL_TOL != 0.006) mot.kinParams.set(7, (float) COL_TOL);   // CAPTURE-RADIUS sweep: override myoColTol (bind reach). Widens the reachTestDistSq perp threshold in BOTH bruteReachable + bindNearest (CPU + GPU, kinParams[7] uploaded FIRST_EXECUTION). GlidingHarness binds brute-force (no grid) ⇒ no cell-size concern. Default 6 nm ⇒ untouched.
         if (ADPPI_BIND) mot.kinParams.set(20, 1.0f);   // STEP A: enable the ADP·Pi strong-bind gate in bindNearest (kinParams[20], uploaded FIRST_EXECUTION)
+        if (BRAKE_HOLD != 1.0) mot.kinParams.set(1, (float) (mot.kinParams.get(1) * BRAKE_HOLD));  // RECRUIT/SHED: scale αCatch (kinParams[1]) — slows shedding of back-strained brake heads (F<0). s=1 ⇒ untouched/byte-identical. Consumed by cycleLymnTaylor g(F) (canonical release) + catchSlipRelease*.
+        if (AZ_GATE || AZ_FALLOFF) {   // AZIMUTHAL (Inc 2/3): the presented-radial helix params (shared by hard gate + graded falloff)
+            mot.kinParams.set(23, (float) twistRatePerUm);                              // helix azimuthal rate (rad/µm), LEFT-handed
+            mot.kinParams.set(24, (float) Constants.actinMonoRadius);                   // monomer axial spacing (µm)
+        }
+        if (AZ_GATE) {   // AZIMUTHAL (Inc 2): the HARD orientational cutoff — head uVec antiparallel within Δ
+            mot.kinParams.set(22, (float) Math.cos(AZ_ACCEPT_DEG * Math.PI / 180.0));   // cos(Δ)
+            mot.kinParams.set(25, 1.0f);                                                // gate ON
+        }
+        if (AZ_FALLOFF) mot.kinParams.set(26, (float) AZ_FALLOFF_N);   // AZIMUTHAL (Inc 3): graded-affinity steepness n
         if (REBIND_TIME > 0) mot.kinParams.set(10, (float) Math.ceil(REBIND_TIME / DT));   // -rebindtime: post-release refractory (a released head can't rebind for this long); default 0 ⇒ the v1 myoRebindTime (byte-identical)
         if (KON > 0) mot.setSearchParams(KON, 0);        // PHASE-2 step-3: reaction-limited attachment rate kОn (kinParams[14])
         if (NOBIND) mot.kinParams.set(19, 1.0f);         // thermal-floor control: motors never bind (default-off no-op)
@@ -633,6 +688,27 @@ public final class GlidingHarness {
         sc.reachSeg = new IntArray(nMot * MAXC); sc.reachSeg.init(-1); sc.reachCount = new IntArray(nMot);
         // in-vitro chamber matching the bed (v1 MyoMiniFilament.checkOuterBugCollision law): [tau, boxX, boxY, boxZ, R, coeff, checkInt]
         sc.boxParams = FloatArray.fromElements(1.0e-4f, (float) (bXhi - bXlo), (float) (2 * bYhalf), 0.5f, 0.005f, 0.5f, 10f);
+        if (ZCONFINE > 0) {
+            // FILAMENT-ONLY tight-z chamber (mechanism test): only the z-walls bite. x/y dims → ∞ so the
+            // filament is unconstrained in-plane; z half-width = ZCONFINE (halfZ = 0.5·zDim − R, R = boxParams[4]);
+            // checkInt = 1 (confine every step, a firm z-wall). Motors stay un-boxed (BOX_ALL off) — tethered.
+            sc.boxParams.set(1, 1.0e6f);                                   // boxX → ∞
+            sc.boxParams.set(2, 1.0e6f);                                   // boxY → ∞
+            sc.boxParams.set(3, (float) (2.0 * (ZCONFINE + sc.boxParams.get(4))));  // boxZ ⇒ halfZ = ZCONFINE
+            sc.boxParams.set(6, 1f);                                       // checkInt = 1 (every step)
+        }
+        if (MATBOX_Z > 0) {
+            // MAT-SIZED reach-preserving chamber (COLTOL_REGIME_SWEEP PART 0): keep the filament over the motor
+            // lawn without pinning it to a plane. y-walls at the mat extent ±bYhalf (the bed IS y-symmetric about
+            // 0 ⇒ boxY = 2·bYhalf confines y to exactly the populated lawn, catching the y-wander that corrupts
+            // high-density coverage); z half-width = MATBOX_Z (LOOSE ~50 nm ⇒ inactive in the engaged state, only
+            // bites an out-of-plane excursion — isolation, not intervention); x → ∞ so the −x glide runway is free
+            // (x-coverage is handled by the -matbed/-full runway + the measurement window). checkInt = 1.
+            sc.boxParams.set(1, 1.0e6f);                                            // boxX → ∞ (glide runway free)
+            sc.boxParams.set(2, (float) (2.0 * bYhalf));                            // boxY = mat y-extent (explicit; = default)
+            sc.boxParams.set(3, (float) (2.0 * (MATBOX_Z + sc.boxParams.get(4))));  // boxZ ⇒ halfZ = MATBOX_Z
+            sc.boxParams.set(6, 1f);                                                // checkInt = 1 (every step)
+        }
         sc.fil = fil; sc.mot = mot;
         return sc;
     }
@@ -661,6 +737,10 @@ public final class GlidingHarness {
         if (CANONICAL)
             BindingDetectionSystem.bindCanonicalTwoPoint(b.coord, b.uVec, b.segLength, f.end1, f.end2, f.segLength,
                     sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.kinParams, mot.counts);
+        else if (AZ_FALLOFF)   // AZIMUTHAL (Inc 3): graded orientational affinity (MAX-combine + race-free bind draw)
+            BindingDetectionSystem.bindNearestFalloff(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, f.yVec, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
+        else if (AZ_GATE)   // AZIMUTHAL (Inc 2): orientational bind gate (bindNearest + the n̂-antiparallel scan)
+            BindingDetectionSystem.bindNearestAzim(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, f.yVec, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
         else
             BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
         if (TWISTCENSUS) CrossBridgeSystem.captureBindTwist(b.yVec, f.uVec, mot.boundSeg, sc.prevBoundTw, sc.twistHist, mot.counts);
@@ -715,13 +795,16 @@ public final class GlidingHarness {
         // --- filament dynamics: chain + Brownian + the gathered cross-bridge, then integrate ---
         ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        if (ROLL_SPRING) RollSpringSystem.dampRoll(f.randTorque, sc.rollParams, f.counts);   // AZIMUTHAL (Inc 2): thermostat the roll kick
         ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        if (ROLL_SPRING) RollSpringSystem.rollForces(f.uVec, f.yVec, f.end2NbrSlot, f.end1NbrSlot, f.bRotGam, f.torqueSum, sc.rollParams, f.counts);   // AZIMUTHAL (Inc 2): torsional-roll spring
         long _g = tns();
         CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, sc.segMotorCount);
         CrossBridgeSystem.csrScan(mot.counts, sc.segMotorCount, sc.segMotorOffsets);
         CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo);
         CrossBridgeSystem.segGather(sc.segMotorOffsets, sc.segMotorMyo, sc.bondData, f.forceSum, f.torqueSum, mot.counts);
         sliceNs[GATHER] += tns() - _g;
+        if (BOX) ContainmentSystem.confine(f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, sc.boxParams, f.counts);  // matches buildPlan confineFil (GPU); CPU-arbiter parity for -box/-zconfine
         if (XB_IMPLICIT2 || SEG_IMPLICIT) CrossBridgeSystem.snapshotSegCenter(f.coord, sc.segImplPrev);
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
@@ -769,6 +852,7 @@ public final class GlidingHarness {
         if (TWISTCENSUS) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.twistHist, sc.prevBoundTw);
         if (PERPHEAD) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.perpRest, mot.headTiltCS);
         if (TAU_AVG > 0 || LYMN_TAYLOR) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.forceDotAvg, mot.avgInit);
+        if (ROLL_SPRING) tg = tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, sc.rollParams);   // AZIMUTHAL (Inc 2): roll-spring params
         // reach (common)
         tg = tg
             .task("publishHead", MotorStore::publishHeadFromBody, b.coord, b.uVec, b.segLength, mot.head, mot.uVec, mot.rodUVec, mot.counts)
@@ -783,6 +867,10 @@ public final class GlidingHarness {
                 tg = tg.task("release", NucleotideCycleSystem::catchSlipRelease, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.cooldown, mot.stats, mot.capStats, mot.kinParams, mot.counts);
             if (CANONICAL)
                 tg = tg.task("bind", BindingDetectionSystem::bindCanonicalTwoPoint, b.coord, b.uVec, b.segLength, f.end1, f.end2, f.segLength, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.bindArc2, mot.canonSnap, mot.kinParams, mot.counts);
+            else if (AZ_FALLOFF)   // AZIMUTHAL (Inc 3): graded orientational affinity + race-free bind draw (localWork=64 via the nM addW group)
+                tg = tg.task("bind", BindingDetectionSystem::bindNearestFalloff, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, f.yVec, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
+            else if (AZ_GATE)   // AZIMUTHAL (Inc 2): orientational bind gate variant (f.yVec threaded; 13 args)
+                tg = tg.task("bind", BindingDetectionSystem::bindNearestAzim, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, f.yVec, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
             else
                 tg = tg.task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
             if (TWISTCENSUS) tg = tg.task("bindTwist", CrossBridgeSystem::captureBindTwist, b.yVec, f.uVec, mot.boundSeg, sc.prevBoundTw, sc.twistHist, mot.counts);
@@ -827,8 +915,12 @@ public final class GlidingHarness {
                 .task("register", CrossBridgeSystem::registerForceDot, sc.bondData, mot.boundSeg, mot.forceDotFil, mot.forceMag, mot.forceDotHist, mot.forceDotPlace, mot.counts)
                 .task("zeroFil", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts);
             tg = tg
-                .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
-                .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
+                .task("brownFil", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+            if (ROLL_SPRING) tg = tg.task("dampRoll", RollSpringSystem::dampRoll, f.randTorque, sc.rollParams, f.counts);   // AZIMUTHAL (Inc 2): thermostat the roll kick
+            tg = tg
+                .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+            if (ROLL_SPRING) tg = tg.task("rollForces", RollSpringSystem::rollForces, f.uVec, f.yVec, f.end2NbrSlot, f.end1NbrSlot, f.bRotGam, f.torqueSum, sc.rollParams, f.counts);   // AZIMUTHAL (Inc 2): torsional-roll spring (‖u torque → bwx)
+            tg = tg
                 .task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, sc.segMotorCount)
                 .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, sc.segMotorCount, sc.segMotorOffsets)
                 .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, sc.segMotorOffsets, sc.segMotorCount, sc.segMotorMyo)
@@ -871,6 +963,7 @@ public final class GlidingHarness {
         }
         for (String t : new String[]{ "zeroMot","brownMot","joints","integMot","deriveMot" }) addW("gliding." + t, pad(nB));
         for (String t : new String[]{ "zeroFil","brownFil","chain","gather","integFil","deriveFil" }) addW("gliding." + t, pad(nSeg));
+        if (ROLL_SPRING) { addW("gliding.dampRoll", pad(nSeg)); addW("gliding.rollForces", pad(nSeg)); }   // AZIMUTHAL (Inc 2)
         for (String t : new String[]{ "csrHist","csrScan","csrScatter" }) addS("gliding." + t);
         if (BOX) addW("gliding.confineFil", pad(nSeg));
         if (BOX_ALL) addW("gliding.confineMot", pad(nB));

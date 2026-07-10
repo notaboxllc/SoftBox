@@ -395,6 +395,165 @@ public final class BindingDetectionSystem {
         }
     }
 
+    // AZIMUTHAL (Inc 2): fixed axial scan half-width (in monomers) for the orientational gate's Option-2 site scan.
+    // reach≈8 nm / monomer≈2.7 nm ⇒ ±3 monomers covers the axial reach window; 4 gives headroom to coltol≈11 nm.
+    // A FIXED bound (no variable loop count, no continue/break) keeps the kernel PTX-safe (the Inc-1 lowering lesson).
+    static final int AZ_NJMAX = 4;
+
+    /**
+     * AZIMUTHAL BINDING (increment 2) — bindNearest + the ORIENTATIONAL GATE. A SEPARATE method (not a signature
+     * change to bindNearest) so the ~20 other bindNearest callers are untouched; the gliding path uses this only
+     * when -azimbind is on (kinParams[25]=1). Reuses the exact bindNearest reach predicate; adds, per reachable
+     * candidate, an Option-2 scan of the actin sites within the head's axial reach window, accepting the candidate
+     * iff ANY site presents its radial ⊥ n̂(s) antiparallel to the free head's uVec within Δ. n̂(s)=cosφ·segY+sinφ·segZ
+     * with φ=twistRate·(arc−½segLen) (intra-segment helix interpolation; segY is the roll-spring-cohered frame ⇒ n̂
+     * continuous across joints). Deterministic (no RNG); FIXED loop bound, no continue/break ⇒ PTX-safe.
+     * kinParams: [22]=cos(Δ) [23]=twistRate(rad/µm, LEFT-handed) [24]=monomer spacing(µm) [25]=azGate(1).
+     */
+    public static void bindNearestAzim(
+            FloatArray head, FloatArray uVec, FloatArray rodUVec,
+            FloatArray segEnd1, FloatArray segEnd2, FloatArray segYVec,
+            IntArray motorCandSeg, IntArray motorCandCount,
+            IntArray boundSeg, FloatArray bindArc, IntArray nucleotideState,
+            FloatArray kinParams, IntArray counts) {
+        int nM = counts.get(0);
+        int nSeg = segEnd1.getSize() / 3;
+        int MAXC = SpatialGrid.MAX_CAND;
+        float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        boolean adppiGate = kinParams.getSize() > 20 && kinParams.get(20) > 0.5f;
+        boolean azGate  = kinParams.getSize() > 25 && kinParams.get(25) > 0.5f;
+        float cosAcc    = (kinParams.getSize() > 22) ? kinParams.get(22) : 1f;    // cos(Δ)
+        float twistRate = (kinParams.getSize() > 23) ? kinParams.get(23) : 0f;    // rad/µm (LEFT-handed ⇒ negative)
+        float monoSp    = (kinParams.getSize() > 24) ? kinParams.get(24) : 1f;    // monomer axial spacing (µm)
+        for (@Parallel int m = 0; m < nM; m++) {
+            if (boundSeg.get(m) != MotorStore.FREE_BINDABLE) continue;
+            if (kinParams.get(19) > 0.5f) continue;
+            if (adppiGate && nucleotideState.get(m) != MotorStore.NUC_ADPPI) continue;
+            float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
+            float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
+            float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
+            int cnt = motorCandCount.get(m); if (cnt > MAXC) cnt = MAXC;
+            int bestSeg = -1; float bestD = 1.0e30f; float bestArc = 0f;
+            for (int k = 0; k < cnt; k++) {
+                int s = motorCandSeg.get(m * MAXC + k);
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float d = reachTestDistSq(mx, my, mz, mux, muy, muz, rux, ruy, ruz,
+                        e1x, e1y, e1z, e2x, e2y, e2z, myoColTol, alignTol);
+                boolean qualifies = true;
+                if (azGate && d >= 0f) {
+                    float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                    float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                    float segLen = (float) Math.sqrt(denom);
+                    float invL = 1.0f / segLen;
+                    float ux = r1x * invL, uy = r1y * invL, uz = r1z * invL;              // segment axis (pointed→barbed = +x)
+                    float footArc = ((mx - e1x) * r1x + (my - e1y) * r1y + (mz - e1z) * r1z) * invL;  // perp-foot arc from end1 (µm)
+                    float w2 = myoColTol * myoColTol - d;                                 // d = perp dist² ; axial half-window²
+                    float w = (w2 > 0f) ? (float) Math.sqrt(w2) : 0f;
+                    int nj = (int) (w / monoSp);                                          // #monomers reachable each side of the foot
+                    float yx = segYVec.get(s), yy = segYVec.get(nSeg + s), yz = segYVec.get(2 * nSeg + s);
+                    float zx = uy * yz - uz * yy, zy = uz * yx - ux * yz, zz = ux * yy - uy * yx;  // segZ = u × segY
+                    float halfSeg = 0.5f * segLen;
+                    qualifies = false;
+                    for (int j = -AZ_NJMAX; j <= AZ_NJMAX; j++) {
+                        float arc = footArc + j * monoSp;
+                        boolean inWin = (j >= -nj) && (j <= nj) && (arc >= 0f) && (arc <= segLen);
+                        float phi = twistRate * (arc - halfSeg);
+                        float c = (float) Math.cos(phi), sn = (float) Math.sin(phi);
+                        float nx = c * yx + sn * zx, ny = c * yy + sn * zy, nz = c * yz + sn * zz;   // presented radial n̂(s)
+                        float dotHN = mux * nx + muy * ny + muz * nz;
+                        if (inWin && dotHN < -cosAcc) qualifies = true;                   // antiparallel within Δ (accumulate, no early exit)
+                    }
+                }
+                if (d >= 0f && qualifies && d < bestD) {
+                    bestD = d; bestSeg = s;
+                    float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                    float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                    float numer = (mx - e1x) * r1x + (my - e1y) * r1y + (mz - e1z) * r1z;
+                    bestArc = numer / (float) Math.sqrt(denom);
+                }
+            }
+            if (bestSeg >= 0) { boundSeg.set(m, bestSeg); bindArc.set(m, bestArc); }
+        }
+    }
+
+    /**
+     * AZIMUTHAL BINDING (increment 3) — GRADED orientational affinity replacing the Inc-2 hard cutoff. Reuses the
+     * Inc-2 scan / intra-segment interpolation φ(s) / presented radial n̂(s) / LEFT-handed twistRate UNCHANGED —
+     * only the accept rule changes: per reachable site the orientational affinity `a(s)=((−headU·n̂+1)/2)^n` ∈[0,1]
+     * (1 at perfect antiparallel, 0 parallel; n = steepness), COMBINED BY MAX over reachable sites
+     * (`b_best=max_s (1−headU·n̂)/2`, `a_best=b_best^n`) — NOT sum (sum reintroduces the density-washout). The head
+     * binds to the BEST-REGISTERED reachable site at its affinity: a race-free wang-hash draw `u<a_best` (drawn
+     * LAST, only for heads with a genuinely reachable oriented site; salt "AZBD"). n=0 ⇒ a_best=1 ⇒ always-bind
+     * (aggregate-equal to the deterministic baseline; the draw consumes RNG ⇒ NOT bit-identical). Per-motor pure
+     * write ⇒ race-free, CPU≡GPU. kinParams: [22..24]/[23] as Inc-2, [26]=n.
+     */
+    public static void bindNearestFalloff(
+            FloatArray head, FloatArray uVec, FloatArray rodUVec,
+            FloatArray segEnd1, FloatArray segEnd2, FloatArray segYVec,
+            IntArray motorCandSeg, IntArray motorCandCount,
+            IntArray boundSeg, FloatArray bindArc, IntArray nucleotideState,
+            FloatArray kinParams, IntArray counts) {
+        int nM = counts.get(0);
+        int nSeg = segEnd1.getSize() / 3;
+        int MAXC = SpatialGrid.MAX_CAND;
+        int step = counts.get(1), seed = counts.get(2);
+        float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        boolean adppiGate = kinParams.getSize() > 20 && kinParams.get(20) > 0.5f;
+        float twistRate = (kinParams.getSize() > 23) ? kinParams.get(23) : 0f;    // rad/µm (LEFT-handed ⇒ negative)
+        float monoSp    = (kinParams.getSize() > 24) ? kinParams.get(24) : 1f;    // monomer axial spacing (µm)
+        float falloffN  = (kinParams.getSize() > 26) ? kinParams.get(26) : 0f;    // steepness n (0 ⇒ a≡1 ⇒ baseline)
+        for (@Parallel int m = 0; m < nM; m++) {
+            if (boundSeg.get(m) != MotorStore.FREE_BINDABLE) continue;
+            if (kinParams.get(19) > 0.5f) continue;
+            if (adppiGate && nucleotideState.get(m) != MotorStore.NUC_ADPPI) continue;
+            float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
+            float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
+            float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
+            int cnt = motorCandCount.get(m); if (cnt > MAXC) cnt = MAXC;
+            // pick the BEST-REGISTERED reachable site (max b = max (1−headU·n̂)/2) over all candidate segments' sites
+            int bestSeg = -1; float bBest = -1.0f; float bestArc = 0f;
+            for (int k = 0; k < cnt; k++) {
+                int s = motorCandSeg.get(m * MAXC + k);
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float d = reachTestDistSq(mx, my, mz, mux, muy, muz, rux, ruy, ruz,
+                        e1x, e1y, e1z, e2x, e2y, e2z, myoColTol, alignTol);
+                if (d >= 0f) {   // reachable segment — scan its axial sites for the best registration (no inner-loop continue: PTX-safe)
+                    float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                    float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                    float segLen = (float) Math.sqrt(denom);
+                    float invL = 1.0f / segLen;
+                    float ux = r1x * invL, uy = r1y * invL, uz = r1z * invL;
+                    float footArc = ((mx - e1x) * r1x + (my - e1y) * r1y + (mz - e1z) * r1z) * invL;
+                    float w2 = myoColTol * myoColTol - d;
+                    float w = (w2 > 0f) ? (float) Math.sqrt(w2) : 0f;
+                    int nj = (int) (w / monoSp);
+                    float yx = segYVec.get(s), yy = segYVec.get(nSeg + s), yz = segYVec.get(2 * nSeg + s);
+                    float zx = uy * yz - uz * yy, zy = uz * yx - ux * yz, zz = ux * yy - uy * yx;
+                    float halfSeg = 0.5f * segLen;
+                    for (int j = -AZ_NJMAX; j <= AZ_NJMAX; j++) {
+                        float arc = footArc + j * monoSp;
+                        boolean inWin = (j >= -nj) && (j <= nj) && (arc >= 0f) && (arc <= segLen);
+                        float phi = twistRate * (arc - halfSeg);
+                        float c = (float) Math.cos(phi), sn = (float) Math.sin(phi);
+                        float nx = c * yx + sn * zx, ny = c * yy + sn * zy, nz = c * yz + sn * zz;   // presented radial n̂(s)
+                        float b = 0.5f * (1.0f - (mux * nx + muy * ny + muz * nz));                   // (1 − headU·n̂)/2 ∈ [0,1]
+                        if (inWin && b > bBest) { bBest = b; bestSeg = s; bestArc = arc; }            // MAX-combine; attach at the best-registered site
+                    }
+                }
+            }
+            if (bestSeg >= 0) {
+                // a_best = bBest^n  (=exp(n·log bBest); exp/log lower on PTX). n=0 ⇒ 1. bBest≤0 ⇒ 0.
+                float aBest = (falloffN <= 0f) ? 1.0f : ((bBest > 1.0e-6f) ? (float) Math.exp(falloffN * (float) Math.log(bBest)) : 0.0f);
+                // race-free wang-hash draw (per motor; salt "AZBD"=0x415A4244) — drawn LAST, only for heads with a reachable oriented site
+                int hsh = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x415A4244);
+                float u = (hsh >>> 1) / 2147483647.0f;
+                if (u < aBest) { boundSeg.set(m, bestSeg); bindArc.set(m, bestArc); }
+            }
+        }
+    }
+
     // ============================================================================================
     // PHASE-2 CANONICAL VERSION-B TWO-POINT BINDER (flag-gated, default-off; the -canonical gliding path).
     // The single-point tip search is RETAINED VERBATIM (the same reachTestDistSq gates as bindNearest —

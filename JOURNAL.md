@@ -1,5 +1,213 @@
 # Soft Box Project Journal
 
+# 2026-07-10 — RECRUIT_SHED_BALANCE: slowing the shed of back-strained brake heads does NOT create a velocity ceiling
+Tested jba's reconciling hypothesis — does the ensemble stay net-forward (no d/τ_on ceiling, velFitX ∝ N) only
+because spent back-strained brake heads are SHED as fast as they form? New flag `-brakehold <s>` scales αCatch
+(`kinParams[1]`), the SIGNED catch-slip term `αCatch·e^(−F·xCatch/kT)` that EXPLODES for a post-stroke back-strained
+head (F<0) ⇒ sheds resisting heads; s<1 slows that shed (brakes persist). Default 1.0 = skeletal Guo–Guilford anchor,
+guarded `!= 1.0` ⇒ **byte-identical canonical (verified: no-flag ≡ -brakehold 1.0 bit-identical GRID_ROW).** PART A
+(s ∈ {1.0,0.3,0.1,0.03} × d ∈ {2000,4000,8000}, coltol=8, GPU single-seed 30k): the lever WORKS mechanically —
+dwell 0.63→5.7 ms, detach 1592→175/s, avgBound 5→50 (brakes retained) — **and the retained brakes BITE** (per-bound
+efficiency collapses 0.74→0.087 @d2000, 0.585→0.121 @d4000 ⇒ resistance genuinely AGGREGATES). **But velFitX does
+NOT cap:** flat ~4 @d2000 (a coincidental efficiency-collapse≈recruitment cancellation), **rising +56% @coverage-clean
+d4000** (6.23→9.70; recruitment 7.5× OUTRUNS the 4.8× efficiency collapse). Slowing shed **STEEPENS** the
+velFitX-vs-density curve (d2000→d4000 slope +61%→+122%), the opposite of a ceiling, and climbs PAST the d/τ_on≈6–8
+anchor, not toward it. Even 33×-below-skeletal (s=0.03) installs no cap ⇒ no capping slip value at any multiple.
+**d8000 slow-shed EXCLUDED** (`fullMat=VIOLATED`, filament ~2 µm off-bed in y; the 22–27 µm/s "explosion" is
+edge-corruption — first sweep grep dropped COV_ROW, caught in the d4000/d8000 coverage re-run). PART B control
+(`-azfalloff 16`, recruitment reduction): scales velFitX+avgBound down ~density-independently, both still climb,
+kinetics unchanged ⇒ doesn't cap either (reproduces AZIMUTHAL_FALLOFF_INCREMENT3 in-batch). **CPU basin-arbiter @the
+decisive d4000 s=0.03** (steepest slip, coverage-clean, avgB≈80): velFitX 9.063 vs GPU 9.703 (~7%), avgB 78.5 vs 80.0
+(~2%), fullMat=YES, stable on the deterministic runner ⇒ **same HIGH basin, the rise is real, not a GPU artifact.**
+**VERDICT: the missing ceiling is NOT a shed-side rate-balance.** Resistance aggregates (per-bound collapse) but
+co-bound recruitment is UNBOUNDED, so retention adds heads faster than each loses efficiency ⇒ net never caps. The
+controlling lever is the bound-head POPULATION (steric co-occupancy / a force→displacement clutch), not the shed
+rate — confirming DETACHMENT_CEILING_CODEREAD (force-summation, no displacement clutch) + the falloff control. Both
+the recruit knob and the shed knob fail ⇒ the ceiling is STRUCTURAL. No default change (diagnostic). z-unconfined.
+Report `docs/RECRUIT_SHED_BALANCE.md`; new `-brakehold`, `scripts/run_recruit_shed_sweep.sh`, `run_recruit_shed_cov.sh`;
+`BoA-v1ref` untouched.
+
+# 2026-07-09 — STROKE_DRAG_PROBE: the cross-bridge attachment is MATERIAL-LATCHED, not a conveyor (C1/C2/C3 refuted)
+Closed the one gap DETACHMENT_CEILING_CODEREAD left open: is the F8 filament-side foot a frozen MATERIAL label
+transformed by the segment's current pose (Lagrangian ⇒ strain accrues, head resists past the stroke), or
+RE-DERIVED to nearest/perp-foot each step (Eulerian ⇒ conveyor belt, strokes forever)? **PART A** (`EomStabilityHarness
+-dragprobe`, single bound head, motor frozen, Brownian OFF, deterministic): advancing the filament +x through/past
+the ~7 nm stroke, the real-code F_x is a clean linear cross-bridge spring — **+10 pN @Δ=−10nm → 0 @Δ=0 → −24 pN
+@Δ=+24nm, slope EXACTLY −k_F8 (−1.0 pN/nm)** — and the attachment world position ap_x tracks the filament 1:1
+(pinned to a receding material point). A synthetic CONVEYOR control (bindArc re-derived to the frozen tip's perp-foot
+each Δ) holds F_x≈0 for all Δ with ap_x under the fixed tip — the C1 signature, and NOT what the code does. **PART B**
+(read-only): `bindArc` is written ONLY at the free→bound transition — every binder guards `boundSeg != FREE_BINDABLE
+⇒ continue` (bindNearest:368, bindKinetics:325, +Azim/Falloff/CanonicalTwoPoint/Rate/NodeAware), and `bondForces`
+:113-118 builds the site as `segCenter + (bindArc−½segLen)·segUVec` from the CURRENT pose — the transformed-material
+(Lagrangian) branch; the Eulerian re-solve is absent. Stroke target (directedSwing:251-253) = a latched
+nucleotide-state-FIXED orientation (translation-invariant), not sustained-force (C3) nor re-neutralizing (C2). ⇒ the
+bound head RESISTS when dragged past its stroke; C1/C2/C3 all REFUTED, attachment + stroke are CORRECT. The V∝N /
+missing d/τ_on ceiling is the orthogonal force-summation-without-displacement-clutch + high-duty fact (do NOT "fix"
+the attachment). Additive `-dragprobe` mode, default byte-identical. Report: docs/STROKE_DRAG_PROBE.md.
+
+# 2026-07-09 — Dense duty gap CLOSED: 0.85 is a thin-window ENRICHMENT artifact, per-head duty ~0.06 (recovery NOT bypassed)
+Closed the unclosed reconciliation step in DUTY_RATIO_DIAGNOSIS (was the dense 0.06→0.85 gap enrichment or a
+bypassed 10ms recovery?). **PART 1 (READ-ONLY, existing coltol=8 sweep log + code) — closes it, no run.** The crux
+number: `meanReach ≈ 1.17×avgBound at EVERY density` (d1000 2.89/3.33, d4000 11.0/13.0, d8000 20.8/24.0) — a THIN,
+bound-dominated reachable window, NEVER hundreds. Arithmetic closes exactly: τ_on 0.6ms / τ_off≥10ms ⇒ per-head
+duty r≈0.057; the ~16.7× recovering (ATP) heads per filament (avgB×10/0.6 ≈184 @d4000) would push meanReach to
+~194 IF reachable, but it's 13 ⇒ they're in the glide WAKE, out of reach, dropped from the denominator. duty_reported/r_perhead
+= (engaged pool)/meanReach ≈ 17.7/1.18 ≈ 15 ⇒ 0.057×15 ≈ 0.85 ✓ (no residual). **Recovery is ENFORCED, not
+bypassed:** bruteReachable is purely geometric/state-blind (BindingDetectionSystem:260-282, so meanReach DOES
+count recovering heads — their absence is real), AND the ADP·Pi gate is welded on (GlidingHarness:310
+LYMN_TAYLOR⇒ADPPI_BIND, kinParams[20]=1) + enforced in the dense binder bindNearestFalloff (BindingDetectionSystem:502/509,
+`if adppiGate && state≠ADPPI continue`) ⇒ a just-released ATP head can't rebind for ~10ms ⇒ r≤0.057 hard bound.
+**VERDICT: thin-window enrichment artifact; dense per-head duty ~0.06; motor low-duty; recovery enforced; PART 2
+NOT needed.** Matches single-molecule `in-reach-while-free≈0`. ⇒ no-saturation is force-summation/recruitment
+(DETACHMENT_CEILING_CODEREAD), not kinetics. Report: `docs/DENSE_DUTY_GAP.md`.
+
+# 2026-07-09 — Azimuthal-binding Inc 3: GRADED orientational falloff — DOES NOT saturate at any steepness
+Replaced Inc-2's hard antiparallel cutoff with a GRADED orientational affinity `a(s)=((−headU·n̂+1)/2)^n`,
+MAX-combined over reachable sites (`a_best=b_best^n`, NOT sum — sum reintroduces the washout), applied as a
+bind-rate multiplier via a NEW race-free wang-hash draw (salt "AZBD", drawn LAST; the gliding bind was
+deterministic-nearest with no existing draw). Reuses the Inc-2 scan/interp/handedness (−166.5°/mon LEFT) verbatim;
+gliding-only `bindNearestFalloff` (bindNearest's ~20 callers + Inc-2 `bindNearestAzim` untouched); `-azfalloff <n>`,
+default OFF byte-identical; `BoA-v1ref` untouched. n=0 recovers baseline (aggregate — the draw decorrelates ⇒ not
+bit-identical; d4000 10.93/6.72 ≈ 10.69/6.44 ✓). PTX-clean; localWork=64 already on the bind task.
+**THE FINDING (single-seed 30k density-response, d1000→d8000):** graded falloff does NOT cap. avgB climbs
+monotonically at n=16 (1.9→15.1) AND n=32 (1.5→13.1); the throttle is a roughly **density-INDEPENDENT scale-down**
+(~0.7× avgB @n16, ~0.65× @n32, ~0.55× @n64) — a plateau never forms. MAX-combine DID fix the Inc-2 washout (ratio
+now FLAT vs the hard gate's RISING 0.80→0.91) — real improvement — but flat-ratio still ⇒ avgB=baseline×const ⇒
+climbs. n-response @d4000 monotone-diminishing (n=0→64: avgB 10.9→6.1), never a low cap. GPU≡CPU @d4000 n16 agree
+(7.89/4.44 vs 7.44/3.92, no basin flip). **Mechanism:** MAX-combine finds the best azimuth in a multi-turn reach
+window regardless of density ⇒ binding depends on head orientation (density-independent), NOT segment packing ⇒
+orientation throttles per-head propensity, not co-occupancy. **VERDICT: orientation CLOSED as the saturation lever
+at any sharpness; the lever is STERIC co-occupancy exclusion** (head footprint) — converges with the concurrent
+`DETACHMENT_CEILING_CODEREAD` (force-summation ∝N, no displacement clutch; fix = clutch/steric cap, not kinetic/
+orientational retune). Report: `docs/AZIMUTHAL_FALLOFF_INCREMENT3.md`; raw
+`RUN_LOGS/2026-07-09_azimuthal_falloff_sweep.txt`; driver `scripts/run_azimuthal_falloff_sweep.sh`.
+
+# 2026-07-09 — Duty-ratio diagnosis: the 0.85 is a MEASUREMENT ARTIFACT, not a τ_off rate bug
+Settled whether the dense-sim duty~0.85 (vs skeletal ~0.05) is an intrinsic rate bug (τ_off too short) or a
+denominator artifact. **PART A (read-only):** the STATS_STEADY "duty" = `avgBoundSteady/meanReach`
+(GlidingHarness:2731) = "fraction of ENGAGEABLE (reachable) heads bound at any instant" — a conditional SPATIAL
+occupancy of the reachable-head pool (meanReach = mean #heads with reachCount>0, :2564/:2610), NOT the temporal
+r=τ_on/(τ_on+τ_off). The reachable set is bound-head-ENRICHED (a bound head is always reachable for its whole
+dwell; free heads flit in/out) ⇒ the ratio structurally overstates occupancy. τ_off is PHYSICALLY TIMED, not
+collapsed: the 1-step refractory (kinParams[10]=ceil(MYO_REBIND_TIME 1e-5/dt)=1 step=0.01ms) is negligible, but
+the REAL gate is the off-fil ATP→ADP·Pi hydrolysis recovery offATP=100/s (~10ms, MotorStore:388) enforced by the
+WELDED ADP·Pi bind-gate (kinParams[20]); onADP=1e3/s ⇒ τ_on~1ms. **PART B (single-motor CPU, `-single`, 40k, 256
+heads, concurrent-safe — no GPU):** intrinsic single-head duty = **0.0050 (0.5%)**, t_on 0.91ms, τ_off ~180ms
+(attach 5.5/s) — skeletal-class, 170× BELOW 0.85. **FORK VERDICT: MEASUREMENT ARTIFACT** — motor is low-duty; do
+NOT slow rebinding (would stall the glide). Anchored τ_on~0.9ms ⇒ d/τ_on ~6-8µm/s to test dense velocity against;
+no-saturation stays in force-summation/recruitment (DETACHMENT_CEILING_CODEREAD). Caveats: `-single` runs Config-1
+(kinetics shared w/ sphere-head ⇒ duty transfers); `-fext` is INERT on the Lymn-Taylor path (feeds only legacy
+catchSlipRelease kinParams[18], not cycleLymnTaylor) ⇒ T2 load-sensitivity read from code (:449-452), not measured.
+Report: `docs/DUTY_RATIO_DIAGNOSIS.md`.
+
+# 2026-07-09 — Detachment-ceiling code read (READ-ONLY): T1/T2/T3 all PRESENT; V=d/τ_on absent for an ORTHOGONAL reason
+READ-ONLY diagnostic (no edits/runs; concurrent with the falloff sweep) of whether the canonical motor has the
+kinetic detachment-limited speed ceiling. Traced the live default stack (`bondForces` F9-frozen-90° + `directedSwing`
++ `cycleLymnTaylor`; GlidingHarness:77-79/255/757/762/735). **All three targets check out:** T1 backward drag IS
+representable (F8 = bidirectional Hookean anchored to the FIXED material `bindArc`, seg-side −F resists a dragged
+filament; CrossBridgeSystem:114-204 — and the sweep's per-bound 0.95→0.46 collapse IS that drag, delivered); T2
+detachment IS strain-DIRECTION-signed (Guo–Guilford catch-slip on signed forceDotFil, NucleotideCycleSystem:449-452;
+the |F|>12pN `-forcecapdetach` is opt-in/non-canon); T3 powerstroke target is FIXED-orientation (cosθ·û_head−sinθ·f̂,
+θ nucleotide-switched; re-neutralizes only in angle, invariant under translation ⇒ doesn't track the filament).
+**Prompt's T1/T3-missing hypothesis REFUTED.** But V=d/τ_on still fails (velFitX∝N, no plateau) for reasons ORTHOGONAL
+to T1/T2/T3: (1) overdamped force-SUMMATION with NO per-head displacement clutch — the stroke is a force, heads only
+add force ⇒ N heads ⇒ ∝N glide, no cap; (2) the model runs HIGH-duty ~0.85 (density-flat dwell 0.6ms/detach 1600/s),
+the wrong regime for the low-duty ceiling; (3) T2 working CORRECTLY sheds back-strained brakes ⇒ sustains the
+forward bias ⇒ works AGAINST a plateau. Duty is high & has no code path to climb with density (velocity climbs via
+avgBound recruitment, not duty). τ_on/duty ALREADY logged (stats[2m]/[2m+1] ⇒ STATS_STEADY_ROW); the deferred probe
+= vary onADP/atpOn at fixed d4000, read velFitX-vs-dwell (predicted: insensitive ⇒ no ceiling). Fix = build the
+force→displacement stroke-limit clutch / steric co-occupancy cap (the AZIMUTHAL_GATE §Verdict lever), NOT a τ_on
+retune and NOT "fixing" T1/T3. Report: `docs/DETACHMENT_CEILING_CODEREAD.md`.
+
+# 2026-07-09 — Azimuthal-binding Inc 2: orientational bind gate in gliding — UNDER-RESTRICTIVE at Δ=45°
+Wired the springs-continuum roll spring (Inc 1/1b) into the gliding path + added the orientational binding gate
+(a free head binds only where its uVec is antiparallel within Δ to a presented actin-site radial n̂(s), Option-2
+scan of reachable sites; intra-segment helix interp φ=twistRate·(arc−½segLen), LEFT-handed −166.5°/mon).
+Flag-gated `-azimbind`/`-azaccept`/`-rollonly`, **default OFF byte-identical** (default d1000 s0 velFitX 2.635 ≈
+baseline 2.687). Gliding-only `bindNearestAzim` (bindNearest's ~20 callers untouched); two roll tasks
+(dampRoll/rollForces) added to the gliding graph + CPU mirror. `BoA-v1ref` untouched.
+**PART A (roll-into-gliding checkpoint) PASS:** roll-on/gate-off ≈ baseline — CLEAN at d4000 (6.60/10.67 vs
+6.44/10.69); d1000 s0 GPU dip (0.884) is a sparse-density BASIN artifact, **CPU-arbiter decisive** (CPU rollonly
+2.269 ≈ CPU baseline 1.796, no flip). Roll is glide-invariant (nothing canonical reads seg.yVec under AXLOCK;
+isotropic perp-drag ⇒ roll-covariant). **PART C cost negligible** (+0.5%/+1.0% at d1000/d8000; GPU PTX clean).
+**PART D — the finding:** at biologically-central Δ=45° the gate is a MODEST, density-WEAKENING throttle
+(avgB ~0.80–0.91× baseline, velFitX ~0.68–0.84×, ratios RISING with density) — **avgBound NOT capped, velFitX
+NOT saturated; both keep climbing** (avgB 0.19→18.5 over d100→d8000, 3-seed 60k). Δ-ladder (d4000, 10k): 90°≈
+baseline, 45° −28%, 15° −51%, 5° hard-cap −83% ⇒ gate is real+tunable but caps only at implausibly narrow Δ.
+**Mechanism:** Option-2 over a multi-turn axial window ⇒ accept collapses to "head uVec within Δ of the radial
+plane," which loosens as density rises ⇒ throttles per-head propensity, NOT co-occupancy ⇒ can't flatten the
+curve. **Verdict: the orientational constraint alone is insufficient to saturate; the physically-right next
+lever is the deferred STERIC exclusion (head footprint, caps co-occupancy directly).** Sweep stopped after
+d8000 s0 (trend unambiguous; jba concurred exact high-density figures don't change the verdict). Report:
+`docs/AZIMUTHAL_GATE_INCREMENT2.md`; raw `RUN_LOGS/2026-07-09_azimuthal_gate_sweep.txt`; driver
+`scripts/run_azimuthal_gate_sweep.sh`.
+
+# 2026-07-09 — Azimuthal-binding Inc 1b: roll coupling converted to the SPRINGS-CONTINUUM form (dt-honest)
+Converted Inc-1's fraction-per-step roll coupling (the one such law smuggled back after the canonical collapse)
+to the canonical springs object — a FIXED stiffness `k_roll = f·γ_roll_red/refDt` via the `springify(f)=f·(dt/
+refDt)` convention (GlidingHarness §PAIRS_SPRINGS): mode 2 uses `refDt` in the denominator instead of `dt` ⇒ dt
+CANCELS ⇒ dt-independent stiffness. Now the DEFAULT roll form (`-fraction` for the old law). All in
+`RollSpringSystem`/`RollSpringHarness` (new files) ⇒ canonical/production byte-identical (FDT re-PASS);
+`BoA-v1ref` untouched. **Three checks GREEN:** (1) refDt-equivalence — springs ≡ fraction at 1e-5 BYTE-IDENTICAL
+(std 2.54°, CPU≡GPU Δ1.76e-5° identical), all Inc-1 numbers stand; (2) stability — springs M=200000 (2.0 s) std
+±2.57°, ratio 1.022, no NaN, ROUTE (A); (3) **dt-convergence (the payoff)** at dt {1e-5,5e-6,2.5e-6,1e-6}:
+FRACTION std 2.40→1.68→1.17→0.74 (∝√dt, FREEZES as dt→0 — the artifact) vs SPRINGS 2.40→2.15→2.05→2.00
+(dt-STABLE, converges to the equipartition ~2.0° — dt-honest like the canonical model). CPU≡GPU bit-identical on
+the reformed spring. No fraction-per-step exception remains; the roll frame is dt-honest for Inc 2 (off-axis
+bond). Report: `docs/ROLL_SPRING_PROTOTYPE.md` §SPRINGS-CONTINUUM CONVERSION.
+
+# 2026-07-09 — Azimuthal-binding Inc 1: torsional-roll spring (physical twist) — ROUTE (A) VIABLE
+Risk-first prototype of the inter-segment torsional-roll spring in ISOLATION (no binding/off-axis-bond/motors/
+turnover), answering: is there a roll stiffness giving a COHERENT helical twist STABLE at production dt=1e-5?
+**YES — outcome (A).** New files only (`RollSpringSystem`, `RollSpringHarness`, `scripts/run_rollspring.sh`) ⇒
+canonical/production byte-identical by construction; `BoA-v1ref` untouched. Spring = the dt-robust
+**fraction-per-step** family (α=f, stable f<2 — NOT raw Hooke, whose `dt_crit ∝ γ_roll/k` on the tiny roll drag
+`bRGx=4πηR²L≈1.4e-24` rings by α≈0.7, blows up α>2). Rest twist = actin 13/6 `−166.5°/mon` (LEFT-handed, derived
+fresh; v1 screw sign not lifted), ×32 mon wrapped = coarse **+72°/joint** (true handedness aliases to the
+deferred intra-segment interpolation). Race-free owner±equal-opposite `torqueSum`→`bwx` (the ChainBending
+two-block PTX pattern; a free-end inner-loop `continue` mis-lowers — fixed). Thermostat `-rolldamp` cools the
+roll Brownian kick. **Results (64-seg, roll kicked on ALL segs = hard test):** long run **M=200000 (=2.0 s sim)
+std ±2.57° about 72°, no NaN, ratio 1.022 STABLE**; fraction sweep coherent+stable f∈[0.1,1.0] (best ±2.3°@0.5),
+raw-Hooke narrow/rings; thermostat is the coherence knob (std∝rolldamp: 0.1→±2.5°, 1.0→±24°); **no-spring
+control f=0 → std 93° scrambled (outcome C) ⇒ the spring MAKES the coherence**; **CPU≡GPU bit-identical**
+(1-step exact; perturb-relax max Δ 1.76e-5°). Op point: fraction f≈0.5, rolldamp≈0.1. ⇒ proceed to Inc 2
+(off-axis bond). Bring-up bug caught: measurement pulled only `uVec` not `yVec` (stale GPU frame read trivially
+"coherent"). Report: `docs/ROLL_SPRING_PROTOTYPE.md`.
+
+# 2026-07-09 — Viscosity (aeta) sensitivity probe — glide is REGIME-DEPENDENT drag-sensitive
+3×3 probe (aeta {0.05,0.10,0.20} Pa·s × 3 seeds) at d1000/coltol10/60k, GPU canonical default. velFitX (µm/s,
+±SEM): 3.266±0.360 / 2.825±0.054 / 1.579±0.078. **Net glide is NOT a single power law in η — a knee at the
+default η≈0.1:** WEAK below (η 0.05→0.10, p≈−0.2, reproduces the standing "drag-insensitive η⁻⁰·¹⁸, cycle/
+tug-of-war-limited" verdict) but STRONG above (η 0.10→0.20, p≈−0.84, near drag-limited η⁻¹). avgBound
+~viscosity-independent (p≈+0.13); inst ∝ η⁻⁰·⁵ (thermal-jitter-dominated ⇒ use velFitX not inst). REFINES (not
+overturns) the drag-insensitive memory. Caveats: aeta=0.05 seed0 low-engagement outlier inflates that point's
+SEM; 3 seeds / 3 points / 0.6 s window; `-aeta` is a diagnostic non-faithful lever (rescales FDT amplitude too).
+Report: `docs/VISCOSITY_SENSITIVITY_FINDINGS.md`; raw `RUN_LOGS/2026-07-09_aeta_sensitivity.txt`; driver
+`scripts/run_aeta_sensitivity.sh`.
+
+# 2026-07-09 — Wider density sweep @ coltol=8 nm — the AZIMUTHALLY-UNAWARE PRE-REFINEMENT BASELINE
+Swept motor density {100,250,500,1000,2000,4000,6000,8000} µm⁻² at **coltol=8 nm** (tighter capture ⇒ a NEW,
+lower-engagement curve, not an extension of the coltol=10 first stab), 3 seeds, M=60000 (0.6 s), canonical
+DEFAULT model on GPU (bare `run_gliding.sh -gpu -full -grid -coltol 8 -density D -seed s 60000`; new driver
+`scripts/run_canonical_density_sweep_coltol8.sh`). The CONTROL measured before jba adds specific helical/azimuthal
+binding sites — "the model's own ceiling," not biology validation. **All 24 GPU runs clean — no NaN/blow-up at
+any density.** velFitX (µm/s, ±SEM) rises MONOTONICALLY, **no plateau/no turnover through d8000:**
+0.13→0.32→1.01→2.69→4.39→6.44→7.95→**9.38** (SEM 0.05/0.08/0.12/0.05/0.11/0.13/0.20/0.21) — a DECELERATING
+climb (+143/213/166/63/47/23/18%) toward a Vmax that lies ABOVE ~9.4 (unreached at d8000). avgBsteady climbs
+~linearly (0.14→20.2, tracking meanReach 0.2→24.6, ~82–88% of reachable bound). **HEADLINE (new vs the
+d2000-capped first stab): the saturation is a per-head EFFICIENCY collapse, not motor slowdown/instability** —
+per-bound flat ~0.95 through d1000 then COLLAPSES 0.81→0.60→0.50→0.46 above d2000 (the co-bound tug-of-war),
+while avgBound keeps rising. Kinetics DENSITY-INDEPENDENT (dwell ~0.60 ms, duty ~0.85, detach ~1600/s flat) ⇒
+collective mechanics, not a rate change. inst NOT density-flat at high d (6.4→7.5 through d2000, then 8.6/9.8/11.5).
+**Collective-load STABLE on -xbimplicit2 alone — -segimplicit NOT needed/not fired** (avgBound≈21 @ d8000, no
+blow-up). **Coverage: fullMat=YES d100–d6000 + 2/3 d8000 seeds; d8000 seed1 fullMat=VIOLATED (runMinMargin
+−0.204 µm — leading edge ran off the bed at ~9.4 µm/s over 0.6 s) ⇒ d8000 is a MEASUREMENT-GEOMETRY limit (bed
+length/window), NOT physics.** CPU d4000 basin-arbiter (20k, 54:51): velFitX 6.469 vs GPU 6.439 (**0.5%**),
+avgBound ~7% lower (shorter earlier steady window, not a basin flip) ⇒ **same HIGH basin, dense curve
+trustworthy.** VRAM a non-issue (~800 MiB @ d8000, 214k motors). Per-seed GPU wall: 1.9/2.3/3.0/4.5/7.4/13.2/
+18.9/24.8 min (d100→d8000); full sweep ~3.8 h. No BAIL. Report: `docs/DENSITY_SWEEP_coltol8.md`; raw
+`RUN_LOGS/2026-07-09_canonical_density_sweep_coltol8.txt`; driver `scripts/run_canonical_density_sweep_coltol8.sh`.
+
 # 2026-07-09 — First canonical velocity–density sweep (FIRST STAB — short window)
 Swept motor density {100,250,500,1000,2000} µm⁻² at coltol=10 nm, 3 seeds, M=60000 (0.6 s), canonical DEFAULT
 model on GPU (bare `run_gliding.sh -gpu -full -grid -coltol 10 -density D -seed s 60000` — springs+Lymn-Taylor+

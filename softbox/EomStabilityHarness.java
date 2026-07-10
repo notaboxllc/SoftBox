@@ -103,6 +103,7 @@ public final class EomStabilityHarness {
     static boolean VARPROBE = false;      // -varprobe : the constrained-variance probe (STEP 1 + STEP 2)
     static boolean VARMEAN = false;       // -varmean : -allnoise DIAGNOSIS STEP 3/4 — isolated F8 mode MEAN + variance, OFF vs ON vs OU, per dt
     static boolean VARGATE = false;       // -vargate : the UNIFORM EQUILIBRIUM GATE (every mode, drive-ON/OFF)
+    static boolean DRAGPROBE = false;     // -dragprobe : STROKE_DRAG_PROBE — quasi-static filament-drag F_x(Δ) + attachment-world-position trace (material-latched vs conveyor A/B)
     static boolean STRUCT_RATE = false;   // -structrate : reformulate the STRUCTURAL fraction-per-step position springs (J1/J2 connection + tail anchor, jointParams[1]/[5]/[9]) to per-TIME rates (rateFix) — the re-gate of the reformulated skeleton (Axis-2 flip dt-flat→dt-vanishing)
     static final double F8_DISP = 0.010;  // 10 nm release displacement (linear regime ⇒ magnitude-independent)
     static final double STROKE_REF_DT = 1e-5;   // refDt at which the per-step fraction k_eff==0.4 (production stroke duration preserved)
@@ -133,6 +134,7 @@ public final class EomStabilityHarness {
                 case "-varmean" -> VARMEAN = true;
                 case "-vargate" -> VARGATE = true;
                 case "-structrate" -> STRUCT_RATE = true;
+                case "-dragprobe" -> DRAGPROBE = true;
                 case "-disp" -> DISP = Double.parseDouble(args[++i]);
                 default -> {}
             }
@@ -147,6 +149,7 @@ public final class EomStabilityHarness {
         if (VARPROBE) { runVarProbe(); return; }
         if (VARMEAN) { runVarStep3(); return; }
         if (VARGATE) { runVarGate(); return; }
+        if (DRAGPROBE) { runDragProbe(); return; }
         if (DETACH_RAMP) { runDetachRampProbe(); return; }
         if (F8_RELAX) { runF8RelaxProbe(); return; }
         if (STROKE) { runStrokeProbe(); return; }
@@ -507,6 +510,104 @@ public final class EomStabilityHarness {
         double tail = 0; int nt = 0;
         for (int t = 0; t < 200; t++) { sc.mot.setCounts(3000 + M + t, 0x57A0E, sc.fil.n); driveStep.run(); tail += (meanX(f) - eqx); nt++; }
         return tail / nt * 1e3;   // nm
+    }
+
+    // ===================================================================== STROKE_DRAG_PROBE (PART A)
+    // Quasi-static filament-drag trace. ONE permanently-bound head, motor body FROZEN at its bound pose,
+    // Brownian OFF ⇒ deterministic. Advance the filament rigidly along the glide axis (+x = seg.uVec) through
+    // and past the stroke; at each Δ read (1) F_x = the F8 seg-side force ON the filament along +x, (2) the
+    // stored attachment's WORLD position ap_x = segCenter + (bindArc−½·segLen)·seg.uVec.
+    //   MATERIAL arm  (real code): bindArc frozen at bind time ⇒ ap moves WITH the filament, F8 strain accrues.
+    //   CONVEYOR arm  (synthetic control for C1): bindArc RE-DERIVED each Δ to the perp-foot of the (frozen)
+    //     head tip ⇒ ap slides to stay under the tip, axial strain never accrues.
+    // Decisive: material F_x is a LINEAR spring crossing zero at Δ=0 and RESISTING (reversing) past it, ap_x
+    // tracks the filament; conveyor F_x stays ~0 for all Δ, ap_x pinned under the fixed tip.
+    static void runDragProbe() {
+        double dt = 1e-5;
+        Scene sc = buildScene(dt, 1);
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        int nSeg = f.n, nB = b.coord.getSize() / 3, hIdx = 2;   // head = sub-body 3m+2, m=0
+        if (mot.boundSeg.get(0) < 0) { System.out.println("DRAG PROBE: motor failed to bind — abort."); return; }
+
+        // frozen head tip (world) — motor body is never integrated in this probe
+        double tipx = b.coord.get(hIdx)            + 0.5 * HEAD_LEN * b.uVec.get(hIdx);
+        double tipy = b.coord.get(nB + hIdx)       + 0.5 * HEAD_LEN * b.uVec.get(nB + hIdx);
+        double tipz = b.coord.get(2 * nB + hIdx)   + 0.5 * HEAD_LEN * b.uVec.get(2 * nB + hIdx);
+        double baseX = f.coord.get(0);                 // segment-center x at Δ=0
+        double segLen = f.segLength.get(0);
+        double bindArcFrozen = mot.bindArc.get(0);     // material label, set at bind (perp-foot arc of the tip)
+        double myoSpringPN = MYO_SPRING * 1e9;         // pN/nm
+
+        System.out.println("=== Soft Box — STROKE_DRAG_PROBE (PART A): quasi-static filament drag ===");
+        System.out.printf("  single bound head, motor body FROZEN, Brownian OFF, dt=%.0e; glide axis = +x (seg.uVec)%n", dt);
+        System.out.printf("  k_F8 = %.2f pN/nm; HEAD_LEN = %.1f nm; frozen head tip x = %.5f µm; bindArc(frozen) = %.5f µm%n",
+                myoSpringPN, HEAD_LEN * 1e3, tipx, bindArcFrozen);
+        System.out.printf("  bound seg = %d; seg-center x @Δ=0 = %.5f µm; segLen = %.4f µm%n%n", mot.boundSeg.get(0), baseX, segLen);
+        System.out.println("  Δ = filament displacement along +x through/past the ~7 nm stroke. F_x>0 ⇒ pushes filament +x; F_x<0 ⇒ resists (−x).");
+        System.out.printf("%n  %-9s | %-24s | %-24s | %-10s%n", "Δ(nm)", "MATERIAL (real code)", "CONVEYOR (C1 control)", "tip_x");
+        System.out.printf("  %-9s | %10s %12s | %10s %12s | %-10s%n", "", "F_x(pN)", "ap_x(µm)", "F_x(pN)", "ap_x(µm)", "(µm)");
+
+        int hDataIdx = 6;   // bondData[6] = seg-side force x (the force ON the filament)
+        double dLo = -0.010, dHi = 0.024, dStep = 0.002;   // −10 → +24 nm in 2 nm steps (past ~3 strokes)
+        double[] dArr = null; double[] fMat = null, fConv = null;
+        int n = (int) Math.round((dHi - dLo) / dStep) + 1;
+        dArr = new double[n]; fMat = new double[n]; fConv = new double[n];
+        for (int i = 0; i < n; i++) {
+            double delta = dLo + i * dStep;   // µm
+            // place the filament at Δ (rigid +x shift of the single segment)
+            f.coord.set(0, (float) (baseX + delta));
+            DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+
+            // -- MATERIAL arm: bindArc frozen (the production code path) --
+            mot.bindArc.set(0, (float) bindArcFrozen);
+            CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                    mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
+            double FxMat = sc.bondData.get(hDataIdx) * 1e12;   // N → pN
+            double aOffMat = bindArcFrozen - 0.5 * segLen;
+            double apxMat = (baseX + delta) + aOffMat * f.uVec.get(0);
+
+            // -- CONVEYOR arm (C1 control): re-derive bindArc to the perp-foot of the FROZEN tip each Δ --
+            double e1x = f.end1.get(0), e1y = f.end1.get(nSeg), e1z = f.end1.get(2 * nSeg);
+            double e2x = f.end2.get(0), e2y = f.end2.get(nSeg), e2z = f.end2.get(2 * nSeg);
+            double r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+            double denom = r1x * r1x + r1y * r1y + r1z * r1z;
+            double numer = (tipx - e1x) * r1x + (tipy - e1y) * r1y + (tipz - e1z) * r1z;
+            double bindArcConv = numer / Math.sqrt(denom);
+            mot.bindArc.set(0, (float) bindArcConv);
+            CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                    mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
+            double FxConv = sc.bondData.get(hDataIdx) * 1e12;
+            double aOffConv = bindArcConv - 0.5 * segLen;
+            double apxConv = (baseX + delta) + aOffConv * f.uVec.get(0);
+
+            dArr[i] = delta * 1e3; fMat[i] = FxMat; fConv[i] = FxConv;
+            System.out.printf("  %+8.1f | %10.4f %12.5f | %10.4f %12.5f | %8.5f%n",
+                    delta * 1e3, FxMat, apxMat, FxConv, apxConv, tipx);
+        }
+
+        // slopes (linear-regression dF/dΔ, pN per nm) + zero-crossing
+        double sMat = slope(dArr, fMat), sConv = slope(dArr, fConv);
+        System.out.printf("%n  MATERIAL: dF_x/dΔ = %.4f pN/nm (expect ≈ −k_F8 = %.3f) ; conveyor dF_x/dΔ = %.5f pN/nm%n",
+                sMat, -myoSpringPN, sConv);
+        System.out.println();
+        System.out.println("VERDICT (PART A):");
+        boolean materialReverses = fMat[0] * fMat[n - 1] < 0 && Math.abs(sMat) > 0.5 * myoSpringPN;
+        boolean conveyorFlat = Math.abs(sConv) < 0.05 * myoSpringPN;
+        if (materialReverses && conveyorFlat) {
+            System.out.println("  MATERIAL-LATCHED CONFIRMED. Real code: F_x is a linear cross-bridge spring that CROSSES ZERO and");
+            System.out.println("  REVERSES to RESISTING as the filament is dragged past the head; the attachment world position ap_x");
+            System.out.println("  moves WITH the filament (pinned to a receding material point). The conveyor control (bindArc re-derived");
+            System.out.println("  to the tip each step) holds F_x≈0 and ap_x under the fixed tip — that behaviour is NOT what the code does.");
+            System.out.println("  ⇒ C1 (sliding/conveyor attachment) REFUTED. The bound head RESISTS when dragged past its stroke.");
+        } else {
+            System.out.printf("  UNEXPECTED: materialReverses=%b conveyorFlat=%b — inspect the trace.%n", materialReverses, conveyorFlat);
+        }
+    }
+
+    static double slope(double[] x, double[] y) {
+        int n = x.length; double sx = 0, sy = 0, sxx = 0, sxy = 0;
+        for (int i = 0; i < n; i++) { sx += x[i]; sy += y[i]; sxx += x[i] * x[i]; sxy += x[i] * y[i]; }
+        return (n * sxy - sx * sy) / (n * sxx - sx * sx);
     }
 
     // ===================================================================== XBTRAP PROBE — STEP 1
