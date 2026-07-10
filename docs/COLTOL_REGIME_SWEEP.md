@@ -181,7 +181,17 @@ GPU basin-flip hazard (which needs a *structural* difference between arms) does 
 the standing GPU-number-trust rule the extreme geometric point gets a deterministic CPU cross-check on velFitX +
 occupancy. Raw: `RUN_LOGS/2026-07-10_coltol_regime_arbiter.txt`.
 
-<!-- ARBITER_ROW -->
+| c2 d2000 (30k) | velFitX | avgBound | meanReach | occupancy | dwell (ms) | detach (/s) | fullMat |
+|---|---:|---:|---:|---:|---:|---:|:--:|
+| GPU (sweep) | 2.106 | 2.405 | 0.9 | 2.703 | 0.64 | 1559 | YES |
+| **CPU arbiter** | 2.282 | 2.403 | 0.8 | 3.081 | 0.71 | 1411 | YES |
+
+**Same basin — confirmed.** `avgBound` is essentially bit-identical (2.405 vs 2.403, 0.08 %) ⇒ the same engagement
+basin on the deterministic runner (a flip would roughly halve/double it). velFitX agrees to +8 % (well inside the
+single-seed chaotic spread). **Occupancy > 1 is reproduced on the CPU** (3.08 vs 2.70) — the window-thinning is
+real, not a GPU artifact; the ~14 % spread is `meanReach` being a tiny ~0.8 count where the last binned digit swings
+the ratio. `fullMat = YES`. The reported result (pool scale-down, occupancy rising past 1, no crossover) is a
+property of the physics, not the runner.
 
 ---
 

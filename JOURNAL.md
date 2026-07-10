@@ -1,5 +1,38 @@
 # Soft Box Project Journal
 
+# 2026-07-10 — COLTOL_REGIME_SWEEP: shrinking the capture radius does NOT cross into release-limited saturation
+Tested jba's timescale/regime intuition — does shrinking coltol (the geometric REFILL lever) slow refill until
+refill-time ≳ τ_on, flipping the dense bed from supply-limited (site-occupancy ~0.85) to release-limited, where
+velFitX saturates at ≈ d/τ_on (density-independent)? **PART 0** — built `-matbox <nm>`, a MAT-SIZED reach-preserving
+chamber (new flag, wraps `ContainmentSystem` over the filament; z half-width 50 nm LOOSE, y-walls at the mat extent
+±bYhalf, x free; default-off byte-identical) to ISOLATE the shrinking-coltol out-of-plane disengagement confound
+(`GLIDING_OUTOFPLANE...`) WITHOUT pinning the plane. Isolation gate PASS: `-matbox 50` vs unconfined ENGAGED
+(coltol8 d2000 -full, 3 seeds) match — avgBound Δ−1.6%, meanReach Δ−0.4%, occupancy Δ−1.4%, velFitX within seed
+scatter (seed1 identical 4.239=4.239); it isolates, does not intervene. **PART 1** (coltol {8,6,4,3,2} × d {2000,
+4000,8000}, chamber ON, GPU single-seed 30k): **NO crossover.** The regime indicator occupancy `avgBound/meanReach`
+goes the OPPOSITE way — it **RISES** with shrinking coltol (0.83→2.70, *past 1.0*), density-flat, never toward the
+~0.06 duty; because coltol shrinks the instantaneous geometric window `meanReach` (24→3 @d8000) faster than the
+persistent bound set `avgBound` — a bound head is dragged out of the 2 nm window but stays bound for its ~0.6 ms
+dwell ⇒ avgBound > meanReach ⇒ occupancy > 1 (window-thinning, exactly `DENSE_DUTY_GAP`'s "not a real duty"). velFitX
+and avgBound DROP TOGETHER (shrinking-pool fingerprint, not the ceiling's flat-vel/climbing-avgB), and the
+velFitX-density curve **keeps climbing at EVERY coltol** (≈doubles d2000→d4000; even c2 climbs 2.11→4.29→6.65) ⇒ no
+density-independence, no saturation. Filament stays CONTINUOUSLY ENGAGED (avgBound ≥2.4, inst 7–9 µm/s, `fullMat=YES`
+throughout) ⇒ outcome #3 (coltol just scales the pool), NOT over-restriction. **The mat-box made d8000 coverage-CLEAN
+(`fullMat=YES`, velFitX 13.5) — the recruit-shed sweep had d8000 VIOLATED at -full; the chamber delivered its purpose.**
+**Mechanistic core: coltol is a pool-SIZE lever, not a refill-CLOCK lever** — it sets how many heads can reach an
+opening site, not how fast the site refills; dwell/detach are FLAT (~0.6 ms / ~1600/s) at every coltol ⇒ a reachable
+site still refills faster than it releases even in a 2 nm window (occupancy ≥0.83, rising >1) ⇒ the system NEVER
+leaves supply-limited. Per-bound efficiency RISES as coltol shrinks (fewer co-bound heads → less tug-of-war; the
+mirror of `RECRUIT_SHED`) but the pool shrinks faster ⇒ net velFitX falls. **CPU basin-arbiter @c2 d2000 30k** (extreme
+point; coltol is a scalar so all arms share hot-kernel structure, low flip hazard, but the geometric extreme gets a
+check): avgBound 2.403 vs GPU 2.405 (0.08%, SAME basin), velFitX 2.282 vs 2.106 (+8%, within SEM), occupancy 3.08 vs
+2.70 (>1 reproduced), `fullMat=YES` ⇒ real, not a GPU artifact. **VERDICT: coltol alone does NOT reach the crossover —
+it just scales the pool; occupancy rises past 1 rather than falling; velocity stays density-climbing, never saturates
+at d/τ_on. A per-site BINDING-RATE cut would be needed, and even that only scales (`AZIMUTHAL_FALLOFF`/`RECRUIT_SHED`).
+The missing ceiling is STRUCTURAL — the bound-head POPULATION (steric co-occupancy / displacement clutch), not the
+capture geometry.** No default change (diagnostic). Report `docs/COLTOL_REGIME_SWEEP.md`; new `-matbox`,
+`scripts/run_coltol_regime_{part0,sweep,arbiter}.sh`; `BoA-v1ref` untouched.
+
 # 2026-07-10 — RECRUIT_SHED_BALANCE: slowing the shed of back-strained brake heads does NOT create a velocity ceiling
 Tested jba's reconciling hypothesis — does the ensemble stay net-forward (no d/τ_on ceiling, velFitX ∝ N) only
 because spent back-strained brake heads are SHED as fast as they form? New flag `-brakehold <s>` scales αCatch
