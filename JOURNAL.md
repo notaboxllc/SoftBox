@@ -1,5 +1,74 @@
 # Soft Box Project Journal
 
+# 2026-07-10 — BIO_BOUNDCOUNT_TEST: at the BIOLOGICAL bound-head count (⟨N_b⟩≈1.5) the model GLIDES directionally + density-independent — it was OVER-BOUND (outcome a)
+Reframed the ceiling question around a real biological number: motility assays run at ⟨N_b⟩≈2 (frequent full
+detachment, duty ~0.02–0.05, velocity FLAT across 1500–2500 µm⁻²); the canonical model is OVER-BOUND ~10× there
+(baseline avgBound ~4.75 @ d2000). Test: tune `-glidekon` so ⟨N_b⟩ lands at the biological ~1.5, confine the
+filament to the lawn with `-matbox 50` (so a momentarily-detached filament stays in reach — the chamber is
+LOAD-BEARING here, it makes "stall" vs "drift-out-of-reach" separable), and read DIRECTED motion (netX/velFitX),
+NOT instSteady (Brownian-inflated at low duty). **No code changed** (reuses `-glidekon`/`-matbox`/`-grid`, all
+default-off byte-identical; `BoA-v1ref` untouched). **STEP 1** (single-seed 15k) — avgBound∈[1,2] reachable at every
+density; operating kOn ∝ 1/density to hold ⟨N_b⟩≈1.5: d1500→7e5, d2000→5e5(1.46), d2500→4e5(1.46). **STEP 2**
+(3-seed 30k at the operating points) — **VERDICT: OUTCOME (a), OVER-BOUND.** At ⟨N_b⟩≈1.3–1.6, net-directed
+**netX = −1.66 / −1.90 / −1.92 µm/s** (d1500/d2000/d2500, all 9 seeds directed −x, none collapses toward 0) and
+**velFitX = 1.28 / 1.64 / 1.32** — **density-FLAT** (the ~2× density climb the crossover sweep saw at *fixed* kOn is
+GONE once the head count is held fixed = saturation). netX/instSteady≈0.29 ⇒ ~29% directed / ~71% Brownian jitter,
+the biological lightly-bound picture; continuity P(≥1)=1−e^−1.5≈0.78 (~22% fully detached), duty order 0.02–0.05.
+The filament GLIDES at the biological head count — **kOn (operating point) is the fix for a density-independent
+glide; NO steric co-occupancy cap / displacement clutch is required to reach it.** Outcome (b) "can't-glide-sparse /
+per-attachment-advance defect" REFUTED (sparse binding → continuous directed transport). Caveat: *absolute* speed
+still rises with head count (velFitX 1.6 @⟨N_b⟩1.5 vs 4.6 @over-bound 4.75) ⇒ the model doesn't saturate in
+AMPLITUDE — Vmax calibration is a separate, non-blocking matter; the saturation this test establishes is
+density-independence at FIXED head count. CPU arbiter (d2000/kOn5e5/seed0, 15k) confirms it's not a GPU float
+artifact: CPU velFitX 2.453 / netX −2.185 / avgB 1.487 ≡ GPU 2.447 / −2.187 / 1.461 (<2%, no basin split — the
+chamber closed the out-of-plane fragility). Report:
+`docs/BIO_BOUNDCOUNT_TEST.md`; raw `RUN_LOGS/2026-07-10_bio_boundcount_step{1,2}.txt`.
+
+# 2026-07-10 — GLIDEKON_CROSSOVER: restoring a finite binding rate does NOT saturate the velocity–density curve — it only SCALES (ceiling is STRUCTURAL)
+Turned the one lever never turned (`BINDING_RATE_SURVEY`: canonical bind is DETERMINISTIC ⇒ effective kOn=∞ ⇒
+permanent supply-limitation). Re-routed the canonical gliding bind to a finite-kOn binder and tested the timescale
+crossover. **STEP 1** — new `-glidekon <k>` (`GlidingHarness`, CPU + GPU): routes the canonical `else` bind branch
+from `bindNearest` to **`BindingDetectionSystem.bindRateGated`** = `bindRate` VERBATIM (pBind=1−exp(−kOn·Δl·dt),
+kOn=kinParams[14], "BRAT" draw) + the baseline's `-nobind`/ADP·Pi guards so high-kOn reproduces the deterministic
+set; formulation A (headPrev≡head, exact at dt=1e-5 ⇒ mot.head passed twice; V2OneX proves same-buffer-twice lowers).
+Default-off ⇒ byte-identical (only an `else if` added). `bindRate`+V2OneXHarness byte-untouched. **Faithfulness** (d4000
+10k GPU): `-glidekon 1e8` avgBsteady 10.61≈baseline 10.49, dwell 0.628ms, velFitX 6.07 within single-seed spread ✓.
+**STEP 2** kOn* ≈ (1/τ_on)/Δl ≈ 1667/0.012µm ≈ 1.4e5; ladder {1.5e6,1.5e5,1.5e4}+baseline (estimate ~5× low but the
+100×-span bracketed the crossover). **STEP 3** (2 density × 4 kOn, GPU 15k, `-matbox 50`): the decisive ratio
+velFitX(d8000)/velFitX(d2000) — baseline(det) **1.85**, kOn 1.5e6 **2.08**, 1.5e5 **2.16**, 1.5e4 **1.10**. **NO
+CROSSOVER:** every ENGAGED kOn climbs ~2× (no flatten); the 1.10 is COLLAPSE (avgB 0.1–0.26 unbound, velFitX ~0.7 —
+both-near-zero trivial flatten, not the engaged ~d/τ_on plateau). velFitX+avgB fall TOGETHER as kOn drops (shrinking-pool
+fingerprint, identical to coltol); dwell flat ~0.6ms (kOn touches capture not release); occupancy-½ (~1.5e6) is on the
+ladder and still climbs 2.08×. The refill clock IS turnable (avgB 4.75→0.11, 5.6× starvation) but turning it collapses
+the pool, never saturates velocity. **⇒ timescale hypothesis REFUTED on the clean rate-side test; the ceiling is
+STRUCTURAL — bound-head POPULATION (steric co-occupancy / displacement clutch), matching DETACHMENT_CEILING_CODEREAD +
+AZIMUTHAL_FALLOFF.** GPU-trust: 5.6× avgB suppression across both densities is kinetic starvation no basin-flip fakes;
+CPU arbiter task-scoped to "if crossover appears" (it didn't). NEXT: build the steric co-occupancy cap / displacement
+clutch — test whether IT installs the density-independent ceiling no kinetic/geometric/rate lever could. New:
+`bindRateGated`, `-glidekon`, `scripts/run_glidekon_crossover.sh`. Report `docs/GLIDEKON_CROSSOVER.md`; raw
+`RUN_LOGS/2026-07-10_glidekon_crossover.txt`. `BoA-v1ref` untouched; production byte-unchanged.
+
+# 2026-07-10 — BINDING_RATE_SURVEY: the canonical gliding bind is DETERMINISTIC (effective kOn = ∞) — no refill clock to turn
+READ-ONLY code survey settling why every eligibility-gate sweep (coltol / azimuthal / recruit-shed) only SCALED and
+none crossed into release-limited saturation. **Verdict: on the canonical `-gpu -full -grid` path a head binds
+DETERMINISTICALLY the step it becomes eligible — effective per-encounter kOn is INFINITE.** Canonical binder =
+`BindingDetectionSystem.bindNearest` (dispatched at `GlidingHarness.java:745`, the `else` after CANONICAL/AZ_FALLOFF/
+AZ_GATE all default-false); accept line `BindingDetectionSystem.java:394` `if (bestSeg>=0){ boundSeg.set(m,bestSeg);
+bindArc.set(m,bestArc);}` — nearest reachable segment, **no RNG, no `u<kOn·dt`**. The historical finite-kOn binder
+`bindRate` (`:818`, `pBind=1−exp(−kOn·Δl·dt)`, reads `kinParams[14]=kOn`, default 0) EXISTS and is wired but is
+ORPHANED — only `V2OneXHarness -ratesearch`; `bindCanonicalTwoPoint` (`:586`) carries a kOn gate too but only under
+`-canonical` (off). `bindKinetics` binding is also deterministic (only its RELEASE draws). Refractory
+`kinParams[10]=MYO_REBIND_TIME=1e-5 s` = ceil(/dt) ≈ **1 step (0.01–0.1 ms) ≪ τ_on ~0.6 ms** ⇒ negligible. The ONLY
+real refill clock is the **ADP·Pi recovery gate ~10 ms** (`nucParams[2]=100/s`; welded on for Lymn–Taylor via
+`GlidingHarness.java:310`→`kinParams[20]=1`, enforced `BindingDetectionSystem.java:374`) — but it gates RE-binding of
+SPENT heads (out-of-reach in the −x glide wake, `DENSE_DUTY_GAP`), NOT the deterministic capture of the fresh primed
+pool the sweeps ride. ⇒ **no tunable per-site refill clock exists on the canonical path**; eligibility gates can only
+change pool SIZE, never per-encounter RATE — the timescale/regime hypothesis was never testable with them.
+**Localization to restore a finite swept kOn (scope only):** re-route the canonical `else` branch to `bindRate` behind
+a new `-glidekon <k>` (kOn>0; passes `mot.headPrev`; default off ⇒ byte-identical) — the historical hook, already
+validated — or a smaller single-site wang-hash gate at accept `:394` (salt-pattern reused from `bindNearestFalloff`).
+Report: `docs/BINDING_RATE_SURVEY.md`. READ-ONLY; no edits/runs; `BoA-v1ref` untouched.
+
 # 2026-07-10 — COLTOL_REGIME_SWEEP: shrinking the capture radius does NOT cross into release-limited saturation
 Tested jba's timescale/regime intuition — does shrinking coltol (the geometric REFILL lever) slow refill until
 refill-time ≳ τ_on, flipping the dense bed from supply-limited (site-occupancy ~0.85) to release-limited, where

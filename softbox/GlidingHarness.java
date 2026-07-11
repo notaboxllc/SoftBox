@@ -51,6 +51,7 @@ public final class GlidingHarness {
     static double  KAPPA = 3.82e-20;             // J1 torsional stiffness (N·m/rad). FORCE-MATCHED (Phase-2 SET-A, 2026-06-28): κ=F·L/θ with F=5pN skeletal stall (Finer'94), L=8nm, θ=60° ⇒ tip≈0.597 pN/nm, stall 5.00 pN. Was 6.4e-20 (8.38 pN). -kappa overrides.
     static double  PAIRS_FRACMOVE = 0.5;         // PAIRS attachment fracMove (dt-robust pin strength); not calibrated
     static double  KON = 0.0;                    // -kon: reaction-limited attachment rate (µm^-1 s^-1); 0 ⇒ saturated bind-on-contact. PHASE-2 step-3 calibration target.
+    static boolean GLIDE_KON = false;            // -glidekon <k>: route the canonical (non-canonical, non-azimuthal) gliding bind from the DETERMINISTIC bindNearest to the finite-kOn bindRateGated (P=1−exp(−kOn·Δl·dt), kOn=kinParams[14]). Default off ⇒ bindNearest ⇒ byte-identical. GLIDEKON_CROSSOVER: the timescale-crossover test (does the velFitX–density curve flatten as kOn drops?).
     static boolean NOBIND = false;               // -nobind: thermal-floor control — motors never bind (kinParams[19]=1). Measurement; default-off ⇒ byte-identical.
     static boolean SINGLE = false;               // -single: single-molecule duty assay (proximal motors on a fixed filament)
     static double  SINGLE_Z = -0.090;            // -singlez: single-molecule anchor z (positions the cycling head's bob range at the filament)
@@ -238,6 +239,7 @@ public final class GlidingHarness {
             else if (args[i].equals("-config1diag")) { CANONICAL = true; CONFIG1 = true; CANON_DIAG = true; }
             else if (args[i].equals("-kappa")) KAPPA = Double.parseDouble(args[++i]);          // J1 torsional stiffness override (N·m/rad)
             else if (args[i].equals("-kon")) KON = Double.parseDouble(args[++i]);              // reaction-limited attachment rate (µm^-1 s^-1)
+            else if (args[i].equals("-glidekon")) { KON = Double.parseDouble(args[++i]); GLIDE_KON = true; }  // GLIDEKON_CROSSOVER: route canonical bind → finite-kOn bindRateGated (kinParams[14]=KON via line 611)
             else if (args[i].equals("-nobind")) NOBIND = true;   // thermal-floor control: motors never bind (kinParams[19]); measurement, default-off byte-identical
             else if (args[i].equals("-single")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; }  // single-molecule duty assay (Config-1)
             else if (args[i].equals("-singlez")) SINGLE_Z = Double.parseDouble(args[++i]);             // single-molecule anchor z override
@@ -741,6 +743,8 @@ public final class GlidingHarness {
             BindingDetectionSystem.bindNearestFalloff(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, f.yVec, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
         else if (AZ_GATE)   // AZIMUTHAL (Inc 2): orientational bind gate (bindNearest + the n̂-antiparallel scan)
             BindingDetectionSystem.bindNearestAzim(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, f.yVec, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
+        else if (GLIDE_KON)   // GLIDEKON_CROSSOVER: finite-kOn stochastic capture (headPrev≡head ⇒ point chord, exact at dt=1e-5)
+            BindingDetectionSystem.bindRateGated(mot.head, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
         else
             BindingDetectionSystem.bindNearest(mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
         if (TWISTCENSUS) CrossBridgeSystem.captureBindTwist(b.yVec, f.uVec, mot.boundSeg, sc.prevBoundTw, sc.twistHist, mot.counts);
@@ -871,6 +875,8 @@ public final class GlidingHarness {
                 tg = tg.task("bind", BindingDetectionSystem::bindNearestFalloff, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, f.yVec, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
             else if (AZ_GATE)   // AZIMUTHAL (Inc 2): orientational bind gate variant (f.yVec threaded; 13 args)
                 tg = tg.task("bind", BindingDetectionSystem::bindNearestAzim, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, f.yVec, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
+            else if (GLIDE_KON)   // GLIDEKON_CROSSOVER: finite-kOn stochastic capture (mot.head passed twice ⇒ point chord; V2OneX proves same-buffer-twice lowers)
+                tg = tg.task("bind", BindingDetectionSystem::bindRateGated, mot.head, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
             else
                 tg = tg.task("bind", BindingDetectionSystem::bindNearest, mot.head, mot.uVec, mot.rodUVec, f.end1, f.end2, sc.reachSeg, sc.reachCount, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.kinParams, mot.counts);
             if (TWISTCENSUS) tg = tg.task("bindTwist", CrossBridgeSystem::captureBindTwist, b.yVec, f.uVec, mot.boundSeg, sc.prevBoundTw, sc.twistHist, mot.counts);

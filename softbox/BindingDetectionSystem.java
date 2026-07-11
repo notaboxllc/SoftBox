@@ -912,6 +912,119 @@ public final class BindingDetectionSystem {
     }
 
     /**
+     * GLIDEKON_CROSSOVER (2026-07-10): the finite-kOn gliding binder — {@link #bindRate} PLUS the two
+     * eligibility guards the canonical gliding baseline ({@link #bindNearest}) already applies, so a
+     * high-kOn run (pBind→1) reproduces the deterministic baseline AGGREGATE rather than binding a
+     * strictly larger set. The ONLY additions over bindRate are: (1) the {@code -nobind} thermal-floor
+     * control (kinParams[19]); (2) the ADP·Pi strong-bind gate (kinParams[20], WELDED on for the
+     * canonical Lymn–Taylor path) — a head strong-binds only in the pre-stroke ADP·Pi state, so a
+     * just-detached ATP head cannot rebind before its ~10 ms recovery (the one real refill clock,
+     * preserved). Everything else — the path-average chord through the tight myoColTol capture sphere,
+     * pBind = 1 − exp(−kOn·Δl·dt) with kOn = kinParams[14], the rate-∝ segment pick, the "BRAT"
+     * wang-hash draw — is bindRate VERBATIM. Gliding-only (mirrors bindNearestAzim/Falloff being
+     * separate gliding binders); bindRate + its V2OneXHarness caller stay byte-untouched. Formulation A
+     * (headPrev≡head ⇒ point chord) is exact here: at dt=1e-5 the head moves ≪ myoColTol per step.
+     */
+    public static void bindRateGated(
+            FloatArray head, FloatArray headPrev, FloatArray uVec, FloatArray rodUVec,
+            FloatArray segEnd1, FloatArray segEnd2,
+            IntArray motorCandSeg, IntArray motorCandCount,
+            IntArray boundSeg, FloatArray bindArc, IntArray nucleotideState,
+            FloatArray kinParams, IntArray counts) {
+        int nM = counts.get(0);
+        int nSeg = segEnd1.getSize() / 3;
+        int step = counts.get(1), seed = counts.get(2);
+        int MAXC = SpatialGrid.MAX_CAND;
+        float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        float dt = kinParams.get(6);
+        float kOn = kinParams.get(14);
+        float r2 = myoColTol * myoColTol;
+        boolean adppiGate = kinParams.getSize() > 20 && kinParams.get(20) > 0.5f;   // ADP·Pi strong-bind gate (welded on for canonical Lymn–Taylor)
+        final int NSAMP = 8;                              // swept-path quadrature samples (point chord when sweep=0)
+        for (@Parallel int m = 0; m < nM; m++) {
+            if (boundSeg.get(m) != MotorStore.FREE_BINDABLE) continue;
+            if (kinParams.get(19) > 0.5f) continue;   // -nobind thermal-floor control (default 0 ⇒ inert)
+            if (adppiGate && nucleotideState.get(m) != MotorStore.NUC_ADPPI) continue;   // only ADP·Pi heads strong-bind
+            float p1x = head.get(m), p1y = head.get(nM + m), p1z = head.get(2 * nM + m);
+            float p0x = headPrev.get(m), p0y = headPrev.get(nM + m), p0z = headPrev.get(2 * nM + m);
+            float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
+            float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
+            int cnt = motorCandCount.get(m); if (cnt > MAXC) cnt = MAXC;
+
+            // pass 1: total effective encounter rate over the candidate segments (path-average chord)
+            float totalRate = 0f;
+            for (int k = 0; k < cnt; k++) {
+                int s = motorCandSeg.get(m * MAXC + k);
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                if (denom <= 0f) continue;
+                float inv = 1.0f / (float) Math.sqrt(denom);
+                float fux = r1x * inv, fuy = r1y * inv, fuz = r1z * inv;
+                float motDotFil = mux * fux + muy * fuy + muz * fuz;
+                if (motDotFil < alignTol) continue;
+                float rodDotFil = rux * fux + ruy * fuy + ruz * fuz;
+                if (rodDotFil < 0f) continue;
+                float chordSum = 0f;
+                for (int i = 0; i < NSAMP; i++) {
+                    float lam = (i + 0.5f) / NSAMP;
+                    float px = p0x + lam * (p1x - p0x), py = p0y + lam * (p1y - p0y), pz = p0z + lam * (p1z - p0z);
+                    float alpha = ((px - e1x) * r1x + (py - e1y) * r1y + (pz - e1z) * r1z) / denom;
+                    if (alpha < 0f || alpha > 1f) continue;
+                    float cpx = e1x + alpha * r1x, cpy = e1y + alpha * r1y, cpz = e1z + alpha * r1z;
+                    float dx = cpx - px, dy = cpy - py, dz = cpz - pz;
+                    float cds = dx * dx + dy * dy + dz * dz;
+                    if (cds < r2) chordSum += 2.0f * (float) Math.sqrt(r2 - cds);
+                }
+                totalRate += kOn * (chordSum / NSAMP);
+            }
+            if (totalRate <= 0f) continue;
+            float pBind = 1.0f - (float) Math.exp(-totalRate * dt);
+            int base = (m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x42524154;   // "BRAT" salt
+            int h = wangHash(base);
+            float u = (h >>> 1) / 2147483647.0f;
+            if (u >= pBind) continue;
+
+            // pass 2: select the segment ∝ its rate (second independent draw), bind at the CURRENT-head foot
+            int h2 = wangHash(base ^ 0x5A5A5A5A);
+            float target = (h2 >>> 1) / 2147483647.0f * totalRate;
+            float acc = 0f; int chosen = -1; float chosenArc = 0f;
+            for (int k = 0; k < cnt; k++) {
+                int s = motorCandSeg.get(m * MAXC + k);
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                if (denom <= 0f) continue;
+                float inv = 1.0f / (float) Math.sqrt(denom);
+                float fux = r1x * inv, fuy = r1y * inv, fuz = r1z * inv;
+                float motDotFil = mux * fux + muy * fuy + muz * fuz;
+                if (motDotFil < alignTol) continue;
+                float rodDotFil = rux * fux + ruy * fuy + ruz * fuz;
+                if (rodDotFil < 0f) continue;
+                float chordSum = 0f;
+                for (int i = 0; i < NSAMP; i++) {
+                    float lam = (i + 0.5f) / NSAMP;
+                    float px = p0x + lam * (p1x - p0x), py = p0y + lam * (p1y - p0y), pz = p0z + lam * (p1z - p0z);
+                    float alpha = ((px - e1x) * r1x + (py - e1y) * r1y + (pz - e1z) * r1z) / denom;
+                    if (alpha < 0f || alpha > 1f) continue;
+                    float cpx = e1x + alpha * r1x, cpy = e1y + alpha * r1y, cpz = e1z + alpha * r1z;
+                    float dx = cpx - px, dy = cpy - py, dz = cpz - pz;
+                    float cds = dx * dx + dy * dy + dz * dz;
+                    if (cds < r2) chordSum += 2.0f * (float) Math.sqrt(r2 - cds);
+                }
+                acc += kOn * (chordSum / NSAMP);
+                if (chosen < 0 && acc >= target && chordSum > 0f) {
+                    chosen = s;
+                    chosenArc = ((p1x - e1x) * r1x + (p1y - e1y) * r1y + (p1z - e1z) * r1z) * inv;
+                }
+            }
+            if (chosen >= 0) { boundSeg.set(m, chosen); bindArc.set(m, chosenArc); }
+        }
+    }
+
+    /**
      * Increment 6c (faithfulness fix): the v1 NODE-HELD binding exclusion, ported from
      * MyoMotor.checkFilSegCollision (BoA-v1ref boxOfActin/MyoMotor.java:391-392):
      *
