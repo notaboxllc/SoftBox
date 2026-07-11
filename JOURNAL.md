@@ -1,5 +1,137 @@
 # Soft Box Project Journal
 
+### [Vmax→25°C calibration] Stage 2 — DEFERRED BY CHOICE (not incomplete): decline to hit the band by falsifying measured rates
+
+**Decision:** We can reach the biological gliding band (V₀ → ~4–8 µm/s, target ~4.2) with the Stage-1-shortlisted knobs — but we are choosing NOT to, because every path does so by moving experimentally-MEASURED parameters off their measured values:
+- **ADP-release ↓ ~3× (1000→300/s) → V₀≈8** — clean mechanically (touches no PINNED quantity) but 300/s is **sub-skeletal** (skeletal ~500–1000/s) ⇒ drifts the motor's identity toward smooth/NMII kinetics.
+- **xCatch/αCatch ↓** (stronger movers) — overrides **Guo&Guilford-measured catch-bond constants**, reshaping the measured lifetime-vs-load curve.
+
+**Why deferred rather than done:** Stage 1's real finding is that the current motor architecture, with all rates at their measured skeletal 25°C values, has an **intrinsic ceiling ABOVE the biological gliding band**. Forcing V₀ into the band by tuning the measured constants would *hide* that finding behind a fitted number. We bank the finding instead: **we know how to lower V₀ and are declining the version that falsifies measured kinetics.** Candidate sets (A: ADP-only, B: catch-shape-only, C: split) are specified and buildable if we ever want the fitted version, but not pursued now.
+
+**The principled alternative — next experiment:** pursue the band by making the motor MORE physically faithful, not less. The accepted **head-frame-swing vs DIRSWING** experiment tests whether a less-idealized stroke (head-frame, not continuously re-aimed at the filament each step) loses axial productivity as the filament slides (H1). If H1 holds, V₀ falls **through more realistic geometry** — the opposite provenance sign from Stage-2 tuning (which buys speed by *degrading* fidelity; head-swing would buy it by *increasing* fidelity). "Relax the swing efficiency" and "make the stroke more biological" are the same change if head-frame is the more realistic stroke. **⇒ Run the head-swing experiment next; return to Stage 2 only if head-swing does NOT reach the band and a fitted calibration becomes necessary (and then as an explicit, PI-chosen provenance tradeoff, documented as such).**
+
+**Open target parameter (unchanged, still to pin if/when calibration resumes):** ionic strength — ~4.2 µm/s is the ~50 mM number; physiological ~150 mM is lower.
+
+**Status:** Stage 0 (audit) + Stage 1 (sensitivity) done/committed. Stage 2 deferred-by-choice. Next: head-frame-swing experiment (its own accepted proposal).
+
+# 2026-07-11 — Vmax calibration STAGE 1 (clamp V₀ sensitivity screen): V₀ is RELEASE-kinetics-limited, NOT stroke-limited
+One-at-a-time clamp-V₀ sensitivity screen over the eligible (non-PINNED) knobs (per the STEP-0 audit), to rank which
+move the ceiling. `-vclamp` f̄_available, CPU, `-matbox 50`, d1000 (V₀ density-indep, faster), adaptive grid
+{0,4,8,12,16,20}, seed 0 (+seed-1 confirm). Added measurement-only default-off byte-identical override flags
+`-adprate/-pirate/-atpdetrate/-koff/-acatch/-aslip/-xslip` (+ reused `-neckangle/-myospring/-xcatch`); baseline
+byte-identical (additive gated branches only). Report `docs/VMAX_SENSITIVITY_25C.md`; raw
+`RUN_LOGS/2026-07-11_vmax_sens_seed{0,1}.txt`. `BoA-v1ref` untouched.
+**2-seed pooled log-sensitivities S=Δln V₀/Δln p (baseline V₀ 12.4/15.2 d1000, seed scatter significant):** xCatch
+**0.69** ≫ αCatch **0.41** [robust top] » mid-cluster ADP-release 0.28 ≈ Pi-release 0.25 ≈ **neck-angle/stroke 0.20**
+≈ myoSpring 0.17 ≈ ATP-detach 0.16 [seed-scattered, not cleanly ordered] » nulls αSlip 0.02 ≈ xSlip −0.02 ≈ **kOff
+0.00**. **HEADLINES (survive 2 seeds):** (1) **catch-slip SHAPE (xCatch, αCatch) DOMINATES V₀** (robust #1/#2) ⇒ the
+ceiling is **release-kinetics-limited**; **stroke size (neck-angle) is only mid-cluster (0.20), NOT the dominant
+lever** — refutes naïve V≈d/τ_on "stroke is the lever". (2) **kOff has ZERO V₀ effect (0.00 both seeds)** — the clean
+amplitude null (scales catch+slip ⇒ moves detach rate not the zero). (3) the **myoSpring CONTROL is NOT null (0.17
+both)** — stiffness couples mildly into the zero (3-body geom + load-dependent release, audit H5). **Cleanest lever to
+lower V₀ into ~4–8: slow ADP release ~3× (1000→300/s ⇒ V₀≈8 both seeds, stroke PINNED-untouched)** — maps to d/τ_on,
+touches no PINNED quantity, though drifts sub-skeletal toward NMII; xCatch/αCatch move V₀ more but are
+Guo&Guilford-measured catch-bond constants (provenance-expensive). **Neck-angle demoted: mid-cluster AND stroke-bound**
+(5–8 nm ⇒ neck ~43–70°). **VERDICT: release dynamics dominate V₀, not stroke ⇒ Stage 2 builds candidate sets on the
+release kinetics (slower ADP clock ± re-shaped catch), NOT stroke. Caveat: screen-precision; mid-cluster order needs
+Stage-2 bootstrap.**
+
+# 2026-07-11 — Vmax→25 °C calibration STEP 0 (READ-ONLY provenance audit): rates are a multi-temperature SKELETAL stitch, NOT single-T ⇒ temperature is NOT the lever (H1 near-dead)
+Read-only gating audit before any temperature calibration — two frozen provenance tables. NO code/runs/`-tempC`.
+Reports: `docs/MOTOR_PARAMETER_PROVENANCE_25C.md` (Table 2), `docs/GLIDING_TARGET_25C.md` (Table 1). `BoA-v1ref`
+reference-only.
+**TABLE 2 (model rates):** the live gliding motor (SPHEREHEAD+AXLOCK+DIRSWING+XB_IMPLICIT2+LYMN_TAYLOR default) is
+**skeletal throughout**, at a MIX of ≥4 inherited temperatures: kT EXPLICIT **25 °C** (`Env.java:25`, PINNED); the
+nucleotide cycle = **Howard 2001 Table 14-2** "shaded path" (rabbit fast skeletal) which is itself a **compilation
+STITCH** — ATP-side (atpOn 2e4, hydrolysis 100) from Lymn & Taylor 1971 at **20 °C** + ADP release (onADP 1e3, the
+τ_on/velocity-limiter) from Siemankowski & White 1985 at **~15 °C**; catch-slip (kOff 100, α 0.92/0.08, xCatch 2.5nm,
+xSlip 0.4nm) = **Guo & Guilford 2006 = RAT skeletal HMM, "room temperature" (no numeric °C)**. ⚠️ Corrections: Env's
+"Stam 2015" catch-slip cite = Stam 2015 *Biophys J* (NOT PNAS), a **simulation** (consumer, not the experimental
+source = Guo&Guilford); the `NMII_BIOLOGY.md` NMII intent was **NEVER parameterized** into the gliding rates (code is
+skeletal). Unitary force ~5 pN (Finer'94, PINNED) + working stroke ~5–8 nm (PINNED) = validation metrics, never
+knobs. **H1 KEY:** the velocity-limiting ADP release (1e3/s) is **ALREADY ~25 °C-equivalent** (Siemankowski 15 °C
+≥500/s × Q₁₀~2 → ~1000/s); round textbook values not a precise single-T set; and **NO per-transition Q₁₀ is cleanly
+available** (only emergent velocity Q₁₀≈2.38 [JAP 2005, fast skel 10–25 °C] + overall ATPase Ea≈66 kJ/mol) ⇒ a
+rigorous per-transition warm-up can't even be built without primary pulls (Nyitrai 2006 ADP-release T-dep paywalled),
+and the one step that sets velocity needs no warm-up.
+**TABLE 1 (target):** condition-matched 25 °C skeletal gliding Vmax = **≈4.2 µm/s** (Rossi 2012, fast rat skel HMM,
+25 °C, 2 mM ATP, ~50 mM ionic — the one exact anchor; Kron&Spudich 3–4, Anson ~4 bracket it); spread **3–5 µm/s**.
+Dominant hidden variable = IONIC STRENGTH (clean numbers at ~50 mM; V falls toward physiological 150 mM per Homsher
+1992 ⇒ <4 there). The provisional "1.5–4" band's LOW end unsupported for skeletal 25 °C/low-salt; ~4 is the anchor.
+The model's directed glide already sits in 3–5 µm/s (BIO_BOUNDCOUNT/FORCE_BALANCE) ⇒ little "missing Vmax."
+**GATE VERDICT: rates are a mixed-temperature SKELETAL stitch, not one T ⇒ "apply one coherent 25 °C shift" is the
+WRONG frame; temperature is near-certainly NOT the lever (H1 dead on arrival — ADP release already ~25 °C, no
+per-transition Q₁₀, target already met). DO NOT run a temperature-scaling calibration; if a velocity change is
+needed the lever is the mechanochemical operating point (stroke/duty/force-balance), not °C.** Sensitivity screen /
+candidate sets / free-glide confirmation are moot under this verdict (were deferred pending this gate).
+
+# 2026-07-11 — FORCE_BALANCE_CLOSURE: the clamp f̄(v) predicts free gliding to a factor ~1.4 (rigid clamp OVER-predicts ~40% on the arbiter) ⇒ model coherent, calibration is the frame (operative ceiling ~11–12); V₀≈16 density-independent; B-impulse crosses at V₀
+Gated the "just calibrate V₀" leap by CLOSING the force balance N·f̄(v*)=F_drag(v*) against observed free-glide
+speeds, + fixing the P_bound>1 denominator, + locating the Variant-B impulse zero, + a bootstrapped V₀ CI.
+Measurement/analysis only; additive/default-off byte-identical (`-vdrag` + denominator fix + impulse SEM; default
+path unchanged; `BoA-v1ref` untouched).
+**PART 1 — balance CLOSES.** `-vdrag` (bare-filament drag, no motors): ζ_eff=0.401 pN/(µm/s), measured≡analytic
+1e6·Σγ_par (overdamped v=F/γ exact, dt cancels; aeta=0.1 Pa·s ⇒ drag NOT anomalously low). Solving
+avgBound(ρ)·f̄_bound(v*)=ζ_eff·v* with the clamp per-BOUND force curve: v*_pred≈5.2(d2000)/8.2(d4000).
+**Arbiter-consistent (CPU clamp vs CPU free) d2000: observed velFitX 3.65±0.60 (3 seeds 3.49/3.01/4.45) ⇒
+pred/obs ≈ 1.4 (range 1.2–1.7) — the rigid clamp OVER-predicts by ~40%.** (Vs GPU-free 4.40 the ratio is only
+1.18, but that MIXES IN the separate ~20% CPU↔GPU gliding basin difference — the clean same-runner comparison is
+~1.4; d4000 uses GPU-free 6.70 ⇒ ratio 1.22 is a LOWER bound, CPU would be ~1.4–1.5.) Case = "predicted >
+observed": the clamp reproduces MAGNITUDE + DENSITY-SCALING (same ~1.4 ballpark both densities), model broadly
+self-consistent, BUT the rigid-clamp idealization overstates the free-glide drive by ~1.4× (flexing/rotating/
+wandering free filament ~40% less efficient than the rigid clamp) ⇒ **operative free-glide ceiling ~V₀/1.4 ≈
+11–12, NOT the clamp's 16.** NOT a double-count/N-mismatch/order-of-mag miss. Observed grid (GPU): d1000
+2.24/2.68, d2000 4.40/4.62, d4000 6.70/9.33, d8000 9.19/18.4; CPU d2000 velFitX 3.65±0.60 (arbiter, ~20% below
+GPU = the basin diff).
+**PART 2 — B-impulse crosses at V₀.** Primary = net impulse per COMPLETE episode ⟨I_ep⟩=∫f_g dt (not conditional
+force). v=12→20: +0.163,+0.156,+0.056,+0.026,+0.022 pN·ms ⇒ crosses zero ~16–18, COINCIDENT with V₀≈16 ⇒ the
+ceiling is intrinsic to ONE attachment, NOT recruitment-masked (attachment-path masking REFUTED at the impulse
+level; individual seeds already negative by v=16).
+**PART 3 — denominator fixed.** N_available=N_reach∪N_bound (bound⊆available) ⇒ occupancy renamed
+`bound_to_available`=0.83≤1 (was the impossible 1.01); does not move the force zero.
+**PART 4 — V₀ bootstrapped.** 4 seeds v=13/14/15: **V₀=15.95[15.0,20.3](d2000)/16.08[15.1,18.4](d4000)** —
+density-INDEPENDENT ≈16 (refines the single-seed 14; seed0 was low). Crossing **slopes MATCH −0.034/−0.037** ⇒
+the earlier ~3× single-seed slope discrepancy was SAMPLING noise, no hidden density effect.
+**VERDICT: the clamp f̄(v) predicts free gliding to a factor ~1.4 (same order + density-scaling) ⇒ model broadly
+self-consistent, calibration is the right frame; BUT the rigid clamp OVER-predicts by ~40% (flexure/rotation the
+clamp omits) ⇒ operative ceiling ~11–12 (≈1.4× biological Vmax ~8), not the clamp's 16. The ~40% rigid-vs-free
+geometric gap is the residual to chase, not a missing collective effect or a new state.** Integrity note: my first
+pass reported "~20%" using GPU-free; the arbiter-consistent (CPU/CPU) gap is ~40% — the ~20% conflated the CPU↔GPU
+basin difference with the geometry gap. Report `docs/FORCE_BALANCE_CLOSURE.md`; raw
+`RUN_LOGS/2026-07-11_freeglide_obs.txt`, `_fvB_impulse.txt`, `_fvA_V0fine.txt`. New: `GlidingHarness` `-vdrag`
+(runDragCal) + N_available denominator fix + per-episode impulse SEM (all default-off byte-identical).
+
+# 2026-07-10 — FORCE_VELOCITY_TEST: velocity-clamp reveals the intrinsic ceiling EXISTS at V₀≈14 µm/s (density-independent) ⇒ outcome 2 (calibration), NOT a missing weak state
+"Measure before build." Velocity-CLAMP the gliding filament (`-vclamp <v>`, `GlidingHarness.runForceVelocity`,
+CPU) — hold it rigid+straight, thermal off, advance only its COM at −v·dt (a kinematic velocity SOURCE that does
+NOT respond to motor force). Because the clamped filament ignores its forceSum, the carpet motors couple only to
+the prescribed trajectory ⇒ mutually INDEPENDENT ⇒ the whole carpet = a bank of replicated single-motor episodes
+(GPT efficient design). Measured `f̄_available(v)` (mean glide force per AVAILABLE motor, unbound=0), sweep
+v∈[−12,+12] (extended to +18), d2000+d4000. **Additive/flag-gated, default-off byte-identical** (new fields +
+dispatch branch + one method; no shared kernel, no default line touched; default d2000 grid velFitX 4.07/avgB 4.56
+reproduces baseline; `BoA-v1ref` untouched).
+**PART 1 (Variant A, full binder):** f̄_available is a clean monotone force–velocity curve — +3.0 pN (v=−12) →
++0.10 (v=+12) → **crosses ZERO at V₀≈14 µm/s** (d2000 14.3 / d4000 14.8 — **density-INDEPENDENT to ~3%**) → negative
+(resistive) beyond. So **the intrinsic force–velocity ceiling EXISTS** — it just sits ~1.8× the biological Vmax
+(~8) and JUST ABOVE the ±12 window (why free-gliding v*<V₀ climbed with N toward the fixed V₀ and never looked
+saturated). P_bound stays high (~0.95–1.0) at all v ⇒ decline is per-head FORCE (⟨I_attach⟩ 3.82→0.05 pN·ms,
+lifetime 1.32→0.52 ms), not engagement; J_attach rises (760→1874) refilling the pool.
+**PART 2 (x_bind):** the axial mismatch at attach `x_bind = s_head−s_site` is a **delta at ~0 (sd≈0) INDEPENDENT
+of v** (bindArc≡head projection ⇒ 0 by construction; the ±0.12 nm mean = the one-step read slip v·dt). The
+strain-erasing binder + committed no-pre-stroke-off-ramp cycle (cycleLymnTaylor: onPi=1e4/s fixed, only the
+POST-stroke ADP→NONE is load-gated) are REAL — but they only set V₀ HIGH, they do NOT abolish the ceiling.
+**PART 3 (Variant B, `-fvepisode`, recruitment removed):** one attachment episode/motor, no rebinding — f̄_bound
+STAYS POSITIVE to +12 (pooled +0.42±0.17 @+12, +0.72 @+6; K-robust @300/700/1500), even HIGHER than A (fresh
+isolated heads vs A's co-bound tug-of-war crowd) ⇒ **the ceiling is INTRINSIC, NOT recruitment-masked.**
+**VERDICT — outcome 2: architecture SOUND (real density-independent ceiling at V₀≈14), V₀ mis-calibrated ~1.8×
+high ⇒ CALIBRATION (stroke size / rates / stiffness), NOT a new state. jba's "no ceiling ⇒ build a single weak /
+pre-stroke-strain-gate state" is REFUTED — the ceiling exists and B does not uncover a masked one. DO NOT build.**
+(Method notes: compact clamp bed x±3/y±0.1 µm — thin-y faithful for per-available since only the ~50 nm capture
+band binds; single-seed B was noise near 0, powered pool is +0.42. All on the deterministic CPU runner = the
+basin arbiter; the +14/+15 sign change is resolved, not float noise.) Report `docs/FORCE_VELOCITY_TEST.md`; raw
+`RUN_LOGS/2026-07-10_fvtest.txt` (A ±12), `_fvA_highv.txt` (locates V₀), `_fvB_clean.txt` (B pooled + K-robust).
+New: `GlidingHarness` `-vclamp`/`-fvepisode` + `runForceVelocity`; `scripts/run_fvtest.sh`, `scripts/run_fvB_clean.sh`.
+
 # 2026-07-10 — BIO_BOUNDCOUNT_TEST: at the BIOLOGICAL bound-head count (⟨N_b⟩≈1.5) the model GLIDES directionally + density-independent — it was OVER-BOUND (outcome a)
 Reframed the ceiling question around a real biological number: motility assays run at ⟨N_b⟩≈2 (frequent full
 detachment, duty ~0.02–0.05, velocity FLAT across 1500–2500 µm⁻²); the canonical model is OVER-BOUND ~10× there

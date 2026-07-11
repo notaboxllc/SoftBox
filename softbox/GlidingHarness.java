@@ -114,6 +114,9 @@ public final class GlidingHarness {
     static boolean STRUCT_SPRINGS = true;       // -structsprings (DEFAULT-ON): STRUCTURAL J1/J2 connection + tail-anchor position springs (jointParams[1]/[5]/[9]) → fixed springs. -nosprings to disable.
     static double STROKE_REF_DT = 1.0e-5;       // -strokerefdt <s>: reference dt at which k_eff==0.4 (the coarse/production-dt physical stroke duration to preserve); default 1e-5
     static double RATE_SCALE = 1.0;             // -ratescale <x>: scale catch-slip kOff + ALL nucleotide cycle rates by x (faster kinetics = V₀ = step·detach-rate); default 1 ⇒ byte-identical. STEP-3 cycle-rate lever.
+    // VMAX_SENSITIVITY (STAGE 1, measurement-only): per-parameter overrides for the eligible non-PINNED rates that
+    // lack a flag. 0 / −1 = not set ⇒ byte-identical. One-at-a-time V₀ sensitivity screen (VMAX_SENSITIVITY_25C.md).
+    static double OVR_ADP = 0, OVR_PI = 0, OVR_ATPDET = 0, OVR_KOFF = 0, OVR_XSLIP = 0, OVR_ACATCH = -1, OVR_ASLIP = -1;
     // SWEPT EXPERIMENTAL PARAMETER — NOT a canonical model default (2026-07-08 Stage 2 reclassification, D7).
     // Capture radius is a swept physical condition (engagement/duty knob), not a chosen operating point; pass
     // -coltol explicitly for any reported run. 6 nm is a NEUTRAL PLACEHOLDER the harness needs to run (it also
@@ -139,6 +142,16 @@ public final class GlidingHarness {
     static boolean BOX_ALL = false;  // -boxall: additionally confine every motor sub-body (upper-bound box-check load at 3·nMotors bodies)
     static double  ZCONFINE = 0;     // -zconfine <nm>: FILAMENT-ONLY tight-z chamber half-width (nm→µm); 0 = off (byte-identical). Mechanism test: pin the filament near the z=0 motor plane (motors stay un-boxed — they are tethered) to close the out-of-plane disengagement runaway. See docs/GLIDING_OUTOFPLANE_DISENGAGEMENT_FINDINGS.md.
     static double  MATBOX_Z = 0;     // -matbox <nm>: MAT-SIZED reach-preserving chamber (COLTOL_REGIME_SWEEP PART 0). z half-width = nm (LOOSE, ~order the motor z-reach ~50 nm ⇒ inactive in the engaged state, only bites an out-of-plane wander — isolation, not a plane pin); y walls at the mat extent ±bYhalf (bed is y-symmetric about 0 ⇒ keeps the filament over the lawn, fixing the y-coverage escape that corrupts high-density points); x FREE (∞, preserves the −x glide runway). 0 = off (byte-identical). Distinct from -zconfine (which sets x/y→∞).
+    // ---- FORCE_VELOCITY_TEST (MEASUREMENT-ONLY): velocity-clamp the filament (kinematic velocity source) and
+    //      measure the ensemble force–velocity curve of the carpet motors. Once the filament is clamped it no
+    //      longer responds to motor force ⇒ the carpet motors are mutually INDEPENDENT (they couple only through
+    //      the filament) ⇒ the whole carpet is a bank of replicated single-motor episodes vs one prescribed
+    //      trajectory (GPT's efficient design). Default-off ⇒ byte-identical (a new dispatch branch + method only).
+    static boolean VCLAMP = false;               // -vclamp <v>: enable the velocity-clamp force–velocity test
+    static double  VCLAMP_V = 0.0;               // glide speed µm/s; +v ⇒ filament COM moves −x (the natural glide direction), −v ⇒ +x (anti-glide/backward drag)
+    static boolean VDRAG = false;                // -vdrag: bare-filament drag calibration (no motors) — measure ζ_eff = F_ext/v for the balance N·f̄=F_drag (FORCE_BALANCE_CLOSURE PART 1)
+    static boolean FV_EPISODE = false;           // -fvepisode <K>: Variant B — one-attachment episodes; rebinding blocked except a fresh cohort re-armed every K steps
+    static int     FV_REARM = 500;               // re-arm cadence (steps); ≫ episode length so each trial is a single episode with no rebinding
     // ---- SUBSTEP_FEASIBILITY (MEASUREMENT-ONLY): bound fraction + bound-cross-bridge slice X + per-outer-dt site motion ----
     static boolean SUBSTEP = false;              // -substep
     static double  OUTER_DT = 1.0e-4;            // -outerdt <s>
@@ -248,6 +261,10 @@ public final class GlidingHarness {
             else if (args[i].equals("-acorr")) ACORR = true;                                            // J1-strain autocorrelation diagnostic
             else if (args[i].equals("-xcatch")) XCATCH = Double.parseDouble(args[++i]);                  // catch distance d override (nm)
             else if (args[i].equals("-density")) { DENSITY = Double.parseDouble(args[++i]); DENSITY_SET = true; }   // motor density (SWEPT condition, D7)
+            else if (args[i].equals("-vclamp")) { VCLAMP = true; VCLAMP_V = Double.parseDouble(args[++i]);          // FORCE_VELOCITY_TEST: velocity-clamp the filament at glide speed v (µm/s); CPU-only measurement
+                bX0 = 1.0; bXlo = -3.0; bXhi = 3.0; bYhalf = 0.1; }   // compact clamp bed: x-runway ±3µm (fits |v|·M excursion), thin y (only the ~50nm capture band binds ⇒ per-available force unaffected; far fewer motors). Override with -full AFTER -vclamp.
+            else if (args[i].equals("-fvepisode")) { FV_EPISODE = true; FV_REARM = Integer.parseInt(args[++i]); }   // FORCE_VELOCITY_TEST Variant B: one-attachment episodes, re-arm every K steps (no rebinding within a trial)
+            else if (args[i].equals("-vdrag")) { VDRAG = true; bX0 = 1.0; bXlo = -3.0; bXhi = 3.0; bYhalf = 0.1; }    // FORCE_BALANCE_CLOSURE PART 1: bare-filament drag calibration (same compact bed, motors present but unused)
             else if (args[i].equals("-dcalib")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; DCALIB = true; }  // catch force-sensitivity calibration
             else if (args[i].equals("-csrecal")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; CSRECAL = true; }  // step-4c catch-slip recalibration
             else if (args[i].equals("-stiffsweep")) { CONFIG1 = true; STIFFSWEEP = true; }   // step-4d κ+angle sensitivity (measurement-only)
@@ -276,6 +293,13 @@ public final class GlidingHarness {
             else if (args[i].equals("-substep")) SUBSTEP = true;         // SUBSTEP_FEASIBILITY readout
             else if (args[i].equals("-neckangle")) NECK_ANGLE = Double.parseDouble(args[++i]);   // STEP-2 step-size lever: cocked neck rest angle (deg)
             else if (args[i].equals("-ratescale")) RATE_SCALE = Double.parseDouble(args[++i]);   // STEP-3 cycle-rate lever: ×scale on kOff + all nucleotide rates
+            else if (args[i].equals("-adprate")) OVR_ADP = Double.parseDouble(args[++i]);          // VMAX_SENSITIVITY: ADP-release rate override (nucParams[6]/[7], baseline 1e3/s) — the τ_on/velocity-limiter
+            else if (args[i].equals("-pirate")) OVR_PI = Double.parseDouble(args[++i]);            // Pi-release/powerstroke rate (nucParams[4], baseline 1e4/s)
+            else if (args[i].equals("-atpdetrate")) OVR_ATPDET = Double.parseDouble(args[++i]);    // ATP-induced detachment rate (nucParams[1], baseline 2e4/s)
+            else if (args[i].equals("-koff")) OVR_KOFF = Double.parseDouble(args[++i]);            // catch-slip base rate kOff (kinParams[0], baseline 100/s)
+            else if (args[i].equals("-acatch")) OVR_ACATCH = Double.parseDouble(args[++i]);        // catch weight alphaCatch (kinParams[1], baseline 0.92)
+            else if (args[i].equals("-aslip")) OVR_ASLIP = Double.parseDouble(args[++i]);          // slip weight alphaSlip (kinParams[2], baseline 0.08)
+            else if (args[i].equals("-xslip")) OVR_XSLIP = Double.parseDouble(args[++i]);          // slip distance xSlip nm (kinParams[4], baseline 0.4 nm)
             else if (args[i].equals("-coltol")) { COL_TOL = Double.parseDouble(args[++i]) * 1.0e-3; COL_TOL_SET = true; }  // CAPTURE-RADIUS sweep: bind reach nm→µm (kinParams[7], D7)
             else if (args[i].equals("-aeta")) AETA = Double.parseDouble(args[++i]);   // VISCOSITY DIAGNOSTIC: filament/medium viscosity (Pa·s); default 0.1 ⇒ byte-identical
             else if (args[i].equals("-stretchcensus")) STRETCHCENSUS = true;                       // STEP-3 read-only bound-population geometry census
@@ -354,6 +378,8 @@ public final class GlidingHarness {
         else if (ZCONFINE > 0) System.out.printf(java.util.Locale.US, "  -zconfine: FILAMENT-ONLY tight-z chamber ON — z half-width %.1f nm, x/y → ∞. Mechanism test (out-of-plane runaway).%n", ZCONFINE * 1e3);
         if (SWING_K_BITS != -1) System.out.printf(java.util.Locale.US, "  -swingkbits: swing coeff FORCED to %s (bits 0x%08x), size-4 (no in-kernel recompute); both runners. (0.4f=0x3ecccccd.)%n", ""+Float.intBitsToFloat(SWING_K_BITS), SWING_K_BITS);
         if (SWING_K_PROBE) { diagMark("swingKProbe: kernel swing-coefficient extraction (no physics scene)"); swingKProbe(gpu); return; }
+        if (VDRAG) { diagMark("dragCal: bare-filament drag calibration ζ_eff (FORCE_BALANCE_CLOSURE PART 1)"); runDragCal(sc, Math.max(M, 3000)); return; }
+        if (VCLAMP) { diagMark("forceVelocity: velocity-clamp force–velocity test (CPU kinematic clamp, FORCE_VELOCITY_TEST)"); runForceVelocity(sc, Math.max(M, 8000)); return; }
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
         if (CSRECAL) { diagMark("catchSlipRecal: phase-2 config-1 single-molecule catch-slip recalibration"); catchSlipRecal(Math.max(M, 14000)); return; }
         if (DCALIB) { diagMark("dCalib: phase-2 config-1 single-molecule catch force-sensitivity"); dCalib(Math.max(M, 25000)); return; }
@@ -615,6 +641,14 @@ public final class GlidingHarness {
         if (TAU_AVG > 0) mot.setReleaseForceAvg(TAU_AVG, DT);   // PHASE-2 step-4a: time-averaged catch input (EMA window τ)
         if (F_EXT != 0) mot.setExtLoad(F_EXT);           // sustained-load injection (force-response guard)
         if (XCATCH > 0) mot.setXCatch(XCATCH);           // PHASE-2 step-4b: catch distance d (Veigel calibration)
+        // VMAX_SENSITIVITY (STAGE 1): per-parameter rate overrides (default 0/−1 ⇒ untouched, byte-identical)
+        if (OVR_ATPDET > 0) mot.nucParams.set(1, (float) OVR_ATPDET);
+        if (OVR_PI > 0)     mot.nucParams.set(4, (float) OVR_PI);
+        if (OVR_ADP > 0)  { mot.nucParams.set(6, (float) OVR_ADP); mot.nucParams.set(7, (float) OVR_ADP); }
+        if (OVR_KOFF > 0)   mot.kinParams.set(0, (float) OVR_KOFF);
+        if (OVR_ACATCH >= 0) mot.kinParams.set(1, (float) OVR_ACATCH);
+        if (OVR_ASLIP >= 0)  mot.kinParams.set(2, (float) OVR_ASLIP);
+        if (OVR_XSLIP > 0)   mot.kinParams.set(4, (float) (OVR_XSLIP * 1.0e-9));
         if (NO_REFRACTORY) mot.kinParams.set(10, 0f);   // §6.6 OFF bracket: no rebind refractory
         mot.setFaithfulRelease(FORCE_CAP_DETACH, DETACH_CAP);  // -forcecapdetach + -detachcap <pN> (default 12); off by default ⇒ kinParams[12]=0 and kinParams[11]=12pN, byte-identical to the prior (false,0.0) call
         mot.setFaithfulRefractory(FAITHFUL_REFRACTORY); // §6.11 default off (HEAD 100%/1-step block)
@@ -826,6 +860,212 @@ public final class GlidingHarness {
             }
             DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
         }
+    }
+
+    // ============================ FORCE_VELOCITY_TEST (velocity-clamp) ============================
+    // Kinematically velocity-clamp the filament — a velocity SOURCE that does NOT respond to motor force — and
+    // measure the ensemble force–velocity curve of the carpet motors. Because the clamped filament ignores its
+    // forceSum, the carpet motors couple to nothing but the prescribed trajectory ⇒ they are mutually INDEPENDENT
+    // ⇒ the whole carpet is a bank of replicated single-motor episodes vs one sliding filament (efficient design).
+    // The filament is held rigid + straight (uVec=+x), thermal OFF, only its COM x advances at −v·dt each step
+    // (glide dir ĝ=−x̂; +v ⇒ gliding forward, −v ⇒ dragged backward/anti-glide). It is re-imposed every step, so
+    // its within-step force response (≤~nm) is discarded — the discipline that makes it a clean velocity source.
+    //
+    // f_g(m) = −bondData[6] (the seg-side x force the motor exerts ON the filament, projected on ĝ; positive ⇒
+    //          the motor DRIVES the filament in the glide direction; = forceDotFil for the +x filament).
+    //   f̄_available = ⟨Σ_bound f_g⟩ / ⟨N_reach⟩   (unbound AVAILABLE motors counted as ZERO — the PRIMARY quantity)
+    //   P_bound = ⟨N_bound⟩/⟨N_reach⟩ ;  f̄_bound = ⟨Σ_bound f_g⟩/⟨N_bound⟩ ;  f̄_available = P_bound·f̄_bound.
+    // Variant B (-fvepisode K): rebinding blocked (kinParams[19]=1) except a fresh cohort re-armed every K steps —
+    // one attachment episode per trial, no rebinding, isolating post-binding mechanics from recruitment.
+    static void runForceVelocity(Scene sc, int M) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot;
+        int nSeg = f.n, nMot = mot.nMotors, STR = CrossBridgeSystem.STRIDE;
+        final double PN = 1.0e12;   // N → pN
+
+        // --- make the filament a clean rigid straight velocity source, centered in the bed x-extent ---
+        double bedCx = 0.5 * (bXlo + bXhi);
+        double comx0 = centroidX(f);
+        double[] offX = new double[nSeg];
+        for (int s = 0; s < nSeg; s++) offX[s] = f.coordX(s) - comx0;   // straight template (x offset from COM)
+        for (int s = 0; s < nSeg; s++) {
+            f.setUVec(s, 1f, 0f, 0f); f.setYVec(s, 0f, 1f, 0f);
+            f.setCoord(s, (float) (bedCx + offX[s]), 0f, (float) FIL_Z);
+            f.brownTransScale.set(s, 0f); f.brownRotScale.set(s, 0f);   // deterministic prescribed trajectory
+        }
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        double dxStep = -VCLAMP_V * DT;             // per-step filament COM x-advance (glide dir −x)
+        double filLen = nSeg * sc.segL;
+        double excursion = Math.abs(dxStep) * M;    // µm swept over the whole run
+        double runwayHalf = 0.5 * (bXhi - bXlo) - 0.5 * filLen;
+
+        System.out.println("\n=== Soft Box — FORCE_VELOCITY_TEST: velocity-clamp force–velocity (CPU kinematic clamp) ===");
+        System.out.printf(java.util.Locale.US, "  runner = CPU (deterministic); glide dir ĝ = −x̂; +v ⇒ filament glides forward (−x), −v ⇒ dragged backward.%n");
+        System.out.printf(java.util.Locale.US, "  clamp v = %+.2f µm/s ; density = %.0f /µm² ; nMot = %d ; filament %d-seg (%.2f µm), rigid+straight, thermal OFF ; dt = %.0e%n",
+                VCLAMP_V, DENSITY, nMot, nSeg, filLen, DT);
+        System.out.printf(java.util.Locale.US, "  bed x∈[%.2f,%.2f] (centered at %.2f) ; window excursion = %.2f µm vs half-runway %.2f µm %s%n",
+                bXlo, bXhi, bedCx, excursion, runwayHalf, excursion > runwayHalf ? "  ** WARNING: excursion exceeds runway — filament may leave uniform carpet (use -full) **" : "(on-mat)");
+        if (MATBOX_Z > 0) System.out.printf(java.util.Locale.US, "  -matbox %.0f nm active (redundant: the rigid clamp already pins the filament on-plane).%n", MATBOX_Z * 1e3);
+        if (FV_EPISODE) System.out.printf(java.util.Locale.US, "  VARIANT B: one-attachment episodes — rebinding blocked, fresh cohort re-armed every %d steps.%n", FV_REARM);
+        else System.out.printf(java.util.Locale.US, "  VARIANT A: full binding algorithm (continuous recruitment).%n");
+
+        // instrumentation
+        int[]    prevBound = new int[nMot]; java.util.Arrays.fill(prevBound, -1);
+        int[]    prevNuc   = new int[nMot]; java.util.Arrays.fill(prevNuc, -1);
+        double[] epImp     = new double[nMot];   // pN·ms axial glide-impulse this episode
+        double[] epWork    = new double[nMot];   // pN·nm work done ON the filament this episode
+        int[]    epSteps   = new int[nMot];
+        // x_bind histogram: axial mismatch s_head − s_site at the instant of attachment (nm)
+        final int NB = 41; final double xbLo = -20.0, xbHi = 20.0, xbBW = (xbHi - xbLo) / NB;
+        long[] xbHist = new long[NB]; long xbUnder = 0, xbOver = 0; double xbSum = 0, xbSumSq = 0; long xbN = 0;
+
+        // steady-window accumulators
+        double accF = 0, accFpos = 0, accFneg = 0; long accNb = 0, accNr = 0, accNrRaw = 0; long steps = 0;
+        long attachN = 0, detachN = 0, strokeN = 0, boundStepsN = 0;
+        double epImpSum = 0, epImpSumSq = 0, epWorkSum = 0; long epN = 0, epPosImp = 0, epPosWork = 0;
+        int warm = Math.max(2000, M / 3);
+
+        for (int t = 0; t < M; t++) {
+            if (FV_EPISODE) mot.kinParams.set(19, (t % FV_REARM == 0) ? 0f : 1f);   // block rebinding except a re-arm step
+            stepOrig(sc, t);
+            // re-impose the exact rigid clamp pose (discard the filament's within-step force response ⇒ velocity source)
+            double comX = bedCx + dxStep * (t + 1);
+            for (int s = 0; s < nSeg; s++) { f.setUVec(s, 1f, 0f, 0f); f.setYVec(s, 0f, 1f, 0f); f.setCoord(s, (float) (comX + offX[s]), 0f, (float) FIL_Z); }
+            DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+
+            boolean meas = t >= warm;
+            for (int m = 0; m < nMot; m++) {
+                int bs = mot.boundSeg.get(m); boolean bound = bs >= 0; boolean reach = sc.reachCount.get(m) > 0;
+                boolean avail = reach || bound;   // N_available = reach ∪ bound ⇒ bound ⊆ available (fixes P_bound>1: a bound head whose fresh-head geometry no longer counts reachable is still available)
+                double fg = bound ? -sc.bondData.get(m * STR + 6) * PN : 0.0;   // pN, glide-projected drive ON the filament
+                if (bound && prevBound[m] < 0) {                               // ATTACH
+                    if (meas) {
+                        attachN++;
+                        double xb = axialMismatchNm(f, mot, m, bs, nSeg);
+                        xbSum += xb; xbSumSq += xb * xb; xbN++;
+                        int bi = (int) Math.floor((xb - xbLo) / xbBW);
+                        if (bi < 0) xbUnder++; else if (bi >= NB) xbOver++; else xbHist[bi]++;
+                    }
+                    epImp[m] = 0; epWork[m] = 0; epSteps[m] = 0;
+                }
+                if (bound) { epImp[m] += fg * DT * 1e3; epWork[m] += fg * VCLAMP_V * DT * 1e3; epSteps[m]++; if (meas) boundStepsN++; }
+                if (!bound && prevBound[m] >= 0 && epSteps[m] > 0) {           // DETACH (finalize episode)
+                    if (meas) { epN++; epImpSum += epImp[m]; epImpSumSq += epImp[m] * epImp[m]; epWorkSum += epWork[m]; if (epImp[m] > 0) epPosImp++; if (epWork[m] > 0) epPosWork++; detachN++; }
+                    epSteps[m] = 0;
+                }
+                int nuc = mot.nucleotideState.get(m);
+                if (meas && bound && prevNuc[m] == MotorStore.NUC_ADPPI && nuc == MotorStore.NUC_ADP) strokeN++;
+                prevNuc[m] = nuc; prevBound[m] = bs;
+                if (meas && bound) { accF += fg; if (fg > 0) accFpos += fg; else accFneg += fg; accNb++; }
+                if (meas && avail) accNr++;      // denominator = available (reach∪bound)
+                if (meas && reach) accNrRaw++;   // raw reach-only count, for reference
+            }
+            if (meas) steps++;
+        }
+        if (FV_EPISODE) mot.kinParams.set(19, 0f);
+
+        // ---- derived quantities ----
+        double T = steps * DT;                                     // steady-window sim-time (s)
+        double meanNr = accNr / (double) steps, meanNb = accNb / (double) steps, meanNrRaw = accNrRaw / (double) steps;
+        double totalF = accF / (double) steps;                     // total axial motor force ON the filament (pN)
+        double fbarAvail = accNr > 0 ? accF / accNr : 0;           // PRIMARY (per AVAILABLE = reach∪bound; unbound available = 0)
+        double fbarBound = accNb > 0 ? accF / accNb : 0;
+        double boundToAvail = accNr > 0 ? (double) accNb / accNr : 0;   // occupancy, TRUE fraction ≤ 1 (renamed from the mislabeled P_bound; bound ⊆ available)
+        double fbarPos = accNr > 0 ? accFpos / accNr : 0, fbarNeg = accNr > 0 ? accFneg / accNr : 0;
+        double Jattach = (accNr > 0) ? attachN / (accNr * DT) : 0; // attachments per available-motor per s
+        double Iattach = epN > 0 ? epImpSum / epN : 0;             // net axial impulse per COMPLETE episode (pN·ms)
+        double iattachSem = epN > 1 ? Math.sqrt(Math.max(0, epImpSumSq / epN - Iattach * Iattach) / epN) : 0;   // SEM of per-episode impulse
+        double lifeMs = detachN > 0 ? (boundStepsN / (double) detachN) * DT * 1e3 : 0;
+        double strokePerBoundS = boundStepsN > 0 ? strokeN / (boundStepsN * DT) : 0;
+        double workPerAtt = epN > 0 ? epWorkSum / epN : 0;         // pN·nm per episode
+        double fracPosImp = epN > 0 ? epPosImp / (double) epN : 0, fracPosWork = epN > 0 ? epPosWork / (double) epN : 0;
+        double idParts = Jattach * (Iattach * 1e-3);               // J·⟨I⟩ with I in pN·s ⇒ pN (should ≈ fbarAvail)
+
+        System.out.printf(java.util.Locale.US, "%n  --- steady window: %d steps (%.3f s), warm-up %d ---%n", steps, T, warm);
+        System.out.printf(java.util.Locale.US, "  ⟨N_available⟩=%.2f (reach∪bound)  ⟨N_reach_raw⟩=%.2f  ⟨N_bound⟩=%.2f  bound_to_available=%.4f (≤1, was mislabeled P_bound)%n", meanNr, meanNrRaw, meanNb, boundToAvail);
+        System.out.printf(java.util.Locale.US, "  >>> f̄_available = %+.4f pN   (PRIMARY — mean glide force per AVAILABLE motor, unbound=0)%n", fbarAvail);
+        System.out.printf(java.util.Locale.US, "      f̄_bound     = %+.4f pN   (per BOUND head) ;  total Σf on filament = %+.3f pN%n", fbarBound, totalF);
+        System.out.printf(java.util.Locale.US, "      f̄_avail(+)  = %+.4f pN   f̄_avail(−) = %+.4f pN  (positive/negative force split, per available)%n", fbarPos, fbarNeg);
+        System.out.printf(java.util.Locale.US, "      J_attach=%.2f /s/avail  ⟨I_attach⟩=%+.4f pN·ms  lifetime=%.3f ms  strokes=%.0f /s/bound%n", Jattach, Iattach, lifeMs, strokePerBoundS);
+        System.out.printf(java.util.Locale.US, "      work/attach=%+.3f pN·nm  frac(+impulse)=%.3f  frac(+work)=%.3f   [J·⟨I⟩=%+.4f pN ≈ f̄_avail]%n", workPerAtt, fracPosImp, fracPosWork, idParts);
+        // machine-parseable summary row (grepped by the sweep driver)
+        System.out.printf(java.util.Locale.US,
+                "FVROW variant=%s v=%.3f dens=%.0f fbar_avail=%.5f fbar_bound=%.5f b2a=%.5f total=%.4f Navail=%.2f Nreachraw=%.2f Nbound=%.3f Jattach=%.3f Iattach=%.5f iaCI=%.5f nEp=%d life_ms=%.4f stroke_s=%.1f work_pnnm=%.4f fpos_imp=%.4f fpos_work=%.4f%n",
+                FV_EPISODE ? "B" : "A", VCLAMP_V, DENSITY, fbarAvail, fbarBound, boundToAvail, totalF, meanNr, meanNrRaw, meanNb, Jattach, Iattach, iattachSem, epN, lifeMs, strokePerBoundS, workPerAtt, fracPosImp, fracPosWork);
+
+        // ---- x_bind histogram (PART 2): axial mismatch at attachment ----
+        double xbMean = xbN > 0 ? xbSum / xbN : 0, xbVar = xbN > 1 ? xbSumSq / xbN - xbMean * xbMean : 0;
+        System.out.printf(java.util.Locale.US, "%n  x_bind (axial mismatch s_head−s_site at attach, nm): N=%d  mean=%+.4f  sd=%.4f  under(<%.0f)=%d  over(>%.0f)=%d%n",
+                xbN, xbMean, Math.sqrt(Math.max(0, xbVar)), xbLo, xbUnder, xbHi, xbOver);
+        long xbPk = 1; for (long c : xbHist) xbPk = Math.max(xbPk, c);
+        for (int bi = 0; bi < NB; bi++) {
+            if (xbHist[bi] == 0) continue;
+            double c0 = xbLo + bi * xbBW;
+            int bar = (int) Math.round(40.0 * xbHist[bi] / xbPk);
+            StringBuilder sb = new StringBuilder(); for (int k = 0; k < bar; k++) sb.append('#');
+            System.out.printf(java.util.Locale.US, "    x_bind[%+6.1f,%+6.1f) %8d |%s%n", c0, c0 + xbBW, xbHist[bi], sb.toString());
+        }
+        System.out.printf(java.util.Locale.US, "  XBROW variant=%s v=%.3f dens=%.0f xbind_mean=%.5f xbind_sd=%.5f N=%d%n",
+                FV_EPISODE ? "B" : "A", VCLAMP_V, DENSITY, xbMean, Math.sqrt(Math.max(0, xbVar)), xbN);
+    }
+
+    // ============================ FORCE_BALANCE_CLOSURE PART 1 — bare-filament drag ζ_eff ============================
+    // Measure the effective axial drag the integrator ACTUALLY applies (not the nominal ζ): with NO motors, drive the
+    // free (integrated) filament with a known total axial force F_ext and read the steady COM velocity ⇒ ζ_eff = F_ext/v.
+    // The overdamped integrator is v = F/γ (exact, dt cancels ⇒ no discretization error), so ζ_eff should equal the
+    // analytic 1e6·Σ_seg γ_par — the run CONFIRMS it and captures any deviation. F_drag(v) = ζ_eff·v enters the free-glide
+    // balance N·f̄(v*) = F_drag(v*). Brownian OFF (deterministic); no clamp (the filament is free to move under F_ext).
+    static void runDragCal(Scene sc, int M) {
+        FilamentStore f = sc.fil; int nSeg = f.n;
+        double bedCx = 0.5 * (bXlo + bXhi);
+        double comx0 = centroidX(f);
+        double[] offX = new double[nSeg];
+        for (int s = 0; s < nSeg; s++) offX[s] = f.coordX(s) - comx0;
+        // analytic ζ_eff = 1e6·Σ_seg γ_par  [pN per µm/s]   (γ_par = bTransGam u-axis component, N·s/m)
+        double sumGam = 0; for (int s = 0; s < nSeg; s++) sumGam += f.bTransGam.get(s);
+        double zetaAnalytic = 1.0e6 * sumGam;
+
+        System.out.println("\n=== Soft Box — FORCE_BALANCE_CLOSURE PART 1: bare-filament drag ζ_eff (no motors, Brownian off) ===");
+        System.out.printf(java.util.Locale.US, "  filament %d-seg (%.2f µm), aeta=%.3f Pa·s ; Σγ_par=%.4e N·s/m ⇒ ζ_eff(analytic)=%.5f pN/(µm/s)%n",
+                nSeg, nSeg * sc.segL, AETA, sumGam, zetaAnalytic);
+        System.out.printf(java.util.Locale.US, "  %-12s %-16s %-16s%n", "F_ext(pN)", "v_COM(µm/s,−x)", "ζ_meas=F/|v|");
+        double[] Fexts = { 2, 5, 10, 20, 40 };   // total axial force, pN, applied in −x (glide dir)
+        double zetaMeasAcc = 0; int nz = 0;
+        for (double Fext : Fexts) {
+            // reset filament: centered, straight, thermal off
+            for (int s = 0; s < nSeg; s++) { f.setUVec(s, 1f, 0f, 0f); f.setYVec(s, 0f, 1f, 0f); f.setCoord(s, (float) (bedCx + offX[s]), 0f, (float) FIL_Z); f.brownTransScale.set(s, 0f); f.brownRotScale.set(s, 0f); }
+            DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+            double perSegN = -Fext * 1.0e-12 / nSeg;   // N per segment, −x
+            double cx0 = centroidX(f);
+            for (int t = 0; t < M; t++) {
+                f.counts.set(1, t);
+                ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+                ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+                for (int s = 0; s < nSeg; s++) f.forceSum.set(s, (float) (f.forceSum.get(s) + perSegN));   // apply F_ext in −x
+                RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+                DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+            }
+            double v = (centroidX(f) - cx0) / (M * DT);        // µm/s (negative = −x)
+            double zetaMeas = Fext / Math.abs(v);
+            zetaMeasAcc += zetaMeas; nz++;
+            System.out.printf(java.util.Locale.US, "  %-12.1f %-16.4f %-16.5f%n", Fext, v, zetaMeas);
+        }
+        double zetaMeasMean = zetaMeasAcc / nz;
+        System.out.printf(java.util.Locale.US, "%n  ζ_eff(measured, mean over F_ext) = %.5f pN/(µm/s)  [analytic %.5f ; ratio %.4f]%n",
+                zetaMeasMean, zetaAnalytic, zetaMeasMean / zetaAnalytic);
+        System.out.printf(java.util.Locale.US, "  ⇒ F_drag(v) = %.5f · v  pN   (linear; ζ_eff is the total rigid-translation drag of the %d-seg filament)%n", zetaMeasMean, nSeg);
+        System.out.printf(java.util.Locale.US, "  DRAGROW dens=%.0f zeta_eff=%.5f zeta_analytic=%.5f nSeg=%d filLen=%.3f%n", DENSITY, zetaMeasMean, zetaAnalytic, nSeg, nSeg * sc.segL);
+    }
+
+    /** s_head − s_site at attach (nm): head arc-projection onto the bound segment minus the frozen material bindArc. */
+    static double axialMismatchNm(FilamentStore f, MotorStore mot, int m, int bs, int nSeg) {
+        int nM = mot.nMotors;
+        double hx = mot.head.get(m), hy = mot.head.get(nM + m), hz = mot.head.get(2 * nM + m);
+        double e1x = f.end1.get(bs), e1y = f.end1.get(nSeg + bs), e1z = f.end1.get(2 * nSeg + bs);
+        double e2x = f.end2.get(bs), e2y = f.end2.get(nSeg + bs), e2z = f.end2.get(2 * nSeg + bs);
+        double r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+        double denom = r1x * r1x + r1y * r1y + r1z * r1z;
+        double proj = ((hx - e1x) * r1x + (hy - e1y) * r1y + (hz - e1z) * r1z) / Math.sqrt(denom);   // s_head (µm)
+        return (proj - mot.bindArc.get(m)) * 1e3;   // nm
     }
 
 
