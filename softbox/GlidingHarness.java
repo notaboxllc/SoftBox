@@ -85,6 +85,10 @@ public final class GlidingHarness {
     static boolean EPKERNEL   = false;           // -epkernel (EPISODE_KERNEL_ACCOUNTING): full AGE-RESOLVED episode kernel in the -vclamp path. Per attachment-age a: survival S(a|v), age-conditioned mean glide force m_f(a,v), transverse force, relative tip−site axial strain, head-tip/material-site axial displacement, converter angle θ_J1, per-state nucleotide fraction, catch-slip release hazard — folded over episodes that ATTACH inside the steady window (KERNROW). Per completed such episode: T, force-producing-state (ADP) lifetime, first-sign-reversal age & filament-travel distance, I₊/I₋/net impulse, rel-tip−site bind/peak/min/last (⇒ effective actin-level working displacement d_eff), bind & power-stroke-onset snapshots (EPROW). In-run reconstruction gate ∫S·m_f ≡ measured ⟨I⟩ (EPKSTAT). Default off ⇒ byte-identical.
     static boolean SERVOAUDIT = false;           // -servoaudit (TIMESTEP_SERVO_AUDIT): deterministic single-motor servo/work/rotation/closed-cycle audit (Parts 2-5). Builds its own single forced-bound-motor scene; runs at the current DT.
     static boolean DETMOTOR = false;             // -detmotor (TIMESTEP_SERVO_AUDIT): zero the motor-body Brownian (rod+head brownTransScale/brownRotScale) so the whole motor mechanics run DETERMINISTICALLY — the primary dt-convergence/servo audit config (filament thermal is already off in -vclamp). Default off ⇒ byte-identical.
+    static boolean J2_AUDIT = false;             // -j2audit: host-side native rod-lever angle/axis, load, age, and episode census. Logging only; default-off.
+    static double J2_TORSION = 0.0;               // -j2torsion <pN nm/rad>: passive state-independent J2 bend potential; EXACTLY zero/off by default.
+    static double J2_REST_DEG = 124.0;            // pose-matched pooled median of canonical v=0 bound-ADP 0.30–0.50 ms plateau (documented audit).
+    static boolean J2_REST_SET = false;           // -j2rest <deg>: diagnostic rest-angle override; never state dependent.
     static boolean ROLLCENSUS = false;           // -rollcensus: after a grid run, census bound heads' roll sign (head.yVec·ŝ). Diagnostic only.
     static boolean TWISTCENSUS = false;          // -twistcensus: capture the arrival-angle (head.yVec vs +ŝ) at each fresh bind. Diagnostic only.
     static boolean MHATCENSUS = false;           // -mhatcensus: census bound heads' HEAD-AXIS sign (head.uVec·n̂bed, n̂bed=+Z) — the second free sign (mhat=±n̂). +ẑ is the productive pole (p=ŷ×û=f̂). Diagnostic only; prints aggregate + per-sample time series + stdev.
@@ -302,6 +306,9 @@ public final class GlidingHarness {
             else if (args[i].equals("-strokeaudit")) { STROKEAUDIT = true; }   // CANONICAL_STROKE_DISAMBIGUATION: live-vs-diagnostic torque reconciliation + F9/DIRSWING work accounting around ADP·Pi→ADP (default-off byte-identical)
             else if (args[i].equals("-detmotor")) { DETMOTOR = true; }   // TIMESTEP_SERVO_AUDIT: deterministic motor bodies (zero motor Brownian) for the primary dt/servo audit (default-off byte-identical)
             else if (args[i].equals("-servoaudit")) { SERVOAUDIT = true; }   // TIMESTEP_SERVO_AUDIT: deterministic single-motor stroke-work / rotation / closed-cycle audit (Parts 2-5). Builds its own single-motor scene.
+            else if (args[i].equals("-j2audit")) { J2_AUDIT = true; }   // PASSIVE_J2_CONFORMATION: logging-only native J2 coordinate census
+            else if (args[i].equals("-j2torsion")) { J2_TORSION = Double.parseDouble(args[++i]); if (!Double.isFinite(J2_TORSION) || J2_TORSION < 0) throw new IllegalArgumentException("-j2torsion must be finite and >= 0 pN nm/rad"); }
+            else if (args[i].equals("-j2rest")) { J2_REST_DEG = Double.parseDouble(args[++i]); J2_REST_SET = true; if (!Double.isFinite(J2_REST_DEG) || J2_REST_DEG < 0 || J2_REST_DEG > 180) throw new IllegalArgumentException("-j2rest must be finite and in [0,180] degrees"); }
             else if (args[i].equals("-rollcensus")) ROLLCENSUS = true;   // census the bound-head roll sign (head.yVec·ŝ) after a grid run
             else if (args[i].equals("-twistcensus")) TWISTCENSUS = true;   // capture the bind-time roll twist (arrival angle vs +ŝ)
             else if (args[i].equals("-mhatcensus")) MHATCENSUS = true;     // census the bound-head head-axis sign (head.uVec·n̂bed)
@@ -388,6 +395,9 @@ public final class GlidingHarness {
         if (PAIRS_SPRINGS) System.out.printf(java.util.Locale.US, "  -pairsprings: FILAMENT PAIRS frozen as FIXED SPRINGS. fracMove 0.5→%.4f, fracMoveTorq 0.2→%.4f (springify=k·DT/refDt, build-time chainParams[1]/[3]) at dt=%.2e (refDt=%.2e). Byte-identical at refDt.%n", springify(0.5), springify(0.2), DT, STROKE_REF_DT);
         if (ALIGN_SPRINGS) System.out.printf(java.util.Locale.US, "  -alignsprings: MOTOR alignment frozen as FIXED SPRINGS. F9/F10/axlock 0.4→%.4f (build-time xbParams[2]); swing via swingParams[4]=−refDt (springify in-kernel). Byte-identical at refDt.%n", springify(0.4), DT);
         if (STRUCT_SPRINGS) System.out.printf(java.util.Locale.US, "  -structsprings: STRUCTURAL J1/J2/anchor frozen as FIXED SPRINGS. 0.4→%.4f (springify, build-time jointParams[1]/[5]/[9]) at dt=%.2e (refDt=%.2e). Byte-identical at refDt.%n", springify(0.4), DT, STROKE_REF_DT);
+        if (J2_TORSION != 0.0 || J2_REST_SET) System.out.printf(java.util.Locale.US,
+                "  -j2torsion: passive state-independent physical J2 potential ON: kappa=%.6g pN nm/rad, rest=%.3f deg%s; U=1/2*kappa*(theta-rest)^2; no dt scaling.%n",
+                J2_TORSION,J2_REST_DEG,J2_REST_SET?" (explicit override)":" (v=0 ADP-plateau pooled median)");
         if (PAIRS_SPRINGS && ALIGN_SPRINGS && STRUCT_SPRINGS) System.out.printf(java.util.Locale.US, "  [SPRINGS DEFAULT-ON: canonical transcendental-free formulation (SPRINGS_PROMOTION). Byte-identical at production dt=1e-5; diverges only below refDt. Use -nosprings to restore raw.]%n");
         if (ROLL_SPRING) System.out.printf(java.util.Locale.US, "  AZIMBIND: roll spring ON (springs f=%.2f rolldamp=%.2f rest=%.1f°/joint, twistPerMon=%.1f° LEFT-handed); bind accept = %s.%n",
                 ROLL_STIFF, ROLL_DAMP, Math.toDegrees(wrapPi(FIL_MONO * TWIST_PER_MON_DEG * Math.PI / 180.0)), TWIST_PER_MON_DEG,
@@ -734,6 +744,16 @@ public final class GlidingHarness {
             sc.swingParams = FloatArray.fromElements(Float.intBitsToFloat(SWING_K_BITS), (float) DT, 0f, (float) NECK_ANGLE);
         }
         if (DIRSWING) sc.jointParams.set(3, 0f);
+        // PASSIVE_J2_CONFORMATION: append a PHYSICAL, state-independent bend potential only when explicitly
+        // requested. [14]=kappa (N m/rad), [15]=rest shortest-angle (rad). The production/default size remains
+        // 11 (or CONFIG1's 14), so the disabled kernel path and all canonical array bytes are unchanged.
+        if (J2_TORSION != 0.0 || J2_REST_SET) {
+            FloatArray jpJ2 = new FloatArray(16); jpJ2.init(0f);
+            for (int q=0;q<sc.jointParams.getSize() && q<14;q++) jpJ2.set(q,sc.jointParams.get(q));
+            jpJ2.set(14,(float)(J2_TORSION*1e-21));
+            jpJ2.set(15,(float)Math.toRadians(J2_REST_DEG));
+            sc.jointParams=jpJ2;
+        }
         sc.swingCompParams = FloatArray.fromElements((float) STROKECOMP, (float) MotorStore.HEAD_LEN);   // -strokecomp E* (nm); STROKECOMP<0 ⇒ modifier off (byte-identical)
         if (STRUCT_SPRINGS) {   // PURE_SPRINGS: freeze the SAME structural position springs (J1/J2 connection + tail anchor)
             // as FIXED stiffnesses via springify (precedence over -structrate). Mirrors the -structrate block but with the
@@ -850,7 +870,8 @@ public final class GlidingHarness {
         if (XB_IMPLICIT2) CrossBridgeSystem.snapshotHeadCenter(b.coord, mot.xbImplPrev);
         long _mi = tns();
         RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
-        DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        if (XB_IMPLICIT2) DerivedGeometrySystem.orthogonalizeY(b.uVec, b.yVec, mot.counts);
+        else DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
         // Version-B head snap (placed LATE to match the GPU graph — see buildPlan: an early body-write task
         // breaks the PTX-lowered bind). Takes effect on the next step's bond ⇒ CPU/GPU snap timing identical.
         if (CANONICAL) BindingDetectionSystem.snapCanonicalHead(b.coord, b.uVec, b.yVec, b.segLength, f.end1, f.uVec,
@@ -874,7 +895,8 @@ public final class GlidingHarness {
         if (BOX) ContainmentSystem.confine(f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, sc.boxParams, f.counts);  // matches buildPlan confineFil (GPU); CPU-arbiter parity for -box/-zconfine
         if (XB_IMPLICIT2 || SEG_IMPLICIT) CrossBridgeSystem.snapshotSegCenter(f.coord, sc.segImplPrev);
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
-        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        if (XB_IMPLICIT2 || SEG_IMPLICIT) DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
+        else DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
         // -xbimplicit2 (COUPLED head+SITE star) and/or -segimplicit (DIAGONAL per-segment collective, rigid head).
         // Both run after BOTH integrates and reuse the boundSeg CSR-inverse. When both are on, -segimplicit's rigid
         // segment solve REPLACES coupleSolveSeg (avoids double-correcting the center); the -xbimplicit2 head phases
@@ -889,6 +911,197 @@ public final class GlidingHarness {
             }
             DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
         }
+    }
+
+    // ============================ PASSIVE_J2_CONFORMATION native-coordinate audit ============================
+    /** Sampling-only Pearson accumulator. It is instantiated only under -j2audit and is never read by physics. */
+    static final class J2Corr {
+        long n; double sx, sy, sxx, syy, sxy;
+        void add(double x, double y) { n++; sx += x; sy += y; sxx += x*x; syy += y*y; sxy += x*y; }
+        double r() {
+            double vx = n*sxx - sx*sx, vy = n*syy - sy*sy;
+            return n > 1 && vx > 0 && vy > 0 ? (n*sxy - sx*sy) / Math.sqrt(vx*vy) : 0;
+        }
+        double slope() { double d = n*sxx - sx*sx; return n > 1 && d != 0 ? (n*sxy - sx*sy) / d : 0; }
+    }
+
+    /**
+     * Host-side, default-off census of the native J2 bend coordinate. The coordinate is the shortest unsigned
+     * angle atan2(|rod.u x lever.u|, rod.u dot lever.u) in [0,pi]; its associated shortest-rotation axis is
+     * normalize(rod.u x lever.u). Histograms use 0.1-degree bins. No simulation array is written.
+     */
+    static final class J2Census {
+        static final int ALL = 4, ADP_PLATEAU = 5, GROUPS = 6, HB = 1801, AB = 80;
+        final Scene sc; final String context;
+        final long[][] hist = new long[GROUPS][HB];
+        final long[] n = new long[GROUPS];
+        final double[] sum = new double[GROUPS], sum2 = new double[GROUPS], min = new double[GROUPS], max = new double[GROUPS];
+        final double[][] axisSum = new double[GROUPS][3];
+        final long[] ageN = new long[AB];
+        final double[][] ageSum = new double[AB][5]; // angle, F8 axial, F8 transverse, swing error, tip-site axial
+        final J2Corr cFax = new J2Corr(), cFtr = new J2Corr(), cSwing = new J2Corr(), cAge = new J2Corr();
+        double sumFg,sumF8mag,sumF8ax,sumF8tr,sumSwing,sumAnchor,sumEnergy,maxF8,maxF8tr,maxAnchor,maxEnergy,maxTorque;
+        final int[] epN, epRelaxN;
+        final double[] epAng, epMin, epMax, epFirst, epLast, epPeakDisp, epPeakAbs, epLastDisp, epRelax,
+                epFax, epFtr, epSwing, epPeakF8;
+
+        J2Census(Scene sc, String context) {
+            this.sc = sc; this.context = context;
+            java.util.Arrays.fill(min, Double.POSITIVE_INFINITY);
+            java.util.Arrays.fill(max, Double.NEGATIVE_INFINITY);
+            int nm = sc.mot.nMotors;
+            epN = new int[nm]; epRelaxN = new int[nm]; epAng = new double[nm]; epMin = new double[nm];
+            epMax = new double[nm]; epFirst = new double[nm]; epLast = new double[nm]; epPeakDisp = new double[nm];
+            epPeakAbs = new double[nm]; epLastDisp = new double[nm]; epRelax = new double[nm]; epFax = new double[nm];
+            epFtr = new double[nm]; epSwing = new double[nm]; epPeakF8 = new double[nm];
+            java.util.Arrays.fill(epMin, Double.POSITIVE_INFINITY);
+            java.util.Arrays.fill(epMax, Double.NEGATIVE_INFINITY);
+        }
+
+        void beginEpisode(int m) {
+            epN[m] = epRelaxN[m] = 0; epAng[m] = epFirst[m] = epLast[m] = 0;
+            epMin[m] = Double.POSITIVE_INFINITY; epMax[m] = Double.NEGATIVE_INFINITY;
+            epPeakDisp[m] = epPeakAbs[m] = epLastDisp[m] = epRelax[m] = 0;
+            epFax[m] = epFtr[m] = epSwing[m] = epPeakF8[m] = 0;
+        }
+
+        void addDistribution(int g, double angle, double ax, double ay, double az) {
+            int h = (int) Math.round(angle * 10.0); if (h < 0) h = 0; if (h >= HB) h = HB - 1;
+            hist[g][h]++; n[g]++; sum[g] += angle; sum2[g] += angle*angle;
+            if (angle < min[g]) min[g] = angle; if (angle > max[g]) max[g] = angle;
+            axisSum[g][0] += ax; axisSum[g][1] += ay; axisSum[g][2] += az;
+        }
+
+        void sample(int m, int bs, int ageSteps) {
+            MotorStore mot = sc.mot; RigidRodBody b = mot.body; FilamentStore f = sc.fil;
+            int nB = 3 * mot.nMotors, nS = f.n, STR = CrossBridgeSystem.STRIDE;
+            int rod = 3*m, lev = rod+1, head = rod+2;
+            double rx=b.uVec.get(rod), ry=b.uVec.get(nB+rod), rz=b.uVec.get(2*nB+rod);
+            double lx=b.uVec.get(lev), ly=b.uVec.get(nB+lev), lz=b.uVec.get(2*nB+lev);
+            double ax=ry*lz-rz*ly, ay=rz*lx-rx*lz, az=rx*ly-ry*lx;
+            double am=Math.sqrt(ax*ax+ay*ay+az*az), dot=rx*lx+ry*ly+rz*lz;
+            if (dot > 1) dot = 1; if (dot < -1) dot = -1;
+            double angle=Math.toDegrees(Math.atan2(am,dot));
+            if (am > 1e-15) { ax/=am; ay/=am; az/=am; } else { ax=ay=az=0; }
+            int st=mot.nucleotideState.get(m); if (st < 0 || st > 3) st=0;
+            addDistribution(st,angle,ax,ay,az); addDistribution(ALL,angle,ax,ay,az);
+            double ageMs = ageSteps >= 0 ? ageSteps*DT*1e3 : -1;
+            if (st == MotorStore.NUC_ADP && ageMs >= 0.30 && ageMs <= 0.50)
+                addDistribution(ADP_PLATEAU,angle,ax,ay,az);
+
+            double fx=f.uVec.get(bs), fy=f.uVec.get(nS+bs), fz=f.uVec.get(2*nS+bs);
+            double fm=Math.sqrt(fx*fx+fy*fy+fz*fz); if (fm > 1e-15) { fx/=fm; fy/=fm; fz/=fm; }
+            double F8x=sc.bondData.get(m*STR), F8y=sc.bondData.get(m*STR+1), F8z=sc.bondData.get(m*STR+2);
+            double fAx=(F8x*fx+F8y*fy+F8z*fz)*1e12;
+            double fMag=Math.sqrt(F8x*F8x+F8y*F8y+F8z*F8z)*1e12;
+            double fTr=Math.sqrt(Math.max(0,fMag*fMag-fAx*fAx));
+            double fg=-sc.bondData.get(m*STR+6)*1e12;
+
+            double hx=b.uVec.get(head), hy=b.uVec.get(nB+head), hz=b.uVec.get(2*nB+head);
+            double rest=(st != MotorStore.NUC_ADPPI) ? sc.swingParams.get(3) : sc.swingParams.get(2);
+            double th=Math.toRadians(rest), tx=Math.cos(th)*hx-Math.sin(th)*fx,
+                    ty=Math.cos(th)*hy-Math.sin(th)*fy, tz=Math.cos(th)*hz-Math.sin(th)*fz;
+            double tm=Math.sqrt(tx*tx+ty*ty+tz*tz); if (tm > 1e-15) { tx/=tm; ty/=tm; tz/=tm; }
+            double ds=lx*tx+ly*ty+lz*tz; if (ds > 1) ds=1; if (ds < -1) ds=-1;
+            double swingErr=Math.toDegrees(Math.acos(ds));
+
+            double htx=b.coord.get(head)+0.5*MotorStore.HEAD_LEN*hx;
+            double hty=b.coord.get(nB+head)+0.5*MotorStore.HEAD_LEN*hy;
+            double htz=b.coord.get(2*nB+head)+0.5*MotorStore.HEAD_LEN*hz;
+            double aoff=mot.bindArc.get(m)-0.5*f.segLength.get(bs);
+            double sx=f.coord.get(bs)+aoff*fx, sy=f.coord.get(nS+bs)+aoff*fy, sz=f.coord.get(2*nS+bs)+aoff*fz;
+            double disp=((htx-sx)*fx+(hty-sy)*fy+(htz-sz)*fz)*1e3;
+
+            double rlen=b.segLength.get(rod), rex=b.coord.get(rod)-.5*rlen*rx-mot.anchor.get(m),
+                    rey=b.coord.get(nB+rod)-.5*rlen*ry-mot.anchor.get(mot.nMotors+m),
+                    rez=b.coord.get(2*nB+rod)-.5*rlen*rz-mot.anchor.get(2*mot.nMotors+m);
+            double anchorNm=Math.sqrt(rex*rex+rey*rey+rez*rez)*1e3;
+            double kappa=sc.jointParams.getSize()>15 ? sc.jointParams.get(14)*1e21 : 0;
+            double j2Rest=sc.jointParams.getSize()>15 ? sc.jointParams.get(15) : angle*Math.PI/180.0;
+            double delta=angle*Math.PI/180.0-j2Rest, torque=Math.abs(kappa*delta), energy=.5*kappa*delta*delta;
+            sumFg+=fg; sumF8mag+=fMag; sumF8ax+=fAx; sumF8tr+=fTr; sumSwing+=swingErr; sumAnchor+=anchorNm; sumEnergy+=energy;
+            if(fMag>maxF8)maxF8=fMag;if(fTr>maxF8tr)maxF8tr=fTr;if(anchorNm>maxAnchor)maxAnchor=anchorNm;
+            if(energy>maxEnergy)maxEnergy=energy;if(torque>maxTorque)maxTorque=torque;
+
+            cFax.add(angle,fAx); cFtr.add(angle,fTr); cSwing.add(angle,swingErr);
+            if (ageSteps >= 0) {
+                cAge.add(ageMs,angle);
+                int ab=(int)Math.floor(ageMs/0.025); if (ab < 0) ab=0; if (ab >= AB) ab=AB-1;
+                ageN[ab]++; ageSum[ab][0]+=angle; ageSum[ab][1]+=fAx; ageSum[ab][2]+=fTr;
+                ageSum[ab][3]+=swingErr; ageSum[ab][4]+=disp;
+                if (epN[m] == 0) epFirst[m]=angle;
+                epN[m]++; epAng[m]+=angle; epLast[m]=angle; epLastDisp[m]=disp;
+                if (angle < epMin[m]) epMin[m]=angle; if (angle > epMax[m]) epMax[m]=angle;
+                double ad=Math.abs(disp); if (ad > epPeakAbs[m]) { epPeakAbs[m]=ad; epPeakDisp[m]=disp; }
+                if (ageMs >= 0.30 && ageMs <= 0.50) { epRelax[m]+=disp; epRelaxN[m]++; }
+                epFax[m]+=fAx; epFtr[m]+=fTr; epSwing[m]+=swingErr; if (fMag > epPeakF8[m]) epPeakF8[m]=fMag;
+            }
+        }
+
+        void endEpisode(int m, double impulsePNms, int lifeSteps) {
+            if (epN[m] <= 0) return;
+            double relax=epRelaxN[m]>0 ? epRelax[m]/epRelaxN[m] : epLastDisp[m];
+            System.out.printf(java.util.Locale.US,
+                "J2EP context=%s seed=0x%X v=%.3f dens=%.0f n=%d life_ms=%.6f impulse=%.7f mean=%.5f min=%.5f max=%.5f first=%.5f last=%.5f peakDisp_nm=%+.5f relaxDisp_nm=%+.5f meanF8ax_pN=%+.5f meanF8tr_pN=%.5f peakF8_pN=%.5f meanSwErr=%.5f%n",
+                context, SEED, VCLAMP_V, DENSITY, epN[m], lifeSteps*DT*1e3, impulsePNms, epAng[m]/epN[m],
+                epMin[m], epMax[m], epFirst[m], epLast[m], epPeakDisp[m], relax, epFax[m]/epN[m],
+                epFtr[m]/epN[m], epPeakF8[m], epSwing[m]/epN[m]);
+        }
+
+        double quantile(int g, double p) {
+            long target=(long)Math.ceil(p*n[g]); if (target < 1) target=1; long c=0;
+            for (int h=0;h<HB;h++) { c+=hist[g][h]; if (c>=target) return h/10.0; }
+            return 180.0;
+        }
+
+        void printSummary() {
+            String[] sn={"NONE","ATP","ADPPi","ADP","ALL","ADP_PLATEAU_0.30_0.50ms"};
+            for (int g=0;g<GROUPS;g++) if (n[g]>0) {
+                double mean=sum[g]/n[g], sd=Math.sqrt(Math.max(0,sum2[g]/n[g]-mean*mean));
+                double mx=axisSum[g][0]/n[g], my=axisSum[g][1]/n[g], mz=axisSum[g][2]/n[g];
+                double coh=Math.sqrt(mx*mx+my*my+mz*mz);
+                System.out.printf(java.util.Locale.US,
+                    "J2SUMMARY context=%s seed=0x%X state=%s n=%d mean=%.5f sd=%.5f p05=%.2f p25=%.2f median=%.2f p75=%.2f p95=%.2f min=%.5f max=%.5f axisMean=%+.5f,%+.5f,%+.5f axisCoherence=%.5f%n",
+                    context,SEED,sn[g],n[g],mean,sd,quantile(g,.05),quantile(g,.25),quantile(g,.5),quantile(g,.75),quantile(g,.95),min[g],max[g],mx,my,mz,coh);
+            }
+            for (int h=0;h<HB;h++) if (hist[ADP_PLATEAU][h]>0)
+                System.out.printf(java.util.Locale.US,"J2HIST context=%s seed=0x%X state=ADP_PLATEAU_0.30_0.50ms angle_deg=%.1f n=%d%n",
+                    context,SEED,h/10.0,hist[ADP_PLATEAU][h]);
+            System.out.printf(java.util.Locale.US,"J2COR context=%s seed=0x%X pair=angle:F8ax n=%d r=%+.6f slope=%+.6f%n",context,SEED,cFax.n,cFax.r(),cFax.slope());
+            System.out.printf(java.util.Locale.US,"J2COR context=%s seed=0x%X pair=angle:F8tr n=%d r=%+.6f slope=%+.6f%n",context,SEED,cFtr.n,cFtr.r(),cFtr.slope());
+            System.out.printf(java.util.Locale.US,"J2COR context=%s seed=0x%X pair=angle:swingErr n=%d r=%+.6f slope=%+.6f%n",context,SEED,cSwing.n,cSwing.r(),cSwing.slope());
+            System.out.printf(java.util.Locale.US,"J2COR context=%s seed=0x%X pair=ageMs:angle n=%d r=%+.6f slope=%+.6f%n",context,SEED,cAge.n,cAge.r(),cAge.slope());
+            if(n[ALL]>0) System.out.printf(java.util.Locale.US,
+                "J2MECH context=%s seed=0x%X n=%d meanFg_pN=%+.6f meanF8mag_pN=%.6f meanF8ax_pN=%+.6f meanF8tr_pN=%.6f meanSwErr_deg=%.6f meanAnchor_nm=%.6f meanEnergy_pNnm=%.6f maxF8_pN=%.6f maxF8tr_pN=%.6f maxAnchor_nm=%.6f maxEnergy_pNnm=%.6f maxTorque_pNnm=%.6f%n",
+                context,SEED,n[ALL],sumFg/n[ALL],sumF8mag/n[ALL],sumF8ax/n[ALL],sumF8tr/n[ALL],sumSwing/n[ALL],
+                sumAnchor/n[ALL],sumEnergy/n[ALL],maxF8,maxF8tr,maxAnchor,maxEnergy,maxTorque);
+            for (int a=0;a<AB;a++) if (ageN[a]>0) System.out.printf(java.util.Locale.US,
+                "J2AGE context=%s seed=0x%X ageLo_ms=%.3f ageHi_ms=%.3f n=%d mean=%.5f F8ax_pN=%+.5f F8tr_pN=%.5f swErr=%.5f tipSite_nm=%+.5f%n",
+                context,SEED,a*.025,(a+1)*.025,ageN[a],ageSum[a][0]/ageN[a],ageSum[a][1]/ageN[a],
+                ageSum[a][2]/ageN[a],ageSum[a][3]/ageN[a],ageSum[a][4]/ageN[a]);
+        }
+    }
+
+    /** Native J2 coordinate: out={angleRad,axisX,axisY,axisZ}. The axis maps rod.u toward lever.u. */
+    static void j2Coordinate(RigidRodBody b, int nB, int m, double[] out) {
+        int rod=3*m, lev=rod+1;
+        double rx=b.uVec.get(rod), ry=b.uVec.get(nB+rod), rz=b.uVec.get(2*nB+rod);
+        double lx=b.uVec.get(lev), ly=b.uVec.get(nB+lev), lz=b.uVec.get(2*nB+lev);
+        double ax=ry*lz-rz*ly, ay=rz*lx-rx*lz, az=rx*ly-ry*lx;
+        double am=Math.sqrt(ax*ax+ay*ay+az*az), dot=rx*lx+ry*ly+rz*lz;
+        if (dot > 1) dot=1; if (dot < -1) dot=-1;
+        out[0]=Math.atan2(am,dot);
+        if (am > 1e-15) { out[1]=ax/am; out[2]=ay/am; out[3]=az/am; }
+        else { out[1]=out[2]=out[3]=0; }
+    }
+
+    /** Physical J2 diagnostics: {angleDeg,axis xyz,torque pN nm,energy pN nm,restDeg,kappa pN nm/rad}. */
+    static double[] j2PhysicalMetrics(Scene sc, int m) {
+        double[] q=new double[4]; j2Coordinate(sc.mot.body,3*sc.mot.nMotors,m,q);
+        double k=0, rest=Double.NaN;
+        if (sc.jointParams.getSize() > 15) { k=sc.jointParams.get(14)*1e21; rest=sc.jointParams.get(15); }
+        double d=Double.isNaN(rest) ? 0 : q[0]-rest; // both shortest angles are in [0,pi]
+        return new double[]{Math.toDegrees(q[0]),q[1],q[2],q[3],-k*d,0.5*k*d*d,Math.toDegrees(rest),k};
     }
 
     // ============================ FORCE_VELOCITY_TEST (velocity-clamp) ============================
@@ -947,6 +1160,8 @@ public final class GlidingHarness {
         double[] epImp     = new double[nMot];   // pN·ms axial glide-impulse this episode
         double[] epWork    = new double[nMot];   // pN·nm work done ON the filament this episode
         int[]    epSteps   = new int[nMot];
+        J2Census j2Audit = J2_AUDIT ? new J2Census(sc,
+                String.format(java.util.Locale.US, "vclamp_v%.3f", VCLAMP_V)) : null;
         // x_bind histogram: axial mismatch s_head − s_site at the instant of attachment (nm)
         final int NB = 41; final double xbLo = -20.0, xbHi = 20.0, xbBW = (xbHi - xbLo) / NB;
         long[] xbHist = new long[NB]; long xbUnder = 0, xbOver = 0; double xbSum = 0, xbSumSq = 0; long xbN = 0;
@@ -1159,6 +1374,7 @@ public final class GlidingHarness {
                         if (bi < 0) xbUnder++; else if (bi >= NB) xbOver++; else xbHist[bi]++;
                     }
                     epImp[m] = 0; epWork[m] = 0; epSteps[m] = 0;
+                    if (j2Audit != null) j2Audit.beginEpisode(m);
                     if (SWING_DIAG) { epTrans[m] = 0; epAxOnset[m] = sdAxProd; epAxMin[m] = sdAxProd; epAxLast[m] = sdAxProd; }
                     if (PRESTROKE) { psCap[m] = 0; psStrokes[m] = 0; }
                     if (EPKERNEL) {                                    // track only in-window binds (age 0 = a true bind)
@@ -1181,6 +1397,7 @@ public final class GlidingHarness {
                         }
                     }
                 }
+                if (j2Audit != null && meas && bound) j2Audit.sample(m, bs, epSteps[m]);
                 if (bound) { epImp[m] += fg * DT * 1e3; epWork[m] += fg * VCLAMP_V * DT * 1e3; epSteps[m]++; if (meas) boundStepsN++;
                     if (SWING_DIAG) { epTrans[m] += sdTransPN * DT * 1e3; if (sdAxProd < epAxMin[m]) epAxMin[m] = sdAxProd; epAxLast[m] = sdAxProd; } }
                 if (EPKERNEL && bound && ekTrack[m] == 1) {            // fold this bound step into the age-resolved kernel
@@ -1220,6 +1437,7 @@ public final class GlidingHarness {
                 if (PRESTROKE && !bound && prevBound[m] >= 0 && epSteps[m] > 0) psEpLen[m] = epSteps[m];   // capture episode length before the finalize reset
                 if (EPKERNEL && !bound && prevBound[m] >= 0 && epSteps[m] > 0) ekLen[m] = epSteps[m];       // capture episode length before the finalize reset
                 if (!bound && prevBound[m] >= 0 && epSteps[m] > 0) {           // DETACH (finalize episode)
+                    if (j2Audit != null && meas) j2Audit.endEpisode(m, epImp[m], epSteps[m]);
                     if (meas) { epN++; epImpSum += epImp[m]; epImpSumSq += epImp[m] * epImp[m]; epWorkSum += epWork[m]; if (epImp[m] > 0) epPosImp++; if (epWork[m] > 0) epPosWork++; detachN++;
                         if (SWING_DIAG) { sdEpTransSum += epTrans[m]; sdEpAxOnsetSum += epAxOnset[m]; sdEpAxMinSum += epAxMin[m]; sdEpAxLastSum += epAxLast[m]; sdEpN++; } }
                     epSteps[m] = 0;
@@ -1327,6 +1545,7 @@ public final class GlidingHarness {
             if (meas) steps++;
         }
         if (FV_EPISODE) mot.kinParams.set(19, 0f);
+        if (j2Audit != null) j2Audit.printSummary();
 
         if (STROKEAUDIT) {   // PART-4 work accounting: net τ·ω per channel, BINNED by transition phase (pre / stroke-transient / plateau)
             double f9pre = 0, f9str = 0, f9plt = 0, swpre = 0, swstr = 0, swplt = 0; int nTr = 0, nTrans = 0;
@@ -1593,7 +1812,8 @@ public final class GlidingHarness {
         }
     }
 
-    /** Read motor 0: {θ_J1 deg, headSeg deg, s_ax=(tip−site)·x̂ nm, |F8| pN, segForceX pN on fil, tip_x µm}. */
+    /** Read motor 0: {thetaJ1,headSeg,sAx,|F8|,segFx,tipX,J2deg,F8ax,F8trans,anchorNm,swingErr,
+     * J2leverTorque_pNnm,J2energy_pNnm}; angles deg, forces pN. */
     static double[] strokeLoadRead(Scene sc, int sMid, double arc) {
         FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
         int nSeg = f.n, nB = 3 * mot.nMotors, STR = CrossBridgeSystem.STRIDE;
@@ -1614,8 +1834,28 @@ public final class GlidingHarness {
         double sAx = ((tipx - apx) * sux + (tipy - apy) * suy + (tipz - apz) * suz) * 1e3;   // (tip−site)·x̂, nm
         double f8x = sc.bondData.get(0 * STR + 0), f8y = sc.bondData.get(0 * STR + 1), f8z = sc.bondData.get(0 * STR + 2);
         double f8mag = Math.sqrt(f8x * f8x + f8y * f8y + f8z * f8z) * PN;
+        double f8ax = (f8x*sux+f8y*suy+f8z*suz)*PN;
+        double f8trans = Math.sqrt(Math.max(0,f8mag*f8mag-f8ax*f8ax));
         double segFx = sc.bondData.get(0 * STR + 6) * PN;   // seg-side x force ON the filament (pN)
-        return new double[]{ thetaJ1, headSeg, sAx, f8mag, segFx, tipx };
+        double[] jm=j2PhysicalMetrics(sc,0);
+        double rex=b.end1.get(0)-mot.anchor.get(0), rey=b.end1.get(nB)-mot.anchor.get(mot.nMotors), rez=b.end1.get(2*nB)-mot.anchor.get(2*mot.nMotors);
+        double anchorNm=Math.sqrt(rex*rex+rey*rey+rez*rez)*1e3;
+        double[] ch=new double[18]; channelTorquesSingle(sc,sMid,arc,ch);
+        return new double[]{ thetaJ1, headSeg, sAx, f8mag, segFx, tipx, jm[0], f8ax, f8trans,
+                anchorNm, ch[12], jm[4], jm[5] };
+    }
+
+    static void printJ2Det(Scene sc, String phase, double ageMs, double v, double dirWorkJ,
+                           int sMid, double arc) {
+        RigidRodBody b=sc.mot.body; int nB=3*sc.mot.nMotors;
+        double[] r=strokeLoadRead(sc,sMid,arc), j=j2PhysicalMetrics(sc,0);
+        System.out.printf(java.util.Locale.US,
+            "J2DET phase=%s dt=%.3e age_ms=%.6f v=%+.3f nuc=%d j2_deg=%.6f axis=%+.6f,%+.6f,%+.6f rest_deg=%.6f kappa=%.6f torque_pNnm=%+.6f energy_pNnm=%.6f energy_kT=%.6f dirWork_kT=%+.6f j1_deg=%.6f swErr_deg=%.6f sAx_nm=%+.6f f8mag_pN=%.6f f8ax_pN=%+.6f f8tr_pN=%.6f anchor_nm=%.6f rodC=%+.7f,%+.7f,%+.7f rodU=%+.7f,%+.7f,%+.7f levC=%+.7f,%+.7f,%+.7f levU=%+.7f,%+.7f,%+.7f headC=%+.7f,%+.7f,%+.7f headU=%+.7f,%+.7f,%+.7f%n",
+            phase,DT,ageMs,v,sc.mot.nucleotideState.get(0),j[0],j[1],j[2],j[3],j[6],j[7],j[4],j[5],j[5]*1e-21/Constants.kT,
+            dirWorkJ/Constants.kT,r[0],r[10],r[2],r[3],r[7],r[8],r[9],
+            b.coord.get(0),b.coord.get(nB),b.coord.get(2*nB),b.uVec.get(0),b.uVec.get(nB),b.uVec.get(2*nB),
+            b.coord.get(1),b.coord.get(nB+1),b.coord.get(2*nB+1),b.uVec.get(1),b.uVec.get(nB+1),b.uVec.get(2*nB+1),
+            b.coord.get(2),b.coord.get(nB+2),b.coord.get(2*nB+2),b.uVec.get(2),b.uVec.get(nB+2),b.uVec.get(2*nB+2));
     }
 
     // ==================== TIMESTEP_SERVO_AUDIT — deterministic single-motor channel-torque decomposition ==============
@@ -1769,9 +2009,15 @@ public final class GlidingHarness {
         strokeLoadEquil(sc, EQ);
         double[] pre = strokeLoadRead(sc, sMid, arc);
         System.out.printf(java.util.Locale.US, "  pre-stroke (ADP·Pi) equilibrium: θ_J1=%.2f° head-seg=%.1f° |F8|=%.3f pN sAx=%+.3f nm%n", pre[0], pre[1], pre[3], pre[2]);
+        float[] prePose=new float[27];
+        for (int q=0;q<3;q++) for (int p=0;p<3;p++) {
+            int z=9*q+3*p; prePose[z]=b.coord.get(q*nB+p); prePose[z+1]=b.uVec.get(q*nB+p); prePose[z+2]=b.yVec.get(q*nB+p);
+        }
+        if (J2_AUDIT) printJ2Det(sc,"pre_ADPPi_plateau",0,0,0,sMid,arc);
 
         // ---- Phase B: switch to ADP; instrument the stroke over a fixed 1 ms physical window ----
         mot.nucleotideState.set(0, MotorStore.NUC_ADP);
+        if (J2_AUDIT) printJ2Det(sc,"immediate_ADPPi_to_ADP",0,0,0,sMid,arc);
         double WIN = 1.0e-3; int nStep = (int) Math.round(WIN / DT);
         double[] Wp = new double[4], Wm = new double[4];             // +/- work per channel (J): F8,F9,F10,DIR
         double[] rotH = new double[nStep], rotL = new double[nStep];
@@ -1789,6 +2035,7 @@ public final class GlidingHarness {
             if (si < sampleT.length && ageMs >= sampleT[si]) {
                 System.out.printf(java.util.Locale.US, "  SERVOAGE dt=%.2e ageMs=%.3f cumDIR_kT=%+.4f swErr=%.3f thetaJ1=%.3f sAx=%+.4f f8pN=%.4f%n",
                         DT, ageMs, cumDIR * J2KT, o[6], o[7], o[8], o[9]);
+                if (J2_AUDIT) printJ2Det(sc,ageMs <= .15 ? "early_stroke" : "bound_ADP_plateau",ageMs,0,cumDIR,sMid,arc);
                 si++;
             }
         }
@@ -1833,6 +2080,36 @@ public final class GlidingHarness {
             double[] r1 = strokeLoadRead(sc, sMid, arc);
             System.out.printf(java.util.Locale.US, "  CYCLE dt=%.2e amp_nm=%.0f Wdir_net_kT=%+.5f Wf8_net_kT=%+.5f Wf9_net_kT=%+.5f Wf10_net_kT=%+.5f (2 closed cycles) thetaJ1_start=%.3f thetaJ1_end=%.3f f8_start=%.4f f8_end=%.4f%n",
                     DT, ampNm, Wc[3] * J2KT, Wc[0] * J2KT, Wc[1] * J2KT, Wc[2] * J2KT, r0[0], r1[0], r0[3], r1[3]);
+            if (J2_AUDIT) printJ2Det(sc,"closed_cycle_end_"+(int)ampNm+"nm",2*(2*tRamp+2*tHold)*1e3,0,Wc[3],sMid,arc);
+        }
+
+        // PASSIVE_J2_CONFORMATION: identical-pose deterministic transmission challenges. Each arm starts from the
+        // same equilibrated ADP·Pi pose, switches once to ADP, and then follows a prescribed constant-velocity site.
+        if (J2_AUDIT) for (double v : new double[]{0,8,-8}) {
+            for (int q=0;q<3;q++) for (int p=0;p<3;p++) {
+                int z=9*q+3*p; b.coord.set(q*nB+p,prePose[z]); b.uVec.set(q*nB+p,prePose[z+1]); b.yVec.set(q*nB+p,prePose[z+2]);
+            }
+            placeFilamentX(f,offX,comx0,0); DerivedGeometrySystem.derive(b.coord,b.uVec,b.yVec,b.zVec,b.end1,b.end2,b.segLength,mot.counts);
+            mot.nucleotideState.set(0,MotorStore.NUC_ADP);
+            double[] tp=new double[18]; channelTorquesSingle(sc,sMid,arc,tp); double[] oo=new double[11];
+            double wdir=0, peakDisp=0, peakAbs=-1, relaxSum=0, maxF8=0, maxF8tr=0, maxTau=0, maxE=0;
+            int relaxN=0; double lastDisp=0, sumJ2=0, sumJ22=0; int nv=(int)Math.round(1e-3/DT);
+            for (int t=0;t<nv;t++) {
+                placeFilamentX(f,offX,comx0,-v*(t+1)*DT);
+                servoStep(sc,sMid,arc,tp,oo); wdir+=oo[3];
+                double[] rr=strokeLoadRead(sc,sMid,arc); double disp=rr[2]-pre[2], age=(t+1)*DT*1e3;
+                lastDisp=disp; if (Math.abs(disp)>peakAbs) { peakAbs=Math.abs(disp); peakDisp=disp; }
+                if (age>=.30 && age<=.50) { relaxSum+=disp; relaxN++; }
+                if (rr[3]>maxF8) maxF8=rr[3]; if (rr[8]>maxF8tr) maxF8tr=rr[8];
+                if (Math.abs(rr[11])>maxTau) maxTau=Math.abs(rr[11]); if (rr[12]>maxE) maxE=rr[12];
+                sumJ2+=rr[6]; sumJ22+=rr[6]*rr[6];
+            }
+            double mj=sumJ2/nv, sdj=Math.sqrt(Math.max(0,sumJ22/nv-mj*mj)), relax=relaxN>0?relaxSum/relaxN:lastDisp;
+            double[] fin=strokeLoadRead(sc,sMid,arc);
+            System.out.printf(java.util.Locale.US,
+                "J2SLIDE dt=%.3e v=%+.3f kappa=%.6f rest_deg=%.6f meanJ2_deg=%.6f sdJ2_deg=%.6f finalJ2_deg=%.6f peakDisp_nm=%+.6f relaxDisp_nm=%+.6f finalDisp_nm=%+.6f maxF8_pN=%.6f finalF8ax_pN=%+.6f maxF8tr_pN=%.6f maxTorque_pNnm=%.6f maxEnergy_pNnm=%.6f dirWork_kT=%+.6f anchor_nm=%.6f j1_deg=%.6f swErr_deg=%.6f%n",
+                DT,v,j2PhysicalMetrics(sc,0)[7],j2PhysicalMetrics(sc,0)[6],mj,sdj,fin[6],peakDisp,relax,lastDisp,maxF8,fin[7],maxF8tr,maxTau,maxE,wdir*J2KT,fin[9],fin[0],fin[10]);
+            printJ2Det(sc,"controlled_slide_final",1.0,v,wdir,sMid,arc);
         }
         System.out.printf(java.util.Locale.US, "%n  Reading: DIRSWING is a FINITE STROKE if cumDIR concentrates near the switch + plateaus (small postAcqDIR) AND closed-cycle Wdir≈0;%n");
         System.out.printf(java.util.Locale.US, "           a PERSISTENT SERVO if postAcqDIR keeps growing OR closed cycles inject repeated net-positive Wdir. Per-step rotation should shrink ∝dt if pose-converged.%n");
@@ -2179,8 +2456,8 @@ public final class GlidingHarness {
             if (XB_IMPLICIT2) tg = tg.task("xbSnap", CrossBridgeSystem::snapshotHeadCenter, b.coord, mot.xbImplPrev);
             tg = tg
                 .task("integMot", RigidRodLangevinIntegrationSystem::integrate, b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
-            tg = tg
-                .task("deriveMot", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+            if (XB_IMPLICIT2) tg = tg.task("deriveMot", DerivedGeometrySystem::orthogonalizeY, b.uVec, b.yVec, mot.counts);
+            else tg = tg.task("deriveMot", DerivedGeometrySystem::derive, b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
             // PHASE-2 Version-B head snap — placed LATE (after deriveMot, like integrate) because a body-writing
             // task placed EARLY (before the force/integrate tasks) breaks the PTX-lowered bind (measured). The
             // snap therefore takes effect on the NEXT step's bond (a ≤1-step timing delay vs the CPU same-step
@@ -2203,8 +2480,9 @@ public final class GlidingHarness {
             if (BOX) tg = tg.task("confineFil", ContainmentSystem::confine, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, f.torqueSum, sc.boxParams, f.counts);
             if (XB_IMPLICIT2 || SEG_IMPLICIT) tg = tg.task("segSnap", CrossBridgeSystem::snapshotSegCenter, f.coord, sc.segImplPrev);
             tg = tg
-                .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
-                .task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+                .task("integFil", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+            if (XB_IMPLICIT2 || SEG_IMPLICIT) tg = tg.task("deriveFil", DerivedGeometrySystem::orthogonalizeY, f.uVec, f.yVec, f.counts);
+            else tg = tg.task("deriveFil", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
             // -xbimplicit2 (COUPLED star) / -segimplicit (DIAGONAL collective, rigid head) — LATE body writes (after
             // deriveFil), satisfying the body-write-must-be-late PTX gotcha. Reuse the boundSeg CSR-inverse. When both
             // are set, -segimplicit's rigid segment solve replaces cplSeg; the -xbimplicit2 head phases are kept.
@@ -3837,6 +4115,8 @@ public final class GlidingHarness {
         long[] ksHist = new long[12];       // -ktotcensus per-segment k_s histogram (engaged segments), [11]=overflow
         double[] strAcc = new double[7];    // -strokecensus acc {boundSamples,strokedSamples,barbedProductive,axialFracSum_stroked,swingSinSum_bound,axialFracSum_bound,N_bound}
         long[] axFracHist = new long[11];   // -strokecensus swing-axial-fraction histogram over STROKED heads, 0.0-1.0 in 0.1 bins
+        J2Census j2Audit = J2_AUDIT ? new J2Census(sc,
+                String.format(java.util.Locale.US, "glide_d%.0f", DENSITY)) : null;
         long rollPlus = 0, rollMinus = 0;   // -rollcensus accumulators (bound-head roll sign, over all samples)
         long mhatPlus = 0, mhatMinus = 0;   // -mhatcensus accumulators (bound-head head-axis sign, over all samples)
         double[] mhatFracT = new double[nInt + 2]; int mhatNT = 0;   // -mhatcensus per-sample +ẑ fraction (census-vs-time)
@@ -3859,6 +4139,13 @@ public final class GlidingHarness {
                     if (STRETCHCENSUS) { res.transferToHost(sc.mot.forceMag, sc.mot.forceDotFil, sc.mot.boundSeg); stretchTally(sc, stxAcc, extHist, fdHist); }
                     if (KTOT_CENSUS && t >= warmStep) { res.transferToHost(sc.mot.boundSeg); ktotTally(sc, ktAcc, ksHist); }
                     if (STROKECENSUS) { res.transferToHost(sc.mot.body.uVec, sc.mot.boundSeg, sc.fil.uVec); strokeTally(sc, strAcc, axFracHist); }
+                    if (j2Audit != null) {
+                        res.transferToHost(sc.mot.body.coord, sc.mot.body.uVec, sc.mot.nucleotideState,
+                                sc.mot.boundSeg, sc.mot.bindArc, sc.bondData, sc.fil.coord, sc.fil.uVec, sc.fil.segLength);
+                        for (int m = 0; m < sc.mot.nMotors; m++) {
+                            int bs = sc.mot.boundSeg.get(m); if (bs >= 0) j2Audit.sample(m, bs, -1);
+                        }
+                    }
                     if (ROLLCENSUS) { res.transferToHost(sc.mot.body.yVec, sc.fil.uVec); long[] pm = rollTally(sc); rollPlus += pm[0]; rollMinus += pm[1]; }
                     if (MHATCENSUS) { res.transferToHost(sc.mot.body.uVec, sc.mot.boundSeg); long[] pm = mhatTally(sc); mhatPlus += pm[0]; mhatMinus += pm[1];
                         long tt = pm[0] + pm[1]; if (tt > 0 && mhatNT < mhatFracT.length) mhatFracT[mhatNT++] = (double) pm[0] / tt; }
@@ -3893,10 +4180,35 @@ public final class GlidingHarness {
             }
             if (TWISTCENSUS && res != null) res.transferToHost(sc.twistHist);
         } else {
+            // PASSIVE_J2_CONFORMATION: CPU-only detailed free-glide episode census. GPU density runs retain
+            // the inexpensive OUT_INT snapshots above; reconstructing a ~0.6 ms attachment from 1 ms snapshots
+            // is invalid. On CPU the bodies are already host-current, so a read-only per-step pass can record
+            // true attachment age, impulse, lifetime, and peak/relaxed displacement without touching physics.
+            int[] j2Prev = null, j2Age = null; double[] j2Impulse = null;
+            if (j2Audit != null) {
+                j2Prev = new int[sc.mot.nMotors]; java.util.Arrays.fill(j2Prev, -1);
+                j2Age = new int[sc.mot.nMotors]; j2Impulse = new double[sc.mot.nMotors];
+            }
             cx[0] = centroidX(sc.fil); cy[0] = centroidY(sc.fil); cz[0] = centroidZ(sc.fil); bnd[0] = bound(sc.mot);
             mnx[0] = minCoordX(sc.fil); mxx[0] = maxCoordX(sc.fil); mny[0] = minCoordY(sc.fil); mxy[0] = maxCoordY(sc.fil); k = 1;
             for (int t = 0; t < M; t++) {
                 step(sc, t);
+                if (j2Audit != null) {
+                    for (int m = 0; m < sc.mot.nMotors; m++) {
+                        int bs = sc.mot.boundSeg.get(m);
+                        if (bs >= 0 && j2Prev[m] < 0) {
+                            j2Audit.beginEpisode(m); j2Age[m] = 0; j2Impulse[m] = 0;
+                        }
+                        if (bs >= 0) {
+                            j2Audit.sample(m, bs, j2Age[m]);
+                            double fg = -sc.bondData.get(m * CrossBridgeSystem.STRIDE + 6) * 1e12;
+                            j2Impulse[m] += fg * DT * 1e3; j2Age[m]++;
+                        } else if (j2Prev[m] >= 0 && j2Age[m] > 0) {
+                            j2Audit.endEpisode(m, j2Impulse[m], j2Age[m]); j2Age[m] = 0;
+                        }
+                        j2Prev[m] = bs;
+                    }
+                }
                 if (t == warmStep) { for (int i = 0; i < 2 * sc.mot.nMotors; i++) statsWarm[i] = sc.mot.stats.get(i); }
                 if ((t + 1) % OUT_INT == 0 && k <= nInt) {
                     cx[k] = centroidX(sc.fil); cy[k] = centroidY(sc.fil); cz[k] = centroidZ(sc.fil); bnd[k] = bound(sc.mot);
@@ -3905,6 +4217,7 @@ public final class GlidingHarness {
                     if (STRETCHCENSUS) stretchTally(sc, stxAcc, extHist, fdHist);   // CPU host arrays already current
                     if (KTOT_CENSUS && t >= warmStep) ktotTally(sc, ktAcc, ksHist);  // CPU boundSeg already current
                     if (STROKECENSUS) strokeTally(sc, strAcc, axFracHist);          // CPU host arrays already current
+                    // Detailed CPU J2 samples were collected every step above; do not double-count OUT_INT here.
                     if (EARLYSTOP && k % esCheckSamples == 0) {
                         double[] mon = esMonitor(cx, k, dtInt);
                         if (mon != null) { esFinal = mon; if (mon[0] < ES_THRESH) { esConverged = true; esStopStep = t + 1; break; } }
@@ -3913,6 +4226,7 @@ public final class GlidingHarness {
             }
             if (EARLYSTOP && !esConverged) esStopStep = Math.min(esStopStep, M);
         }
+        if (j2Audit != null) j2Audit.printSummary();
         int n = k;   // number of samples (intervals + 1)
 
         // ---- v1's instantaneousSpeed: per-interval 3D displacement / dt ----

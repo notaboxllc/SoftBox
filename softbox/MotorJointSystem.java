@@ -16,11 +16,10 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
  *   J1 (lever-motor):  connection lever.end2 ↔ motor.end1; angular spring rest 0° (uncocked),
  *                      capped at the stall-force torque (Myosin.java:241-242).
  *
- * OWNERSHIP (race-free, no atomics — like the chain): one thread per sub-body; each computes
- * the joint contributions ON ITSELF and writes only its own forceSum/torqueSum (+=). A joint
- * is evaluated from BOTH endpoints; the connection forceMag is symmetric (same strain, same
- * moveC sum) so the two sides are exactly equal-and-opposite (Newton's 3rd), and the bend
- * torque is computed identically by both, applied +to one side / -to the other.
+ * OWNERSHIP (race-free, no atomics): one thread per motor evaluates both joints once and writes
+ * only that motor's three disjoint forceSum/torqueSum slots. The connection forceMag is symmetric
+ * (same strain and moveC sum), so the two sides are exactly equal-and-opposite (Newton's 3rd),
+ * while each bend torque is applied +to one side / -to the other.
  *
  * The PAIRS connection force is applied at the body CENTER (no positional torque) plus an
  * explicit fractional lever-arm torque R×F, R = ½·len·fracR·uVec toward the body's joint end
@@ -28,7 +27,8 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
  *
  * jointParams: [0]=dt; J1 [1]=fracMove [2]=fracR [3]=fracMoveTorq [4]=restDeg;
  *              J2 [5]=fracMove [6]=fracR [7]=fracMoveTorq [8]=restDeg; [9]=anchorFracMove
- *              [10]=stallForcePN.
+ *              [10]=stallForcePN. Optional passive J2 conformation (default absent/off):
+ *              [14]=physical kappa (N m/rad), [15]=state-independent shortest bend rest (rad).
  */
 public final class MotorJointSystem {
     private MotorJointSystem() {}
@@ -93,12 +93,20 @@ public final class MotorJointSystem {
         // stroke geometry). [13]=κ (N·m/rad). The rest angle still switches 0°↔60° ⇒ J1 still DRIVES the stroke.
         int config1 = (jointParams.getSize() > 12) ? (int) jointParams.get(12) : 0;
         double kappaJ1 = (jointParams.getSize() > 13) ? jointParams.get(13) : 0.0;
+        double kappaJ2 = (jointParams.getSize() > 15) ? jointParams.get(14) : 0.0;
+        double restJ2Rad = (jointParams.getSize() > 15) ? jointParams.get(15) : 0.0;
+        boolean j1TorsionActive = (config1 != 0) ? (kappaJ1 != 0.0) : (j1FracMoveTorq != 0.0);
+        boolean j2LegacyTorsionActive = j2FracMoveTorq != 0.0;
+        boolean j2PhysicalTorsionActive = kappaJ2 != 0.0;
+        boolean j2TorsionActive = j2LegacyTorsionActive || j2PhysicalTorsionActive;
 
-        for (@Parallel int s = 0; s < nB; s++) {
-            int m = s / 3;
-            int role = s - 3 * m;
+        int nM = nB / 3;
+        for (@Parallel int m = 0; m < nM; m++) {
             // J1 lever-motor rest angle switches by nucleotide state (the stroke): cocked (≠ADPPi) 60°, uncocked 0°.
-            double j1Rest = (j1Frozen != 0) ? 0.0 : ((nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? 60.0 : 0.0);
+            // The nucleotide read is unnecessary when DIRSWING has disabled the legacy J1 torsion.
+            double j1Rest = j1TorsionActive
+                    ? ((j1Frozen != 0) ? 0.0 : ((nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? 60.0 : 0.0))
+                    : 0.0;
             int rod = 3 * m, lever = 3 * m + 1, head = 3 * m + 2;
 
             // sub-body poses (double, like the chain)
@@ -112,10 +120,12 @@ public final class MotorJointSystem {
             double hux = uVec.get(head),  huy = uVec.get(nB + head),  huz = uVec.get(2 * nB + head);
             double hlen = segLength.get(head);
 
-            double fx = 0, fy = 0, fz = 0, tx = 0, ty = 0, tz = 0;
+            double rfx = 0, rfy = 0, rfz = 0, rtx = 0, rty = 0, rtz = 0;
+            double lfx = 0, lfy = 0, lfz = 0, ltx = 0, lty = 0, ltz = 0;
+            double hfx = 0, hfy = 0, hfz = 0, htx = 0, hty = 0, htz = 0;
 
             // ===================== J2 (rod-lever): rod.end2 ↔ lever.end1 =====================
-            if (role == 0 || role == 1) {
+            {
                 double aEx = rcx + 0.5 * rlen * rux, aEy = rcy + 0.5 * rlen * ruy, aEz = rcz + 0.5 * rlen * ruz; // rod.end2
                 double bEx = lcx - 0.5 * llen * lux, bEy = lcy - 0.5 * llen * luy, bEz = lcz - 0.5 * llen * luz; // lever.end1
                 double dx = aEx - bEx, dy = aEy - bEy, dz = aEz - bEz;
@@ -126,37 +136,45 @@ public final class MotorJointSystem {
                 double mcLever = moveC(lux, luy, luz, lx, ly, lz, bTransGam.get(lever), bTransGam.get(nB + lever), bRotGam.get(nB + lever), llen);
                 double denom = dt * (mcRod + mcLever);
                 double forceMag = (denom > 0.0) ? (j2FracMove * 1.0e-6 * strain / denom) : 0.0;
-                // bend torque (rest 96°; fracMoveTorq=0 ⇒ zero, ported faithfully)
-                double tvx = ruy * luz - ruz * luy, tvy = ruz * lux - rux * luz, tvz = rux * luy - ruy * lux;
-                double tvm2 = tvx * tvx + tvy * tvy + tvz * tvz;
-                double torsionMag = 0.0;
-                if (tvm2 > 1.0e-30) {
-                    double im = 1.0 / Math.sqrt(tvm2); tvx *= im; tvy *= im; tvz *= im;
-                    double dotV = rux * lux + ruy * luy + ruz * luz;
-                    if (dotV > 1.0) dotV = 1.0; if (dotV < -1.0) dotV = -1.0;
-                    double ang = accurateAcos(dotV) * RAD2DEG;
-                    double invBRG = 1.0 / bRotGam.get(nB + rod) + 1.0 / bRotGam.get(nB + lever);
-                    torsionMag = j2FracMoveTorq * DEG2RAD * (ang - j2Rest) / (invBRG * dt);
+                // bend torque (rest 96°). Canonical J2 has fracMoveTorq=0: do not evaluate an
+                // identically-zero angular force (especially its acos/Newton refinement) when disabled.
+                double tvx = 0.0, tvy = 0.0, tvz = 0.0, torsionMag = 0.0;
+                if (j2TorsionActive) {
+                    tvx = ruy * luz - ruz * luy; tvy = ruz * lux - rux * luz; tvz = rux * luy - ruy * lux;
+                    double tvm2 = tvx * tvx + tvy * tvy + tvz * tvz;
+                    if (tvm2 > 1.0e-30) {
+                        double im = 1.0 / Math.sqrt(tvm2); tvx *= im; tvy *= im; tvz *= im;
+                        double dotV = rux * lux + ruy * luy + ruz * luz;
+                        if (dotV > 1.0) dotV = 1.0; if (dotV < -1.0) dotV = -1.0;
+                        double angRad = accurateAcos(dotV); // shortest unsigned bend in [0,pi]
+                        if (j2LegacyTorsionActive) {
+                            double ang = angRad * RAD2DEG;
+                            double invBRG = 1.0 / bRotGam.get(nB + rod) + 1.0 / bRotGam.get(nB + lever);
+                            torsionMag += j2FracMoveTorq * DEG2RAD * (ang - j2Rest) / (invBRG * dt);
+                        }
+                        // U=1/2*kappa*(theta-theta0)^2. axis=cross(rod.u,lever.u) maps rod toward lever;
+                        // rod gets +kappa*delta*axis and lever the exact opposite, so the lever restoring torque
+                        // is -kappa*delta*axis. No dt or mobility appears in this physical torque.
+                        if (j2PhysicalTorsionActive) torsionMag += kappaJ2 * (angRad - restJ2Rad);
+                    }
                 }
-                if (role == 0) {
-                    // ROD side: end2 → -forceMag·lu, R = +½·rlen·j2FracR·rod.uVec; torque +tv (v1: rod gets +)
-                    double Fx = -forceMag * lx, Fy = -forceMag * ly, Fz = -forceMag * lz;
-                    fx += Fx; fy += Fy; fz += Fz;
-                    double Rs = 0.5e-6 * rlen * j2FracR, Rx = Rs * rux, Ry = Rs * ruy, Rz = Rs * ruz;
-                    tx += Ry * Fz - Rz * Fy; ty += Rz * Fx - Rx * Fz; tz += Rx * Fy - Ry * Fx;
-                    tx += tvx * torsionMag; ty += tvy * torsionMag; tz += tvz * torsionMag;
-                } else {
-                    // LEVER side: end1 → +forceMag·lu, R = -½·llen·j2FracR·lever.uVec; torque -tv (v1: lever gets -)
-                    double Fx = forceMag * lx, Fy = forceMag * ly, Fz = forceMag * lz;
-                    fx += Fx; fy += Fy; fz += Fz;
-                    double Rs = -0.5e-6 * llen * j2FracR, Rx = Rs * lux, Ry = Rs * luy, Rz = Rs * luz;
-                    tx += Ry * Fz - Rz * Fy; ty += Rz * Fx - Rx * Fz; tz += Rx * Fy - Ry * Fx;
-                    tx -= tvx * torsionMag; ty -= tvy * torsionMag; tz -= tvz * torsionMag;
-                }
+                // ROD side: end2 → -forceMag·lu, R = +½·rlen·j2FracR·rod.uVec; torque +tv (v1: rod gets +)
+                double Fx = -forceMag * lx, Fy = -forceMag * ly, Fz = -forceMag * lz;
+                rfx += Fx; rfy += Fy; rfz += Fz;
+                double Rs = 0.5e-6 * rlen * j2FracR, Rx = Rs * rux, Ry = Rs * ruy, Rz = Rs * ruz;
+                rtx += Ry * Fz - Rz * Fy; rty += Rz * Fx - Rx * Fz; rtz += Rx * Fy - Ry * Fx;
+                rtx += tvx * torsionMag; rty += tvy * torsionMag; rtz += tvz * torsionMag;
+
+                // LEVER side: end1 → +forceMag·lu, R = -½·llen·j2FracR·lever.uVec; torque -tv (v1: lever gets -)
+                Fx = forceMag * lx; Fy = forceMag * ly; Fz = forceMag * lz;
+                lfx += Fx; lfy += Fy; lfz += Fz;
+                Rs = -0.5e-6 * llen * j2FracR; Rx = Rs * lux; Ry = Rs * luy; Rz = Rs * luz;
+                ltx += Ry * Fz - Rz * Fy; lty += Rz * Fx - Rx * Fz; ltz += Rx * Fy - Ry * Fx;
+                ltx -= tvx * torsionMag; lty -= tvy * torsionMag; ltz -= tvz * torsionMag;
             }
 
             // ===================== J1 (lever-motor): lever.end2 ↔ motor.end1 =================
-            if (role == 1 || role == 2) {
+            {
                 double aEx = lcx + 0.5 * llen * lux, aEy = lcy + 0.5 * llen * luy, aEz = lcz + 0.5 * llen * luz; // lever.end2
                 double bEx = hcx - 0.5 * hlen * hux, bEy = hcy - 0.5 * hlen * huy, bEz = hcz - 0.5 * hlen * huz; // motor.end1
                 double dx = aEx - bEx, dy = aEy - bEy, dz = aEz - bEz;
@@ -167,47 +185,63 @@ public final class MotorJointSystem {
                 double mcHead  = moveC(hux, huy, huz, lx, ly, lz, bTransGam.get(head),  bTransGam.get(nB + head),  bRotGam.get(nB + head),  hlen);
                 double denom = dt * (mcLever + mcHead);
                 double forceMag = (denom > 0.0) ? (j1FracMove * 1.0e-6 * strain / denom) : 0.0;
-                // bend torque toward rest j1Rest, torsionVec = cross(lever.uVec, motor.uVec), capped at stall
-                double tvx = luy * huz - luz * huy, tvy = luz * hux - lux * huz, tvz = lux * huy - luy * hux;
-                double tvm2 = tvx * tvx + tvy * tvy + tvz * tvz;
-                double torsionMag = 0.0;
-                if (tvm2 > 1.0e-30) {
-                    double im = 1.0 / Math.sqrt(tvm2); tvx *= im; tvy *= im; tvz *= im;
-                    double dotV = lux * hux + luy * huy + luz * huz;
-                    if (dotV > 1.0) dotV = 1.0; if (dotV < -1.0) dotV = -1.0;
-                    double ang = accurateAcos(dotV) * RAD2DEG;
-                    if (config1 != 0) {
-                        torsionMag = kappaJ1 * DEG2RAD * (ang - j1Rest);   // pure Hookean κ·deflection (no /dt, no cap)
-                    } else {
-                        double invBRG = 1.0 / bRotGam.get(nB + lever) + 1.0 / bRotGam.get(nB + head);
-                        torsionMag = j1FracMoveTorq * DEG2RAD * (ang - j1Rest) / (invBRG * dt);
-                        double maxMag = stallPN * 0.5 * hlen * 1.0e-18;     // Myosin.java:241 (pN·µm → N·m)
-                        if (torsionMag > maxMag) torsionMag = maxMag;
+                // bend torque toward rest j1Rest, torsionVec = cross(lever.uVec, motor.uVec), capped at
+                // stall. DIRSWING explicitly disables this legacy converter (fracMoveTorq=0), so avoid
+                // evaluating its identically-zero trigonometric path. Config-1's Hookean path stays active.
+                double tvx = 0.0, tvy = 0.0, tvz = 0.0, torsionMag = 0.0;
+                if (j1TorsionActive) {
+                    tvx = luy * huz - luz * huy; tvy = luz * hux - lux * huz; tvz = lux * huy - luy * hux;
+                    double tvm2 = tvx * tvx + tvy * tvy + tvz * tvz;
+                    if (tvm2 > 1.0e-30) {
+                        double im = 1.0 / Math.sqrt(tvm2); tvx *= im; tvy *= im; tvz *= im;
+                        double dotV = lux * hux + luy * huy + luz * huz;
+                        if (dotV > 1.0) dotV = 1.0; if (dotV < -1.0) dotV = -1.0;
+                        double ang = accurateAcos(dotV) * RAD2DEG;
+                        if (config1 != 0) {
+                            torsionMag = kappaJ1 * DEG2RAD * (ang - j1Rest);   // pure Hookean κ·deflection (no /dt, no cap)
+                        } else {
+                            double invBRG = 1.0 / bRotGam.get(nB + lever) + 1.0 / bRotGam.get(nB + head);
+                            torsionMag = j1FracMoveTorq * DEG2RAD * (ang - j1Rest) / (invBRG * dt);
+                            double maxMag = stallPN * 0.5 * hlen * 1.0e-18;     // Myosin.java:241 (pN·µm → N·m)
+                            if (torsionMag > maxMag) torsionMag = maxMag;
+                        }
                     }
                 }
-                if (role == 1) {
-                    // LEVER side: end2 → -forceMag·lu, R = +½·llen·j1FracR·lever.uVec; torque +tv (v1: lever gets +)
-                    double Fx = -forceMag * lx, Fy = -forceMag * ly, Fz = -forceMag * lz;
-                    fx += Fx; fy += Fy; fz += Fz;
-                    double Rs = 0.5e-6 * llen * j1FracR, Rx = Rs * lux, Ry = Rs * luy, Rz = Rs * luz;
-                    tx += Ry * Fz - Rz * Fy; ty += Rz * Fx - Rx * Fz; tz += Rx * Fy - Ry * Fx;
-                    tx += tvx * torsionMag; ty += tvy * torsionMag; tz += tvz * torsionMag;
-                } else {
-                    // HEAD side: end1 → +forceMag·lu, R = -½·hlen·j1FracR·head.uVec; torque -tv (v1: motor gets -)
-                    double Fx = forceMag * lx, Fy = forceMag * ly, Fz = forceMag * lz;
-                    fx += Fx; fy += Fy; fz += Fz;
-                    double Rs = -0.5e-6 * hlen * j1FracR, Rx = Rs * hux, Ry = Rs * huy, Rz = Rs * huz;
-                    tx += Ry * Fz - Rz * Fy; ty += Rz * Fx - Rx * Fz; tz += Rx * Fy - Ry * Fx;
-                    tx -= tvx * torsionMag; ty -= tvy * torsionMag; tz -= tvz * torsionMag;
-                }
+                // LEVER side: end2 → -forceMag·lu, R = +½·llen·j1FracR·lever.uVec; torque +tv (v1: lever gets +)
+                double Fx = -forceMag * lx, Fy = -forceMag * ly, Fz = -forceMag * lz;
+                lfx += Fx; lfy += Fy; lfz += Fz;
+                double Rs = 0.5e-6 * llen * j1FracR, Rx = Rs * lux, Ry = Rs * luy, Rz = Rs * luz;
+                ltx += Ry * Fz - Rz * Fy; lty += Rz * Fx - Rx * Fz; ltz += Rx * Fy - Ry * Fx;
+                ltx += tvx * torsionMag; lty += tvy * torsionMag; ltz += tvz * torsionMag;
+
+                // HEAD side: end1 → +forceMag·lu, R = -½·hlen·j1FracR·head.uVec; torque -tv (v1: motor gets -)
+                Fx = forceMag * lx; Fy = forceMag * ly; Fz = forceMag * lz;
+                hfx += Fx; hfy += Fy; hfz += Fz;
+                Rs = -0.5e-6 * hlen * j1FracR; Rx = Rs * hux; Ry = Rs * huy; Rz = Rs * huz;
+                htx += Ry * Fz - Rz * Fy; hty += Rz * Fx - Rx * Fz; htz += Rx * Fy - Ry * Fx;
+                htx -= tvx * torsionMag; hty -= tvy * torsionMag; htz -= tvz * torsionMag;
             }
 
-            forceSum.set(s,          (float) (forceSum.get(s)          + fx));
-            forceSum.set(nB + s,     (float) (forceSum.get(nB + s)     + fy));
-            forceSum.set(2 * nB + s, (float) (forceSum.get(2 * nB + s) + fz));
-            torqueSum.set(s,          (float) (torqueSum.get(s)          + tx));
-            torqueSum.set(nB + s,     (float) (torqueSum.get(nB + s)     + ty));
-            torqueSum.set(2 * nB + s, (float) (torqueSum.get(2 * nB + s) + tz));
+            forceSum.set(rod,          (float) (forceSum.get(rod)          + rfx));
+            forceSum.set(nB + rod,     (float) (forceSum.get(nB + rod)     + rfy));
+            forceSum.set(2 * nB + rod, (float) (forceSum.get(2 * nB + rod) + rfz));
+            torqueSum.set(rod,          (float) (torqueSum.get(rod)          + rtx));
+            torqueSum.set(nB + rod,     (float) (torqueSum.get(nB + rod)     + rty));
+            torqueSum.set(2 * nB + rod, (float) (torqueSum.get(2 * nB + rod) + rtz));
+
+            forceSum.set(lever,          (float) (forceSum.get(lever)          + lfx));
+            forceSum.set(nB + lever,     (float) (forceSum.get(nB + lever)     + lfy));
+            forceSum.set(2 * nB + lever, (float) (forceSum.get(2 * nB + lever) + lfz));
+            torqueSum.set(lever,          (float) (torqueSum.get(lever)          + ltx));
+            torqueSum.set(nB + lever,     (float) (torqueSum.get(nB + lever)     + lty));
+            torqueSum.set(2 * nB + lever, (float) (torqueSum.get(2 * nB + lever) + ltz));
+
+            forceSum.set(head,          (float) (forceSum.get(head)          + hfx));
+            forceSum.set(nB + head,     (float) (forceSum.get(nB + head)     + hfy));
+            forceSum.set(2 * nB + head, (float) (forceSum.get(2 * nB + head) + hfz));
+            torqueSum.set(head,          (float) (torqueSum.get(head)          + htx));
+            torqueSum.set(nB + head,     (float) (torqueSum.get(nB + head)     + hty));
+            torqueSum.set(2 * nB + head, (float) (torqueSum.get(2 * nB + head) + htz));
         }
     }
 }

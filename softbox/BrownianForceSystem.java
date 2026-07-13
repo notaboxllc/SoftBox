@@ -59,6 +59,17 @@ public final class BrownianForceSystem {
         for (@Parallel int i = 0; i < N; i++) {
             int iy = N + i;
             int iz = 2 * N + i;
+            float tS = brownTransScale.get(i);
+            float rS = brownRotScale.get(i);
+
+            // A disabled body has exactly zero Brownian force and torque. The Wang RNG is a stateless
+            // function of (slot,step,seed), so omitting its unused hashes/Box-Muller transforms cannot
+            // alter any other body's stream. Myosin levers and velocity-clamped filaments use this path.
+            if (tS == 0f && rS == 0f) {
+                randForce.set(i, 0f); randForce.set(iy, 0f); randForce.set(iz, 0f);
+                randTorque.set(i, 0f); randTorque.set(iy, 0f); randTorque.set(iz, 0f);
+                continue;
+            }
 
             // --- deterministic per-(slot,step,run) RNG seed (v1 keying) ---
             int base = (i * 1000003) ^ (stepCount * 999983) ^ (runSeed * 7919);
@@ -91,9 +102,6 @@ public final class BrownianForceSystem {
             float th3 = 2.0f * 3.14159265f * u6;
             float gfz = r3 * (float) Math.cos(th3);
             float gtz = r3 * (float) Math.sin(th3);
-
-            float tS = brownTransScale.get(i);
-            float rS = brownRotScale.get(i);
 
             randForce.set(i,  tS * brownianForceMag * (float) Math.sqrt(bTransGam.get(i))  * gfx);
             randForce.set(iy, tS * brownianForceMag * (float) Math.sqrt(bTransGam.get(iy)) * gfy);

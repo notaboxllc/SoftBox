@@ -1,5 +1,47 @@
 # Soft Box Project Journal
 
+### 2026-07-12 — FINE-dt V₀ REFERENCE: canonical rigid-clamp force zero is operationally converged at ≈13.3±0.5 µm/s; production dt overestimates it by +2.7 µm/s (+20%)
+
+Well-powered follow-up to the under-seeded timestep ladder in `TIMESTEP_SERVO_AUDIT`. **Measurement-only — NO physical-model or production-setting change:** ran the existing default-off CPU `-vclamp` harness at dt={1e-5, 5e-6, 2.5e-6, 1.25e-6} s with the canonical `SPHEREHEAD+AXLOCK+DIRSWING+XB_IMPLICIT2+LYMN_TAYLOR` stack; F9 frozen at 90°, DIRSWING 0°→60°, J1/J2 native angular springs off; `BoA-v1ref` untouched. Used the validated d2000/matbox50 compact clamp, **constant 80 ms physical duration** with constant 26.7 ms physical warm-up, step counts 8k/16k/32k/64k, **8 paired seeds identical across every arm**, and a refined near-zero velocity grid v={10,12,13,14,15,16,18} µm/s (+8 for production): 232 runs total.
+
+* **Fixed-velocity convergence — decisive anchor:** production→5e-6 lowers f̄_available significantly at v=12/14/16 by approximately −0.07/−0.07/−0.08 pN, whereas both subsequent halvings are statistically unresolved at all three velocities. The three fine force–velocity curves are mutually near-coincident; the production curve is shifted upward.
+* **Joint local fit f=a+bv, V₀=−a/b:** **16.07 [15.23,17.60]** µm/s at dt=1e-5 → **13.53 [12.58,14.66]** → **13.01 [12.43,13.55]** → **13.41 [12.76,14.21]** at the three fine timesteps. The fine estimates overlap, span only 0.52 µm/s, and are stable to leave-one-seed-out, dropping either outer velocity, and five alternative fit windows.
+* **Canonical numerical statement:** over the tested fine-timestep range, the rigid-clamp force zero is operationally stable at **V₀_fine≈13.3±0.5 µm/s**. The routine production timestep gives **V₀_prod≈16.1 µm/s**, an upward bias of **ΔV₀≈+2.7 µm/s (+20%)**, exceeding the pre-registered ±2 µm/s tolerance. Production dt remains useful for routine qualitative work, but its quoted V₀ is not numerically converged.
+* **Mechanism of the dt shift @v=12:** as dt decreases, mean bound count rises **3.98→5.39**, lifetime rises **0.52→0.63 ms**, attachment frequency falls **1514→1308 s⁻¹**, and net episode impulse falls **+0.087→+0.030 pN·ms**. Finer dt therefore gives **more and longer attachments but less net forward impulse per attachment**. The isolated DIRSWING stroke is already dt-converged; the residual bias lies in sustained cross-bridge force during continuous sliding.
+* **Interpretation:** a finite force zero exists at every timestep, so the model’s capacity for density-dependent gliding saturation is unchanged. Refinement moves the quantitative ceiling downward but does not remove the ceiling. Do **not** infer the asymptotic free-gliding plateau by dividing clamp V₀ by the prior ~1.4 finite-density force-balance discrepancy; measure the free-gliding plateau directly.
+* **Status:** **resolved fine-timestep reference**, not a formal proof of the mathematical dt→0 limit. Report the empirical result as **13.3±0.5 µm/s over dt≤5e-6 s**, and attach the +2.7 µm/s timestep bias wherever the production value ≈16 is quoted. No routine dt change made. Report: `docs/FINE_DT_V0_REFERENCE.md`; figure: `docs/FINE_DT_V0_REFERENCE.png`; raw logs: `RUN_LOGS/v0fine/`; pre-registration: `RUN_LOGS/v0fine/PREREG.txt`.
+
+
+### 2026-07-12 — FINE-dt V₀ REFERENCE: converged rigid-clamp force-zero = 13.3 [12.8,13.8] µm/s; production dt biases V₀ +2.7 (+20%) HIGH (Outcome A; E rejected)
+Well-powered follow-up to the servo audit's under-powered Part-6b V₀ ladder ("~13±2", n=2–3). **Measurement-only —
+NO code change** (ran the existing default-off `-vclamp` harness at 4 timesteps; motor model / rates / force laws /
+kinetics / production dt all unchanged; `BoA-v1ref` untouched; CPU basin arbiter). Canonical stack confirmed default
+(SPHEREHEAD+AXLOCK+DIRSWING+XB_IMPLICIT2+LYMN_TAYLOR; F9 frozen 90°, DIRSWING 0°↔60°, J1/J2 angular off). d2000
+compact clamp bed + matbox 50 (the validated FORCE_VELOCITY geometry), **80 ms physical window held constant**
+(warm-up=M/3 ⇒ constant *physical* equilibration — the Part-6a lesson), steps ∝1/dt (8k/16k/32k/64k), **8 paired seeds
+identical across arms**, v∈{10,12,13,14,15,16,18}(+8 prod). 232 points, ~7.5 core-h.
+- **Fixed-velocity paired convergence (the robust anchor):** Δf̄(dt→dt/2) paired within seed — the **1e-5→5e-6 drop is
+  SIGNIFICANT** at v=12/14/16 (−0.07/−0.07/−0.08 pN), but **5e-6→2.5e-6 and 2.5e-6→1.25e-6 are BOTH non-significant**
+  (CIs span 0). Force converged by 5e-6.
+- **Joint local linear fit** f=a+bv → V₀=−a/b, paired-seed bootstrap: **16.07 [15.2,17.6] (1e-5) → 13.53 → 13.01 →
+  13.41 [12.8,14.2] (1.25e-6).** Three fine arms compatible (spread 0.52, overlapping CIs) ⇒ plateau. Stable under
+  leave-one-seed-out, drop-lowest-v, drop-highest-v, and across 5 fit windows (fine arms ±0.45).
+- **dt-limit models:** Model A (plateau over finest 3) = 13.32 SELECTED (fixed-v force flat below 5e-6). Model B
+  first-order intercept 12.4, Model C p=2 intercept 13.0 — both bound the reference in [12.4,13.0]; 4 levels don't
+  justify a free exponent. **Reference V₀_fine = 13.3 [12.8, 13.8] µm/s** (combined paired bootstrap 13.43 [13.20,13.67],
+  widened for the between-arm+window systematic).
+- **Production bias ΔV₀ = +2.68 [+1.60,+4.18] µm/s (+20%) ⇒ EXCEEDS the pre-registered ±2 tolerance ⇒ Outcome E
+  (production adequate) REJECTED.** **Outcome A (resolved fine-dt reference).**
+- **Mechanism (dt→0 @v=12):** N_bound RISES 3.98→5.39, lifetime 0.52→0.63 ms, J_attach FALLS 1514→1308, net episode
+  impulse FALLS into drag +0.087→+0.030 — more/longer attachments, less net forward impulse per attachment = the
+  cross-bridge sustained-force-under-sliding (duty) ceiling, NOT the stroke (the stroke is dt-converged, servo-audit
+  Part 6a). Confirms the servo-audit decomposition at 8× power.
+- **Consequence (informational):** V₀_fine/1.4 ≈ 9.5 µm/s operative free-glide ceiling (vs 16/1.4≈11.4 at production dt)
+  — nearer biological Vmax~8 (ζ_eff flagged approximate: measured at production dt). Fix to earn 13.3 in production =
+  the standing cross-bridge SUB-STEP, NOT a routine dt cut (1.25e-6 = 8× wall). Report `docs/FINE_DT_V0_REFERENCE.md` +
+  `.png`; raw `RUN_LOGS/v0fine/`; pre-reg `RUN_LOGS/v0fine/PREREG.txt`. Extends `docs/TIMESTEP_SERVO_AUDIT.md`,
+  `docs/FORCE_VELOCITY_TEST.md`, `docs/FORCE_BALANCE_CLOSURE.md`.
+
 ### 2026-07-12 — TIMESTEP & SERVO-WORK AUDIT: canonical DIRSWING is a CONVERGED FINITE STROKE (not a servo); production-dt V₀ is ~25–45% HIGH (Outcome A + E, C-rider; B refuted)
 Audited whether canonical DIRSWING is a converged finite stroke or a dt-dependent active servo, and whether the
 production-dt mechanics are timestep-converged. New default-off byte-identical instrumentation (`-vclamp 8` FVROW

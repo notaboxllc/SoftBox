@@ -24,6 +24,35 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
 public final class DerivedGeometrySystem {
     private DerivedGeometrySystem() {}
 
+    /**
+     * Re-orthogonalize yVec after integration without publishing zVec/endpoints. Coupled-implicit
+     * callers perform a second full derive after correcting centers; between the two passes they read
+     * only uVec/yVec. This is the y-frame prefix of derive(), with identical arithmetic and writes.
+     */
+    public static void orthogonalizeY(FloatArray uVec, FloatArray yVec, IntArray counts) {
+        int N = uVec.getSize() / 3;
+        for (@Parallel int i = 0; i < N; i++) {
+            int iy = N + i;
+            int iz = 2 * N + i;
+
+            float ux = uVec.get(i), uyc = uVec.get(iy), uzc = uVec.get(iz);
+            float yx = yVec.get(i), yyc = yVec.get(iy), yzc = yVec.get(iz);
+
+            float zx = uyc * yzc - uzc * yyc;
+            float zy = uzc * yx  - ux  * yzc;
+            float zz = ux  * yyc - uyc * yx;
+            float zmag2 = zx * zx + zy * zy + zz * zz;
+            if (zmag2 > 0f) {
+                float inv = 1.0f / (float) Math.sqrt(zmag2);
+                zx *= inv; zy *= inv; zz *= inv;
+            }
+
+            yVec.set(i,       zy * uzc - zz * uyc);
+            yVec.set(iy,      zz * ux  - zx * uzc);
+            yVec.set(iz,      zx * uyc - zy * ux);
+        }
+    }
+
     public static void derive(
             FloatArray coord,
             FloatArray uVec,
