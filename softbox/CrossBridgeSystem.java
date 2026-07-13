@@ -272,6 +272,81 @@ public final class CrossBridgeSystem {
     }
 
     /**
+     * STROKE_COMPLETION_STRAIN_TEST PART-2 modifier (measurement-only, flag-gated `-strokecomp`, default-off ⇒
+     * NOT called on any production/default path; CPU-only, wired only when STROKECOMP≥0 in stepOrig). A minimal
+     * copy of directedSwing whose SOLE change is: under RESISTIVE F8 axial strain the post-stroke lever target is
+     * reduced toward the pre-stroke (uncocked) angle — a strain-dependent stroke COMPLETION knob, the smallest
+     * expressible modification of the EXISTING stroke (no new converter frame). The completion fraction
+     *   c = exp(−max(0, s_res)/E*) ,   s_res = (tip − site)·f̂  in nm  (the RESISTIVE axial strain, growing with v)
+     * and the effective post-stroke rest is  θ_eff = θ_u + (θ_c − θ_u)·c  (only in the cocked/ADP state).
+     * At E*→∞ (or zero strain) c→1 ⇒ θ_eff=θ_c ⇒ byte-identical to directedSwing. Everything else (the b̂×â
+     * alignment-torque form, the springs/rate k handling, the per-motor PURE writes) is directedSwing verbatim.
+     * compParams: [0]=E* (nm; ≤0 ⇒ off), [1]=headLen (µm).
+     */
+    public static void directedSwingComp(FloatArray motorUVec, FloatArray motorCoord, FloatArray motorTorqueSum,
+                                         FloatArray motorBRotGam, FloatArray filUVec, FloatArray filCoord,
+                                         FloatArray filSegLength, IntArray boundSeg, FloatArray bindArc,
+                                         IntArray nucleotideState, FloatArray swingParams, FloatArray compParams,
+                                         IntArray counts) {
+        int nB = motorUVec.getSize() / 3;
+        int nSeg = filUVec.getSize() / 3;
+        int nM = nB / 3;
+        double k = swingParams.get(0), dt = swingParams.get(1);
+        double thetaU = swingParams.get(2), thetaC = swingParams.get(3);
+        if (swingParams.getSize() > 4) {
+            double refDt = swingParams.get(4);
+            if (refDt > 0.0) k = 1.0 - Math.exp((dt / refDt) * Math.log(1.0 - k));
+            else if (refDt < 0.0) k = k * (dt / (-refDt));
+        }
+        double Estar = compParams.get(0);        // nm; ≤0 ⇒ modifier off (byte-identical to directedSwing)
+        double headLen = compParams.get(1);      // µm
+        double DEG2RAD = Math.PI / 180.0;
+        for (@Parallel int m = 0; m < nM; m++) {
+            int s = boundSeg.get(m);
+            if (s < 0) continue;
+            int lev = 3 * m + 1, head = 3 * m + 2;
+            double lux = motorUVec.get(lev), luy = motorUVec.get(nB + lev), luz = motorUVec.get(2 * nB + lev);
+            double hux = motorUVec.get(head), huy = motorUVec.get(nB + head), huz = motorUVec.get(2 * nB + head);
+            double fx = filUVec.get(s), fy = filUVec.get(nSeg + s), fz = filUVec.get(2 * nSeg + s);
+            // post-stroke rest, reduced by the strain-completion factor c (cocked state only)
+            double rest;
+            if (nucleotideState.get(m) != MotorStore.NUC_ADPPI) {
+                rest = thetaC;
+                if (Estar > 0.0) {
+                    // F8 axial strain: (tip − site)·f̂ in nm (RESISTIVE = tip barbed-ward of the material site)
+                    double hcx = motorCoord.get(head), hcy = motorCoord.get(nB + head), hcz = motorCoord.get(2 * nB + head);
+                    double htipx = hcx + 0.5 * headLen * hux, htipy = hcy + 0.5 * headLen * huy, htipz = hcz + 0.5 * headLen * huz;
+                    double slen = filSegLength.get(s), aOff = bindArc.get(m) - 0.5 * slen;
+                    double apx = filCoord.get(s) + aOff * fx, apy = filCoord.get(nSeg + s) + aOff * fy, apz = filCoord.get(2 * nSeg + s) + aOff * fz;
+                    double sRes = ((htipx - apx) * fx + (htipy - apy) * fy + (htipz - apz) * fz) * 1.0e3;   // (tip−site)·f̂, nm
+                    double c = (sRes > 0.0) ? Math.exp(-sRes / Estar) : 1.0;
+                    rest = thetaU + (thetaC - thetaU) * c;
+                }
+            } else {
+                rest = thetaU;
+            }
+            double th = rest * DEG2RAD, c = Math.cos(th), sn = Math.sin(th);
+            double tx = c * hux - sn * fx, ty = c * huy - sn * fy, tz = c * huz - sn * fz;
+            double tm2 = tx * tx + ty * ty + tz * tz;
+            if (tm2 < 1.0e-30) continue;
+            double it = 1.0 / Math.sqrt(tm2); tx *= it; ty *= it; tz *= it;
+            double ax = luy * tz - luz * ty, ay = luz * tx - lux * tz, az = lux * ty - luy * tx;
+            double am2 = ax * ax + ay * ay + az * az;
+            if (am2 < 1.0e-30) continue;
+            double ia = 1.0 / Math.sqrt(am2); ax *= ia; ay *= ia; az *= ia;
+            double dot = lux * tx + luy * ty + luz * tz; if (dot > 1) dot = 1; if (dot < -1) dot = -1;
+            double ang = accurateAcos(dot);
+            double mag = k * ang / ((1.0 / motorBRotGam.get(nB + lev) + 1.0 / motorBRotGam.get(nB + head)) * dt);
+            motorTorqueSum.set(lev,          (float) (motorTorqueSum.get(lev)          + mag * ax));
+            motorTorqueSum.set(nB + lev,     (float) (motorTorqueSum.get(nB + lev)     + mag * ay));
+            motorTorqueSum.set(2 * nB + lev, (float) (motorTorqueSum.get(2 * nB + lev) + mag * az));
+            motorTorqueSum.set(head,          (float) (motorTorqueSum.get(head)          - mag * ax));
+            motorTorqueSum.set(nB + head,     (float) (motorTorqueSum.get(nB + head)     - mag * ay));
+            motorTorqueSum.set(2 * nB + head, (float) (motorTorqueSum.get(2 * nB + head) - mag * az));
+        }
+    }
+
+    /**
      * TWIST-COST census (PHASE-2, 2026-07-01, -twistcensus). At each FRESH bind (boundSeg free→bound this
      * step), record the arrival angle between the head's yVec (as it arrives) and the +ŝ roll target
      * (ŝ = n̂bed×seg.uVec) — the assembly twist the stereospecific roll-sign lock must impose. Binned into

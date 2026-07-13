@@ -1,5 +1,202 @@
 # Soft Box Project Journal
 
+### 2026-07-12 — TIMESTEP & SERVO-WORK AUDIT: canonical DIRSWING is a CONVERGED FINITE STROKE (not a servo); production-dt V₀ is ~25–45% HIGH (Outcome A + E, C-rider; B refuted)
+Audited whether canonical DIRSWING is a converged finite stroke or a dt-dependent active servo, and whether the
+production-dt mechanics are timestep-converged. New default-off byte-identical instrumentation (`-vclamp 8` FVROW
+`fbar_avail=0.13541` unchanged): **`-servoaudit`** — deterministic single forced-bound motor (all Brownian off), the
+only clean substrate (zeroing motor Brownian in the CARPET kills binding — thermal search is what reaches the
+filament); per-step rotation-vector distributions, per-channel MIDPOINT signed work, cumulative DIRSWING work vs age,
+closed-cycle perturbation. Plus **`-detmotor`** and a stochastic-`-vclamp` **V₀ dt-ladder** (1e-5→1.25e-6, seeds).
+- **DIRSWING = CONVERGED FINITE STROKE (Outcome A).** ~98% of its work is done in the first 0.1 ms after ADP·Pi→ADP
+  (95%-acquisition at 0.06 ms; post-acquisition remainder ~4–5%); cumulative W_DIR plateaus (~5.15 kT). It is a FIXED
+  rotational spring (springs `swingParams[4]=−refDt` ⇒ dt cancels to refDt) — target-active, but a target that stays
+  active is NOT a servo.
+- **SERVO REFUTED (Outcome B).** Closed-cycle displacement challenge (out→hold→back→hold ×2, amp 4/8/12 nm): net
+  DIRSWING work over the closed cycle is small, **≤0 (dissipative), dt-stable, NEVER net-positive** (−0.008/−0.038/−0.094
+  kT @1e-5, essentially unchanged to 1.25e-6). No repeated net-positive energy injection.
+- **Per-step rotation is a benign ∝dt discretization artifact (Outcome E).** Lever max/step 13.03→6.59→3.31→1.67 as dt
+  halves (exactly ∝dt); the physical-time trajectory converges. Bounds the prior doc's "±30°/step thermal-off" head
+  jitter (deterministic-constraint part ≤13°/step, dt-vanishing; rest was thermal). Estimator artifact (F) ruled out
+  (robust rotation vectors + midpoint work). Deterministic run also REMOVES the head-jitter confound the disambiguation
+  PART 4 flagged: clean NET channel work — DIR R=1.00/W⁻=0 (one-time conversion), F8 R=14.3 (reversible bond breathing,
+  net≈0), F9 net-negative ⊥-maintenance, F10 net-positive plane reorientation.
+- **Pose / single-motor force / stroke-work CONVERGE** (θ_J1 49.9°, |F8| 2.57 pN, cumW_DIR ~5.15 kT flat to <1% over 8×
+  dt) — once the pre-stroke equilibration is held at constant PHYSICAL time (constant STEP-count gives a spurious ±8%
+  non-monotone from the slow post-stroke settling mode — an equilibration-window artifact, not mechanics).
+- **ENSEMBLE V₀ is NOT dt-converged (Outcome C rider).** f̄_available(v) zero-crossing: **17.8 (1e-5)** → noisy **~13±2**
+  (11.8/15.3/12.4) at finer dt — a ~25–45% production-dt overestimate. Robust fixed-v read: at v=16 the carpet still
+  DRIVES forward (+0.028 pN) at 1e-5 but is in NET DRAG (−0.01…−0.13 pN) at ALL finer dt. Decomposed: occupancy Nbound
+  RISES as dt→0 (0.54→0.75) yet per-bound drive FALLS → the shift is the **cross-bridge sustained-force-under-sliding /
+  duty dt-ceiling** (`dt-faithful-ceiling`, `gliding-reconvergence`), NOT the stroke (the static single-motor stroke
+  converges). Recommended fix = the standing cross-bridge sub-step, NOT a DIRSWING change.
+- **Verdict:** no persistent-servo behavior and no stroke-mechanics non-convergence ⇒ **do NOT replace DIRSWING.** The
+  quantitative gliding ceiling remains dt-unconverged at production dt (localized to the cross-bridge duty clock).
+  Audit-only; canonical model unchanged; `BoA-v1ref` untouched. Report: `docs/TIMESTEP_SERVO_AUDIT.md`; code
+  `-servoaudit`/`-detmotor` in `GlidingHarness`; runs `RUN_LOGS/servo_ladder_eqconst.txt`, `RUN_LOGS/servo_full_1e-5.txt`,
+  `RUN_LOGS/v0_ladder.txt`; `scripts/run_servo_v0_ladder.sh`.
+
+### 2026-07-12 — CANONICAL STROKE DISAMBIGUATION: ONE power stroke (DIRSWING), NOT two; F9 is a FROZEN-90° ⊥-maintainer — and the PLATEAU_ORIGIN_AUDIT "F9-dominant stroke" was a 120°-vs-90° DIAGNOSTIC BUG (Outcome A + E)
+Resolved a suspected inconsistency: the code audit said SPHEREHEAD freezes F9 at 90° with DIRSWING the stroke, but
+PLATEAU_ORIGIN_AUDIT reconstructed a dominant nucleotide-switched 90°→120° F9 "stroke." Audited the LIVE production
+kernel (`-strokeaudit`, default-off byte-identical: snapshots the exact pose `bondForces` uses, reads the actual
+`bondData` it wrote, reconciles per channel).
+- **LIVE-CONFIRMED (v=0 AND v=16, every step): `xbParams[9]=f9Frozen=1` ⇒ `restF9=90°` in ALL nucleotide states.**
+  Recompute of the head torque with restF9=90 matches live `bondData[3..5]` to **0.0000 pN·nm**; restF9=120 is off by a
+  fixed **52 pN·nm**. **F9 is nucleotide-INDEPENDENT — the ⊥-maintainer, NOT a stroke.**
+- **DIRSWING is the SOLE nucleotide-triggered stroke:** its lever target switches **0°→60° exactly at ADP·Pi→ADP**
+  (`swRest` 0→60 at the transition step, `swErr` then decays 88°→10° over ~0.1 ms = the lever swinging). J1 angular
+  converter is OFF (`jointParams[3]=0`, replaced by DIRSWING). **⇒ ONE stroke, not two. Outcome B (two strokes) REFUTED.**
+- **PART 4 work:** raw τ·ω confounded by head-jitter (both channels large), but DIRSWING work is **front-loaded**
+  (pre+stroke 136 ≫ plateau 22, transition-active) vs F9 **duration-proportional** (plateau 112, ongoing constraint);
+  the decisive discriminator is the target change (DIRSWING yes / F9 no).
+- **OUTCOME A (one stroke) + OUTCOME E (my prior diagnostic bug).** `plateauBalance()` used `cocked?120:90` ignoring
+  `f9Frozen` ⇒ inflated T9 62→ (true) **24 pN·nm**, F9 dev −35°→ (true) **−5.9°**. **FIXED** (reads f9Frozen; live d90=0).
+  **The "F9-dominant stroke" claim is RETRACTED**; corrected, F8's counter-torque is **F9-⊥ (24) + AXLOCK (23)
+  co-dominant**, neither a stroke. **PLATEAU_ORIGIN_AUDIT structural conclusions SURVIVE** (constraint-set, thermal-scale
+  ~2.3 kT, frustrated stroke, AXLOCK load-bearing, the 3 fidelity levers) — only the F9 mislabel was wrong. PART 5
+  two-stroke ablation NOT triggered (F9 not a stroke). **Audit-only; `BoA-v1ref` untouched.** Report:
+  `docs/CANONICAL_STROKE_DISAMBIGUATION.md`; correction banner on `docs/PLATEAU_ORIGIN_AUDIT.md`; code `-strokeaudit` +
+  `plateauBalance()` fix in `GlidingHarness`.
+
+### 2026-07-12 — PLATEAU-ORIGIN AUDIT: the V₀-setting prestress is a CONSTRAINT-SET, thermal-scale, FRUSTRATED-F9-stroke residual (largely honest emergent mechanics; 3 named idealization levers)
+Follow-up to EPISODE_KERNEL: what MAINTAINS the bound-ADP forward F8-strain plateau that sets V₀, and is it defensible?
+Extended `-epkernel` with a **pose-derived plateau-band force/torque/energy balance** (`plateauBalance()`: re-computes
+the exact canonical-stack torques — bondForces F8/F9/F10-AXLOCK, directedSwing, MotorJointSystem J1/J2, TailAnchor — from
+the body pose; touches NO kernel ⇒ default-off **byte-identical**, PART-1 completeness identity unchanged). Grid v=0,16 ×
+neck 40/60/80 × 4 seeds. **Framing correction carried:** m_f is survival-conditioned; no causal mechanics/kinetics split
+re-asserted.
+- **CONSTRAINT-SET, not stroke-set (decisive):** the whole balance RE-EMERGES across a **1.9× nominal neck-swing change**
+  (F8 |F| 3.95/3.99/4.00, F9 torque 62/63/64, AXLOCK 23/23/23, dev9 −35/−36/−37, devAx 26/25/25 — all flat). Only Tsw
+  (smallest term) and devJ1 (no restoring torque) track neck. Torque-level confirmation of the kernel's neck-angle
+  disconnection.
+- **Dominant torque = F9** (the nucleotide rest-angle switch 90°→120° = the modeled power stroke, T9≈62 pN·nm), balanced
+  by F8-restoring (TH≈33) + **AXLOCK** (hF10≈23, 37% of counter-torque) + a near-complete swing (≈6). J1 angular converter
+  is OFF (jointParams[3]=0, replaced by DIRSWING) ⇒ Tj1=0 (faithful, verified vs sc.jointParams).
+- **The F9 stroke is FRUSTRATED:** the bound head sits ~85° (F8-anchoring + AXLOCK win), NOT the 120° target ⇒ the nominal
+  reorientation is ~fully absorbed; residual = a SMALL forward strain (**0.82 pN axial of a 79%-transverse 3.95 pN**),
+  storing only **~2.3 kT**. NOT a large artificial preload. d_relax≈0.7nm ≪ d_peak≈6nm because the free J1/J2 rotational
+  hinges (angular springs off) let the lever/rod recoil + F8 holds the bound head → the stroke isn't held.
+- **Verdict — primarily OUTCOME 1 (honest emergent mechanics):** dominated by a PHYSICAL mechanism (F9 stroke),
+  thermal-scale, re-emergent ⇒ V₀≈16 is a fairly honest consequence of the modeled stroke; NO single idealized artifact,
+  NO smoking gun. **3 named, licensed fidelity-preserving levers (NOT built):** (A) AXLOCK's lab-n̂=+Z axial-plane lock
+  (gliding-assay idealization, co-sets forward directedness) → make it physical/compliant; (B) the dt-dependent fracMove
+  F9/AXLOCK torques (∝1/dt, magnitude un-converged) → dt-converge (dt line); (C) the free J1/J2 hinges (lever-arm doesn't
+  hold the stroke) → a stiff transmitting lever. Primary Vmax lever stays the catch-slip shape (VMAX_SENSITIVITY).
+- **PART 3 (statistical debt closed):** paired per-seed xCatch ΔV₀ = **−8.65 [−10.14, −7.17]** (bootstrap; all 4 seeds
+  −6.7…−10.6, dwarfs seed SD 1.80). **Audit/logging only; no constraint change; `BoA-v1ref` untouched.** Report:
+  `docs/PLATEAU_ORIGIN_AUDIT.md`; code `plateauBalance()`+PLATROW in `GlidingHarness`; runs `RUN_LOGS/2026-07-12_plateau_grid.txt`.
+
+### 2026-07-12 — EPISODE-KERNEL ACCOUNTING: V₀≈16 is a bound-state F8-STRAIN BALANCE carried by the force WAVEFORM, not d/τ, not lifetime; the nominal stroke is DECOUPLED from the effective d_eff
+"Explain the ceiling, don't correlate with it." Built the full AGE-RESOLVED episode kernel (`-epkernel`, additive to the
+`-vclamp`/`-prestroke` clamp; default-off **byte-identical**, completeness identity Σbins≡completed+censored idErr ≤
+5e-15 across all runs ⇒ no force dropped): per attachment-age `a` → survival `S(a|v)`, age-conditioned mean glide force
+`m_f(a,v)`, F8 tip−site strain, converter angle, per-state nucleotide fraction, catch-slip hazard; per episode → T,
+ADP-lifetime, sign-reversal age/distance, I₊/I₋/net, effective actin-level working displacement d_peak/d_relax, bind &
+stroke-onset snapshots. CPU deterministic, d2000 `-matbox 50`, v=0…20, 4 paired seeds.
+- **RECONSTRUCTION GATE PASS:** `⟨I(v)⟩ = ∫S·m_f da` reproduces the measured per-episode impulse (0.1–2 %) and its zero;
+  kernel V₀ 15.98 ≡ measured 15.92 ≡ force-f̄ zero 16.00.
+- **NESTED-MODEL VERDICT: only Model 3 (measured kernel) survives.** Model 1 `d_eff/T̄` ≈ 8.9 and Model 2
+  `2d_eff·E[T]/E[T²]` ≈ 9.2 both FAIL at the low-v anchor (they only "match" 16 if fed the v=16 self-consistent values —
+  circular). Why: the **force waveform is a two-phase transient+plateau, NOT `k(d−vt)`** (a fast stroke spike absorbed in
+  ~0.05 ms + a sustained bound-ADP plateau); the **dwell is not exponential and reshapes with v** (CV 0.96→0.75).
+- **DECISIVE COUNTERFACTUAL — the WAVEFORM carries V₀, survival only SCALES:** freeze S at its v=0 shape, let only
+  `m_f(a,v)` move ⇒ impulse zero stays **V₀=16.1**; freeze `m_f` at v=0, let only S move ⇒ impulse **never crosses zero**
+  (survival shortening drops magnitude ~40 % but makes no zero). ⇒ V₀ is a **force/cross-bridge-strain balance**: the
+  sustained ADP-plateau holds a net-forward F8 strain (~+0.5 pN at v=0) that the sliding-induced resistive strain erodes
+  to zero at v≈16 (strain `mrel` tracks `m_f` one-for-one).
+- **The nominal stroke is DECOUPLED from the effective d_eff (PART 3, Claude's hypothesis CONFIRMED):** d_peak ≈ 6 nm but
+  **d_relax ≈ 0.7 nm** (compliant body absorbs ~85 % — the per-episode view of `STROKE_COMPLETION_STRAIN_TEST` PART 1); a
+  **1.9× nominal neck-angle swing (40°→80°) moves d_eff ~2 % and V₀ < 10 %.** xCatch (2.5→1.0 nm) drops V₀ 16→7.8 with
+  **d_eff unchanged**, by **steepening `m_f(a,v)`** (lower catch-force-sensitivity ⇒ resistive back-strained heads persist
+  ⇒ survivor-conditioned force falls faster with v). ⇒ **xCatch is the dominant lever because it is the knob on the
+  survivor-conditioned force waveform** — unifying `VMAX_SENSITIVITY_25C` (catch-slip shape dominant) with the waveform
+  finding. **Logging only (PART 3 existing flags); no model change; `BoA-v1ref` untouched.** Report:
+  `docs/EPISODE_KERNEL_ACCOUNTING.md`; code `-epkernel` in `GlidingHarness`; runs `RUN_LOGS/2026-07-12_epkernel_*.txt`.
+
+### 2026-07-11 — STROKE-COMPLETION-vs-STRAIN TEST: load-dependent completion is the c·f̄ AMPLITUDE null, NOT a V₀ lever (measure-before-build → DON'T build)
+Does strain-dependent stroke COMPLETION move the force–velocity ZERO (a real, fidelity-preserving V₀ lever) or only
+scale AMPLITUDE (the c·f̄ null that worsens the density problem)? The one hypothesis surviving `PRESTROKE_DISTORTION`.
+**Verdict: OUTCOME 2 — it does NOT move the zero; it mildly scales amplitude. Do not build** (nor the Option-4
+converter re-architecture it would take to test a lever this shows is null).
+- **PART 1 prerequisite (does the EXISTING stroke already stall under load?) — NO, it completes FULLY at every load.**
+  New `-strokeload` (single-motor quasi-static, default-off byte-identical) + a read-only converter-completion
+  accumulator in the `-vclamp` clamp (θ_J1=∠(û_lever,û_head), 60°=full; FVROW byte-identical). Canonical DIRSWING
+  completion is **flat at ~100–108 % of 60° across v=0→20** (65.2°→60.0°, only ~8 % decline). Quasi-static: a static
+  filament offset ±24 nm is **ABSORBED** by the compliant J1/J2/anchor springs (|s_ax|<0.08 nm, segFx≈0.05 pN) ⇒ the
+  stroke force is **transient**, completion held ~98 % — so the load-dependence read MUST be the sliding clamp, not a
+  static offset. ⇒ DIRSWING's "perfect axial advantage": no existing partial-completion to duplicate or strengthen.
+- **PART 2 decisive cut (`-strokecomp E*`: θ_eff=θ_u+(θ_c−θ_u)·exp(−max(0,s_res)/E*), s_res=(tip−site)·f̂; default-off
+  byte-identical) — the ZERO does NOT move (multi-seed).** f̄_available(v) grid, canonical vs E*=4/2/1, d2000 `-matbox
+  50`. **3-seed V₀: canonical 15.1, E*=2 14.8 (Δ−0.2 n.s.), E*=1 13.8 (Δ−1.3, < 1 SD n.s.)** — the single-seed E*=1
+  "11.9" was a **seed-0 low draw** (seeds 1,2: 14.1, 15.2). The **v=0** (no v-load) force is mildly cut −7/−11 %
+  (amplitude present at zero velocity) and completion cut as a **parallel down-shift** (65°→48°, same shallow slope,
+  NOT steepened) that barely moves f̄ ⇒ lever-completion is a **weak, loosely-coupled** force handle. Low-load in-spec
+  check FAILS: every arm degrades the unloaded stroke without buying a robust V₀ shift.
+- **Root cause:** the F8 axial strain the knob keys on is dominated by the **stroke's own tip-advance** (s_res>0 at
+  v=0), so throttling completion is a **negative feedback on the productive stroke**, firing at all v ⇒ uniform
+  amplitude, not zero-movement. The velocity-driven strain increment is tiny (`f8ax` −0.93→−1.43 nm, v0→20). ⇒ V₀≈16
+  is a **STATIC over-drive** (stroke size / duty / rigid-clamp), matching `FORCE_VELOCITY_TEST`/`FORCE_BALANCE_CLOSURE`.
+  `BoA-v1ref` untouched; production byte-identical. Report `docs/STROKE_COMPLETION_STRAIN_TEST.md`; raw
+  `RUN_LOGS/2026-07-11_strokecomp_sweep.txt` + `_seeds.txt` + `strokecomp_analyze.py`.
+
+### 2026-07-11 — PRE-STROKE DISTORTION ANALYSIS: no competence metric earns a geometry-gated commitment step (BAIL — honest negative)
+Does a pre-stroke strain/competence metric justify a mechanically-gated stroke-commitment ("bailout") step — i.e. does
+pre-stroke distortion **(a) rise with sliding velocity AND (b) predict unproductive episodes at FIXED velocity**, or
+would a gate be an efficiency-reducer dressed as mechanism? **Verdict: BAIL** — the gate is NOT the missing mechanism.
+- **STEP 0 — RE-RUN required.** Existing head-swing logs have the episode *outcome* only as an **aggregated mean**
+  (`Iattach`) + commanded geometry (`-swingdiag`); **no** pre-stroke mechanical variables and **no per-episode pairing**
+  ⇒ Q2 impossible from existing data. New `-prestroke` (additive, default-off **byte-identical**, FVROW verified): at
+  each episode's first ADP·Pi→ADP transition capture the PRIMARY sign-only **virtual axial work** `whead=wsw+wf9`
+  (`w=(τ̂×û_head)·(−x̂)·angle`, >0 productive; the **F9 head-reorientation is the productive channel**, stroke ∝
+  HEAD_LEN — a first cut on the `directedSwing` lever channel was uniformly-signed, the 87°-artifact trap, avoided) +
+  ΔU_stroke, F8 axial strain, J1 misalignment; paired with the episode net impulse. DIRSWING arm, v={0,2,4,8,12,16,20}
+  ×seeds0–3, 12k steps, d2000 `-matbox 50`. **15 586 episodes**; FVROW reproduces V₀≈16 (setup validated).
+- **THREE-QUESTION VERDICT (no metric passes all three as *mechanism*).** **Q1 (worsen with v): NO** for the virtual
+  work — `wf9` incompetent-frac FLAT 0.020→0.029 (v0→20) ⇒ a **static filter, not a saturation mechanism** (can't lower
+  V₀). **Q2 (predict at fixed v): YES (weak–moderate)** — within-v r(`wf9`,imp)≈0.30–0.36 (real, n≈2200), r(`f8ax`)≈0.28,
+  r(`whead`)≈0.10. **Q3 (v0 population): YES** — frac(whead>0)=0.52, frac(wf9-productive)=0.98 (not an axis artifact).
+  The only metric that **grows with v is F8 axial strain** (−0.93→−1.43 nm) — but that is cross-bridge **LOAD, not
+  assembly distortion**; a gate on it duplicates the existing force-dependent catch-slip release + 12 pN break cap
+  (efficiency-reducer, not new mechanism) and targets the wrong tail.
+- **VARIANT-B RECONCILIATION (decisive).** Per-episode impulse ceiling is a **UNIFORM decline via collapse of the
+  PRODUCTIVE tail** — p90 1.73→0.51 (Δ−1.22), p50 +0.12→−0.12 (zero @v≈16=V₀), **p10 only −0.34→−0.59 (Δ−0.25)**; ~⅘ of
+  the change is in the upper half. **No emergent gate-able incompetent sub-population.** A *pre-stroke* gate cannot
+  rescue productive episodes losing steam mid-attachment. Matches `FORCE_BALANCE_CLOSURE.md` PART 2 (impulse crosses
+  zero at V₀, intrinsic to one attachment, not recruitment-masked).
+- **⇒ Geometric commitment gating is NOT the missing mechanism; the ~1.4× over-Vmax is the STATIC over-drive
+  (stroke/duty/rigid-clamp geometry), not a velocity-gated commitment step.** Three-arm follow-up + soft-`k_eff(ΔU/E*)`
+  form left UNBUILT (ΔU_stroke flat with v, r≈0.13). No gate built. `BoA-v1ref` untouched. Report:
+  `docs/PRESTROKE_DISTORTION_ANALYSIS.md`; raw `RUN_LOGS/2026-07-11_prestroke_grid.txt` + `prestroke_analyze.py`.
+
+### 2026-07-11 — HEAD-FRAME SWING vs DIRSWING (force–velocity): H2 static penalty, NOT the fidelity path — the deferred-Stage-2 alternative FAILS
+The accepted head-frame-swing experiment (does a less-idealized stroke lose **axial** productivity as the filament
+slides ⇒ lower V₀ *through more realistic geometry*?). Single factor: swap `directedSwing` (swing ref f̂ = filament
+axis) → the pre-existing `directedSwingHeadFrame` (swing ref ŷ_head×û_head = head frame), canonical stack otherwise
+fixed. New flags `-headswing` (selector) + `-swingdiag` (additive commanded-geometry diagnostics: q_DIR, q_HF,
+off-axis ∠(p̂_HF,f̂), transverse impulse); default-off **byte-identical** (git-stash pre/post FVROW char-identical).
+`-vclamp` clamp force–velocity, CPU deterministic, `-matbox 50` d2000, VARIANT A full-binding, 15k steps, paired CRN
+seeds 0–3, v-grid {0,2,4,8,12,16,20} refined ≤1 µm/s around each zero (104 runs).
+- **STEP-0 audit (`docs/HEADFRAME_SWING_CODE_AUDIT.md`):** SINGLE FACTOR (only the −sinθ swing reference differs;
+  θ/stiffness/torque-form/F8/F9/F10/AXLOCK/release/binding/cycle byte-identical). **AXLOCK does NOT override the swing
+  target** — F9 (head.uVec), AXLOCK/F10 (head.yVec), swing (lever) are 3 distinct torque channels; coupling is indirect
+  (through the head pose, across steps) ⇒ H3 NOT foreordained. Both targets live-recomputed (not frozen).
+- **RESULT — H2 (static penalty), NOT H1, NOT H3.** V₀,DIR=16.07 [15.8,17.1], V₀,HF=11.70 [11.4,12.5],
+  **ΔV₀=−4.35 [−4.95,−3.88]** (bootstrap 5000, paired). But the three H1 velocity-dependence signatures ALL fail:
+  off-axis ∠(p̂_HF,f̂) is **FLAT ~87°** across all v (86.8°@0→87.6°@20, NOT +≥5°); q_HF slope ≈0 (axialProd ~+0.04,
+  chronically non-axial); **D(v) POSITIVE at every v** (+0.05…+0.13, 11/12 excl 0 — head-frame is *less* velocity-
+  sensitive, opposite of H1). Static v=0 deficit −34% (f̄ 0.435 vs 0.655). q_DIR≡−1.000 exact (DIRSWING commands a
+  perfectly axial ref at all v). Episodes 555–697/run (≥100), right-censored <0.6%.
+- **Mechanism (static, flagged):** the canonical F9(90°)+AXLOCK locks do NOT settle the head into û_head=±ẑ ⇒
+  ŷ_head×û_head is ≈⊥ f̂ (~87° off) at ALL velocities (same in BOTH modes). The recast's "locked ⇒ ŷ_head×û_head=f̂"
+  ideal is not realized ⇒ the head-frame swing sweeps largely off-glide; retains ~65% of DIRSWING drive via cosθ·û_head.
+- **VERDICT:** head-frame is a **worse** stroke (less efficient, velocity-independently), not a ceiling mechanism and
+  not fidelity-increasing — the OPPOSITE of the Stage-2-deferred goal. Its lower V₀ is a pure static-offset artifact,
+  no velocity feedback. **No follow-on licensed** (H1 rejected ⇒ no free-glide validation; H3 rejected ⇒ no AXLOCK-
+  relax experiment). If ever revisited, fix the STATIC v=0 geometry first (why locked û_head≠±ẑ), not force–velocity.
+  Report `docs/HEADFRAME_SWING_VELOCITY_TEST.md`; runs `RUN_LOGS/swing_*`, analysis `RUN_LOGS/2026-07-11_headframe_swing_analysis.txt`.
+  **⇒ The principled fidelity path pointed to by the Stage-2 deferral does NOT reach the band; return to Stage-2 fitted
+  calibration is now the remaining lever (explicit PI-chosen provenance tradeoff).**
+
 ### [Vmax→25°C calibration] Stage 2 — DEFERRED BY CHOICE (not incomplete): decline to hit the band by falsifying measured rates
 
 **Decision:** We can reach the biological gliding band (V₀ → ~4–8 µm/s, target ~4.2) with the Stage-1-shortlisted knobs — but we are choosing NOT to, because every path does so by moving experimentally-MEASURED parameters off their measured values:

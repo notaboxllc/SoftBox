@@ -78,6 +78,13 @@ public final class GlidingHarness {
     static boolean SPHEREHEAD = true;            // CANONICAL DEFAULT (2026-07-08 collapse Stage 1; formerly a post-parse promotion): freeze F9 at 90° (perp-maintainer) ⇒ the J1 neck-swing is the stroke (the three-body sphere-head). -legacymotor restores the v1-port F9 head-swing; -canonical/-config1/-perphead select their own bond law (sphere stack cleared in the resolution block).
     static boolean AXLOCK = true;                // CANONICAL DEFAULT: retarget F10 to ŝ=normalize(n̂bed×seg.uVec) head-only (the axial swing-plane lock, §9.4c). Part of the sphere-head canonical stack.
     static boolean DIRSWING = true;              // CANONICAL DEFAULT: DETERMINISTIC polarity-directed power stroke (CrossBridgeSystem.directedSwing) — neck rear sweeps barbed-ward; J1 angular converter OFF. Part of the sphere-head canonical stack.
+    static boolean HEADSWING = false;            // -headswing (HEADFRAME_SWING_VELOCITY_TEST): route the DIRSWING stroke through CrossBridgeSystem.directedSwingHeadFrame — swing reference ŷ_head×û_head (head frame) instead of f̂ (filament). SINGLE FACTOR (only the −sinθ reference changes). Default off ⇒ byte-identical.
+    static boolean SWING_DIAG = false;           // -swingdiag: additive commanded-geometry diagnostics in the -vclamp path (q_DIR, q_HF, off-axis angle, transverse impulse). Default off ⇒ byte-identical.
+    static boolean PRESTROKE  = false;           // -prestroke (PRESTROKE_DISTORTION_ANALYSIS): at each episode's FIRST ADP·Pi→ADP power-stroke transition, capture PRE-stroke mechanical competence metrics (sign-only virtual axial work w_virt, ΔU_stroke, F8 axial strain, J1 converter misalignment) and pair them with the episode's net axial impulse outcome. Emits per-episode PSROW lines. Default off ⇒ byte-identical.
+    static boolean STROKEAUDIT = false;          // -strokeaudit (CANONICAL_STROKE_DISAMBIGUATION): live production torque vs pose-diagnostic reconciliation + F9/DIRSWING nucleotide-dependence & work accounting around the ADP·Pi→ADP transition. Default off ⇒ byte-identical.
+    static boolean EPKERNEL   = false;           // -epkernel (EPISODE_KERNEL_ACCOUNTING): full AGE-RESOLVED episode kernel in the -vclamp path. Per attachment-age a: survival S(a|v), age-conditioned mean glide force m_f(a,v), transverse force, relative tip−site axial strain, head-tip/material-site axial displacement, converter angle θ_J1, per-state nucleotide fraction, catch-slip release hazard — folded over episodes that ATTACH inside the steady window (KERNROW). Per completed such episode: T, force-producing-state (ADP) lifetime, first-sign-reversal age & filament-travel distance, I₊/I₋/net impulse, rel-tip−site bind/peak/min/last (⇒ effective actin-level working displacement d_eff), bind & power-stroke-onset snapshots (EPROW). In-run reconstruction gate ∫S·m_f ≡ measured ⟨I⟩ (EPKSTAT). Default off ⇒ byte-identical.
+    static boolean SERVOAUDIT = false;           // -servoaudit (TIMESTEP_SERVO_AUDIT): deterministic single-motor servo/work/rotation/closed-cycle audit (Parts 2-5). Builds its own single forced-bound-motor scene; runs at the current DT.
+    static boolean DETMOTOR = false;             // -detmotor (TIMESTEP_SERVO_AUDIT): zero the motor-body Brownian (rod+head brownTransScale/brownRotScale) so the whole motor mechanics run DETERMINISTICALLY — the primary dt-convergence/servo audit config (filament thermal is already off in -vclamp). Default off ⇒ byte-identical.
     static boolean ROLLCENSUS = false;           // -rollcensus: after a grid run, census bound heads' roll sign (head.yVec·ŝ). Diagnostic only.
     static boolean TWISTCENSUS = false;          // -twistcensus: capture the arrival-angle (head.yVec vs +ŝ) at each fresh bind. Diagnostic only.
     static boolean MHATCENSUS = false;           // -mhatcensus: census bound heads' HEAD-AXIS sign (head.uVec·n̂bed, n̂bed=+Z) — the second free sign (mhat=±n̂). +ẑ is the productive pole (p=ŷ×û=f̂). Diagnostic only; prints aggregate + per-sample time series + stdev.
@@ -152,6 +159,9 @@ public final class GlidingHarness {
     static boolean VDRAG = false;                // -vdrag: bare-filament drag calibration (no motors) — measure ζ_eff = F_ext/v for the balance N·f̄=F_drag (FORCE_BALANCE_CLOSURE PART 1)
     static boolean FV_EPISODE = false;           // -fvepisode <K>: Variant B — one-attachment episodes; rebinding blocked except a fresh cohort re-armed every K steps
     static int     FV_REARM = 500;               // re-arm cadence (steps); ≫ episode length so each trial is a single episode with no rebinding
+    // ---- STROKE_COMPLETION_STRAIN_TEST (measurement, 2026-07-11) ----
+    static boolean STROKE_LOAD = false;          // -strokeload: PART 1 — single-motor deterministic completion-vs-imposed-load probe (does the existing DIRSWING stroke stall under strain?)
+    static double  STROKECOMP  = -1.0;           // -strokecomp <E*>: PART 2 modifier — strain-dependent stroke COMPLETION length-scale (nm). θ_eff = θ_u+(θ_c−θ_u)·exp(−max(0,s_res)/E*); −1 ⇒ off/byte-identical.
     // ---- SUBSTEP_FEASIBILITY (MEASUREMENT-ONLY): bound fraction + bound-cross-bridge slice X + per-outer-dt site motion ----
     static boolean SUBSTEP = false;              // -substep
     static double  OUTER_DT = 1.0e-4;            // -outerdt <s>
@@ -264,6 +274,8 @@ public final class GlidingHarness {
             else if (args[i].equals("-vclamp")) { VCLAMP = true; VCLAMP_V = Double.parseDouble(args[++i]);          // FORCE_VELOCITY_TEST: velocity-clamp the filament at glide speed v (µm/s); CPU-only measurement
                 bX0 = 1.0; bXlo = -3.0; bXhi = 3.0; bYhalf = 0.1; }   // compact clamp bed: x-runway ±3µm (fits |v|·M excursion), thin y (only the ~50nm capture band binds ⇒ per-available force unaffected; far fewer motors). Override with -full AFTER -vclamp.
             else if (args[i].equals("-fvepisode")) { FV_EPISODE = true; FV_REARM = Integer.parseInt(args[++i]); }   // FORCE_VELOCITY_TEST Variant B: one-attachment episodes, re-arm every K steps (no rebinding within a trial)
+            else if (args[i].equals("-strokeload")) { STROKE_LOAD = true; }   // STROKE_COMPLETION_STRAIN_TEST PART 1: single-motor deterministic completion-vs-load probe (CPU-only measurement)
+            else if (args[i].equals("-strokecomp")) { STROKECOMP = Double.parseDouble(args[++i]); }   // STROKE_COMPLETION_STRAIN_TEST PART 2: strain-completion length-scale E* (nm); default off ⇒ byte-identical
             else if (args[i].equals("-vdrag")) { VDRAG = true; bX0 = 1.0; bXlo = -3.0; bXhi = 3.0; bYhalf = 0.1; }    // FORCE_BALANCE_CLOSURE PART 1: bare-filament drag calibration (same compact bed, motors present but unused)
             else if (args[i].equals("-dcalib")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; DCALIB = true; }  // catch force-sensitivity calibration
             else if (args[i].equals("-csrecal")) { CANONICAL = true; CONFIG1 = true; SINGLE = true; CSRECAL = true; }  // step-4c catch-slip recalibration
@@ -283,6 +295,13 @@ public final class GlidingHarness {
             else if (args[i].equals("-spherehead")) SPHEREHEAD = true;   // freeze F9 at 90° ⇒ J1 neck-swing is the stroke (sphere-head on the dense-mat GPU path)
             else if (args[i].equals("-axlock")) { SPHEREHEAD = true; AXLOCK = true; }   // axial swing-plane lock (F10 → ŝ, head-only); implies -spherehead
             else if (args[i].equals("-dirswing")) { SPHEREHEAD = true; AXLOCK = true; DIRSWING = true; }   // + deterministic polarity-directed power stroke; implies -axlock
+            else if (args[i].equals("-headswing")) { HEADSWING = true; }   // HEADFRAME_SWING_VELOCITY_TEST: swing reference = head frame (ŷ_head×û_head) not f̂; single-factor, uses the canonical DIRSWING stack
+            else if (args[i].equals("-swingdiag")) { SWING_DIAG = true; }   // additive commanded-geometry diagnostics in the -vclamp path (default-off byte-identical)
+            else if (args[i].equals("-prestroke")) { PRESTROKE = true; }   // PRESTROKE_DISTORTION_ANALYSIS: per-episode pre-stroke competence metrics vs impulse outcome (default-off byte-identical)
+            else if (args[i].equals("-epkernel")) { EPKERNEL = true; }   // EPISODE_KERNEL_ACCOUNTING: age-resolved episode kernel S(a|v), m_f(a,v), d_eff, I±, sign-reversal (default-off byte-identical)
+            else if (args[i].equals("-strokeaudit")) { STROKEAUDIT = true; }   // CANONICAL_STROKE_DISAMBIGUATION: live-vs-diagnostic torque reconciliation + F9/DIRSWING work accounting around ADP·Pi→ADP (default-off byte-identical)
+            else if (args[i].equals("-detmotor")) { DETMOTOR = true; }   // TIMESTEP_SERVO_AUDIT: deterministic motor bodies (zero motor Brownian) for the primary dt/servo audit (default-off byte-identical)
+            else if (args[i].equals("-servoaudit")) { SERVOAUDIT = true; }   // TIMESTEP_SERVO_AUDIT: deterministic single-motor stroke-work / rotation / closed-cycle audit (Parts 2-5). Builds its own single-motor scene.
             else if (args[i].equals("-rollcensus")) ROLLCENSUS = true;   // census the bound-head roll sign (head.yVec·ŝ) after a grid run
             else if (args[i].equals("-twistcensus")) TWISTCENSUS = true;   // capture the bind-time roll twist (arrival angle vs +ŝ)
             else if (args[i].equals("-mhatcensus")) MHATCENSUS = true;     // census the bound-head head-axis sign (head.uVec·n̂bed)
@@ -379,6 +398,8 @@ public final class GlidingHarness {
         if (SWING_K_BITS != -1) System.out.printf(java.util.Locale.US, "  -swingkbits: swing coeff FORCED to %s (bits 0x%08x), size-4 (no in-kernel recompute); both runners. (0.4f=0x3ecccccd.)%n", ""+Float.intBitsToFloat(SWING_K_BITS), SWING_K_BITS);
         if (SWING_K_PROBE) { diagMark("swingKProbe: kernel swing-coefficient extraction (no physics scene)"); swingKProbe(gpu); return; }
         if (VDRAG) { diagMark("dragCal: bare-filament drag calibration ζ_eff (FORCE_BALANCE_CLOSURE PART 1)"); runDragCal(sc, Math.max(M, 3000)); return; }
+        if (STROKE_LOAD) { diagMark("strokeLoad: single-motor stroke-completion-vs-imposed-load probe (STROKE_COMPLETION_STRAIN_TEST PART 1)"); runStrokeLoad(sc, Math.max(M, 4000)); return; }
+        if (SERVOAUDIT) { diagMark("servoAudit: deterministic single-motor stroke-work/rotation/closed-cycle audit (TIMESTEP_SERVO_AUDIT Parts 2-5)"); runServoAudit(sc, M); return; }
         if (VCLAMP) { diagMark("forceVelocity: velocity-clamp force–velocity test (CPU kinematic clamp, FORCE_VELOCITY_TEST)"); runForceVelocity(sc, Math.max(M, 8000)); return; }
         if (viz != null) { runViz(sc, Math.max(M, 20000), viz, gpu); return; }
         if (CSRECAL) { diagMark("catchSlipRecal: phase-2 config-1 single-molecule catch-slip recalibration"); catchSlipRecal(Math.max(M, 14000)); return; }
@@ -409,6 +430,7 @@ public final class GlidingHarness {
         FloatArray bondData, xbParams, boxParams;
         FloatArray xbParamsC1, jointParams;   // CONFIG 1: PAIRS+Hookean-J1 xbParams + the size-14 jointParams (= mot.jointParams when not config1)
         FloatArray swingParams;               // -dirswing: [k, dt, θ_uncocked, θ_cocked] for CrossBridgeSystem.directedSwing
+        FloatArray swingCompParams;           // -strokecomp: [E*_nm, HEAD_LEN] for CrossBridgeSystem.directedSwingComp (STROKE_COMPLETION_STRAIN_TEST)
         IntArray twistHist, prevBoundTw;      // -twistcensus: per-motor 6-bin arrival-angle histogram + prev boundSeg
         IntArray segMotorCount, segMotorOffsets, segMotorMyo;
         IntArray reachSeg; IntArray reachCount;
@@ -638,6 +660,8 @@ public final class GlidingHarness {
         if (REBIND_TIME > 0) mot.kinParams.set(10, (float) Math.ceil(REBIND_TIME / DT));   // -rebindtime: post-release refractory (a released head can't rebind for this long); default 0 ⇒ the v1 myoRebindTime (byte-identical)
         if (KON > 0) mot.setSearchParams(KON, 0);        // PHASE-2 step-3: reaction-limited attachment rate kОn (kinParams[14])
         if (NOBIND) mot.kinParams.set(19, 1.0f);         // thermal-floor control: motors never bind (default-off no-op)
+        if (DETMOTOR) { RigidRodBody bDet = mot.body; int nBd = 3 * mot.nMotors;   // TIMESTEP_SERVO_AUDIT: zero motor-body Brownian (deterministic mechanics; default-off ⇒ no-op)
+            for (int i = 0; i < nBd; i++) { bDet.brownTransScale.set(i, 0f); bDet.brownRotScale.set(i, 0f); } }
         if (TAU_AVG > 0) mot.setReleaseForceAvg(TAU_AVG, DT);   // PHASE-2 step-4a: time-averaged catch input (EMA window τ)
         if (F_EXT != 0) mot.setExtLoad(F_EXT);           // sustained-load injection (force-response guard)
         if (XCATCH > 0) mot.setXCatch(XCATCH);           // PHASE-2 step-4b: catch distance d (Veigel calibration)
@@ -710,6 +734,7 @@ public final class GlidingHarness {
             sc.swingParams = FloatArray.fromElements(Float.intBitsToFloat(SWING_K_BITS), (float) DT, 0f, (float) NECK_ANGLE);
         }
         if (DIRSWING) sc.jointParams.set(3, 0f);
+        sc.swingCompParams = FloatArray.fromElements((float) STROKECOMP, (float) MotorStore.HEAD_LEN);   // -strokecomp E* (nm); STROKECOMP<0 ⇒ modifier off (byte-identical)
         if (STRUCT_SPRINGS) {   // PURE_SPRINGS: freeze the SAME structural position springs (J1/J2 connection + tail anchor)
             // as FIXED stiffnesses via springify (precedence over -structrate). Mirrors the -structrate block but with the
             // fixed-spring freeze-form instead of the geometric-rate; at dt=refDt springify(0.4)=0.4 ⇒ byte-identical.
@@ -816,7 +841,11 @@ public final class GlidingHarness {
         sliceNs[BOND] += tns() - _bf;
         long _ah = tns();
         CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
-        if (DIRSWING) CrossBridgeSystem.directedSwing(b.uVec, b.torqueSum, b.bRotGam, f.uVec, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+        if (DIRSWING) {
+            if (HEADSWING) CrossBridgeSystem.directedSwingHeadFrame(b.uVec, b.yVec, b.torqueSum, b.bRotGam, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+            else if (STROKECOMP >= 0) CrossBridgeSystem.directedSwingComp(b.uVec, b.coord, b.torqueSum, b.bRotGam, f.uVec, f.coord, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.swingParams, sc.swingCompParams, mot.counts);   // STROKE_COMPLETION_STRAIN_TEST: strain-completion modifier (CPU-only; default off ⇒ unreached)
+            else           CrossBridgeSystem.directedSwing(b.uVec, b.torqueSum, b.bRotGam, f.uVec, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+        }
         sliceNs[APPLY] += tns() - _ah;
         if (XB_IMPLICIT2) CrossBridgeSystem.snapshotHeadCenter(b.coord, mot.xbImplPrev);
         long _mi = tns();
@@ -905,6 +934,10 @@ public final class GlidingHarness {
         System.out.printf(java.util.Locale.US, "  bed x∈[%.2f,%.2f] (centered at %.2f) ; window excursion = %.2f µm vs half-runway %.2f µm %s%n",
                 bXlo, bXhi, bedCx, excursion, runwayHalf, excursion > runwayHalf ? "  ** WARNING: excursion exceeds runway — filament may leave uniform carpet (use -full) **" : "(on-mat)");
         if (MATBOX_Z > 0) System.out.printf(java.util.Locale.US, "  -matbox %.0f nm active (redundant: the rigid clamp already pins the filament on-plane).%n", MATBOX_Z * 1e3);
+        System.out.printf(java.util.Locale.US, "  swing mode = %s (%s)%s%n",
+                HEADSWING ? "HEADSWING" : "DIRSWING",
+                HEADSWING ? "swing ref = ŷ_head×û_head (head frame)" : "swing ref = f̂ (filament axis)",
+                SWING_DIAG ? "  [-swingdiag ON]" : "");
         if (FV_EPISODE) System.out.printf(java.util.Locale.US, "  VARIANT B: one-attachment episodes — rebinding blocked, fresh cohort re-armed every %d steps.%n", FV_REARM);
         else System.out.printf(java.util.Locale.US, "  VARIANT A: full binding algorithm (continuous recruitment).%n");
 
@@ -924,19 +957,199 @@ public final class GlidingHarness {
         double epImpSum = 0, epImpSumSq = 0, epWorkSum = 0; long epN = 0, epPosImp = 0, epPosWork = 0;
         int warm = Math.max(2000, M / 3);
 
+        // STROKE_COMPLETION_STRAIN_TEST PART 1 (measurement-only; reads body arrays, NO physics change ⇒ FVROW
+        // byte-identical): realized converter completion of bound ADP (post-stroke) motors under sustained sliding
+        // load. θ_J1 = ∠(û_lever,û_head) (→60°=full completion); swing residual = ∠(û_lever, θ_cocked target) (→0
+        // = full); head-seg = ∠(û_head,û_seg). Averaged over bound-ADP motor-steps in the steady window vs v.
+        RigidRodBody bCmp = mot.body; int nBcmp = 3 * nMot;
+        double THC_cmp = sc.swingParams.get(3) * Math.PI / 180.0, cThC = Math.cos(THC_cmp), sThC = Math.sin(THC_cmp);
+        double cmpJ1 = 0, cmpRes = 0, cmpHS = 0; long cmpN = 0;
+
+        // -swingdiag (HEADFRAME_SWING_VELOCITY_TEST): commanded swing-reference geometry on the CURRENT (post-step)
+        // pose for every bound motor. p̂_DIR = f̂ = seg.uVec ; p̂_HF = normalize(ŷ_head×û_head). ĝ = glide axis = −x̂.
+        // q = p̂·ĝ (signed; fully-locked ⇒ p̂=+x̂ ⇒ q=−1). axialProd a = p̂·x̂ (=−q; +1 = fully axial). off-axis
+        // angle = acos(p̂_HF·f̂) (0° when locked). Per-episode transverse impulse + q_HF onset/min/final.
+        RigidRodBody bDiag = mot.body; int nBdiag = 3 * nMot;
+        double sdQdir = 0, sdQhf = 0, sdAx = 0, sdOffDeg = 0; long sdBoundSteps = 0;   // means over bound measured steps
+        double[] epTrans = new double[nMot];                                            // pN·ms transverse impulse this episode
+        double[] epAxOnset = new double[nMot], epAxMin = new double[nMot], epAxLast = new double[nMot];
+        double sdEpTransSum = 0, sdEpAxOnsetSum = 0, sdEpAxMinSum = 0, sdEpAxLastSum = 0; long sdEpN = 0;
+
+        // -prestroke (PRESTROKE_DISTORTION_ANALYSIS): per-episode PRE-stroke competence metrics, captured at the
+        // FIRST ADP·Pi→ADP power-stroke transition of the episode, paired with the episode's net axial impulse.
+        // PRIMARY = sign-only virtual axial work w_virt = (â×R_H)·x̂ (â = swing axis toward the θ_cocked target,
+        // R_H = ½·headLen·û_head): >0 ⇒ the incipient converter swing drives the F8 tip barbed-ward ⇒ productive.
+        // Secondary (screened, not fitted): ΔU_stroke = ang_post² − ang_pre² (switch of the swing rest at fixed
+        // pose); F8 axial strain (site−tip)·x̂ + |F8|; J1 converter misalignment ∠(û_lever,û_head).
+        int[]    psCap    = new int[nMot];      // 0 = not yet captured this episode
+        int[]    psStrokes= new int[nMot];      // # ADP·Pi→ADP transitions this episode
+        // Sign-only VIRTUAL AXIAL WORK: w = (τ̂_channel × û_head)·(−x̂)·angle_weight — the axial glide (−x̂) component
+        // of the incipient head-tip motion the switched stroke torque drives. >0 ⇒ tip barbed-ward ⇒ PRODUCTIVE.
+        // Two switched channels at the ADP·Pi→ADP transition: directedSwing (lever, θ 0→60) + F9 (head, 90→120).
+        // Per the codebase the F9 head-reorientation is the productive channel (stroke ∝ HEAD_LEN); wHead = wSw+wF9.
+        double[] psWhead  = new double[nMot];   // PRIMARY: combined switched-stroke head virtual axial work (>0 productive)
+        double[] psWsw    = new double[nMot];   // directedSwing (lever→60°) channel
+        double[] psWf9    = new double[nMot];   // F9 (head 90→120°) channel — the productive one
+        double[] psDU     = new double[nMot];   // ΔU_stroke proxy (rad², signed)
+        double[] psF8ax   = new double[nMot];   // F8 axial strain (site−tip)·x̂ (nm)
+        double[] psF8mag  = new double[nMot];   // |site−tip| (nm)
+        double[] psJ1     = new double[nMot];   // converter misalignment ∠(û_lever,û_head) (deg)
+        int[]    psEpLen  = new int[nMot];       // episode length (steps) at detach
+        double MYO_SPRING_ps = MYO_SPRING; double HEADLEN_ps = MotorStore.HEAD_LEN;
+        double THU_ps = sc.swingParams.get(2), THC_ps = sc.swingParams.get(3);   // θ_uncocked, θ_cocked (deg)
+
+        // -epkernel (EPISODE_KERNEL_ACCOUNTING): age-resolved episode kernel. Only episodes that ATTACH inside
+        // the steady window are tracked (age 0 = a true bind), so age-bin folds are over complete, clean episodes.
+        // Global age-bin accumulators (age in steps; overflow lumped in AMAX-1). S(a)=kNalive[a]/kNalive[0];
+        // m_f(a)=kSumFx[a]/kNalive[a]; the in-run reconstruction ∫S·m_f·da = (dt/N)·Σ_a kSumFx[a] ≡ measured ⟨I⟩.
+        final int AMAX = 2048;
+        long[]   kNalive = new long[AMAX];        // # tracked episodes still bound at age a  (⇒ survival)
+        double[] kSumFx  = new double[AMAX];      // Σ glide force fg at age a  (⇒ m_f)
+        double[] kSumFx2 = new double[AMAX];
+        double[] kSumTr  = new double[AMAX];      // Σ transverse |F⊥| at age a
+        double[] kSumRel = new double[AMAX];      // Σ (site−tip)·x̂ axial strain at age a (nm)
+        double[] kSumTip = new double[AMAX];      // Σ head-tip axial displacement since bind (nm)
+        double[] kSumSite= new double[AMAX];      // Σ material-site axial displacement since bind (nm)
+        double[] kSumConv= new double[AMAX];      // Σ converter angle θ_J1 (deg) at age a
+        double[] kSumHaz = new double[AMAX];      // Σ catch-slip release hazard (/s) at age a
+        long[]   kNuc    = new long[AMAX * 4];    // per-age nucleotide-state counts (NONE/ATP/ADPPI/ADP)
+        long     kOverflow = 0;                    // motor-steps beyond AMAX (dropped from age bins)
+        // per-motor episode state (tracked episodes only)
+        int[]    ekTrack  = new int[nMot];        // 1 = this motor's current episode attached in-window ⇒ tracked
+        double[] ekSite0  = new double[nMot], ekTip0 = new double[nMot];   // axial site/tip coord at bind (µm)
+        double[] ekRel0   = new double[nMot];     // (site−tip)·x̂ at bind (nm)
+        double[] ekConv0  = new double[nMot];     // θ_J1 at bind (deg)
+        int[]    ekNuc0   = new int[nMot];        // nucleotide state at bind
+        double[] ekXbind  = new double[nMot];     // x_bind axial mismatch at bind (nm)
+        double[] ekIpos   = new double[nMot], ekIneg = new double[nMot];   // +/- glide impulse (pN·ms)
+        int[]    ekAdp    = new int[nMot];        // # steps in NUC_ADP (force-producing state)
+        int[]    ekRev    = new int[nMot];        // age (steps) of first glide-force sign reversal (+→−); −1 none
+        int[]    ekWasPos = new int[nMot];        // 1 once the episode has shown fg>0 (arm the reversal detector)
+        double[] ekRelMax = new double[nMot], ekRelMin = new double[nMot], ekRelLast = new double[nMot];   // rel-strain extrema (nm)
+        double[] ekConvLast = new double[nMot];   // last folded θ_J1 (deg), for the stroke-onset snapshot
+        // PLATEAU_ORIGIN_AUDIT: survivor-averaged force/torque/energy balance in the plateau age band [0.3,0.5] ms
+        final int PLAT_LO = 30, PLAT_HI = 50;
+        double[] platSum = new double[14]; long platN = 0;
+        // CANONICAL_STROKE_DISAMBIGUATION (-strokeaudit): live-vs-diagnostic torque reconciliation + F9/DIRSWING
+        // nucleotide-dependence & work accounting around ADP·Pi→ADP. Snapshot the exact pose bondForces will use.
+        final int SA_MAX = 4, SA_WIN = 90;               // track ≤4 motors, ~0.9 ms window each
+        FloatArray saU = null, saY = null, saC = null, saFU = null, saFC = null;
+        int[] saState = null, saLeft = null, saPrevNuc = null, saTrans = null; int saTracked = 0;
+        // phase-binned net work (kT) per tracked motor: [pre-ADPPi | stroke-transient (≤10 steps post-transition) | plateau]
+        double[] saW9pre = null, saW9str = null, saW9plt = null, saWSpre = null, saWSstr = null, saWSplt = null;
+        double liveF9Frozen = (sc.xbParams.getSize() > 9) ? sc.xbParams.get(9) : 0;
+        double liveAxLock = (sc.xbParams.getSize() > 10) ? sc.xbParams.get(10) : 0;
+        double liveThetaC = sc.swingParams.get(3), liveThetaU = sc.swingParams.get(2);
+        if (STROKEAUDIT) {
+            saU = new FloatArray(3 * nMot * 3); saY = new FloatArray(3 * nMot * 3); saC = new FloatArray(3 * nMot * 3);
+            saFU = new FloatArray(3 * nSeg); saFC = new FloatArray(3 * nSeg);
+            saState = new int[nMot]; saLeft = new int[nMot]; saPrevNuc = new int[nMot]; java.util.Arrays.fill(saPrevNuc, -1);
+            saTrans = new int[nMot]; java.util.Arrays.fill(saTrans, -1);
+            saW9pre = new double[nMot]; saW9str = new double[nMot]; saW9plt = new double[nMot];
+            saWSpre = new double[nMot]; saWSstr = new double[nMot]; saWSplt = new double[nMot];
+            System.out.printf(java.util.Locale.US,
+                "%n=== CANONICAL_STROKE_DISAMBIGUATION (-strokeaudit) ===%n  LIVE production stack: bondForces branch=%s ; xbParams[9]=f9Frozen=%.0f ; xbParams[10]=axLock=%.0f ; swing θ_uncocked=%.0f θ_cocked=%.0f ; DIRSWING=%b LYMN_TAYLOR=%b XB_IMPLICIT2=%b%n  ⇒ live F9 rest = %s ; DIRSWING lever target switches %s%n  reconcile: recompute head torque = TH − T9(restF9) + hF10 vs LIVE bondData[3..5]; Δ90 vs Δ120 decides the F9 target%n",
+                (CANONICAL?"bondForcesCanonical":(CONFIG1?"config1":(PERPHEAD?"perp":"bondForces"))), liveF9Frozen, liveAxLock, liveThetaU, liveThetaC, DIRSWING, LYMN_TAYLOR, XB_IMPLICIT2,
+                (liveF9Frozen != 0 ? "FROZEN 90° (nucleotide-INDEPENDENT)" : "switches 90°↔120° by state"),
+                (DIRSWING ? String.format("%.0f°(ADP·Pi)→%.0f°(ADP) at the transition", liveThetaU, liveThetaC) : "OFF"));
+        }
+        int[]    ekStrokeAge = new int[nMot];     // age at first ADP·Pi→ADP transition; −1 none
+        double[] ekRelStroke = new double[nMot], ekConvStroke = new double[nMot];   // rel-strain / θ_J1 at that transition
+        int[]    ekLen    = new int[nMot];         // episode length at detach (steps)
+        long     ekEpN = 0; double ekImpSum = 0;   // completed tracked episodes; Σ net impulse (cross-check vs kernel)
+        // release-hazard constants (Guo–Guilford catch-slip; SI units in kinParams)
+        double khKoff = mot.kinParams.get(0), khAcatch = mot.kinParams.get(1), khAslip = mot.kinParams.get(2);
+        double khXcatch = mot.kinParams.get(3), khXslip = mot.kinParams.get(4), khKT = mot.kinParams.get(5);
+
         for (int t = 0; t < M; t++) {
             if (FV_EPISODE) mot.kinParams.set(19, (t % FV_REARM == 0) ? 0f : 1f);   // block rebinding except a re-arm step
+            if (STROKEAUDIT) {   // snapshot the EXACT pose bondForces(t) will use (motor: post-(t-1)-integrate; filament: post-(t-1)-clamp)
+                int nB3 = 9 * nMot;
+                for (int i = 0; i < nB3; i++) { saC.set(i, mot.body.coord.get(i)); saU.set(i, mot.body.uVec.get(i)); saY.set(i, mot.body.yVec.get(i)); }
+                for (int i = 0; i < 3 * nSeg; i++) { saFC.set(i, f.coord.get(i)); saFU.set(i, f.uVec.get(i)); }
+            }
             stepOrig(sc, t);
             // re-impose the exact rigid clamp pose (discard the filament's within-step force response ⇒ velocity source)
             double comX = bedCx + dxStep * (t + 1);
             for (int s = 0; s < nSeg; s++) { f.setUVec(s, 1f, 0f, 0f); f.setYVec(s, 0f, 1f, 0f); f.setCoord(s, (float) (comX + offX[s]), 0f, (float) FIL_Z); }
             DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
 
+            if (STROKEAUDIT) {   // live-vs-diagnostic reconciliation + F9/DIRSWING nucleotide-dependence & work, tracked around ADP·Pi→ADP
+                int nB = 3 * nMot;
+                for (int m = 0; m < nMot; m++) {
+                    int nuc = mot.nucleotideState.get(m), bs = mot.boundSeg.get(m); boolean bnd = bs >= 0;
+                    if (bnd && nuc == MotorStore.NUC_ADPPI && saState[m] == 0 && saTracked < SA_MAX && t > 200) {
+                        saState[m] = 1; saLeft[m] = SA_WIN; saTracked++;   // begin capturing a few steps BEFORE the transition
+                    }
+                    if (saState[m] == 1) {
+                        if (bnd) {
+                            double[] r = strokeReconcile(sc, mot, f, saU, saY, saC, saFU, saFC, m, bs, nuc);
+                            boolean trans = (saPrevNuc[m] == MotorStore.NUC_ADPPI && nuc == MotorStore.NUC_ADP);
+                            // per-channel mechanical power P=τ·ω (ω from snapshot→post uVec), integrate +/- work in kT.
+                            // F9 acts on head (τ=r[14..16]); swing on lever (r[17..19]) and head (−r[17..19]).
+                            int hh = 3 * m + 2, ll = 3 * m + 1;
+                            double[] wh = omega(saU, mot.body.uVec, nB, hh, DT), wl = omega(saU, mot.body.uVec, nB, ll, DT);
+                            double pF9 = (r[14] * wh[0] + r[15] * wh[1] + r[16] * wh[2]) * DT / Constants.kT;
+                            double pSw = (r[17] * wl[0] + r[18] * wl[1] + r[19] * wl[2]
+                                        - r[17] * wh[0] - r[18] * wh[1] - r[19] * wh[2]) * DT / Constants.kT;
+                            if (trans && saTrans[m] < 0) saTrans[m] = t;   // record the transition step
+                            int phase = (nuc == MotorStore.NUC_ADPPI) ? 0 : ((saTrans[m] >= 0 && t - saTrans[m] < 10) ? 1 : 2);
+                            if (phase == 0) { saW9pre[m] += pF9; saWSpre[m] += pSw; }
+                            else if (phase == 1) { saW9str[m] += pF9; saWSstr[m] += pSw; }
+                            else { saW9plt[m] += pF9; saWSplt[m] += pSw; }
+                            String snm = (nuc == 0 ? "NONE" : nuc == 1 ? "ATP" : nuc == 2 ? "ADPPi" : "ADP");
+                            System.out.printf(java.util.Locale.US,
+                                "SAROW m=%d t=%d v=%.1f nuc=%-5s%s headSeg=%.2f leverHead=%.2f restF9=%.0f T9live=%.3f T9_120=%.3f hF10=%.3f TH=%.3f live|T|=%.3f d90=%.4f d120=%.4f swRest=%.0f swErr=%.2f swT=%.3f f8ax=%+.3f%n",
+                                m, t, VCLAMP_V, snm, trans ? " <ADPPi→ADP" : "", r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[9], r[7], r[8], r[10], r[11], r[12], r[13]);
+                            saLeft[m]--; if (saLeft[m] <= 0) saState[m] = 2;
+                        } else { saState[m] = 2; }   // detached ⇒ stop
+                    }
+                    saPrevNuc[m] = nuc;
+                }
+            }
+
             boolean meas = t >= warm;
             for (int m = 0; m < nMot; m++) {
                 int bs = mot.boundSeg.get(m); boolean bound = bs >= 0; boolean reach = sc.reachCount.get(m) > 0;
                 boolean avail = reach || bound;   // N_available = reach ∪ bound ⇒ bound ⊆ available (fixes P_bound>1: a bound head whose fresh-head geometry no longer counts reachable is still available)
                 double fg = bound ? -sc.bondData.get(m * STR + 6) * PN : 0.0;   // pN, glide-projected drive ON the filament
+                // -swingdiag: commanded swing-reference geometry on the CURRENT bound pose (see the header block)
+                double sdAxProd = 0, sdTransPN = 0;
+                if (SWING_DIAG && bound) {
+                    int head = 3 * m + 2;
+                    double hux = bDiag.uVec.get(head), huy = bDiag.uVec.get(nBdiag + head), huz = bDiag.uVec.get(2 * nBdiag + head);
+                    double hyx = bDiag.yVec.get(head), hyy = bDiag.yVec.get(nBdiag + head), hyz = bDiag.yVec.get(2 * nBdiag + head);
+                    double fx = f.uVec.get(bs), fy = f.uVec.get(nSeg + bs), fz = f.uVec.get(2 * nSeg + bs);
+                    double px = hyy * huz - hyz * huy, py = hyz * hux - hyx * huz, pz = hyx * huy - hyy * hux;  // ŷ_head×û_head
+                    double pm = Math.sqrt(px * px + py * py + pz * pz);
+                    double qhf = -1.0, ax = 1.0, off = 0.0;
+                    if (pm > 1.0e-12) {
+                        px /= pm; py /= pm; pz /= pm;
+                        qhf = -px; ax = px;                                       // ĝ=−x̂ ⇒ q_HF=p̂·ĝ=−px ; axialProd a=p̂·x̂=px
+                        double d = px * fx + py * fy + pz * fz; if (d > 1) d = 1; if (d < -1) d = -1;
+                        off = Math.toDegrees(Math.acos(d));                        // deviation of p̂_HF from f̂ (0° when locked)
+                    }
+                    double qdir = -fx;                                            // p̂_DIR=f̂ ⇒ q_DIR=f̂·ĝ=−fx
+                    sdAxProd = ax;
+                    double fyT = sc.bondData.get(m * STR + 7) * PN, fzT = sc.bondData.get(m * STR + 8) * PN;
+                    sdTransPN = Math.sqrt(fyT * fyT + fzT * fzT);                  // ⊥-x̂ seg-side force on the filament (pN)
+                    if (meas) { sdQdir += qdir; sdQhf += qhf; sdAx += ax; sdOffDeg += off; sdBoundSteps++; }
+                }
+                // PART-1 completion readout: realized converter completion of bound ADP (post-stroke) motors
+                if (meas && bound && mot.nucleotideState.get(m) == MotorStore.NUC_ADP) {
+                    int lev = 3 * m + 1, hd = 3 * m + 2;
+                    double lux = bCmp.uVec.get(lev), luy = bCmp.uVec.get(nBcmp + lev), luz = bCmp.uVec.get(2 * nBcmp + lev);
+                    double hux = bCmp.uVec.get(hd), huy = bCmp.uVec.get(nBcmp + hd), huz = bCmp.uVec.get(2 * nBcmp + hd);
+                    double fux = f.uVec.get(bs), fuy = f.uVec.get(nSeg + bs), fuz = f.uVec.get(2 * nSeg + bs);
+                    double dj = lux * hux + luy * huy + luz * huz; if (dj > 1) dj = 1; if (dj < -1) dj = -1;
+                    cmpJ1 += Math.toDegrees(Math.acos(dj));                         // θ_J1 (→60° full completion)
+                    double dh = hux * fux + huy * fuy + huz * fuz; if (dh > 1) dh = 1; if (dh < -1) dh = -1;
+                    cmpHS += Math.toDegrees(Math.acos(dh));                         // head-seg angle
+                    double tx = cThC * hux - sThC * fux, ty = cThC * huy - sThC * fuy, tz = cThC * huz - sThC * fuz;   // θ_cocked target lever dir
+                    double tm = Math.sqrt(tx * tx + ty * ty + tz * tz);
+                    if (tm > 1e-12) { tx /= tm; ty /= tm; tz /= tm; double dr = lux * tx + luy * ty + luz * tz; if (dr > 1) dr = 1; if (dr < -1) dr = -1; cmpRes += Math.toDegrees(Math.acos(dr)); }
+                    cmpN++;
+                }
                 if (bound && prevBound[m] < 0) {                               // ATTACH
                     if (meas) {
                         attachN++;
@@ -946,14 +1159,166 @@ public final class GlidingHarness {
                         if (bi < 0) xbUnder++; else if (bi >= NB) xbOver++; else xbHist[bi]++;
                     }
                     epImp[m] = 0; epWork[m] = 0; epSteps[m] = 0;
+                    if (SWING_DIAG) { epTrans[m] = 0; epAxOnset[m] = sdAxProd; epAxMin[m] = sdAxProd; epAxLast[m] = sdAxProd; }
+                    if (PRESTROKE) { psCap[m] = 0; psStrokes[m] = 0; }
+                    if (EPKERNEL) {                                    // track only in-window binds (age 0 = a true bind)
+                        ekTrack[m] = meas ? 1 : 0;
+                        if (meas) {
+                            int lev = 3 * m + 1, head = 3 * m + 2;
+                            double hux = bDiag.uVec.get(head), huy = bDiag.uVec.get(nBdiag + head), huz = bDiag.uVec.get(2 * nBdiag + head);
+                            double lux = bDiag.uVec.get(lev), luy = bDiag.uVec.get(nBdiag + lev), luz = bDiag.uVec.get(2 * nBdiag + lev);
+                            double hcx = bDiag.coord.get(head);
+                            double tipx = hcx + 0.5 * HEADLEN_ps * hux;
+                            double slen = f.segLength.get(bs), aOff = mot.bindArc.get(m) - 0.5 * slen;
+                            double sitex = f.coord.get(bs) + aOff * f.uVec.get(bs);
+                            ekSite0[m] = sitex; ekTip0[m] = tipx; ekRel0[m] = (sitex - tipx) * 1e3;
+                            double dj = lux * hux + luy * huy + luz * huz; if (dj > 1) dj = 1; if (dj < -1) dj = -1;
+                            ekConv0[m] = Math.toDegrees(Math.acos(dj)); ekNuc0[m] = mot.nucleotideState.get(m);
+                            ekXbind[m] = axialMismatchNm(f, mot, m, bs, nSeg);
+                            ekIpos[m] = 0; ekIneg[m] = 0; ekAdp[m] = 0; ekRev[m] = -1; ekWasPos[m] = 0;
+                            ekRelMax[m] = ekRel0[m]; ekRelMin[m] = ekRel0[m]; ekRelLast[m] = ekRel0[m];
+                            ekStrokeAge[m] = -1; ekRelStroke[m] = 0; ekConvStroke[m] = 0;
+                        }
+                    }
                 }
-                if (bound) { epImp[m] += fg * DT * 1e3; epWork[m] += fg * VCLAMP_V * DT * 1e3; epSteps[m]++; if (meas) boundStepsN++; }
+                if (bound) { epImp[m] += fg * DT * 1e3; epWork[m] += fg * VCLAMP_V * DT * 1e3; epSteps[m]++; if (meas) boundStepsN++;
+                    if (SWING_DIAG) { epTrans[m] += sdTransPN * DT * 1e3; if (sdAxProd < epAxMin[m]) epAxMin[m] = sdAxProd; epAxLast[m] = sdAxProd; } }
+                if (EPKERNEL && bound && ekTrack[m] == 1) {            // fold this bound step into the age-resolved kernel
+                    int age = epSteps[m] - 1;                          // 0 at the first bound step
+                    int lev = 3 * m + 1, head = 3 * m + 2;
+                    double hux = bDiag.uVec.get(head), huy = bDiag.uVec.get(nBdiag + head), huz = bDiag.uVec.get(2 * nBdiag + head);
+                    double lux = bDiag.uVec.get(lev), luy = bDiag.uVec.get(nBdiag + lev), luz = bDiag.uVec.get(2 * nBdiag + lev);
+                    double hcx = bDiag.coord.get(head);
+                    double tipx = hcx + 0.5 * HEADLEN_ps * hux;
+                    double slen = f.segLength.get(bs), aOff = mot.bindArc.get(m) - 0.5 * slen;
+                    double sitex = f.coord.get(bs) + aOff * f.uVec.get(bs);
+                    double rel = (sitex - tipx) * 1e3;                 // (site−tip)·x̂ axial strain (nm)
+                    double fyT = sc.bondData.get(m * STR + 7) * PN, fzT = sc.bondData.get(m * STR + 8) * PN;
+                    double transPN = Math.sqrt(fyT * fyT + fzT * fzT);
+                    double dj = lux * hux + luy * huy + luz * huz; if (dj > 1) dj = 1; if (dj < -1) dj = -1;
+                    double conv = Math.toDegrees(Math.acos(dj));
+                    double F = mot.forceDotFil.get(m);
+                    double haz = khKoff * (khAcatch * Math.exp(-F * khXcatch / khKT) + khAslip * Math.exp(F * khXslip / khKT));
+                    int nucst = mot.nucleotideState.get(m);
+                    double dImp = fg * DT * 1e3;                       // pN·ms
+                    if (fg > 0) { ekIpos[m] += dImp; ekWasPos[m] = 1; }
+                    else if (fg < 0) { ekIneg[m] += dImp; if (ekWasPos[m] == 1 && ekRev[m] < 0) ekRev[m] = age; }
+                    if (nucst == MotorStore.NUC_ADP) ekAdp[m]++;
+                    if (rel > ekRelMax[m]) ekRelMax[m] = rel; if (rel < ekRelMin[m]) ekRelMin[m] = rel; ekRelLast[m] = rel; ekConvLast[m] = conv;
+                    if (age >= PLAT_LO && age <= PLAT_HI) {         // plateau-band force/torque/energy balance
+                        double[] pb = plateauBalance(sc, mot, f, m, bs);
+                        for (int q = 0; q < 14; q++) platSum[q] += pb[q];
+                        platN++;
+                    }
+                    if (age >= 0) {
+                        int a = age < AMAX ? age : AMAX - 1; if (age >= AMAX) kOverflow++;
+                        kNalive[a]++; kSumFx[a] += fg; kSumFx2[a] += fg * fg; kSumTr[a] += transPN;
+                        kSumRel[a] += rel; kSumTip[a] += (tipx - ekTip0[m]) * 1e3; kSumSite[a] += (sitex - ekSite0[m]) * 1e3;
+                        kSumConv[a] += conv; kSumHaz[a] += haz; kNuc[a * 4 + nucst]++;
+                    }
+                }
+                if (PRESTROKE && !bound && prevBound[m] >= 0 && epSteps[m] > 0) psEpLen[m] = epSteps[m];   // capture episode length before the finalize reset
+                if (EPKERNEL && !bound && prevBound[m] >= 0 && epSteps[m] > 0) ekLen[m] = epSteps[m];       // capture episode length before the finalize reset
                 if (!bound && prevBound[m] >= 0 && epSteps[m] > 0) {           // DETACH (finalize episode)
-                    if (meas) { epN++; epImpSum += epImp[m]; epImpSumSq += epImp[m] * epImp[m]; epWorkSum += epWork[m]; if (epImp[m] > 0) epPosImp++; if (epWork[m] > 0) epPosWork++; detachN++; }
+                    if (meas) { epN++; epImpSum += epImp[m]; epImpSumSq += epImp[m] * epImp[m]; epWorkSum += epWork[m]; if (epImp[m] > 0) epPosImp++; if (epWork[m] > 0) epPosWork++; detachN++;
+                        if (SWING_DIAG) { sdEpTransSum += epTrans[m]; sdEpAxOnsetSum += epAxOnset[m]; sdEpAxMinSum += epAxMin[m]; sdEpAxLastSum += epAxLast[m]; sdEpN++; } }
                     epSteps[m] = 0;
                 }
                 int nuc = mot.nucleotideState.get(m);
-                if (meas && bound && prevNuc[m] == MotorStore.NUC_ADPPI && nuc == MotorStore.NUC_ADP) strokeN++;
+                if (meas && bound && prevNuc[m] == MotorStore.NUC_ADPPI && nuc == MotorStore.NUC_ADP) {
+                    strokeN++;
+                    if (EPKERNEL && ekTrack[m] == 1 && ekStrokeAge[m] < 0) {   // power-stroke onset snapshot (first ADP·Pi→ADP)
+                        ekStrokeAge[m] = epSteps[m] - 1; ekRelStroke[m] = ekRelLast[m]; ekConvStroke[m] = ekConvLast[m];
+                    }
+                    // -prestroke: capture PRE-stroke competence metrics at the FIRST power-stroke transition of this episode
+                    if (PRESTROKE) {
+                        psStrokes[m]++;
+                        if (psCap[m] == 0) {
+                            psCap[m] = 1;
+                            int lev = 3 * m + 1, head = 3 * m + 2;
+                            double lux = bDiag.uVec.get(lev), luy = bDiag.uVec.get(nBdiag + lev), luz = bDiag.uVec.get(2 * nBdiag + lev);
+                            double hux = bDiag.uVec.get(head), huy = bDiag.uVec.get(nBdiag + head), huz = bDiag.uVec.get(2 * nBdiag + head);
+                            double hcx = bDiag.coord.get(head), hcy = bDiag.coord.get(nBdiag + head), hcz = bDiag.coord.get(2 * nBdiag + head);
+                            double fx = f.uVec.get(bs), fy = f.uVec.get(nSeg + bs), fz = f.uVec.get(2 * nSeg + bs);   // = +x̂ under clamp
+                            double DEG2RAD = Math.PI / 180.0;
+                            // Helper convention: virtual axial work of a head torque channel with unit axis â_t and
+                            // scalar magnitude g (rad-weighted): tip velocity ∝ (g·â_t) × û_head; productive glide is
+                            // −x̂ ⇒ w = ((g·â_t) × û_head)·(−x̂). Inlined per channel below.
+                            // ---- directedSwing channel: head torque = −mag·â_sw, â_sw = (û_lever × target_C)ĥat ----
+                            double thC = THC_ps * DEG2RAD, cC = Math.cos(thC), sC = Math.sin(thC);
+                            double txC = cC * hux - sC * fx, tyC = cC * huy - sC * fy, tzC = cC * huz - sC * fz;
+                            double tmC = Math.sqrt(txC * txC + tyC * tyC + tzC * tzC);
+                            double wSw = 0;
+                            if (tmC > 1e-12) {
+                                txC /= tmC; tyC /= tmC; tzC /= tmC;
+                                double axx = luy * tzC - luz * tyC, axy = luz * txC - lux * tzC, axz = lux * tyC - luy * txC;   // û_lever × target_C
+                                double amn = Math.sqrt(axx * axx + axy * axy + axz * axz);
+                                double dotC = lux * txC + luy * tyC + luz * tzC; if (dotC > 1) dotC = 1; if (dotC < -1) dotC = -1;
+                                double angC = Math.acos(dotC);                                   // swing misalignment (rad) = magnitude weight
+                                if (amn > 1e-12) {
+                                    axx /= amn; axy /= amn; axz /= amn;
+                                    // head torque dir = −â_sw ; τ×û_head then ·(−x̂) = −(τ×û_head)_x. τ_dir = −â_sw.
+                                    double tzx = -axx, tzy = -axy, tzz = -axz;                    // −â_sw
+                                    double cx = tzy * huz - tzz * huy;                            // (τ_dir × û_head)_x
+                                    wSw = -cx * angC;                                             // ·(−x̂), weighted by angC
+                                }
+                            }
+                            // ---- F9 channel: head torque = −T9, T9 dir = t9ĥat=(seg×head)ĥat, sign from angD9=∠(su,hu)−120 ----
+                            double wF9 = 0;
+                            {
+                                double sux = fx, suy = fy, suz = fz;                              // seg uVec (=+x̂ clamp, but general)
+                                double c9x = suy * huz - suz * huy, c9y = suz * hux - sux * huz, c9z = sux * huy - suy * hux;  // seg×head
+                                double m9 = Math.sqrt(c9x * c9x + c9y * c9y + c9z * c9z);
+                                double dot9 = sux * hux + suy * huy + suz * huz; if (dot9 > 1) dot9 = 1; if (dot9 < -1) dot9 = -1;
+                                double angD9 = Math.acos(dot9) / DEG2RAD - 120.0;                 // deg from the POST-stroke rest
+                                if (m9 > 1e-12) {
+                                    c9x /= m9; c9y /= m9; c9z /= m9;
+                                    double sgn = (angD9 >= 0) ? 1.0 : -1.0;                       // head torque dir = −sign(angD9)·t9ĥat
+                                    double tzx = -sgn * c9x, tzy = -sgn * c9y, tzz = -sgn * c9z;
+                                    double cx = tzy * huz - tzz * huy;                            // (τ_dir × û_head)_x
+                                    wF9 = -cx * Math.abs(angD9 * DEG2RAD);                        // ·(−x̂), weighted by |angD9| (rad)
+                                }
+                            }
+                            psWsw[m] = wSw; psWf9[m] = wF9; psWhead[m] = wSw + wF9;
+                            // ΔU_stroke proxy = ang_post² − ang_pre²  (switch of the swing rest at the FIXED current pose)
+                            double thU = THU_ps * DEG2RAD, cU = Math.cos(thU), sU = Math.sin(thU);
+                            double txU = cU * hux - sU * fx, tyU = cU * huy - sU * fy, tzU = cU * huz - sU * fz;
+                            double tmU = Math.sqrt(txU * txU + tyU * tyU + tzU * tzU);
+                            double angPre = 0, angPost = 0;
+                            if (tmU > 1e-12) { txU /= tmU; tyU /= tmU; tzU /= tmU; double d = lux * txU + luy * tyU + luz * tzU; if (d > 1) d = 1; if (d < -1) d = -1; angPre = Math.acos(d); }
+                            if (tmC > 1e-12) { double d = lux * txC + luy * tyC + luz * tzC; if (d > 1) d = 1; if (d < -1) d = -1; angPost = Math.acos(d); }
+                            psDU[m] = angPost * angPost - angPre * angPre;
+                            // F8 axial strain: (site − tip)·x̂ and |site − tip| (nm). Tip = head center + ½·headLen·û_head.
+                            double htipx = hcx + 0.5 * HEADLEN_ps * hux, htipy = hcy + 0.5 * HEADLEN_ps * huy, htipz = hcz + 0.5 * HEADLEN_ps * huz;
+                            double slen = f.segLength.get(bs), aOff = mot.bindArc.get(m) - 0.5 * slen;
+                            double apx = f.coord.get(bs) + aOff * fx, apy = f.coord.get(nSeg + bs) + aOff * fy, apz = f.coord.get(2 * nSeg + bs) + aOff * fz;
+                            double ddx = apx - htipx, ddy = apy - htipy, ddz = apz - htipz;
+                            psF8ax[m] = ddx * 1e3;   // (site−tip)·x̂ in nm (fx=+x̂ under clamp)
+                            psF8mag[m] = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz) * 1e3;   // nm
+                            // J1 converter misalignment: ∠(û_lever, û_head) in deg
+                            double dj = lux * hux + luy * huy + luz * huz; if (dj > 1) dj = 1; if (dj < -1) dj = -1;
+                            psJ1[m] = Math.acos(dj) / DEG2RAD;
+                        }
+                    }
+                }
+                if (PRESTROKE && meas && !bound && prevBound[m] >= 0 && epSteps[m] == 0 && psCap[m] == 1) {
+                    // DETACH just finalized above (epSteps reset to 0) — emit this episode's PSROW if it had a stroke
+                    System.out.printf(java.util.Locale.US,
+                        "PSROW v=%.3f dens=%.0f seed=%d whead=%.6e wsw=%.6e wf9=%.6e dU=%.6e f8ax=%.4f f8mag=%.4f j1=%.3f strokes=%d imp=%.6f epsteps=%d%n",
+                        VCLAMP_V, DENSITY, SEED, psWhead[m], psWsw[m], psWf9[m], psDU[m], psF8ax[m], psF8mag[m], psJ1[m], psStrokes[m], epImp[m], psEpLen[m]);
+                    psCap[m] = 0;
+                }
+                if (EPKERNEL && meas && !bound && prevBound[m] >= 0 && epSteps[m] == 0 && ekTrack[m] == 1) {
+                    // DETACH just finalized — emit this tracked episode's per-episode scalar record
+                    ekEpN++; ekImpSum += epImp[m];
+                    double revDist = ekRev[m] >= 0 ? Math.abs(VCLAMP_V) * (ekRev[m] * DT) * 1e3 : -1.0;   // nm filament travel to first sign reversal
+                    System.out.printf(java.util.Locale.US,
+                        "EPROW v=%.3f dens=%.0f seed=%d T=%d Tadp=%d rev=%d revdist=%.4f Ipos=%.6f Ineg=%.6f Inet=%.6f rel0=%.4f relmax=%.4f relmin=%.4f rellast=%.4f site0=%.6f tip0=%.6f xbind=%.4f nuc0=%d strokeage=%d relstroke=%.4f convstroke=%.3f conv0=%.3f%n",
+                        VCLAMP_V, DENSITY, SEED, ekLen[m], ekAdp[m], ekRev[m], revDist, ekIpos[m], ekIneg[m], epImp[m],
+                        ekRel0[m], ekRelMax[m], ekRelMin[m], ekRelLast[m], ekSite0[m], ekTip0[m], ekXbind[m], ekNuc0[m],
+                        ekStrokeAge[m], ekRelStroke[m], ekConvStroke[m], ekConv0[m]);
+                    ekTrack[m] = 0;
+                }
                 prevNuc[m] = nuc; prevBound[m] = bs;
                 if (meas && bound) { accF += fg; if (fg > 0) accFpos += fg; else accFneg += fg; accNb++; }
                 if (meas && avail) accNr++;      // denominator = available (reach∪bound)
@@ -962,6 +1327,23 @@ public final class GlidingHarness {
             if (meas) steps++;
         }
         if (FV_EPISODE) mot.kinParams.set(19, 0f);
+
+        if (STROKEAUDIT) {   // PART-4 work accounting: net τ·ω per channel, BINNED by transition phase (pre / stroke-transient / plateau)
+            double f9pre = 0, f9str = 0, f9plt = 0, swpre = 0, swstr = 0, swplt = 0; int nTr = 0, nTrans = 0;
+            for (int m = 0; m < nMot; m++) if (saState[m] == 2) {
+                f9pre += saW9pre[m]; f9str += saW9str[m]; f9plt += saW9plt[m];
+                swpre += saWSpre[m]; swstr += saWSstr[m]; swplt += saWSplt[m]; nTr++;
+                if (saTrans[m] >= 0) nTrans++;
+            }
+            System.out.printf(java.util.Locale.US,
+                "%n  --- STROKE-CHANNEL WORK (net τ·ω, kT; %d windows, %d captured a transition) ---%n", nTr, nTrans);
+            System.out.printf(java.util.Locale.US, "  %-9s %12s %14s %12s%n", "channel", "pre-ADP·Pi", "stroke(≤10st)", "plateau");
+            System.out.printf(java.util.Locale.US, "  %-9s %+12.2f %+14.2f %+12.2f   (target nucleotide-INDEPENDENT — same work in all phases ⇒ constraint, not stroke)%n", "F9", f9pre, f9str, f9plt);
+            System.out.printf(java.util.Locale.US, "  %-9s %+12.2f %+14.2f %+12.2f   (target 0°→60° AT the transition ⇒ work concentrated in the stroke phase)%n", "DIRSWING", swpre, swstr, swplt);
+            System.out.printf(java.util.Locale.US,
+                "SAWORK f9_pre=%.3f f9_str=%.3f f9_plt=%.3f sw_pre=%.3f sw_str=%.3f sw_plt=%.3f nwin=%d ntrans=%d%n",
+                f9pre, f9str, f9plt, swpre, swstr, swplt, nTr, nTrans);
+        }
 
         // ---- derived quantities ----
         double T = steps * DT;                                     // steady-window sim-time (s)
@@ -992,6 +1374,94 @@ public final class GlidingHarness {
                 "FVROW variant=%s v=%.3f dens=%.0f fbar_avail=%.5f fbar_bound=%.5f b2a=%.5f total=%.4f Navail=%.2f Nreachraw=%.2f Nbound=%.3f Jattach=%.3f Iattach=%.5f iaCI=%.5f nEp=%d life_ms=%.4f stroke_s=%.1f work_pnnm=%.4f fpos_imp=%.4f fpos_work=%.4f%n",
                 FV_EPISODE ? "B" : "A", VCLAMP_V, DENSITY, fbarAvail, fbarBound, boundToAvail, totalF, meanNr, meanNrRaw, meanNb, Jattach, Iattach, iattachSem, epN, lifeMs, strokePerBoundS, workPerAtt, fracPosImp, fracPosWork);
 
+        // -epkernel: age-resolved kernel (KERNROW / EPKROW per age bin) + reconstruction gate (EPKSTAT)
+        if (EPKERNEL) {
+            long n0 = kNalive.length > 0 ? kNalive[0] : 0;            // tracked episodes reaching age 0 (completed + still-bound-at-end)
+            int maxA = 0; for (int a = 0; a < AMAX; a++) if (kNalive[a] > 0) maxA = a;
+            double reconSumFx = 0; for (int a = 0; a < AMAX; a++) reconSumFx += kSumFx[a];
+            double reconTotal = (DT * 1e3) * reconSumFx;              // total axial impulse held in the age bins (pN·ms)
+            // COMPLETENESS IDENTITY: the kernel bins must account for EVERY folded step. Total impulse in bins ≡
+            // Σ_completed epImp + Σ_censored(still-bound) epImp — machine-exact ⇒ proves no force was dropped.
+            double censoredImp = 0; long censoredN = 0;
+            for (int m = 0; m < nMot; m++) if (ekTrack[m] == 1) { censoredImp += epImp[m]; censoredN++; }
+            double accounted = ekImpSum + censoredImp;
+            double idErr = accounted != 0 ? Math.abs(reconTotal - accounted) / Math.abs(accounted) : (reconTotal == 0 ? 0 : 1);
+            // SCIENCE: kernel-implied mean impulse per tracked episode = ∫S·m_f da = reconTotal/n0 (censored counted
+            // at their observed partial — the survival-correct estimator); measured mean over COMPLETED episodes.
+            double kernelI = n0 > 0 ? reconTotal / n0 : 0;            // ∫S·m_f da (pN·ms)  [S=nAlive/n0]
+            double meanIcompl = ekEpN > 0 ? ekImpSum / ekEpN : 0;    // measured ⟨I⟩ over completed episodes
+            double censFrac = n0 > 0 ? (double) censoredN / n0 : 0;
+            System.out.printf(java.util.Locale.US,
+                "%n  --- EPISODE_KERNEL (age-resolved; tracked in-window episodes only) ---%n");
+            System.out.printf(java.util.Locale.US,
+                "  COMPLETENESS IDENTITY: Σbins=%+.6f pN·ms ≡ completed(%+.6f)+censored(%+.6f) (idErr=%.2e, must be ~0 ⇒ no force dropped)%n",
+                reconTotal, ekImpSum, censoredImp, idErr);
+            System.out.printf(java.util.Locale.US,
+                "  RECONSTRUCTION: ∫S·m_f da = %+.6f pN·ms  vs  measured ⟨I⟩(completed) = %+.6f pN·ms  (censored %d/%d = %.1f%%)  maxAge=%d steps  overflow=%d%n",
+                kernelI, meanIcompl, censoredN, n0, 100.0 * censFrac, maxA, kOverflow);
+            System.out.printf(java.util.Locale.US,
+                "EPKSTAT v=%.3f dens=%.0f seed=%d nEp=%d n0=%d kernel_I=%.6f mean_I=%.6f idErr=%.3e censN=%d maxAge=%d overflow=%d%n",
+                VCLAMP_V, DENSITY, SEED, ekEpN, n0, kernelI, meanIcompl, idErr, censoredN, maxA, kOverflow);
+            // PLATEAU_ORIGIN_AUDIT: survivor-averaged plateau-band balance (which constraint holds the forward strain?)
+            if (platN > 0) {
+                double[] p = new double[14]; for (int q = 0; q < 14; q++) p[q] = platSum[q] / platN;
+                System.out.printf(java.util.Locale.US,
+                    "  --- PLATEAU BALANCE (age %.2f–%.2f ms, survivor-avg over %d head-steps) ---%n", PLAT_LO * DT * 1e3, PLAT_HI * DT * 1e3, platN);
+                System.out.printf(java.util.Locale.US,
+                    "  F8: |F|=%.3f pN axial=%+.3f pN E=%.2f kT | torques(pN·nm): TH(F8)=%.3f  T9(F9)=%.3f  hF10(AXLOCK)=%.3f  Tj1(J1)=%.3f  Tsw(swing)=%.3f%n",
+                    p[0], p[1], p[13], p[2], p[4], p[6], p[8], p[10]);
+                System.out.printf(java.util.Locale.US,
+                    "  rest-deviations(deg): F9 dev=%+.2f (rest %s)  AXLOCK dev=%.2f  J1 dev=%+.2f (rest60)  swing dev=%.2f  J2 dev=%+.2f  anchor=%.3f nm%n",
+                    p[3], "90/120", p[5], p[7], p[9], p[11], p[12]);
+                System.out.printf(java.util.Locale.US,
+                    "PLATROW v=%.3f dens=%.0f seed=%d neck=%.0f platN=%d f8mag=%.4f f8ax=%.4f f8E_kT=%.4f TH=%.4f T9=%.4f hF10=%.4f Tj1=%.4f Tsw=%.4f dev9=%.4f devAx=%.4f devJ1=%.4f devSw=%.4f devJ2=%.4f anchor=%.4f%n",
+                    VCLAMP_V, DENSITY, SEED, sc.swingParams.get(3), platN, p[0], p[1], p[13], p[2], p[4], p[6], p[8], p[10], p[3], p[5], p[7], p[9], p[11], p[12]);
+            }
+            // per-age-bin kernel (S, m_f, transverse, rel-strain, tip/site disp, converter, hazard, nuc fractions)
+            for (int a = 0; a <= maxA; a++) {
+                long na = kNalive[a]; if (na == 0) continue;
+                double S = n0 > 0 ? (double) na / n0 : 0;
+                double mfx = kSumFx[a] / na, mfx2 = kSumFx2[a] / na;
+                double mfxSd = Math.sqrt(Math.max(0, mfx2 - mfx * mfx));
+                double fNone = (double) kNuc[a * 4 + 0] / na, fAtp = (double) kNuc[a * 4 + 1] / na;
+                double fAdppi = (double) kNuc[a * 4 + 2] / na, fAdp = (double) kNuc[a * 4 + 3] / na;
+                System.out.printf(java.util.Locale.US,
+                    "EPKROW v=%.3f dens=%.0f seed=%d a=%d age_ms=%.5f nAlive=%d S=%.6f mfx=%.6f mfx_sd=%.6f mtrans=%.6f mrel=%.5f mtip=%.5f msite=%.5f mconv=%.4f mhaz=%.4f fNone=%.5f fAtp=%.5f fAdppi=%.5f fAdp=%.5f%n",
+                    VCLAMP_V, DENSITY, SEED, a, a * DT * 1e3, na, S, mfx, mfxSd,
+                    kSumTr[a] / na, kSumRel[a] / na, kSumTip[a] / na, kSumSite[a] / na, kSumConv[a] / na, kSumHaz[a] / na,
+                    fNone, fAtp, fAdppi, fAdp);
+            }
+        }
+
+        // STROKE_COMPLETION_STRAIN_TEST PART 1: realized converter completion of bound ADP motors vs v (sliding load)
+        double mJ1 = cmpN > 0 ? cmpJ1 / cmpN : 0, mRes = cmpN > 0 ? cmpRes / cmpN : 0, mHS = cmpN > 0 ? cmpHS / cmpN : 0;
+        double thC_deg = sc.swingParams.get(3);
+        System.out.printf(java.util.Locale.US, "  stroke completion (bound-ADP): θ_J1=%.2f° (%.1f%% of %.0f°)  swing-residual=%.2f°  head-seg=%.2f°  [%s%s  N=%d]%n",
+                mJ1, 100.0 * mJ1 / thC_deg, thC_deg, mRes, mHS, STROKECOMP >= 0 ? "strokecomp E*=" : "canonical", STROKECOMP >= 0 ? String.format("%.1f nm", STROKECOMP) : "", cmpN);
+        System.out.printf(java.util.Locale.US,
+                "CMPLROW comp=%s Estar=%.2f v=%.3f dens=%.0f thetaJ1=%.5f compl=%.5f residual=%.5f headseg=%.5f fbar_avail=%.5f fbar_bound=%.5f Nbound=%.3f cmpN=%d%n",
+                STROKECOMP >= 0 ? "on" : "off", STROKECOMP, VCLAMP_V, DENSITY, mJ1, mJ1 / thC_deg, mRes, mHS, fbarAvail, fbarBound, meanNb, cmpN);
+
+        // -swingdiag: commanded swing-reference geometry summary (HEADFRAME_SWING_VELOCITY_TEST)
+        if (SWING_DIAG) {
+            double mQdir = sdBoundSteps > 0 ? sdQdir / sdBoundSteps : 0, mQhf = sdBoundSteps > 0 ? sdQhf / sdBoundSteps : 0;
+            double mAx = sdBoundSteps > 0 ? sdAx / sdBoundSteps : 0, mOff = sdBoundSteps > 0 ? sdOffDeg / sdBoundSteps : 0;
+            double mEpTrans = sdEpN > 0 ? sdEpTransSum / sdEpN : 0, mAxOn = sdEpN > 0 ? sdEpAxOnsetSum / sdEpN : 0;
+            double mAxMin = sdEpN > 0 ? sdEpAxMinSum / sdEpN : 0, mAxLast = sdEpN > 0 ? sdEpAxLastSum / sdEpN : 0;
+            String mode = HEADSWING ? "headswing" : "dirswing";
+            System.out.printf(java.util.Locale.US,
+                "%n  --- swing geometry (%s, commanded on current pose; ĝ=−x̂, q=p̂·ĝ, axialProd a=p̂·x̂, offDeg=∠(p̂_HF,f̂)) ---%n", mode);
+            System.out.printf(java.util.Locale.US,
+                "  q_DIR=%+.5f (counterfactual filament ref)  q_HF=%+.5f  axialProd_HF=%+.5f  offAxis_HF=%.4f°  (mean over %d bound steps)%n",
+                mQdir, mQhf, mAx, mOff, sdBoundSteps);
+            System.out.printf(java.util.Locale.US,
+                "  per-episode: transverse_impulse=%.5f pN·ms  axialProd onset=%+.4f min=%+.4f final=%+.4f  (%d complete episodes)%n",
+                mEpTrans, mAxOn, mAxMin, mAxLast, sdEpN);
+            System.out.printf(java.util.Locale.US,
+                "  SWINGROW mode=%s v=%.3f dens=%.0f qdir=%.5f qhf=%.5f axprod=%.5f offdeg=%.5f trans_pnms=%.5f ax_onset=%.5f ax_min=%.5f ax_final=%.5f boundsteps=%d nEp=%d%n",
+                mode, VCLAMP_V, DENSITY, mQdir, mQhf, mAx, mOff, mEpTrans, mAxOn, mAxMin, mAxLast, sdBoundSteps, sdEpN);
+        }
+
         // ---- x_bind histogram (PART 2): axial mismatch at attachment ----
         double xbMean = xbN > 0 ? xbSum / xbN : 0, xbVar = xbN > 1 ? xbSumSq / xbN - xbMean * xbMean : 0;
         System.out.printf(java.util.Locale.US, "%n  x_bind (axial mismatch s_head−s_site at attach, nm): N=%d  mean=%+.4f  sd=%.4f  under(<%.0f)=%d  over(>%.0f)=%d%n",
@@ -1006,6 +1476,366 @@ public final class GlidingHarness {
         }
         System.out.printf(java.util.Locale.US, "  XBROW variant=%s v=%.3f dens=%.0f xbind_mean=%.5f xbind_sd=%.5f N=%d%n",
                 FV_EPISODE ? "B" : "A", VCLAMP_V, DENSITY, xbMean, Math.sqrt(Math.max(0, xbVar)), xbN);
+    }
+
+    // ==================== STROKE_COMPLETION_STRAIN_TEST PART 1 — single-motor completion-vs-load ====================
+    // Does the EXISTING (canonical DIRSWING) power stroke already complete LESS under load, or drive to full
+    // completion regardless of strain? ONE motor, deterministically bound to a HELD rigid filament, nucleotide
+    // forced to ADP (post-stroke rest active), Brownian OFF ⇒ fully deterministic. For a ladder of imposed axial
+    // filament offsets Δ (the material site displaced by Δ ⇒ a controlled F8 axial strain), the motor body is
+    // equilibrated under the full motor-side dynamics (J1/J2 position springs + tail anchor + F8 + directedSwing +
+    // F10/axlock), and we read: the realized converter rotation θ_J1 = ∠(û_lever,û_head) (0°=pre-stroke, ≈60°=full
+    // completion), the F8 axial strain (tip−site)·x̂, and the axial force. Δ<0 (filament slid −x, the glide dir)
+    // loads the stroke RESISTIVELY. Explicit F8 (the equilibrium fixed point is scheme-independent). CPU-only.
+    static void runStrokeLoad(Scene sc, int M) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        int nSeg = f.n, nMot = mot.nMotors, nB = 3 * nMot, STR = CrossBridgeSystem.STRIDE;
+        final double PN = 1.0e12, RAD2DEG = 180.0 / Math.PI;
+        int EQ = Math.max(4000, M);            // equilibration steps per ladder point
+
+        // hold the filament rigid + straight, deterministic (all Brownian off)
+        double[] offX = new double[nSeg];
+        double comx0 = centroidX(f);
+        for (int s = 0; s < nSeg; s++) { f.setUVec(s, 1f, 0f, 0f); f.setYVec(s, 0f, 1f, 0f); f.brownTransScale.set(s, 0f); f.brownRotScale.set(s, 0f); offX[s] = f.coordX(s) - comx0; }
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        int sMid = nSeg / 2;
+        double scx0 = f.coord.get(sMid), scy0 = f.coord.get(nSeg + sMid);
+
+        // unbind + freeze every motor; place + bind ONLY motor 0 under sMid, pointing +z (the gliding geometry)
+        for (int m = 0; m < nMot; m++) {
+            mot.boundSeg.set(m, MotorStore.FREE_BINDABLE);
+            for (int j = 0; j < 3; j++) { b.brownTransScale.set(3 * m + j, 0f); b.brownRotScale.set(3 * m + j, 0f); }
+        }
+        mot.assembleArticulated(0, (float) scx0, (float) scy0, (float) ANCHOR_Z, 0f, 0f, 1f, 0f);
+        DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        int head = 2, lev = 1;                 // motor-0 body slots
+        double htx0 = b.coord.get(head) + 0.5 * MotorStore.HEAD_LEN * b.uVec.get(head);
+        double e1x0 = f.end1.get(sMid);
+        double arc = htx0 - e1x0;              // bindArc = (tip−e1)·x̂  (û_seg = +x)
+        mot.boundSeg.set(0, sMid); mot.bindArc.set(0, (float) arc);
+        mot.nucleotideState.set(0, MotorStore.NUC_ADPPI);
+
+        boolean comp = STROKECOMP >= 0;
+        System.out.println("\n=== Soft Box — STROKE_COMPLETION_STRAIN_TEST PART 1: single-motor stroke completion vs imposed load ===");
+        System.out.printf(java.util.Locale.US, "  runner=CPU deterministic (Brownian off); canonical stack SPHEREHEAD+AXLOCK+DIRSWING; θ_uncocked=%.0f° θ_cocked=%.0f°; k_F8=%.2f pN/nm; HEAD_LEN=%.0f nm.%n",
+                sc.swingParams.get(2), sc.swingParams.get(3), MYO_SPRING * 1e3, MotorStore.HEAD_LEN * 1e3);
+        System.out.printf(java.util.Locale.US, "  stroke channel = directedSwing (lever); F9 frozen 90° (sphere-head). θ_J1=∠(û_lever,û_head): 0°=pre-stroke, →%.0f°=full completion.%n", sc.swingParams.get(3));
+        if (comp) System.out.printf(java.util.Locale.US, "  -strokecomp E*=%.2f nm ACTIVE (directedSwingComp: θ_eff=θ_u+(θ_c−θ_u)·exp(−max(0,s_res)/E*)).%n", STROKECOMP);
+        else       System.out.printf(java.util.Locale.US, "  -strokecomp OFF (canonical existing stroke).%n");
+
+        // --- pre-stroke (ADPPI) reference at Δ=0: establish the uncocked baseline + the unloaded stroke size ---
+        placeFilamentX(f, offX, comx0, 0.0);
+        strokeLoadEquil(sc, EQ);
+        double[] pre = strokeLoadRead(sc, sMid, arc);
+        double tipPre = pre[5];
+
+        // --- post-stroke (ADP) at Δ=0: the UNLOADED completion (low-load in-spec check) ---
+        mot.nucleotideState.set(0, MotorStore.NUC_ADP);
+        strokeLoadEquil(sc, EQ);
+        double[] post0 = strokeLoadRead(sc, sMid, arc);
+        double strokeNm = (post0[5] - tipPre) * 1e3;   // unloaded tip advance (nm) = working stroke
+        // snapshot the post-stroke Δ=0 body pose of motor 0 (rod/lever/head coord+uVec+yVec) for fresh restarts
+        float[] snap = new float[27]; int si = 0;
+        for (int slot = 0; slot < 3; slot++) for (int cc = 0; cc < 3; cc++) snap[si++] = b.coord.get(cc * nB + slot);
+        for (int slot = 0; slot < 3; slot++) for (int cc = 0; cc < 3; cc++) snap[si++] = b.uVec.get(cc * nB + slot);
+        for (int slot = 0; slot < 3; slot++) for (int cc = 0; cc < 3; cc++) snap[si++] = b.yVec.get(cc * nB + slot);
+
+        System.out.printf(java.util.Locale.US, "%n  UNLOADED (Δ=0): pre-stroke θ_J1=%.2f° head-seg=%.1f°  |  post-stroke θ_J1=%.2f° (%.0f%% of %.0f°)  working stroke=%.2f nm  s_ax=%+.3f nm  segFx=%+.3f pN%n",
+                pre[0], pre[1], post0[0], 100.0 * post0[0] / sc.swingParams.get(3), sc.swingParams.get(3), strokeNm, post0[2], post0[4]);
+        System.out.printf(java.util.Locale.US, "  [in-spec check: working stroke should be 5–8 nm, unitary |F8| %s pN]%n", String.format("%.2f", post0[3]));
+
+        System.out.printf(java.util.Locale.US, "%n  %-8s %-11s %-9s %-9s %-11s %-11s %-9s%n",
+                "Δ(nm)", "s_ax(nm)", "|F8|pN", "θ_J1°", "compl%", "segFx(pN)", "headSeg°");
+        double[] ladder = { +12, +8, +4, 0, -4, -8, -12, -16, -20, -24 };   // Δ<0 = filament slid −x (glide dir) = RESISTIVE
+        double thetaC = sc.swingParams.get(3);
+        for (double dNm : ladder) {
+            // fresh restart from the post-stroke Δ=0 pose, then impose the offset and re-equilibrate
+            si = 0;
+            for (int slot = 0; slot < 3; slot++) for (int cc = 0; cc < 3; cc++) b.coord.set(cc * nB + slot, snap[si++]);
+            for (int slot = 0; slot < 3; slot++) for (int cc = 0; cc < 3; cc++) b.uVec.set(cc * nB + slot, snap[si++]);
+            for (int slot = 0; slot < 3; slot++) for (int cc = 0; cc < 3; cc++) b.yVec.set(cc * nB + slot, snap[si++]);
+            DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+            placeFilamentX(f, offX, comx0, dNm * 1e-3);
+            strokeLoadEquil(sc, EQ);
+            double[] r = strokeLoadRead(sc, sMid, arc);
+            System.out.printf(java.util.Locale.US, "  %-8.1f %-+11.4f %-9.3f %-9.3f %-11.2f %-+11.4f %-9.2f%n",
+                    dNm, r[2], r[3], r[0], 100.0 * r[0] / thetaC, r[4], r[1]);
+            System.out.printf(java.util.Locale.US, "  SLROW comp=%s Estar=%.2f delta_nm=%.1f s_ax_nm=%.5f f8_pN=%.5f thetaJ1=%.5f compl=%.5f segFx_pN=%.5f headseg=%.4f stroke_nm=%.4f%n",
+                    comp ? "on" : "off", STROKECOMP, dNm, r[2], r[3], r[0], r[0] / thetaC, r[4], r[1], strokeNm);
+        }
+        System.out.printf(java.util.Locale.US, "%n  Reading: if θ_J1/compl DECLINE as Δ→−24 (resistive), the existing stroke ALREADY stalls under load;%n");
+        System.out.printf(java.util.Locale.US, "           if θ_J1 stays ≈%.0f° across the ladder, DIRSWING drives to full completion regardless of strain.%n", thetaC);
+    }
+
+    /** Displace the whole (held, straight) filament so its centroid x = comx0 + dxUm; re-derive. */
+    static void placeFilamentX(FilamentStore f, double[] offX, double comx0, double dxUm) {
+        int nSeg = f.n;
+        for (int s = 0; s < nSeg; s++) f.setCoord(s, (float) (comx0 + dxUm + offX[s]), 0f, (float) FIL_Z);
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+    }
+
+    /** Equilibrate the bound motor body under the full motor-side dynamics with the filament HELD (explicit F8). */
+    static void strokeLoadEquil(Scene sc, int steps) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        for (int t = 0; t < steps; t++) {
+            mot.setCounts(t, SEED, f.n);
+            ChainBendingForceSystem.zeroAccumulators(b.forceSum, b.torqueSum, mot.counts);
+            BrownianForceSystem.brownianForce(b.randForce, b.randTorque, b.bTransGam, b.bRotGam, b.brownTransScale, b.brownRotScale, mot.bodyParams, mot.counts);
+            MotorJointSystem.joints(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, b.torqueSum, mot.nucleotideState, sc.jointParams, mot.counts);
+            TailAnchorSystem.anchor(b.coord, b.uVec, b.segLength, b.bTransGam, b.bRotGam, b.forceSum, mot.anchor, sc.jointParams, mot.counts);
+            CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength,
+                    mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
+            CrossBridgeSystem.applyHeadForce(sc.bondData, b.forceSum, b.torqueSum, mot.counts);
+            if (STROKECOMP >= 0) CrossBridgeSystem.directedSwingComp(b.uVec, b.coord, b.torqueSum, b.bRotGam, f.uVec, f.coord, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.swingParams, sc.swingCompParams, mot.counts);
+            else                 CrossBridgeSystem.directedSwing(b.uVec, b.torqueSum, b.bRotGam, f.uVec, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+            RigidRodLangevinIntegrationSystem.integrate(b.coord, b.uVec, b.yVec, b.forceSum, b.torqueSum, b.randForce, b.randTorque, b.bTransGam, b.bRotGam, mot.bodyParams, mot.counts);
+            DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        }
+    }
+
+    /** Read motor 0: {θ_J1 deg, headSeg deg, s_ax=(tip−site)·x̂ nm, |F8| pN, segForceX pN on fil, tip_x µm}. */
+    static double[] strokeLoadRead(Scene sc, int sMid, double arc) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        int nSeg = f.n, nB = 3 * mot.nMotors, STR = CrossBridgeSystem.STRIDE;
+        final double PN = 1.0e12, RAD2DEG = 180.0 / Math.PI;
+        int head = 2, lev = 1;
+        double lux = b.uVec.get(lev), luy = b.uVec.get(nB + lev), luz = b.uVec.get(2 * nB + lev);
+        double hux = b.uVec.get(head), huy = b.uVec.get(nB + head), huz = b.uVec.get(2 * nB + head);
+        double sux = f.uVec.get(sMid), suy = f.uVec.get(nSeg + sMid), suz = f.uVec.get(2 * nSeg + sMid);
+        double dj = lux * hux + luy * huy + luz * huz; if (dj > 1) dj = 1; if (dj < -1) dj = -1;
+        double thetaJ1 = Math.acos(dj) * RAD2DEG;
+        double dh = hux * sux + huy * suy + huz * suz; if (dh > 1) dh = 1; if (dh < -1) dh = -1;
+        double headSeg = Math.acos(dh) * RAD2DEG;
+        double tipx = b.coord.get(head) + 0.5 * MotorStore.HEAD_LEN * hux;
+        double tipy = b.coord.get(nB + head) + 0.5 * MotorStore.HEAD_LEN * huy;
+        double tipz = b.coord.get(2 * nB + head) + 0.5 * MotorStore.HEAD_LEN * huz;
+        double e1x = f.end1.get(sMid), e1y = f.end1.get(nSeg + sMid), e1z = f.end1.get(2 * nSeg + sMid);
+        double apx = e1x + arc * sux, apy = e1y + arc * suy, apz = e1z + arc * suz;
+        double sAx = ((tipx - apx) * sux + (tipy - apy) * suy + (tipz - apz) * suz) * 1e3;   // (tip−site)·x̂, nm
+        double f8x = sc.bondData.get(0 * STR + 0), f8y = sc.bondData.get(0 * STR + 1), f8z = sc.bondData.get(0 * STR + 2);
+        double f8mag = Math.sqrt(f8x * f8x + f8y * f8y + f8z * f8z) * PN;
+        double segFx = sc.bondData.get(0 * STR + 6) * PN;   // seg-side x force ON the filament (pN)
+        return new double[]{ thetaJ1, headSeg, sAx, f8mag, segFx, tipx };
+    }
+
+    // ==================== TIMESTEP_SERVO_AUDIT — deterministic single-motor channel-torque decomposition ==============
+    /** Live per-channel torque vectors (N·m) acting on motor-0's HEAD/LEVER at the CURRENT pose — the exact torques the
+     *  production kernels (bondForces F8/F9/F10 + directedSwing) apply this step (springs baked into xbParams[2]; the
+     *  DIRSWING springs/rate handling mirrored in-place). Writes into out[18]:
+     *   [0..2]  F8 head torque TH = R_H×F        [3..5]  F9 head torque = −T9 (⊥-maintainer)
+     *   [6..8]  F10/AXLOCK head torque hF10      [9..11] DIRSWING lever torque +mag·â (head gets −this)
+     *   [12] swErrDeg (lever→target)             [13] headSegDeg   [14] thetaJ1Deg   [15] |F8| pN
+     *   [16] sAx=(tip−site)·f̂ nm (resistive>0 barbed-ward tip lead)   [17] segFx (bondData[6]) pN on filament */
+    static void channelTorquesSingle(Scene sc, int sMid, double arc, double[] out) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        int nSeg = f.n, nB = 3 * mot.nMotors, STR = CrossBridgeSystem.STRIDE;
+        final double D2R = Math.PI / 180.0, DEG = 180.0 / Math.PI, PN = 1e12;
+        double myoSpring = sc.xbParams.get(0), j1FMT = sc.xbParams.get(2), dt = sc.xbParams.get(3), headLen = sc.xbParams.get(4);
+        int f9Frozen = sc.xbParams.getSize() > 9 ? (int) sc.xbParams.get(9) : 0;
+        int axLock = sc.xbParams.getSize() > 10 ? (int) sc.xbParams.get(10) : 0;
+        int nuc = mot.nucleotideState.get(0); boolean cocked = nuc != MotorStore.NUC_ADPPI;
+        int head = 2, lev = 1;
+        double hcx = b.coord.get(head), hcy = b.coord.get(nB + head), hcz = b.coord.get(2 * nB + head);
+        double hux = b.uVec.get(head), huy = b.uVec.get(nB + head), huz = b.uVec.get(2 * nB + head);
+        double hyx = b.yVec.get(head), hyy = b.yVec.get(nB + head), hyz = b.yVec.get(2 * nB + head);
+        double lux = b.uVec.get(lev), luy = b.uVec.get(nB + lev), luz = b.uVec.get(2 * nB + lev);
+        double hbRGx = b.bRotGam.get(head), hbRGy = b.bRotGam.get(nB + head), lbRGy = b.bRotGam.get(nB + lev);
+        double sux = f.uVec.get(sMid), suy = f.uVec.get(nSeg + sMid), suz = f.uVec.get(2 * nSeg + sMid);
+        double sbRGx = f.bRotGam.get(sMid), sbRGy = f.bRotGam.get(nSeg + sMid);
+        double apx = f.end1.get(sMid) + arc * sux, apy = f.end1.get(nSeg + sMid) + arc * suy, apz = f.end1.get(2 * nSeg + sMid) + arc * suz;
+        double htipx = hcx + 0.5 * headLen * hux, htipy = hcy + 0.5 * headLen * huy, htipz = hcz + 0.5 * headLen * huz;
+        // F8 head torque
+        double dx = apx - htipx, dy = apy - htipy, dz = apz - htipz, dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        double fmag = myoSpring * dist, Fx = 0, Fy = 0, Fz = 0;
+        if (dist > 0) { double inv = fmag / dist; Fx = inv * dx; Fy = inv * dy; Fz = inv * dz; }
+        double RHx = (htipx - hcx) * 1e-6, RHy = (htipy - hcy) * 1e-6, RHz = (htipz - hcz) * 1e-6;
+        out[0] = RHy * Fz - RHz * Fy; out[1] = RHz * Fx - RHx * Fz; out[2] = RHx * Fy - RHy * Fx;
+        out[15] = fmag * PN; out[16] = ((htipx - apx) * sux + (htipy - apy) * suy + (htipz - apz) * suz) * 1e3;
+        // F9 head torque = −T9 (restF9 frozen 90° when f9Frozen)
+        double restF9 = (f9Frozen != 0) ? 90.0 : (cocked ? 120.0 : 90.0);
+        double t9x = suy * huz - suz * huy, t9y = suz * hux - sux * huz, t9z = sux * huy - suy * hux, m9 = Math.sqrt(t9x * t9x + t9y * t9y + t9z * t9z);
+        double headSeg = Math.acos(Math.max(-1, Math.min(1, sux * hux + suy * huy + suz * huz))) * DEG;
+        out[13] = headSeg;
+        out[3] = out[4] = out[5] = 0;
+        if (m9 > 1e-15) { double im = 1 / m9, coef = j1FMT * D2R / ((1.0 / hbRGy + 1.0 / sbRGy) * dt), tm = coef * (headSeg - restF9);
+            out[3] = -tm * t9x * im; out[4] = -tm * t9y * im; out[5] = -tm * t9z * im; }
+        // F10 / AXLOCK head torque (ŝ = n̂bed×seg.u = (−suy,sux,0))
+        out[6] = out[7] = out[8] = 0;
+        if (axLock != 0) {
+            double sx = -suy, sy = sux, sz = 0, sm = Math.sqrt(sx * sx + sy * sy + sz * sz);
+            if (sm > 1e-9) { sx /= sm; sy /= sm; sz /= sm;
+                double tvx = hyy * sz - hyz * sy, tvy = hyz * sx - hyx * sz, tvz = hyx * sy - hyy * sx;
+                double dotv = hyx * sx + hyy * sy + hyz * sz;
+                if (dotv < 0) { tvx = -tvx; tvy = -tvy; tvz = -tvz; dotv = -dotv; }
+                if (dotv > 1) dotv = 1; double tvm = Math.sqrt(tvx * tvx + tvy * tvy + tvz * tvz);
+                if (tvm > 1e-15) { double it = 1 / tvm, angL = Math.acos(dotv) * DEG, tmL = j1FMT * D2R * angL / ((1.0 / hbRGx + 1.0 / sbRGx) * dt);
+                    out[6] = tmL * tvx * it; out[7] = tmL * tvy * it; out[8] = tmL * tvz * it; } }
+        }
+        // DIRSWING lever torque +mag·â (head gets −this); mirror the springs/rate k handling
+        double k = sc.swingParams.get(0), sdt = sc.swingParams.get(1), thetaC = sc.swingParams.get(3), thetaU = sc.swingParams.get(2);
+        if (sc.swingParams.getSize() > 4) { double rd = sc.swingParams.get(4);
+            if (rd > 0) k = 1.0 - Math.exp((sdt / rd) * Math.log(1.0 - k)); else if (rd < 0) k = k * (sdt / (-rd)); }
+        double rest = cocked ? thetaC : thetaU, thr = rest * D2R, cc = Math.cos(thr), sn = Math.sin(thr);
+        double tx = cc * hux - sn * sux, ty = cc * huy - sn * suy, tz = cc * huz - sn * suz, tm2 = Math.sqrt(tx * tx + ty * ty + tz * tz);
+        out[9] = out[10] = out[11] = 0; out[12] = 0;
+        if (tm2 > 1e-9) { tx /= tm2; ty /= tm2; tz /= tm2;
+            double ax = luy * tz - luz * ty, ay = luz * tx - lux * tz, az = lux * ty - luy * tx, am = Math.sqrt(ax * ax + ay * ay + az * az);
+            double dotT = Math.max(-1, Math.min(1, lux * tx + luy * ty + luz * tz)); double ang = Math.acos(dotT); out[12] = ang * DEG;
+            double mag = k * ang / ((1.0 / lbRGy + 1.0 / hbRGy) * sdt);
+            if (am > 1e-15) { out[9] = mag * ax / am; out[10] = mag * ay / am; out[11] = mag * az / am; } }
+        double dj = Math.max(-1, Math.min(1, lux * hux + luy * huy + luz * huz)); out[14] = Math.acos(dj) * DEG;
+        out[17] = sc.bondData.get(0 * STR + 6) * PN;
+    }
+
+    /** Robust rotation vector (rad) taking unit uPre→uPost: angle·axis, axis=normalize(uPre×uPost). */
+    static void rotVec3(double px, double py, double pz, double qx, double qy, double qz, double[] out) {
+        double d = px * qx + py * qy + pz * qz; if (d > 1) d = 1; if (d < -1) d = -1;
+        double ang = Math.acos(d);
+        double ax = py * qz - pz * qy, ay = pz * qx - px * qz, az = px * qy - py * qx, am = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (am > 1e-15 && ang > 0) { out[0] = ang * ax / am; out[1] = ang * ay / am; out[2] = ang * az / am; }
+        else { out[0] = out[1] = out[2] = 0; }
+    }
+
+    /** One instrumented deterministic step of motor-0: advance one strokeLoadEquil step, then compute per-channel
+     *  MIDPOINT work (0.5·(τ_pre+τ_post)·Δθ, J) on head/lever and the per-step |Δθ| (deg). tauPrev[18] carries the
+     *  pre-step torques (updated in place). out: [0]W_F8 [1]W_F9 [2]W_F10 [3]W_DIR (J) [4]|Δθ_head|° [5]|Δθ_lever|°
+     *  [6]swErr° [7]θ_J1° [8]sAx nm [9]|F8| pN [10]segFx pN. */
+    static void servoStep(Scene sc, int sMid, double arc, double[] tauPrev, double[] out) {
+        RigidRodBody b = sc.mot.body; int nB = 3 * sc.mot.nMotors, head = 2, lev = 1;
+        double hpx = b.uVec.get(head), hpy = b.uVec.get(nB + head), hpz = b.uVec.get(2 * nB + head);
+        double lpx = b.uVec.get(lev), lpy = b.uVec.get(nB + lev), lpz = b.uVec.get(2 * nB + lev);
+        strokeLoadEquil(sc, 1);
+        double hnx = b.uVec.get(head), hny = b.uVec.get(nB + head), hnz = b.uVec.get(2 * nB + head);
+        double lnx = b.uVec.get(lev), lny = b.uVec.get(nB + lev), lnz = b.uVec.get(2 * nB + lev);
+        double[] dH = new double[3], dL = new double[3];
+        rotVec3(hpx, hpy, hpz, hnx, hny, hnz, dH);
+        rotVec3(lpx, lpy, lpz, lnx, lny, lnz, dL);
+        double[] tn = new double[18]; channelTorquesSingle(sc, sMid, arc, tn);
+        double DEG = 180.0 / Math.PI;
+        // midpoint torques
+        double f8x = 0.5 * (tauPrev[0] + tn[0]), f8y = 0.5 * (tauPrev[1] + tn[1]), f8z = 0.5 * (tauPrev[2] + tn[2]);
+        double f9x = 0.5 * (tauPrev[3] + tn[3]), f9y = 0.5 * (tauPrev[4] + tn[4]), f9z = 0.5 * (tauPrev[5] + tn[5]);
+        double axx = 0.5 * (tauPrev[6] + tn[6]), axy = 0.5 * (tauPrev[7] + tn[7]), axz = 0.5 * (tauPrev[8] + tn[8]);
+        double dwx = 0.5 * (tauPrev[9] + tn[9]), dwy = 0.5 * (tauPrev[10] + tn[10]), dwz = 0.5 * (tauPrev[11] + tn[11]);
+        out[0] = f8x * dH[0] + f8y * dH[1] + f8z * dH[2];                    // F8 head
+        out[1] = f9x * dH[0] + f9y * dH[1] + f9z * dH[2];                    // F9 head
+        out[2] = axx * dH[0] + axy * dH[1] + axz * dH[2];                    // F10 head
+        out[3] = dwx * dL[0] + dwy * dL[1] + dwz * dL[2] - (dwx * dH[0] + dwy * dH[1] + dwz * dH[2]);   // DIRSWING lever(+)+head(−)
+        out[4] = Math.sqrt(dH[0] * dH[0] + dH[1] * dH[1] + dH[2] * dH[2]) * DEG;
+        out[5] = Math.sqrt(dL[0] * dL[0] + dL[1] * dL[1] + dL[2] * dL[2]) * DEG;
+        out[6] = tn[12]; out[7] = tn[14]; out[8] = tn[16]; out[9] = tn[15]; out[10] = tn[17];
+        System.arraycopy(tn, 0, tauPrev, 0, 18);
+    }
+
+    static double pct(double[] a, int n, double p) {   // p in [0,1] percentile of a[0..n) (a is sorted copy)
+        if (n <= 0) return 0; double[] c = java.util.Arrays.copyOf(a, n); java.util.Arrays.sort(c);
+        double idx = p * (n - 1); int lo = (int) Math.floor(idx); int hi = Math.min(lo + 1, n - 1);
+        return c[lo] + (idx - lo) * (c[hi] - c[lo]);
+    }
+
+    // ==================== TIMESTEP_SERVO_AUDIT — deterministic single-motor servo/work/rotation/closed-cycle =========
+    // Parts 2-5: one motor forced-bound to a HELD straight filament, ALL Brownian off ⇒ fully deterministic. After a
+    // pre-stroke (ADP·Pi) equilibration, switch to ADP (DIRSWING target 0°→60°) and run a fixed PHYSICAL window,
+    // logging per-step rotation-vector increments (Part 2), per-channel MIDPOINT signed work (Part 3), cumulative
+    // DIRSWING work vs attachment age + post-target-acquisition work (Part 4). Then a closed-cycle displacement
+    // challenge (Part 5): drive the filament out/hold/back/hold and measure net DIRSWING work over the closed cycle.
+    // Runs at the current DT; a wrapper script sweeps the dt ladder. Measurement-only; canonical model unchanged.
+    static void runServoAudit(Scene sc, int M) {
+        FilamentStore f = sc.fil; MotorStore mot = sc.mot; RigidRodBody b = mot.body;
+        int nSeg = f.n, nMot = mot.nMotors, nB = 3 * nMot;
+        final double J2KT = 1.0 / Constants.kT, J2PNNM = 1e21;
+        // ---- single bound motor on a held straight filament (Brownian off), mirrors runStrokeLoad ----
+        double[] offX = new double[nSeg]; double comx0 = centroidX(f);
+        for (int s = 0; s < nSeg; s++) { f.setUVec(s, 1f, 0f, 0f); f.setYVec(s, 0f, 1f, 0f); f.brownTransScale.set(s, 0f); f.brownRotScale.set(s, 0f); offX[s] = f.coordX(s) - comx0; }
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        int sMid = nSeg / 2; double scx0 = f.coord.get(sMid), scy0 = f.coord.get(nSeg + sMid);
+        for (int m = 0; m < nMot; m++) { mot.boundSeg.set(m, MotorStore.FREE_BINDABLE);
+            for (int j = 0; j < 3; j++) { b.brownTransScale.set(3 * m + j, 0f); b.brownRotScale.set(3 * m + j, 0f); } }
+        mot.assembleArticulated(0, (float) scx0, (float) scy0, (float) ANCHOR_Z, 0f, 0f, 1f, 0f);
+        DerivedGeometrySystem.derive(b.coord, b.uVec, b.yVec, b.zVec, b.end1, b.end2, b.segLength, mot.counts);
+        int head = 2, lev = 1;
+        double htx0 = b.coord.get(head) + 0.5 * MotorStore.HEAD_LEN * b.uVec.get(head);
+        double arc = htx0 - f.end1.get(sMid);
+        mot.boundSeg.set(0, sMid); mot.bindArc.set(0, (float) arc);
+        mot.nucleotideState.set(0, MotorStore.NUC_ADPPI);
+        int EQ = Math.max(4000, M);
+
+        System.out.println("\n=== Soft Box — TIMESTEP_SERVO_AUDIT: deterministic single-motor stroke-work / rotation / closed-cycle ===");
+        System.out.printf(java.util.Locale.US, "  runner=CPU deterministic (ALL Brownian off); canonical SPHEREHEAD+AXLOCK+DIRSWING+XB_IMPLICIT2+LYMN_TAYLOR; dt=%.3e ; f9Frozen=%.0f axLock=%.0f θ_u=%.0f θ_c=%.0f ; springs swingParams[4]=%.2e%n",
+                DT, sc.xbParams.get(9), sc.xbParams.get(10), sc.swingParams.get(2), sc.swingParams.get(3), sc.swingParams.getSize() > 4 ? sc.swingParams.get(4) : 0.0);
+
+        // ---- Phase A: pre-stroke (ADP·Pi) equilibration at Δ=0 ----
+        placeFilamentX(f, offX, comx0, 0.0);
+        strokeLoadEquil(sc, EQ);
+        double[] pre = strokeLoadRead(sc, sMid, arc);
+        System.out.printf(java.util.Locale.US, "  pre-stroke (ADP·Pi) equilibrium: θ_J1=%.2f° head-seg=%.1f° |F8|=%.3f pN sAx=%+.3f nm%n", pre[0], pre[1], pre[3], pre[2]);
+
+        // ---- Phase B: switch to ADP; instrument the stroke over a fixed 1 ms physical window ----
+        mot.nucleotideState.set(0, MotorStore.NUC_ADP);
+        double WIN = 1.0e-3; int nStep = (int) Math.round(WIN / DT);
+        double[] Wp = new double[4], Wm = new double[4];             // +/- work per channel (J): F8,F9,F10,DIR
+        double[] rotH = new double[nStep], rotL = new double[nStep];
+        double cumDIR = 0;
+        double[] cumHist = new double[nStep];
+        double[] tauPrev = new double[18]; channelTorquesSingle(sc, sMid, arc, tauPrev);
+        double[] o = new double[11];
+        double[] sampleT = { 0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.75, 1.0 };   // ms marks for the W_DIR(a) curve
+        int si = 0;
+        for (int t = 0; t < nStep; t++) {
+            servoStep(sc, sMid, arc, tauPrev, o);
+            for (int c = 0; c < 4; c++) { if (o[c] > 0) Wp[c] += o[c]; else Wm[c] += o[c]; }
+            cumDIR += o[3]; rotH[t] = o[4]; rotL[t] = o[5]; cumHist[t] = cumDIR;
+            double ageMs = (t + 1) * DT * 1e3;
+            if (si < sampleT.length && ageMs >= sampleT[si]) {
+                System.out.printf(java.util.Locale.US, "  SERVOAGE dt=%.2e ageMs=%.3f cumDIR_kT=%+.4f swErr=%.3f thetaJ1=%.3f sAx=%+.4f f8pN=%.4f%n",
+                        DT, ageMs, cumDIR * J2KT, o[6], o[7], o[8], o[9]);
+                si++;
+            }
+        }
+        // target-acquisition = 95% / 99% of the final cumulative DIRSWING work (dt-robust; the stroke settles to a
+        // LOADED plateau at swErr≈12°, not swErr=0, so a fixed-angle tolerance is wrong — use the work fraction).
+        double cumFinal = cumDIR; int acq95 = nStep - 1, acq99 = nStep - 1;
+        for (int t = 0; t < nStep; t++) { if (cumHist[t] >= 0.95 * cumFinal) { acq95 = t; break; } }
+        for (int t = 0; t < nStep; t++) { if (cumHist[t] >= 0.99 * cumFinal) { acq99 = t; break; } }
+        double acqMs = (acq95 + 1) * DT * 1e3;
+        double postAcqDir = cumFinal - cumHist[acq95];   // DIRSWING work AFTER 95%-acquisition (should be small for a finite stroke)
+        // rotation percentiles (deg/step)
+        double rhMed = pct(rotH, nStep, 0.5), rhP90 = pct(rotH, nStep, 0.90), rhP99 = pct(rotH, nStep, 0.99), rhP999 = pct(rotH, nStep, 0.999), rhMax = pct(rotH, nStep, 1.0);
+        double rlMed = pct(rotL, nStep, 0.5), rlP90 = pct(rotL, nStep, 0.90), rlP99 = pct(rotL, nStep, 0.99), rlP999 = pct(rotL, nStep, 0.999), rlMax = pct(rotL, nStep, 1.0);
+        System.out.printf(java.util.Locale.US, "%n  --- Part 2: per-step rotation (deg/step), stroke window ---%n");
+        System.out.printf(java.util.Locale.US, "  ROT dt=%.2e head[med=%.4f p90=%.4f p99=%.4f p99.9=%.4f max=%.4f] lever[med=%.4f p90=%.4f p99=%.4f p99.9=%.4f max=%.4f]%n",
+                DT, rhMed, rhP90, rhP99, rhP999, rhMax, rlMed, rlP90, rlP99, rlP999, rlMax);
+        System.out.printf(java.util.Locale.US, "%n  --- Part 3/4: channel signed work over the 1 ms stroke window (kT) ---%n");
+        String[] cn = { "F8  ", "F9  ", "F10 ", "DIR " };
+        for (int c = 0; c < 4; c++) { double net = Wp[c] + Wm[c], R = (Math.abs(net) + 1e-30) > 0 ? (Wp[c] - Wm[c]) / (Math.abs(net) + 1e-30) : 0;
+            System.out.printf(java.util.Locale.US, "  WCH dt=%.2e ch=%s Wplus_kT=%+.4f Wminus_kT=%+.4f Wnet_kT=%+.4f R=%.2f%n", DT, cn[c], Wp[c] * J2KT, Wm[c] * J2KT, net * J2KT, R);
+        }
+        System.out.printf(java.util.Locale.US, "  SERVOB dt=%.2e acq95Ms=%.4f acq99Ms=%.4f cumDIR_kT=%+.5f postAcq95DIR_kT=%+.5f postAcqFrac=%.4f nStep=%d%n",
+                DT, acqMs, (acq99 + 1) * DT * 1e3, cumFinal * J2KT, postAcqDir * J2KT, Math.abs(cumFinal) > 1e-30 ? postAcqDir / cumFinal : 0, nStep);
+
+        // ---- Phase C (Part 5): closed-cycle displacement challenge, post-acquisition ----
+        strokeLoadEquil(sc, EQ);   // settle at ADP Δ=0
+        System.out.printf(java.util.Locale.US, "%n  --- Part 5: closed-cycle displacement challenge (out→hold→back→hold, ×2 cycles), post-acquisition ---%n");
+        double tRamp = 0.2e-3, tHold = 0.1e-3;                      // physical-time waveform segments
+        int nRamp = Math.max(1, (int) Math.round(tRamp / DT)), nHold = Math.max(1, (int) Math.round(tHold / DT));
+        for (double ampNm : new double[]{ 4, 8, 12 }) {
+            // reset to the settled Δ=0 pose each amplitude
+            placeFilamentX(f, offX, comx0, 0.0); strokeLoadEquil(sc, EQ);
+            double[] tp = new double[18]; channelTorquesSingle(sc, sMid, arc, tp);
+            double[] Wc = new double[4]; double[] oo = new double[11];
+            double[] r0 = strokeLoadRead(sc, sMid, arc);
+            for (int cyc = 0; cyc < 2; cyc++) {
+                for (int t = 0; t < nRamp; t++) { double dz = -ampNm * (t + 1.0) / nRamp * 1e-3; placeFilamentX(f, offX, comx0, dz); servoStep(sc, sMid, arc, tp, oo); for (int c = 0; c < 4; c++) Wc[c] += oo[c]; }
+                for (int t = 0; t < nHold; t++) { placeFilamentX(f, offX, comx0, -ampNm * 1e-3); servoStep(sc, sMid, arc, tp, oo); for (int c = 0; c < 4; c++) Wc[c] += oo[c]; }
+                for (int t = 0; t < nRamp; t++) { double dz = -ampNm * (1.0 - (t + 1.0) / nRamp) * 1e-3; placeFilamentX(f, offX, comx0, dz); servoStep(sc, sMid, arc, tp, oo); for (int c = 0; c < 4; c++) Wc[c] += oo[c]; }
+                for (int t = 0; t < nHold; t++) { placeFilamentX(f, offX, comx0, 0.0); servoStep(sc, sMid, arc, tp, oo); for (int c = 0; c < 4; c++) Wc[c] += oo[c]; }
+            }
+            double[] r1 = strokeLoadRead(sc, sMid, arc);
+            System.out.printf(java.util.Locale.US, "  CYCLE dt=%.2e amp_nm=%.0f Wdir_net_kT=%+.5f Wf8_net_kT=%+.5f Wf9_net_kT=%+.5f Wf10_net_kT=%+.5f (2 closed cycles) thetaJ1_start=%.3f thetaJ1_end=%.3f f8_start=%.4f f8_end=%.4f%n",
+                    DT, ampNm, Wc[3] * J2KT, Wc[0] * J2KT, Wc[1] * J2KT, Wc[2] * J2KT, r0[0], r1[0], r0[3], r1[3]);
+        }
+        System.out.printf(java.util.Locale.US, "%n  Reading: DIRSWING is a FINITE STROKE if cumDIR concentrates near the switch + plateaus (small postAcqDIR) AND closed-cycle Wdir≈0;%n");
+        System.out.printf(java.util.Locale.US, "           a PERSISTENT SERVO if postAcqDIR keeps growing OR closed cycles inject repeated net-positive Wdir. Per-step rotation should shrink ∝dt if pose-converged.%n");
     }
 
     // ============================ FORCE_BALANCE_CLOSURE PART 1 — bare-filament drag ζ_eff ============================
@@ -1057,6 +1887,202 @@ public final class GlidingHarness {
     }
 
     /** s_head − s_site at attach (nm): head arc-projection onto the bound segment minus the frozen material bindArc. */
+    /**
+     * PLATEAU_ORIGIN_AUDIT (measurement-only; pose-derived, touches no kernel ⇒ default-off byte-identical).
+     * Re-computes the FULL rotational/strain balance on the bound head at the current pose, using the EXACT
+     * force-law formulas of the canonical stack (bondForces F8/F9/F10-AXLOCK, directedSwing, MotorJointSystem J1/J2,
+     * TailAnchorSystem). This is what MAINTAINS the residual forward F8 strain in the plateau band — the audit's core.
+     * Returns (all torques in pN·nm, forces pN, angles deg, energy in units of kT):
+     *   [0]=|F8|  [1]=F8_axial(forceDotFil)  [2]=|TH|(F8 restoring torque on head)
+     *   [3]=dev9=∠(seg,head)−restF9  [4]=|T9|(F9)
+     *   [5]=devAx=∠(head.y,ŝ)        [6]=|hF10|(AXLOCK/F10)
+     *   [7]=devJ1=∠(lever,head)−60   [8]=|Tj1|(J1 bend)
+     *   [9]=devSw=∠(lever,swingTarget) [10]=|Tsw|(directedSwing; ≈0 once completed)
+     *   [11]=devJ2=∠(rod,lever)−96   [12]=anchorNm=|rod.end1−anchorPt|  [13]=E_F8/kT
+     */
+    static double[] plateauBalance(Scene sc, MotorStore mot, FilamentStore f, int m, int bs) {
+        int nMot = mot.nMotors, nB = 3 * nMot, nSeg = f.n;
+        RigidRodBody b = mot.body;
+        int rod = 3 * m, lev = 3 * m + 1, head = 3 * m + 2;
+        double DEG = 180.0 / Math.PI, D2R = Math.PI / 180.0, PN = 1e12, TQ = 1e21;   // N·m→pN·nm
+        double myoSpring = sc.xbParams.get(0), j1FMT = sc.xbParams.get(2), dt = sc.xbParams.get(3), headLen = sc.xbParams.get(4);
+        int axLock = sc.xbParams.getSize() > 10 ? (int) sc.xbParams.get(10) : 0;
+        int nuc = mot.nucleotideState.get(m); boolean cocked = nuc != MotorStore.NUC_ADPPI;
+        // poses
+        double hcx = b.coord.get(head), hcy = b.coord.get(nB + head), hcz = b.coord.get(2 * nB + head);
+        double hux = b.uVec.get(head), huy = b.uVec.get(nB + head), huz = b.uVec.get(2 * nB + head);
+        double hyx = b.yVec.get(head), hyy = b.yVec.get(nB + head), hyz = b.yVec.get(2 * nB + head);
+        double lux = b.uVec.get(lev), luy = b.uVec.get(nB + lev), luz = b.uVec.get(2 * nB + lev);
+        double rux = b.uVec.get(rod), ruy = b.uVec.get(nB + rod), ruz = b.uVec.get(2 * nB + rod);
+        double rcx = b.coord.get(rod), rcy = b.coord.get(nB + rod), rcz = b.coord.get(2 * nB + rod);
+        double hbRGx = b.bRotGam.get(head), hbRGy = b.bRotGam.get(nB + head);
+        double sux = f.uVec.get(bs), suy = f.uVec.get(nSeg + bs), suz = f.uVec.get(2 * nSeg + bs);
+        double syx = f.yVec.get(bs), syy = f.yVec.get(nSeg + bs), syz = f.yVec.get(2 * nSeg + bs);
+        double sbRGx = f.bRotGam.get(bs), sbRGy = f.bRotGam.get(nSeg + bs);
+        double slen = f.segLength.get(bs), aOff = mot.bindArc.get(m) - 0.5 * slen;
+        double apx = f.coord.get(bs) + aOff * sux, apy = f.coord.get(nSeg + bs) + aOff * suy, apz = f.coord.get(2 * nSeg + bs) + aOff * suz;
+        double htipx = hcx + 0.5 * headLen * hux, htipy = hcy + 0.5 * headLen * huy, htipz = hcz + 0.5 * headLen * huz;
+        double[] o = new double[14];
+        // ---- F8 ----
+        double dx = apx - htipx, dy = apy - htipy, dz = apz - htipz, dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        double fmag = myoSpring * dist;   // N
+        double Fx = 0, Fy = 0, Fz = 0; if (dist > 0) { double inv = fmag / dist; Fx = inv * dx; Fy = inv * dy; Fz = inv * dz; }
+        o[0] = fmag * PN;
+        o[1] = (Fx * sux + Fy * suy + Fz * suz) * PN;
+        double RHx = (htipx - hcx) * 1e-6, RHy = (htipy - hcy) * 1e-6, RHz = (htipz - hcz) * 1e-6;
+        double THx = RHy * Fz - RHz * Fy, THy = RHz * Fx - RHx * Fz, THz = RHx * Fy - RHy * Fx;
+        o[2] = Math.sqrt(THx * THx + THy * THy + THz * THz) * TQ;
+        o[13] = 0.5 * fmag * (dist * 1e-6) / Constants.kT;   // ½·F·x in kT
+        // ---- F9 — respect the LIVE frozen target (CANONICAL_STROKE_DISAMBIGUATION fix): SPHEREHEAD sets
+        //      xbParams[9]=f9Frozen=1 ⇒ restF9=90° in ALL states (F9 is the nucleotide-INDEPENDENT ⊥-maintainer,
+        //      NOT a stroke). The earlier `cocked ? 120 : 90` was the Outcome-E diagnostic bug (verified live: the
+        //      recompute matches bondData to 0.0 pN·nm at 90°, is off by ~52 at 120°). ----
+        int f9FrozenPB = sc.xbParams.getSize() > 9 ? (int) sc.xbParams.get(9) : 0;
+        double restF9 = (f9FrozenPB != 0) ? 90.0 : (cocked ? 120.0 : 90.0);
+        double dot9 = Math.max(-1, Math.min(1, sux * hux + suy * huy + suz * huz));
+        o[3] = Math.acos(dot9) * DEG - restF9;
+        double t9m = Math.sqrt(1 - dot9 * dot9);   // |seg×head|
+        o[4] = Math.abs(j1FMT * D2R * o[3] / ((1.0 / hbRGy + 1.0 / sbRGy) * dt)) * (t9m > 1e-9 ? 1 : 0) * TQ;
+        // ---- F10 / AXLOCK (head.yVec → ŝ = n̂bed×seg.u = (−suy,sux,0)) ----
+        double devAx, hF10;
+        if (axLock != 0) {
+            double sx = -suy, sy = sux, sz = 0, sm = Math.sqrt(sx * sx + sy * sy + sz * sz);
+            if (sm > 1e-9) { sx /= sm; sy /= sm; sz /= sm; }
+            double dotv = hyx * sx + hyy * sy + hyz * sz; if (dotv < 0) dotv = -dotv;   // nearer of ±ŝ
+            dotv = Math.max(-1, Math.min(1, dotv)); devAx = Math.acos(dotv) * DEG;
+            hF10 = Math.abs(j1FMT * D2R * devAx / ((1.0 / hbRGx + 1.0 / sbRGx) * dt)) * TQ;
+        } else {   // default F10: head.y → seg.y
+            double dv = Math.max(-1, Math.min(1, syx * hyx + syy * hyy + syz * hyz)); devAx = Math.acos(dv) * DEG;
+            hF10 = Math.abs(j1FMT * D2R * devAx / ((1.0 / hbRGx + 1.0 / sbRGx) * dt)) * TQ;
+        }
+        o[5] = devAx; o[6] = hF10;
+        // ---- J1 bend (rest 60 cocked) ----
+        double jp3 = sc.jointParams.get(3), stallPN = sc.jointParams.get(10), lbRGy = b.bRotGam.get(nB + lev);
+        double j1Rest = cocked ? 60.0 : 0.0;
+        double dotJ = Math.max(-1, Math.min(1, lux * hux + luy * huy + luz * huz));
+        o[7] = Math.acos(dotJ) * DEG - j1Rest;
+        double tj1 = jp3 * D2R * o[7] / ((1.0 / lbRGy + 1.0 / hbRGy) * dt);
+        double maxMag = stallPN * 0.5 * headLen * 1.0e-18; if (tj1 > maxMag) tj1 = maxMag;
+        o[8] = Math.abs(tj1) * TQ;
+        // ---- swing (directedSwing target = c·head − sn·seg at θ_cocked) ----
+        double k = sc.swingParams.get(0), sdt = sc.swingParams.get(1), thetaC = sc.swingParams.get(3), thetaU = sc.swingParams.get(2);
+        if (sc.swingParams.getSize() > 4) { double rd = sc.swingParams.get(4);
+            if (rd > 0) k = 1.0 - Math.exp((sdt / rd) * Math.log(1.0 - k)); else if (rd < 0) k = k * (sdt / (-rd)); }
+        double rest = cocked ? thetaC : thetaU, thr = rest * D2R, cc = Math.cos(thr), sn = Math.sin(thr);
+        double tx = cc * hux - sn * sux, ty = cc * huy - sn * suy, tz = cc * huz - sn * suz, tm = Math.sqrt(tx * tx + ty * ty + tz * tz);
+        if (tm > 1e-9) { tx /= tm; ty /= tm; tz /= tm; }
+        double dotSw = Math.max(-1, Math.min(1, lux * tx + luy * ty + luz * tz)); o[9] = Math.acos(dotSw) * DEG;
+        o[10] = Math.abs(k * (o[9] * D2R) / ((1.0 / lbRGy + 1.0 / hbRGy) * sdt)) * TQ;
+        // ---- J2 (rod-lever), anchor ----
+        double dotJ2 = Math.max(-1, Math.min(1, rux * lux + ruy * luy + ruz * luz)); o[11] = Math.acos(dotJ2) * DEG - 96.0;
+        double rlen = f.segLength != null ? MotorStore.ROD_LEN : MotorStore.ROD_LEN;   // rod length constant
+        double e1x = rcx - 0.5 * rlen * rux, e1y = rcy - 0.5 * rlen * ruy, e1z = rcz - 0.5 * rlen * ruz;
+        double axp = mot.anchor.get(m), ayp = mot.anchor.get(nMot + m), azp = mot.anchor.get(2 * nMot + m);
+        o[12] = Math.sqrt((e1x - axp) * (e1x - axp) + (e1y - ayp) * (e1y - ayp) + (e1z - azp) * (e1z - azp)) * 1e3;
+        return o;
+    }
+
+    /**
+     * CANONICAL_STROKE_DISAMBIGUATION — reconcile the pose-diagnostic against the LIVE production kernel.
+     * Recomputes the F8/F9/F10-AXLOCK head torque from the SNAPSHOT pose (the exact pose `bondForces` used) with the
+     * live restF9 (respecting xbParams[9]=f9Frozen), and returns metrics incl. Δ90/Δ120 vs the live bondData head
+     * torque. Also recomputes the directedSwing target/torque (nucleotide-dependent). Mirrors bondForces:143-205 and
+     * directedSwing:244-270 EXACTLY. Returns:
+     *  [0]=headSegAng [1]=leverHeadAng [2]=restF9_live [3]=T9mag_live(restF9) [4]=T9mag_120 [5]=hF10mag [6]=THmag
+     *  [7]=Δ90 (|recompute(restF9=90/live) − liveHeadTorque|) [8]=Δ120 (|recompute(restF9=120) − liveHeadTorque|)
+     *  [9]=|liveHeadTorque| [10]=swingRest [11]=swingTargetErrDeg [12]=swingTorqMag [13]=f8axialLive
+     */
+    static double[] strokeReconcile(Scene sc, MotorStore mot, FilamentStore f,
+            FloatArray saU, FloatArray saY, FloatArray saC, FloatArray saFU, FloatArray saFC, int m, int bs, int nuc) {
+        int nMot = mot.nMotors, nB = 3 * nMot, nSeg = f.n, STR = CrossBridgeSystem.STRIDE;
+        double D2R = Math.PI / 180.0, DEG = 180.0 / Math.PI, TQ = 1e21, PN = 1e12;
+        double myoSpring = sc.xbParams.get(0), j1FMT = sc.xbParams.get(2), dt = sc.xbParams.get(3), headLen = sc.xbParams.get(4);
+        int f9Frozen = sc.xbParams.getSize() > 9 ? (int) sc.xbParams.get(9) : 0;
+        int axLock = sc.xbParams.getSize() > 10 ? (int) sc.xbParams.get(10) : 0;
+        boolean cocked = nuc != MotorStore.NUC_ADPPI;
+        int h = 3 * m + 2, lev = 3 * m + 1;
+        double hux = saU.get(h), huy = saU.get(nB + h), huz = saU.get(2 * nB + h);
+        double hyx = saY.get(h), hyy = saY.get(nB + h), hyz = saY.get(2 * nB + h);
+        double hcx = saC.get(h), hcy = saC.get(nB + h), hcz = saC.get(2 * nB + h);
+        double lux = saU.get(lev), luy = saU.get(nB + lev), luz = saU.get(2 * nB + lev);
+        double hbRGx = mot.body.bRotGam.get(h), hbRGy = mot.body.bRotGam.get(nB + h);
+        double sux = saFU.get(bs), suy = saFU.get(nSeg + bs), suz = saFU.get(2 * nSeg + bs);
+        double sbRGx = f.bRotGam.get(bs), sbRGy = f.bRotGam.get(nSeg + bs);
+        double slen = f.segLength.get(bs), aOff = mot.bindArc.get(m) - 0.5 * slen;
+        double apx = saFC.get(bs) + aOff * sux, apy = saFC.get(nSeg + bs) + aOff * suy, apz = saFC.get(2 * nSeg + bs) + aOff * suz;
+        double htipx = hcx + 0.5 * headLen * hux, htipy = hcy + 0.5 * headLen * huy, htipz = hcz + 0.5 * headLen * huz;
+        // F8
+        double dx = apx - htipx, dy = apy - htipy, dz = apz - htipz, dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        double fmag = myoSpring * dist, Fx = 0, Fy = 0, Fz = 0;
+        if (dist > 0) { double inv = fmag / dist; Fx = inv * dx; Fy = inv * dy; Fz = inv * dz; }
+        double RHx = (htipx - hcx) * 1e-6, RHy = (htipy - hcy) * 1e-6, RHz = (htipz - hcz) * 1e-6;
+        double THx = RHy * Fz - RHz * Fy, THy = RHz * Fx - RHx * Fz, THz = RHx * Fy - RHy * Fx;
+        // F9 with live restF9 (f9Frozen ⇒ 90 always) and with 120 (the buggy diagnostic), same axis t9=seg×head
+        double restF9live = (f9Frozen != 0) ? 90.0 : (cocked ? 120.0 : 90.0);
+        double t9x = suy * huz - suz * huy, t9y = suz * hux - sux * huz, t9z = sux * huy - suy * hux;
+        double m9 = Math.sqrt(t9x * t9x + t9y * t9y + t9z * t9z);
+        double headSeg = Math.acos(Math.max(-1, Math.min(1, sux * hux + suy * huy + suz * huz))) * DEG;
+        double T9live_x = 0, T9live_y = 0, T9live_z = 0, T9_120x = 0, T9_120y = 0, T9_120z = 0, T9magLive = 0, T9mag120 = 0;
+        if (m9 > 1e-15) {
+            double im = 1 / m9; double ux = t9x * im, uy = t9y * im, uz = t9z * im;
+            double coef = j1FMT * D2R / ((1.0 / hbRGy + 1.0 / sbRGy) * dt);
+            double tmLive = coef * (headSeg - restF9live), tm120 = coef * (headSeg - 120.0);
+            T9live_x = tmLive * ux; T9live_y = tmLive * uy; T9live_z = tmLive * uz; T9magLive = Math.abs(tmLive);
+            T9_120x = tm120 * ux; T9_120y = tm120 * uy; T9_120z = tm120 * uz; T9mag120 = Math.abs(tm120);
+        }
+        // F10 / AXLOCK head-side torque (hF10) — axLock branch (ŝ = n̂bed×seg.u), mirrors bondForces:169-191
+        double hF10x = 0, hF10y = 0, hF10z = 0;
+        if (axLock != 0) {
+            double sx = -suy, sy = sux, sz = 0, sm = Math.sqrt(sx * sx + sy * sy + sz * sz);
+            if (sm > 1e-9) { sx /= sm; sy /= sm; sz /= sm;
+                double tvx = hyy * sz - hyz * sy, tvy = hyz * sx - hyx * sz, tvz = hyx * sy - hyy * sx;
+                double dotv = hyx * sx + hyy * sy + hyz * sz;
+                if (dotv < 0) { tvx = -tvx; tvy = -tvy; tvz = -tvz; dotv = -dotv; }
+                if (dotv > 1) dotv = 1; double tvm = Math.sqrt(tvx * tvx + tvy * tvy + tvz * tvz);
+                if (tvm > 1e-15) { double it = 1 / tvm; double angL = Math.acos(dotv) * DEG;
+                    double tmL = j1FMT * D2R * angL / ((1.0 / hbRGx + 1.0 / sbRGx) * dt);
+                    hF10x = tmL * tvx * it; hF10y = tmL * tvy * it; hF10z = tmL * tvz * it; } }
+        }
+        double hF10mag = Math.sqrt(hF10x * hF10x + hF10y * hF10y + hF10z * hF10z);
+        // recomputed head torque with live restF9 and with 120
+        double rLx = THx - T9live_x + hF10x, rLy = THy - T9live_y + hF10y, rLz = THz - T9live_z + hF10z;
+        double r120x = THx - T9_120x + hF10x, r120y = THy - T9_120y + hF10y, r120z = THz - T9_120z + hF10z;
+        // LIVE kernel head torque (what bondForces actually wrote this step, from the SAME snapshot pose)
+        double Lx = sc.bondData.get(m * STR + 3), Ly = sc.bondData.get(m * STR + 4), Lz = sc.bondData.get(m * STR + 5);
+        double d90 = Math.sqrt((rLx - Lx) * (rLx - Lx) + (rLy - Ly) * (rLy - Ly) + (rLz - Lz) * (rLz - Lz));
+        double d120 = Math.sqrt((r120x - Lx) * (r120x - Lx) + (r120y - Ly) * (r120y - Ly) + (r120z - Lz) * (r120z - Lz));
+        double Lmag = Math.sqrt(Lx * Lx + Ly * Ly + Lz * Lz);
+        // directedSwing target (nucleotide-dependent) + swing torque, mirrors directedSwing:251-264
+        double thetaC = sc.swingParams.get(3), thetaU = sc.swingParams.get(2);
+        double swRest = cocked ? thetaC : thetaU, thr = swRest * D2R, cc = Math.cos(thr), sn = Math.sin(thr);
+        double tx = cc * hux - sn * sux, ty = cc * huy - sn * suy, tz = cc * huz - sn * suz, tm = Math.sqrt(tx * tx + ty * ty + tz * tz);
+        double leverHead = Math.acos(Math.max(-1, Math.min(1, lux * hux + luy * huy + luz * huz))) * DEG;
+        double swErr = 0, swTorq = 0, swLx = 0, swLy = 0, swLz = 0;
+        if (tm > 1e-9) { tx /= tm; ty /= tm; tz /= tm;
+            double dotT = Math.max(-1, Math.min(1, lux * tx + luy * ty + luz * tz)); swErr = Math.acos(dotT) * DEG;
+            double ax = luy * tz - luz * ty, ay = luz * tx - lux * tz, az = lux * ty - luy * tx;   // lever.u × target
+            double am = Math.sqrt(ax * ax + ay * ay + az * az);
+            double k = sc.swingParams.get(0), sdt = sc.swingParams.get(1);
+            if (sc.swingParams.getSize() > 4) { double rd = sc.swingParams.get(4);
+                if (rd > 0) k = 1.0 - Math.exp((sdt / rd) * Math.log(1.0 - k)); else if (rd < 0) k = k * (sdt / (-rd)); }
+            double lbRGy = mot.body.bRotGam.get(nB + lev);
+            double mag = k * (swErr * D2R) / ((1.0 / lbRGy + 1.0 / hbRGy) * sdt);   // N·m (lever gets +mag·â, head −mag·â)
+            swTorq = Math.abs(mag) * TQ;
+            if (am > 1e-15) { swLx = mag * ax / am; swLy = mag * ay / am; swLz = mag * az / am; }
+        }
+        double f8ax = sc.bondData.get(m * STR + 12) * PN;
+        return new double[]{ headSeg, leverHead, restF9live, T9magLive * TQ, T9mag120 * TQ, hF10mag * TQ,
+            Math.sqrt(THx * THx + THy * THy + THz * THz) * TQ, d90 * TQ, d120 * TQ, Lmag * TQ, swRest, swErr, swTorq, f8ax,
+            -T9live_x, -T9live_y, -T9live_z, swLx, swLy, swLz };   // [14..16]=F9 head torque vec, [17..19]=swing lever torque vec (N·m)
+    }
+
+    /** angular velocity of a sub-body's uVec between snapshot and current pose (rad/s), ω ≈ (u_snap × u_now)/dt. */
+    static double[] omega(FloatArray uSnap, FloatArray uNow, int nB, int idx, double dt) {
+        double ax = uSnap.get(idx), ay = uSnap.get(nB + idx), az = uSnap.get(2 * nB + idx);
+        double bx = uNow.get(idx), by = uNow.get(nB + idx), bz = uNow.get(2 * nB + idx);
+        return new double[]{ (ay * bz - az * by) / dt, (az * bx - ax * bz) / dt, (ax * by - ay * bx) / dt };
+    }
+
     static double axialMismatchNm(FilamentStore f, MotorStore mot, int m, int bs, int nSeg) {
         int nM = mot.nMotors;
         double hx = mot.head.get(m), hy = mot.head.get(nM + m), hz = mot.head.get(2 * nM + m);
@@ -1145,7 +2171,10 @@ public final class GlidingHarness {
             else
                 tg = tg.task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, sc.bondData, sc.xbParams);
             tg = tg.task("applyHead", CrossBridgeSystem::applyHeadForce, sc.bondData, b.forceSum, b.torqueSum, mot.counts);
-            if (DIRSWING) tg = tg.task("dirSwing", CrossBridgeSystem::directedSwing, b.uVec, b.torqueSum, b.bRotGam, f.uVec, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+            if (DIRSWING) {
+                if (HEADSWING) tg = tg.task("dirSwing", CrossBridgeSystem::directedSwingHeadFrame, b.uVec, b.yVec, b.torqueSum, b.bRotGam, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+                else           tg = tg.task("dirSwing", CrossBridgeSystem::directedSwing, b.uVec, b.torqueSum, b.bRotGam, f.uVec, mot.boundSeg, mot.nucleotideState, sc.swingParams, mot.counts);
+            }
             if (BOX_ALL) tg = tg.task("confineMot", ContainmentSystem::confine, b.coord, b.uVec, b.segLength, b.bTransGam, b.forceSum, b.torqueSum, sc.boxParams, mot.counts);
             if (XB_IMPLICIT2) tg = tg.task("xbSnap", CrossBridgeSystem::snapshotHeadCenter, b.coord, mot.xbImplPrev);
             tg = tg
