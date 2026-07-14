@@ -23,6 +23,10 @@
 #   scripts/finedt_free_glide_sweep.sh arbiter   # Part 1/5 CPU basin-arbiter cells (d2000,d8000)
 #   scripts/finedt_free_glide_sweep.sh control    # matbox on/off + dt-order controls
 set -u
+# WT = pristine build of commit f537972 (the FINE-dt V0 reference; the canonical numerics that match
+# the clamp reference — no uncommitted J2/orthogonalizeY WIP). To recreate after cleanup:
+#   git worktree add --detach /home/jba/Code/SoftBox-finedt-canon f537972
+#   ( cd /home/jba/Code/SoftBox-finedt-canon && bash scripts/build.sh )
 WT=/home/jba/Code/SoftBox-finedt-canon
 MAIN=/home/jba/Code/SoftBox
 CELLS=$MAIN/RUN_LOGS/finedt_cells

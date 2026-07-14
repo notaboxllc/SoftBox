@@ -1,5 +1,299 @@
 # Soft Box Project Journal
 
+### 2026-07-14 — FINE-dt FREE-GLIDING DENSITY SWEEP: canonical curve is CLASS-B bounded-approach, already biological at ρ≈2000; fine dt's real effect is de-biasing production bistability (NOT the mean)
+
+Directly measured the canonical free-gliding velFitX–density curve at production dt=1e-5 vs fine dt=5e-6 (matched 0.6 s, matbox-50, coltol-8), to answer whether the fine-dt curve
+plateaus — **without** inferring from the V₀/1.4 closure. Ran on a **pristine build of commit f537972** (the FINE-dt V₀ reference) in an isolated worktree so jba's uncommitted
+J2/orthogonalizeY WIP stayed untouched and the numerics matched the clamp reference. GPU primary + deterministic CPU basin arbiter; **51 runs, 0 NaN**. Deliverables:
+`FINE_DT_FREE_GLIDE_PLAN.md`, `FINE_DT_FREE_GLIDE_RESULTS.md`, `FINE_DT_FREE_GLIDE_figure.png`, `scripts/finedt_{benchmark,free_glide_sweep,conv_extension}.sh` + `scripts/finedt_analyze.py`,
+raw `RUN_LOGS/finedt_cells/`. Canonical stack UNMODIFIED; no parameter changed; `BoA-v1ref` byte-clean.
+- **THE MEAN BARELY MOVES:** |ΔV(5e-6−1e-5)| < 3% across d1000–6000; significant −12% only at d500. **The −19% clamp-V₀ shift does NOT transfer to free glide** (measured, not assumed) —
+  because two individually-non-converged channels **compensate**: fine dt raises occupancy (avgB) but lowers per-bound efficiency (velPerBound), net ≈0 on velFitX. Confirmed low AND high density.
+- **THE REAL FINE-dt EFFECT = de-biasing production BISTABILITY at high ρ:** at d8000 production seeds scatter 9.03/10.90/**13.84** (spread 4.81; s0=13.84 has fullMat=YES ⇒ a genuine
+  fast basin, not coverage), fine dt collapses to 8.99/8.99/9.13 (spread **0.15**, ~32× variance cut). The one clean-coverage production seed (9.03) = the fine-dt value. **CPU arbiter refutes
+  the GPU fast basin** (CPU d8000@1e-5 s0 = 9.93 vs GPU 13.84) ⇒ 13.84 is a GPU last-bit basin-tip artifact (the CLAUDE.md hazard); production d8000 is un-fittable (MM V∞ CI [13.6, **223**]),
+  drop it → V∞=14.04 = the fine-dt asymptote. **Fine dt is REQUIRED to characterize the dense curve.**
+- **SATURATION = CLASS B (bounded approach), fine-dt arm:** MM (Hill n≈1) strongly preferred (AICc −12 vs linear/power/log); **V∞=14.1 [13.4,14.6]**, **ρ½≈4565** [3931,5137], LOO-stable. BUT
+  sampled only to **64% of V∞ at d8000** (top increment +13% ≫ noise) ⇒ V∞ is a model extrapolation ABOVE the data; directly observed top = **9.0 µm/s**. Not A (top increment material), not
+  C (curvature resolved), not D (velPerBound decline is real tug-of-war, avgB rising — no engagement collapse), not E.
+- **dt=5e-6 IS converged (Q4):** the apparent high-ρ 5e-6→2.5e-6 climb (+8% at d4000, 2 seeds) **did NOT survive the 1.25e-6 check** (d4000 ladder 6.41→6.35→6.97→**6.70**; the +9.7% reversed
+  −3.8%; 1.25e-6 seeds straddle 6.37/7.04) — a small-sample chaotic fluctuation, not a systematic drift. The 1.25e-6 point did its job (refuted a spurious signal). velFitX converged within the
+  ~±5–10% seed envelope; class E NOT supported.
+- **BIOLOGY (Q5):** the unmodified fine-dt curve crosses biological ~4 µm/s at **ρ≈1800–2000** (physiological mat density). **The canonical model is ALREADY in the biological operating range —
+  no xCatch or J2 intervention is motivated to reach biological velocity.** The open item is numerical (bistability at production dt), not physical; V₀/1.4 (9.5) and V₀ (13.3) bracket the
+  in-range top (9.0) and extrapolated V∞ (14) only coincidentally.
+- **matbox-50 control:** benign no-op at d2000 (ON 4.52 / OFF 4.38, within noise); the d8000 ON/OFF gap is the same production basin-tip, not a chamber effect. matbox fixes the y-coverage escape
+  (established sweep VIOLATED at d8000) but NOT the free-x-runway graze at fast high-ρ glide (marginal flags d6000–8000, fine-dt YES/VIOLATED seeds agree ⇒ non-corrupting). Benchmark: GPU
+  306→130→40 steps/s (d500→8000), CPU ~11× slower; 3 GPU seeds practical, 4 not.
+
+### 2026-07-14 — EXPERIMENT 3E: Brownian + stereospecific binding capture (frozen ADP·Pi) — binding naturally recruits the 3D +30° basin; chemistry LICENSED; NO canonical change
+
+Adds normal Brownian motion + a stereospecific binding SEARCH to the two-body motor, frozen in the ADP·Pi pre-stroke state, and shows it NATURALLY recruits poses at the
+validated 3D basin WITHOUT snapping/reconstructing. Default-off `[NON-CANONICAL TWO-BODY PROTOTYPE]` (`softbox/TwoBodyConverterMotor.java`, `-exp3e`/`-twobody-capture`); NO Pi-
+release/stroke/ADP/ATP/catch-slip/gliding; NO canonical change; `BoA-v1ref` byte-clean; **3C & 3D preserved byte-identical** (3E is new methods only). CPU-only ≈7 s. Report
+`docs/TWOBODY_BINDING_CAPTURE.md`; artifacts `RUN_LOGS/twobody_binding_capture/` (+ `PREREGISTRATION.md`, `exp3e_summary.png`).
+- **SEARCH:** the neck-lever Brownian-SWINGS about the FIXED tail anchor ((φ,ψ) diffuse under FDT torques + converter spring on θ=ψ−φ; common swing free). The converter SLAVES
+  ψ≈φ+θ_s (θ_s=−30°) ⇒ near φ≈30° the head presents ψ≈0 at the actin site — the stereospecific basin. Trap-held filament (Brownian off). All gates in the LOCAL ACTIN MATERIAL
+  FRAME (via bhat/eup/econv ⇐ Rm) ⇒ rotation-covariant, no world-axis bias. NAMED explicit tolerances (dist 3nm, ψ<25°, φ<25°, θ<20°, preload<2pN, E<15kT), NOT tuned to a rate.
+- **LATCH not snap:** on all-pass, latch boundSeg + bindArc = the CURRENT material coordinate, KEEP (φ,ψ); the F8/converter/bind potentials then relax it (θ_s frozen, no Δθ). No
+  teleport, no coord change, no setting φ=30°.
+- **STUDY (260 dilute multi-seed episodes):** 252 captures (96.9%); capture pose **φ=29.0±11.2° ψ=−1.1±8.3°** (AT the +30°/0° basin), E=1.9±1.8 kT, preload 1.46 pN, bindArc
+  499±3 nm interior, **0% implausible (E>15kT)**; genuine search (capture-time 632±2806 steps, tail ~24k). Rejection-by-gate: the orient(ψ)/lever(φ)/energy gates do the selecting.
+- **REPLAY (separate, 140 native captures + 3D Δθ=60° stroke):** **140/140** pointed-first, 5-8nm axial (6.91±0.05), ≤2nm transverse (0.12±0.07), stiffness 0.5-2 (0.644±0.004),
+  low preload, load-sensitive ⇒ native captured poses PRESERVE the 3D mechanics. The basin is REACHED by binding, not imposed.
+- **CONTROLS:** spatial-only (orient gates OFF) → 100% accept but poses scatter (φ=±66° ψ=±63°) + **28.3% implausible** (E up to ~1000 kT) = why stereospecificity matters (rejects
+  non-physical bonds); narrow(±8°)/broad(±55°) control capture SPREAD/realism but NOT the replayed stroke (relaxation basin absorbs the spread ⇒ 6.90-6.91 nm across all windows);
+  polarity+rot90+rot3D acceptance ALL 0.983 (covariant, no world-axis); restart bit-identical; timestep — acceptance ≈dt-robust, relaxation dt-EXACT (φ→30.0°/ψ→0.0°/conDist→0).
+- **DECISION:** binding naturally recruits the basin; tolerance width does NOT strongly control stroke/stiffness (relaxation-basin-absorbed); native captures preserve 3D mechanics
+  ⇒ **the search is ready for the ADP·Pi→ADP transition — chemistry integration LICENSED as the next experiment.** **No canonical change; production defaults + `BoA-v1ref` unchanged.**
+
+### 2026-07-14 — EXPERIMENT 3D: axial-stroke geometry remapping of the 3C two-body motor — Outcome A (geometry alone solves it); chemistry LICENSED; NO canonical change
+
+Realigns the 3C lever swing so the arc SAGITTA (transverse) cancels, hitting the target 5–8 nm axial with ≤1–2 nm transverse. Default-off `[NON-CANONICAL TWO-BODY PROTOTYPE]`
+(`softbox/TwoBodyConverterMotor.java`, `-exp3d`/`-twobody-axial`); NO chemistry/binding/detachment/catch-slip/gliding; NO canonical change; `BoA-v1ref` byte-clean; **3C preserved
+byte-identical** (build3c refactored into a parameterized build3core with 3C-constant defaults + an η DOF gated off in stepC ⇒ all 7 3C CSVs reproduce bit-for-bit). CPU-only ≈6 s.
+Report `docs/TWOBODY_AXIAL_GEOMETRY.md`; artifacts `RUN_LOGS/twobody_geometry_search/` (+ `PREREGISTRATION.md`, `exp3d_summary.png`).
+- **MECHANISM (the whole result):** the 3C transverse (~6 nm) is the lever ARC SAGITTA — its swing (φ:−30°→−88°) sits entirely on the pointed side of vertical. In the strong-binding
+  limit a lever point moves axial=L_B(sinφ_post−sinφ_pre), transverse=L_B(cosφ_post−cosφ_pre). **Symmetrizing the swing about the vertical (φ_pre=Δθ/2)** ⇒ transverse=0,
+  axial=−2·L_B·sin(Δθ/2). Pure GEOMETRY: only the PRE-STROKE lever lean moves (−30°→+30°); the FIXED motor-frame Δθ SIGN is unchanged (barbedDir still out of target/torque/routing).
+- **STAGE 1 (kinematic Pareto):** the symmetric prediction is EXACT — along φ_pre=Δθ/2 transverse≡0. Feasible Pareto front = that line: (20°,40°)→5.5, (25°,50°)→6.8, (30°,60°)→8.0 nm
+  axial, all transverse 0. Refine picks **φ_pre=+30°, Δθ=60°** (keeps 3C's converter stroke ⇒ the ONLY change is the re-aim). [Fixed a false-positive overlap gate: head-center-near-
+  filament-axis is normal binding contact, NOT an overlap — the real check is the head crossing to the filament's far side + head/anchor interpenetration.]
+- **STAGE 2 (full mechanics, leader φ_pre=+30°/Δθ=60°, ref k_F8=1/κ_conv=128/κ_bind=512):** **k_ext=0.645 pN/nm** (bracket 0.45–1.40; skeletal), **stroke=6.91 nm** (3C 3.62),
+  **transverse=0.09 nm** (3C 6.02 — ~65× down), **preload≈0**, iso-stall 4.78 pN, τ≈0.20 ms. Δφ=−57° (lever swing)/Δψ=+0.8° (head actin-aligned) = the lever-arm mechanism.
+  **Load** (opposing→barbed): stroke 6.91→4.57 nm, completion 0.96→0.71, genForce→4.84 pN (load-sensitive, no servo; transverse ≤1.9 nm at 5 pN). **Polarity:** force-on-actin pointed,
+  glide pointed-first; swap reverses world/preserves relative; rot90 & rot3D covariant. 7 candidates all in-band + handedness OK.
+- **STAGE 3 (η) NOT NEEDED:** geometry solved both requirements. Bounded T1-passive `[COARSE-GRAINED TRANSVERSE REGISTRATION]` probe on the 3C geometry (illustrative only) reduces
+  its 6.02→3.22 nm transverse at soft k_η=0.1 pN/nm — a partial, softness-dependent absorption; the symmetric geometry removes the sagitta at source with zero added compliance ⇒ not adopted.
+- **TIMESTEP/LEDGER:** external stroke/transverse/peak+plateau force/angles **dt-INVARIANT** to <0.001 nm across {5e-6…5e-7}; work-ledger residual converges O(dt) (0.39→0.10) — the same
+  fast-lever discrete-dissipation artifact as 3C, NOT a leak; fixed anchor does zero work (never integrated).
+- **OUTCOME A / chemistry LICENSED** on this geometry (add binding/ADP·Pi→ADP Δθ-switch/ADP-release/ATP-detach one at a time; fine-dt gliding = regression target). Caveats: k_ext≤k_F8;
+  transverse grows modestly under heavy load; fast lever needs finer dt for the ledger only; fixed anchor still defers substrate compliance. **No canonical change; production defaults + `BoA-v1ref` unchanged.**
+
+### 2026-07-13 — EXPERIMENT 3C: topologically faithful 2-DOF head–converter–lever motor + material-frame handedness — Outcome B (viable AFTER flipping the material-frame ordering; the earlier stroke was BACKWARD); chemistry LICENSED; NO canonical change
+
+Replaces the 3A/3B PINNED CAM (fixed neck-lever + single arm swinging about a fixed pivot; stroke sign taken tautologically from b̂) with the intended head–converter–lever
+topology, and decides handedness from MEASURED pre/post trajectories. Default-off `[NON-CANONICAL TWO-BODY PROTOTYPE]` (`softbox/TwoBodyConverterMotor.java`, `-exp3c`); NO chemistry;
+NO canonical change; FDT bit-unchanged (Gate 1); `BoA-v1ref` untouched. CPU-only ≈1.9 s. **ALL 26 gates PASS.** Report `docs/TWOBODY_TOPOLOGY_CORRECTION.md`; artifacts `RUN_LOGS/twobody_topology/`.
+- **TOPOLOGY:** Body A = ellipsoid motor domain 9×5.5×4.5 nm carrying MATERIAL points r_F8=(3.5,1.5)/r_conv=(−3.5,−1.5) nm, |Δ|=7.6 nm (NO rod, NO head-arm body); Body B = neck-lever
+  L_B=8 nm rotating (orientation FREE) about a FIXED-POSITION anchor. Generalized coords φ (lever about anchor), ψ (head); converter joint CLOSED by construction (C=A+L_B·ûB(φ);
+  x_H=C−R(ψ)r_conv; x_F8=C+R(ψ)(r_F8−r_conv)), θ=ψ−φ, U_conv=½κ_conv(θ−θ_s)². Passive stereospecific U_bind=½κ_bind(ψ−ψ_actin)². Production F8. LINEARLY-IMPLICIT 2×2 with the F8
+  Gauss-Newton stiffness k·J⊗J (REQUIRED — the tiny head makes the F8/head mode τ<dt otherwise).
+- **HANDEDNESS (load-bearing, non-tautological):** Δθ FIXED in the motor frame (b̂ used ONLY in binding pose + analysis — access audit: postTargetSel=0, converterTorque=0, routing=0
+  ⇒ Gate 8). MEASURED: original Δθ=−60° ⇒ F8·b̂=+7.60 nm BARBEDWARD (biologically REVERSED); corrected by FLIPPING the material-frame ordering (Δθ→+60°, Outcome B — NOT force/displacement
+  ×−1) ⇒ F8·b̂=−3.98 nm POINTEDWARD, filament glide·p̂=+3.62 (pointed-first). **The earlier 3B/legacy stroke direction was BACKWARD.**
+- **LEVER-ARM MECHANISM (M2):** strongly-bound head (κ_bind≳128) expresses the stroke as NECK-LEVER SWING (Δφ≈−58°, Δψ≈0) with the head actin-aligned — the biological lever swing;
+  free head (κ_bind=0) splits (Δφ−24°/Δψ+34°, the soft regime). **Passive k_ext free-head 0.008 → bound-head 0.954 pN/nm** (skeletal for κ_bind≳128). Active stroke 3.62 nm, load-sensitive
+  (→1.85 at 5 pN), preload 0, no servo. Ledger converges O(dt) to 3.1% @2.5e-7 (fast lever/converter discretization, not a leak).
+- **LEGACY compare (M5):** corrected3C k_ext=0.64/Δφ=−57.6°(swings)/glide+3.62(POINTED); legacyCam k_ext=0.99/Δφ=0(frozen)/glide−0.43(BARBED) — **the cam and the articulated motor have
+  OPPOSITE handedness for the same Δθ** (why the 3B tautology hid the reversal).
+- **RENDERING:** typed `objects` JSON (physical_body/physical_bond/diagnostic_vector, each labeled; role NOT from color/width/order); the 3B "long diagonal line" was the pinned-cam
+  head-arm (converter→F8 rod) — REMOVED (the ellipsoid material points encode the separation). 10 typed `-3js` sequences.
+- **⇒ OUTCOME B (clearly corrected, on the CORRECTED topology not the legacy cam) ⇒ chemistry integration LICENSED** (add binding/nucleotide-target-switch/detachment/gliding one at a
+  time on this faithful + polarity-correct prototype; fine-dt gliding = regression NOT fitting target). Caveats: large lever-arc transverse ~6 nm (flatter geometry later); fast converter
+  needs finer dt; fixed anchor defers substrate compliance. NO canonical change.
+
+### 2026-07-13 — EXPERIMENT 3B: biological two-body geometry remap + EXPLICIT actin polarity — Outcome A (scaled + polarity-correct); chemistry LICENSED; NO canonical change
+
+Remaps the Exp-3A two-body prototype to a defensible coarse-grained myosin geometry AND makes actin barbed/pointed EXPLICIT in state/logs/JSON/viewer/tests. Default-off
+`[NON-CANONICAL TWO-BODY PROTOTYPE]` (`softbox/TwoBodyConverterMotor.java`, `-exp3b`); NO chemistry/binding/gliding added; NO canonical change; FDT bit-unchanged (Gate 1);
+`BoA-v1ref` untouched. CPU-only ≈1.1 s. **All 20 gates PASS.** Report `docs/TWOBODY_GEOMETRY_POLARITY.md`; artifacts `RUN_LOGS/twobody_geometry_polarity/`.
+- **POLARITY AUDIT (executed code, Part V):** UNAMBIGUOUS — end1=coord−½L·uVec, end2=coord+½L·uVec; bindArc(s) increases end1→end2; **barbed=end2=+uVec, pointed=end1=−uVec**
+  (`AxLockGateHarness`/`AgingHarness`/`directedSwing` "pointed→barbed"); canonical glide=pointed-first(−uVec)="correct". ⇒ **Outcome C refuted.** Exp-3A's +θ stroke dragged
+  the filament +x=BARBED-first=biologically BACKWARD ⇒ 3B defines the working stroke via the stored b̂ (sweep F8 point toward pointed=−b̂).
+- **GEOMETRY REMAP (Gates 2/3):** motor-domain ellipsoid 9×5.5×4.5 nm (semi-axes 4.5/2.75/2.25, hydro r≈4.6 nm) · **R_A=8 nm** (converter→F8 arm, DISTINCT from motor size) ·
+  neck–lever **L_B=8 nm** (renamed; NOT S2/tail) · rigid calibration anchor. General-frame build (bhat/eup/econv) ⇒ arbitrary orientation.
+- **PASSIVE (remapped):** rigid α=1.000 (Gate 14); k_ext = series(k_F8, κ/R_A²) EXACT after remap (resid ~1e-5), monotonic 0→k_F8 (κ=64→0.500, 576→0.900, ∞→1.000);
+  trap+dt invariant (Gates 15/18). Active stroke pointed-directed 2.6–6.2 nm ~90% geometric, completion 0.96 (Gate 16).
+- **POLARITY MECHANICS (measured dot products vs stored b̂/p̂):** **P1** clamped: F on actin·b̂=−3.518 pN (POINTED, Gate 9), F on motor·b̂=+3.518 pN (BARBED, Gate 8),
+  Newton-exact · **P2** free filament glide·p̂=+4.388 nm (POINTED-FIRST, Gate 10) · **P3** swap b̂ (geometry fixed) ⇒ world −4.388→+4.388 REVERSES (Gate 11) · **P4** rotate
+  assay 90°+3D ⇒ glide 4.388 / force −3.518 BIT-IDENTICAL to unrotated (COVARIANT, Gate 12) · **P5** reverse target ⇒ −4.388 (nonbiological sign control) · **P6** load vs b̂:
+  completion resist 0.821<free 0.959<assist 1.081 (Gate 17). **⇒ Gate 13 no-world-axis-bias PASS** (depends only on stored b̂ + geometry, not ±x).
+- **LEDGER (Gate 19):** the remapped converter is FASTER (γ_θ ∝ R_A²; R_A 10→8 shrinks γ_θ ⇒ τ_conv<dt for stiff κ) ⇒ the coarse-dt work residual is a DISCRETIZATION
+  artifact (explicit F8-torque lags), converging 0.003→**0.0017** as dt→0 (κ=64); filament-rot dissipation=0 (centred attach). A real remap consequence (finer dt for stroke
+  dynamics), NOT an energy leak.
+- **Geometry controls:** R_A 6/8/10 → k_ext 0.780/0.667/0.561, glide 5.91/4.39/3.50 nm, force −4.99/−3.52/−2.75 pN — R_A trades stiffness↔stroke; **polarity signs invariant.**
+- **Viewer/JSON (Gates 4/5/6/20):** every `-3js` frame carries an explicit `"polarity"` block (barbed/pointed coords+dirs, material-coord direction, motor-step/force-on-actin/
+  glide vectors + b̂/p̂ projections) + distinct endpoint SHAPES (barbed broad cap / pointed narrow) + arrows; 8 matched sequences; serialization exact (P0).
+- **The two-body kinematic decomposition DIFFERS from canonical (fixed neck-lever + swinging F8 grip vs canonical fixed grip + swinging lever) but the OBSERVABLE is identical**
+  (force on actin pointed, glide pointed-first). **OUTCOME A ⇒ chemistry integration LICENSED** (add binding/nucleotide/detachment/gliding one at a time on this scaled +
+  polarity-explicit prototype; fine-dt gliding = regression target). Caveats: k_ext≤k_F8 ceiling; stall F8-limited; rigid anchor (real substrate compliance deferred); faster
+  converter needs finer dt. NO canonical change.
+
+### 2026-07-13 — EXPERIMENT 3A: two-body converter motor, optical-trap characterization — Outcome A (VIABLE); NO canonical change
+
+First replacement-motor prototype. A DEFAULT-OFF `[NON-CANONICAL TWO-BODY PROTOTYPE]` (`softbox/TwoBodyConverterMotor.java`, `-exp3a`): head + fixed lever-tail,
+ONE converter DOF θ with elastic potential ½κ_θ(θ−θ_s)², production F8 (align OFF), rigid anchor — **NO J1/J2/F9/F10/AXLOCK/DIRSWING/XB_IMPLICIT2**. CPU-only ≈1.3 s.
+**New file + 1-line dispatch; NO tracked/canonical source changed; FDT bit-unchanged (Gate 1 PASS); `BoA-v1ref` untouched.** Report `docs/TWOBODY_CONVERTER_TRAP_CHARACTERIZATION.md`;
+artifacts `RUN_LOGS/twobody_converter/`. All 16 gates PASS.
+- **Design:** a rigid head arm of radius R_A=10 nm pivots about a FIXED converter point P (=rigidly-anchored lever-tail's proximal end); F8 attach at radius R_A; θ the single
+  in-plane coordinate (roll/out-of-plane KINEMATICALLY locked, yVec≡ŷ ⇒ 1 DOF, no ball joint, no hidden mode). Converter integrated SEMI-IMPLICITLY (unconditionally stable
+  all κ; κ→∞ ⇒ θ→θ_s rigid limit). Effective converter stiffness at the F8 point = κ_θ/R_A². F8 = production `bondForces`, material-latched bindArc (never relatched).
+- **Stage 0/1:** zero preload exact (F8=0, convTorque=0); rigid converter (θ frozen) reproduces the Exp-2B fixed-head reference **α=1.000** (Gate 4). ⇒ Outcome F (hidden
+  compliance) REFUTED, force routing correct.
+- **Stage 2/3 — the two-body motor is a CLEAN EXACT SERIES SPRING:** k_ext = 1/(1/k_F8 + R_A²/κ_θ), matching measured to ~1e-5. Monotonic 0 (κ=0, the free-rotating sphere)
+  → k_F8 (κ→∞, fixed head). **k_ext ≤ k_F8 (F8 is the stiff series ceiling).** @k_F8=1: κ=100→0.500, κ=1000→**0.909 pN/nm (skeletal band)** vs the canonical three-body ~0.02.
+  Trap-invariant (k_motor=0.500 flat). Gates 5/6/7/12 PASS. (One stiff-F8/soft-converter corner ill-conditioned → small negative k_ext, reported not clipped.)
+- **Stage 4 — finite external stroke:** a θ_s: θ_pre→θ_post shift (NOT a trajectory/servo/re-aim/relatch) sweeps the F8 point, dragging the material-latched filament. External
+  stroke 2.5–8.1 nm (~90% of geometric R_A·sinθ_post); **completion RISES with κ (99% at κ=1000)**. Gate 8.
+- **Stage 5 — load/stall:** opposing force clamp 0–5 pN drops converter completion **0.92→0.12** (Gate 9), generated force rises to match; NOT a servo (Gate 10); fully
+  reversible. Isometric stall **2.6 pN — F8-COMPLIANCE-LIMITED** (half the rigid κΔθ/R_A=5.24 bound; ceiling k_F8·R_A·sinθ_post≈5 pN). Under a constant-force clamp the filament
+  stroke is ~isotonic (load pre-deflects the soft converter); the stall shows in COMPLETION + isometric force.
+- **Ledger (Gate 14):** active-stroke ΔU_target = ΔU_conv+ΔU_F8+ΔU_trap+dissipation, **residual 0.2%** — the injected converter free energy is mostly DISSIPATED by the head
+  swinging through γ_θ (adding converter rotational dissipation was required to close it; was 0.65 without). Timestep dt-invariant (Gate 13); sign reverses (Gate 15); 6 `-3js` (Gate 16).
+- **THE HEADLINE — Outcome A (VIABLE) + Outcome D (tradeoff) REFUTED:** a stiff converter (κ≳300 pN·nm/rad²) simultaneously gives skeletal-range stiffness (0.75–0.91·k_F8) AND a
+  near-complete load-sensitive stroke (both RISE with κ — no conflict). The two-body reaches ~0.9 pN/nm (vs canonical ~0.02) because it has ONE compliance + a RIGID anchor —
+  realizing the Exp-2A "collapse to a stiffer two-body" recommendation and the Exp-2B fixed-head finding. **DECISION: PROCEED to chemistry integration** (converter stiff, k_F8
+  chosen for the target combined series stiffness; fine-dt gliding = regression target, not fitting target). NO canonical change made. Caveats: k_ext≤k_F8 ceiling; stall
+  F8-compliance-limited; rigid anchor (real substrate compliance deferred — the next series-compliance term).
+
+### 2026-07-13 — EXPERIMENT 2B: fake-coupler stiffness-transfer ladder — Outcome A (exact F8 recovers ~100%); the 1.0→0.65 loss is HEAD-SIDE compliance, NOT F8 geometry; NO model change
+
+Deliberately non-biological diagnostic: how a coded F8 spring becomes the blinded-inferred stiffness as we add, one at a time, 3D geometry, bond orientation,
+material attachment, filament translation/rotation, off-axis torque, trap compliance, and a fixed spherical head — and where the settled Exp-2A **1.0→0.65**
+(H8 frozen-motor / F8-only) loss localizes. CPU-only, ≈3.5 s. **New behaviour ONLY in new `softbox/LaserTrapFakeCoupler.java` + a 1-line `-exp2b` dispatch in
+the untracked `LaserTrapHarness` + `scripts/lasertrap_fake_analyze.py`; NO tracked/canonical source changed; FDT regression bit-unchanged (Gate 1 PASS);
+`BoA-v1ref` untouched; default-off, `[NON-CANONICAL FAKE COUPLER]`-labelled.** Report `docs/LASER_TRAP_FAKE_COUPLER_LADDER.md`; artifacts `RUN_LOGS/lasertrap_fake_coupler/`.
+- **Exact F8 (Gate 3):** every F8 arm calls the PRODUCTION `CrossBridgeSystem.bondForces` with the F9/F10 alignment coeff = 0 (`xbParams[2]=0`) ⇒ the pure
+  **zero-rest-length** Hookean spring `F=myoSpring·(site−tip)` + its exact R×F torque, NOT reimplemented. Head = a frozen (or, F7, freely-rotating-about-a-pinned-
+  centre) MotorStore head sub-body; seg reaction via the production CSR `segGather`; traps = validated `applyTraps3D`; blinded paired-±step estimator (Exp-2A).
+- **THE STRUCTURAL FACT:** F8 is zero-rest ⇒ its linear stiffness tensor is ISOTROPIC `k·I` ⇒ orientation/preload/off-axis-torque cost NOTHING at linear order; any
+  loss must be MOTION of the parts. The ladder measured this instead of assuming `cos²θ`.
+- **Transfer curve F0/F1/F6 (trap 0.05):** α = k_blinded/k_assigned = **1.000** for k_F8 ≤ 1.5; at k ≥ 2 k_motor is **UNIDENTIFIABLE** (follow<5%, trap-limited —
+  reported NaN not clipped, Exp-1b Outcome D); k_obs saturates toward k_trap (instrument limit, NOT coupler saturation). **F0 (scalar spring) ≡ F1 (axial F8) ≡ F6
+  (fixed sphere)** — all recover 100%.
+- **Localization (native stage-E, k=1; bonds span 13–157°, 2–7 nm, n=48):** F1 axial 1.000 · **F2 orient 1.0000 · F2 +native preload 1.0000 · F3 +filament rotation
+  1.0000 · F4 off-axis z-bond ¼/⅛L rot-ON 0.9999/0.9995 (filRot 0.4–0.5°, torque ~1e-22 N·m) · F5 torque-cancel 1.0000** — every pure-F8 geometry recovers full k.
+  **ONLY F9 (canonical frozen motor = Exp-2A H8) = 0.6534.** ⇒ the 0.65 loss is NOT F8 spring/orientation/preload/attachment/torque/filament-rotation; it is the
+  **head-side canonical machinery** (F9/F10 alignment torques + XB_IMPLICIT2 coupled solve) that F9 carries and the pure-F8 arms omit.
+- **Spherical head (the mechanism, direct):** **F6 fixed = full k**; **F7 free-rotating = α 0.48→0.14→0.042, k_motor SATURATES ≈0.17 pN/nm** as k_F8 rises (a
+  fixed-magnitude head-rotation compliance in series — the many-body analog of the canonical body); **F8 orientation-restrained → recovers F6** (validates the
+  rotational reading). ⇒ **Outcome G + E.**
+- **Is 0.65 constant?** NO. Fixed-F8 arms α=1.000; the head-compliance analog (F7 / real motor) α FALLS with k (saturates) ⇒ 0.65 is one point on a saturating curve,
+  not a transmission constant. **B/C/D/H all REFUTED; controlling = A, with G+E as the loss mechanism.** Confirms & mechanistically explains Exp-2A Outcome E.
+- **Closure/dt/Brownian:** F1 centred net force/torque = 0, work-ramp resid 2.3e-6 (Gate 13); F1 & F6 dt-invariant (Gate 12); Brownian F1/F6 mean-Ftrap~0 rms~0.2 pN,
+  F7 rectifies (~0.28 pN), |F8|~2.4–3.3 pN light-head inflation (detachment off ⇒ high-F overrepresented; NO 12 pN cap referenced). 8 `-3js` sequences (Gate 14).
+- **DECISIONS:** fixed spherical head (F6) is the clean full-stiffness reference for a two-body prototype; a rolling head NEEDS an explicit orientation potential
+  (F7 too soft); stiffen the head/body pathway BEFORE touching F8 (F7 saturation ⇒ raising F8 alone can't overcome a compliant head). **NO canonical F8 change made
+  or recommended.** Recommendation for the anchor/two-body study recorded in the report §13.
+
+### 2026-07-13 — EXPERIMENT 2A: native-pose DYNAMIC compliance localization (time-resolved trap + one-DOF holds) — Outcome E (distributed), F8 is skeletal-stiff; NO model change
+
+First step of the mechanical-stiffness intervention study: localize WHICH freedom causes the Exp-1b softness before adding any spring. CPU-only,
+**new behaviour only in untracked `LaserTrapHarness` (`-exp2a`) + `scripts/lasertrap_localization_analyze.py`; no tracked/canonical source changed; FDT
+regression bit-unchanged (Gate 1 PASS); `BoA-v1ref` untouched; default-off.** Full run ≈30 s (40 snapshots/stage, n=20 used). Report
+`docs/LASER_TRAP_COMPLIANCE_LOCALIZATION.md`; artifacts `RUN_LOGS/lasertrap_compliance_localization/`.
+- **Time-resolved blinded estimator** `k_obs(t)=ΔF_trap/Δx_cmd` (paired ±) + compliance-corrected `k_motor(t)=paired ΔF-slope/paired filament-follow-slope`
+  (NaN, not clipped, when follow<5%). **Diagnostic HOLDS H0–H8** = exact kinematic projections pinning ONE DOF to its captured value each step, reporting
+  reaction force/torque/work; `[NON-CANONICAL DIAGNOSTIC HOLD]`, default-off, NOT models.
+- **Stage 1 (Gate 2) — estimator VALIDATED:** motor-free peak `k_obs`=k_eff exactly, plateau→0; **known scalar-spring recovered to 100.0% across 3 springs×3
+  traps, FLAT vs trap** ⇒ the Exp-1b trap-dependence is genuine multibody ill-conditioning, NOT estimator failure; synthetic reproduces Exp-1 (0.0019/0.0040).
+- **Stage 2 baseline:** early `k_obs@10µs`≈0.099≈k_trap (the INSTRUMENT, not the motor) decaying to the soft plateau ⇒ **Outcome A (bandwidth) REFUTED**
+  (no stiff-early MOTOR mode); plateau stiffens ~1.6× A→E; trap-dependence persists (Outcome-D caveat); native pose persists (frozen-relaxed ≈ minimal-settle); linear.
+- **Stage 3 holds (compliance-corrected `k_motor`@plateau, mean B,E):** H0 0.019 · **H2 rod-rotation(anchor pivot) 0.054 (leading single DOF)** · H7 rigid-chain
+  0.027 · **H8 frozen-motor/F8-only 0.653 — INSIDE skeletal 0.5–2!** ⇒ **F8 + attachment geometry are NOT the ceiling (Outcome F REFUTED)**; the softness is the
+  **~34×-softer articulated body IN SERIES with F8**. J1/J2/head holds ≈0 (reaffirms J2-null); even locking all internal articulation (H7) recovers ~1% of the
+  H0→H8 gap; H2 alone ~5%. **Holds quasi-neutral** (reaction work ~1e-18–1e-20 J, H2 injects 0 force) ⇒ genuine transmission change, not immobilization (Gates 5,10).
+- **Gates:** G1–G11 all PASS (G8 H2 improves across full trap bracket; G9 dt-stable, H8 +3.5% reported). Telemetry: motion taken up by anchor extension + F8, joints small.
+- **OUTCOME E (distributed architectural compliance)** with B flavour (rod pivot about the tail anchor = leading single contributor). **Ranked next:** (1) rod-orientation
+  restraint about the anchor (cheap/interpretable/partial); (2) tail-anchor trans+rot stiffening; (3) **simplified two-body spherical-head prototype — LICENSED** (no single
+  hold, nor the internal rigid-chain, reaches skeletal; only whole anchor/rod-body rigidification does — but F8 itself is already skeletal-stiff, so the two-body job is to
+  remove the series articulated-body compliance, NOT fix F8); (4) J1/J2 transmission NOT recommended; (5) attachment geometry NOT the limiter. **No intervention implemented.**
+
+### 2026-07-13 — EXPERIMENT 1b: native-pose BLINDED optical-trap stiffness — Outcome D (not uniquely identifiable) over B (canonical soft mode); NO model change
+
+Measurement/identifiability follow-up to Exp-1's flag that its synthetic vertical pose (J2=0°/62.9° collinear) is non-native. CPU-only,
+**new files only — `git diff` on tracked source EMPTY** (canonical untouched; `BoA-v1ref` untouched; default-off). Extended `LaserTrapHarness`
+(`-nativegen`,`-exp1b`); `LaserTrapSystem` reused. Four ordered stages: generate native poses → snapshot A–E → blinded 3D-trap replay → analyse.
+
+- **Native generation (Gate 2):** composed the EXACT canonical stepOrig WITH binding/cycle/release ON (Lymn-Taylor, ADP·Pi-only bind), filament
+  velocity-clamped v=0, **dilute 64-motor bed** (clamped filament ⇒ independent single-molecule episodes, the episode-kernel trick — the unbound
+  free-jointed arm floods a 0.1 µm sphere so 1-motor binding is diffusion-limited). Canonical geometry (anchor −0.05, fil z=0). 60 snapshots/stage × 4 seeds.
+- **Gate 4 coordinate reconciliation:** SAME atan2 unsigned J2 formula as the native audit + Exp-1; native means **A/ADP·Pi 104°, E/ADP 142°**
+  (match audit 103°/122°); Exp-1's **0°/62.9° = collinear synthetic assembly**, non-native. Same formula, different poses.
+- **Gate 3 restart fidelity PASS; Gate 6 power PASS.**
+- **BLINDED stiffness (external observables only; k=ΔF_trap/Δx_fil):** median **A 0.0154 → E 0.0310 pN/nm** (stiffens ~2× with age, tracks J2),
+  broad (p5–p95 ~0.002–0.056), fracNeg 2–7%, 0 unstable. **Native ~8× stiffer than synthetic (0.0019/0.0040) — refutes a pure synthetic artifact —
+  but still 16–65× below skeletal (0.5–2 pN/nm); ~0% of events reach skeletal.**
+- **Gate 7 trap-invariance FAIL ⇒ Outcome D:** compliance-corrected k = 0.017/0.025/0.029 at trap 0.02/0.05/0.10 pN/nm (49% spread) — the motor is
+  comparable-to-softer than the trap ⇒ correction ill-conditioned ⇒ NOT uniquely identifiable. **Gate 8 timestep PASS (0.3%).** Gate 10: native
+  pose PERSISTS (drift ~2 nm); native-instantaneous ill-posed (relaxation transient), relaxed is the identifiable value.
+- **Secondary (unblinded AFTER freezing primary):** within stage E, r(k,anchorExt)=+0.37, r(k,|F8|)=+0.37, r(k,J2)=−0.18…−0.28 ⇒ tail-anchor +
+  F8 load are the leading compliance predictors (the anchored body pivots; consistent with Exp-1 + episode kernel). Brownian |F8| median 3.4 pN,
+  p99 7.5, tail ~8.9 pN (thermal rectification; detachment OFF ⇒ high-force overrepresented; NO 12 pN cap in canonical, `-forcecapdetach` is separate).
+- **OUTCOME D (not uniquely identifiable) over B (canonical soft mode), C flavour (pose/age spread), NOT A (native≠synthetic-artifact).** Gates 1–6,8,9,11
+  PASS; G7 FAIL (=the Outcome-D signal); G10 reported. **NO model change.** Intervention is scientifically motivated but NOT implemented; ranked
+  candidate compliance sources (tail-anchor pivot #1, articulated J1/J2 #2, F8 projection #3) for a later one-factor default-off study gated on the
+  blinded trap observable. Report `docs/LASER_TRAP_NATIVE_POSE_STIFFNESS.md`; prereg+log+CSV+figure `RUN_LOGS/lasertrap_native/`; viewer `threejs_native_*/`.
+
+### 2026-07-13 — EXPERIMENT 1 (+Stage 0b): 3D trap + passive forced-bound canonical-motor compliance — CONDITIONAL PASS; Exp-2 licensed
+
+Ordered two-stage compliance measurement, CPU-only (GPU reserved for the fine-dt sweep). **New files only — `git diff` on tracked
+source EMPTY** (no canonical/production file touched; `BoA-v1ref` untouched). Extended `LaserTrapSystem` (`applyTraps3D`: vector
+diagonal-tensor trap, kTr=0 recovers the axial-only Exp-0 law) + `LaserTrapHarness` (`-0b`, `-exp1`).
+
+- **Stage 0b (3D trap dumbbell, no motor) — all 6 tests PASS:** k_effAx=2kAx, k_effTr=2kTr, **kθ=kTr·L²/2·1e-6 matched to 0.1%**,
+  translational covariance FDT-correct (axial 1.00/transY 0.97/transZ 0.87), angular sub-thermal by the known **BRotCoeff=0.5** knob
+  (reported, NOT gated on naive kT/kθ), deterministic axial τ dt-invariant 0.10%. Pretension 5 nm (0.25 pN) stabilizes orientation
+  (kθ rises) without changing axial k_eff (Gate 4).
+- **Experiment 1 — EXACT canonical composition (Gate 5 by construction):** the `GlidingHarness.stepOrig` mechanics subset (joints→
+  anchor→bondForces[F8/F9@90/AXLOCK]→applyHeadForce→directedSwing→integrate→XB_IMPLICIT2 couple) with the springs baking verbatim;
+  passive = forced-bound at the material midpoint (boundSeg=0, bindArc=½segLen, material-latched), binding/release/cycle removed,
+  nucleotide frozen (DIRSWING retained as the fixed state's potential). NO surrogate motor equations.
+- **Key results:** both states equilibrate to plateau (ADP·Pi F8=0.153 pN lever-0°; **ADP F8=0.320 pN, DIRSWING→lever-60° J1=59° J2=63°**).
+  Force–displacement LINEAR/SYMMETRIC (±0.5–4 nm). **k_motor,eff = 0.0019 (ADP·Pi) vs 0.0040 (ADP) pN/nm — +113%, ADP ~2.1× stiffer**
+  (state-dependent compliance differs measurably). **Series identity k_obs=1/(1/k_trap+1/k_motor) EXACT (resid 0.000) ⇒ whole-motor
+  stiffness cleanly IDENTIFIABLE** (Gate 11). Timestep dt-invariant 0.03% (Gate 9). Pretension-independent (1/5/10 nm). **Absolute
+  stiffness ~100–1000× SOFTER than skeletal (~0.5–2 pN/nm)** — dominated by the anchored articulated body PIVOTING about the tail
+  anchor (near-vertical F8 bond; the filament follows the command ~98%, F8 barely changes, head-chain translates with it); a real
+  finding with a geometry caveat (may not represent the load-bearing engaged cross-bridge). **J2 accommodates (~0.65°/nm; 63° in ADP)
+  but does NOT set incremental stiffness ⇒ reinforces the settled near-neutral-hinge result.**
+- **Controls:** axial-only trap gives **0 stiffness** (filament escapes transversely) vs 3D 0.0018 — materially different, 3D essential.
+  Brownian: deterministic |F8|=0.15 pN vs stochastic-mean 3.54 pN = light-sphere-head thermal RECTIFICATION (magnitude), not a basin shift.
+- **Gates:** G1–G7,G9,G10,G11 **PASS**; **G8 energy CONDITIONAL** (multibody rotational/joint-mover dissipation not captured; force/disp
+  closure exact). **Outcome CONDITIONAL PASS.** Conditions carried to Exp-2: (a) absolute stiffness geometry-dependence (§7.1), (b) energy
+  closure approximate. **Experiment 2 (deterministic active working-stroke) LICENSED.** Report `docs/LASER_TRAP_PASSIVE_MOTOR_COMPLIANCE.md`;
+  prereg+logs+CSVs+figure `RUN_LOGS/lasertrap_motor/`; viewer `threejs_lasertrap_motor_{adppi,adp}/`. `run_lasertrap.sh -0b|-exp1`.
+
+### 2026-07-13 — EXPERIMENT 0: virtual optical-trap FILAMENT calibration assay — all 7 gates PASS; CONDITIONAL PASS (Exp-1 licensed)
+
+Setup-validation experiment BEFORE any motor: prove the optical-trap geometry, force balance, thermal equilibrium,
+relaxation, timestep behaviour, energy accounting, logging, and visualization are correct. **No motor / chemistry /
+binding / crosslinker / turnover.** **CPU-ONLY** (GPU reserved for the fine-dt gliding sweep, ~89% util; the harness
+refuses `-gpu`). **New files only — `git diff` on tracked files EMPTY** (canonical bytecode unchanged; `BoA-v1ref`
+untouched): `softbox/LaserTrapSystem.java` (endpoint trap force+torque, the `ContainmentSystem` r-in-metres
+convention), `softbox/LaserTrapHarness.java`, `scripts/run_lasertrap.sh`, `scripts/lasertrap_analyze.py`.
+
+- **Scene:** ONE rigid actin rod (`FilamentStore` n=1, L≈1 µm) between two axial-projected harmonic traps on the
+  derived endpoints (`F=−k[(x−x0)·f̂]f̂`), composing the SHARED drag/Brownian/rigid-rod-Langevin/derive systems.
+  Rotation LEFT FREE and MEASURED (not suppressed). A single rigid segment cannot carry internal strain ⇒ A2 trivially
+  clean. The optional `applyAxisPrep` orientation term stayed **OFF** (not needed).
+- **Analytic backbone (derived, not assumed):** the two endpoint x-offsets ±(L/2)u_x cancel in the force sum ⇒
+  `F_net=−(k_L+k_R)(x_c−x_eq)` orientation-independent ⇒ **k_eff = k_L+k_R** (NOT one trap stiffness), effective drag
+  = γ_∥, `⟨δx²⟩=kT/k_eff`, `τ=γ_∥/(1e6·k_eff)`, `x_eq=F/k_eff`.
+- **Phase A (deterministic):** A1 net/torque = 0, no drift; A2 follows to ≤1.2e-7 µm, internal strain 0; A3 tension =
+  k·d EXACT with correct signs, net 0; A4 τ_meas 1.31344 ms vs pred 1.31844 ms (0.38%); A5 x_eq=F/k_eff <0.001%,
+  **R²=1.0000000**, linear both signs. Deterministic dt-ladder: τ 1.31344→1.31594→1.31719 ms (→1.31844), **finest-two
+  |Δτ|/τ = 0.09%** (noise-free timestep leg); k_eff invariant <0.003%.
+- **Phase B (thermal, canonical Brownian, 8 paired seeds × dt{1e-5,5e-6,2.5e-6} × 0.3 s):** equipartition var/var_pred
+  = **0.985 ± 0.018 (n=24)**; timestep paired Δvar/var_pred (finest two) = −0.050±0.032 (within noise, reported
+  directly). Angular excursion 3.4–7.1° RMS, transverse 0.1 µm RMS — no tumbling/escape (axial-only traps don't confine
+  transverse/orientation; a real 3D bead trap would).
+- **Phase C (step recovery):** 2/5/8/11 nm × 3 stiffnesses — raw step fully recovered, peak force = k_eff·step, τ∝1/k
+  (3.29/1.31/0.654 ms). Observation operator (moving-avg 50 + downsample 20) kept SEPARATE from raw, NOT tuned.
+- **Energy (Gate 7):** free-relax ΔU = dissipation (residual 0.38%); differential ramp W_center = ΔU + dissipation
+  (residual 0.0%).
+- **Gates:** G1 default-path (empty diff + FDT CPU regression unchanged) · G2 force balance · G3 equipartition · G4
+  relaxation · G5 timestep (deterministic 0.09% + thermal within noise) · G6 viz (230 `-3js` frames, dumbbell + traps +
+  attachments + connectors + scale in the EXISTING viewer schema; geometry numerically verified: 0→+40→0 nm) · G7
+  energy — **all PASS.**
+- **Outcome: CONDITIONAL PASS.** All gates green; the ONE carry-forward condition is that axial-projected traps do NOT
+  confine transverse/orientation and a forced-bound motor loads those DOF ⇒ Exp-1 must choose full-3D traps / weak axis
+  prep / monitored-free explicitly (do NOT tune it). Single-rod idealization + provisional stiffness bracket
+  (0.02/0.05/0.10 pN/nm, NOT biological) are the other carry-forward notes. **Experiment 1 (passive forced-bound motor)
+  LICENSED.** Report `docs/LASER_TRAP_FILAMENT_CALIBRATION.md`; figure `RUN_LOGS/lasertrap/lasertrap_summary.png`;
+  prereg + logs + CSVs `RUN_LOGS/lasertrap/`. Runner CPU, ~1.2 s full assay; no canonical default changed.
+
 ### 2026-07-12 — FINE-dt V₀ REFERENCE: canonical rigid-clamp force zero is operationally converged at ≈13.3±0.5 µm/s; production dt overestimates it by +2.7 µm/s (+20%)
 
 Well-powered follow-up to the under-seeded timestep ladder in `TIMESTEP_SERVO_AUDIT`. **Measurement-only — NO physical-model or production-setting change:** ran the existing default-off CPU `-vclamp` harness at dt={1e-5, 5e-6, 2.5e-6, 1.25e-6} s with the canonical `SPHEREHEAD+AXLOCK+DIRSWING+XB_IMPLICIT2+LYMN_TAYLOR` stack; F9 frozen at 90°, DIRSWING 0°→60°, J1/J2 native angular springs off; `BoA-v1ref` untouched. Used the validated d2000/matbox50 compact clamp, **constant 80 ms physical duration** with constant 26.7 ms physical warm-up, step counts 8k/16k/32k/64k, **8 paired seeds identical across every arm**, and a refined near-zero velocity grid v={10,12,13,14,15,16,18} µm/s (+8 for production): 232 runs total.
