@@ -181,7 +181,7 @@ def paired_bootstrap(diffs, B=10000, rng=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cells", default=CELLS_DEFAULT)
-    ap.add_argument("--fig", default=os.path.join(os.path.dirname(__file__), "..", "FINE_DT_FREE_GLIDE_figure.png"))
+    ap.add_argument("--fig", default=os.path.join(os.path.dirname(__file__), "..", "docs", "FINE_DT_FREE_GLIDE_figure.png"))
     ap.add_argument("--runner", default="gpu")
     args = ap.parse_args()
 
