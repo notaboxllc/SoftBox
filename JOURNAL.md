@@ -1,5 +1,121 @@
 # Soft Box Project Journal
 
+### 2026-07-14 — EXPERIMENT 4D: flexible filament gliding over a dense 2D myosin mat — FEASIBILITY DEMONSTRATED (glides pointed-first, multi-section engagement, contour conserved); flexible ≈ rigid at canonical actin stiffness
+
+Corrects 4C's assay limitations (rigid rod in a narrow doubly-confined strip) WITHOUT changing the motor: a genuinely FLEXIBLE chain filament (nSeg=12, ~2.11 µm, canonical `ChainBendingForceSystem` F3+F4 bending
++ full Brownian, free ends, z-ONLY surface ⇒ x/y/rotation/bending FREE) glides over a TRUE 2D motor lawn (ρ=1000/µm² over 3.0×1.0 µm ⇒ N=3000 motors). Non-canonical, default-off `-exp4d` / `-twobody-flexible-mat-gliding`,
+CPU-only; **two-body motor, canonical chemistry+constants, chain law, RNG, force order, `BoA-v1ref` untouched** (new `Glide2D` path; 4B/4C `Multi`/`stepMulti` unchanged). Deliverables: `docs/TWOBODY_FLEXIBLE_MAT_GLIDING.md`,
+`scripts/twobody4d_analyze.py`, `RUN_LOGS/twobody_flexible_mat_gliding/`, viewer `~/Code/SoftBox/threejs_twobody4d_{flexible_active,flexible_control,flexible_nobind,rigid_active}` (chain + 3000-motor lawn).
+- **APPARATUS (canonical chain reused):** `FilamentStore(12)` straight along +x (MONOMER_CT=64, segLen 0.176 µm), `ChainBendingForceSystem` F3 link + F4 bending (canonical actin Lp≈17 µm — NOT softened), rot-Brownian on end
+  segments only; z-only confinement `−kz·z` per segment (kz=2 pN/nm); step zero→brownian→chain→gather→z→integrate ONCE→derive (verified). Motors bind the NEAREST segment (local tangent for the material coord + signed force
+  via `bondForces`); the CSR gather (keyed by boundSeg, general over nSeg) sums reactions per segment. **Active-set spatial cull:** only ~377 of 3000 motors (within the filament bbox+30 nm) run mechanics/step. Rigid-rod mode
+  (1 segment) = condition D. **Verified: contour conserved (2.106=2.106), forces to correct segment/material coord, once/step integration, no stale rigid axis** (orientation gate uses the lab frame — a flagged approximation
+  valid for the bend<1° semiflexible filament).
+- **RESULT — FEASIBILITY DEMONSTRATED (primary dt=2.5e-6, 6 ep × 0.5 s):** (1) recruited to the dense 2D mat — avgBound 0.38, continuity 0.30 (**better than the 4C strip 0.15** at the same density; 2D lawn ⇒ more reachable
+  motors); (2) **pointed-first polarity** (per-stroke disp·p̂ +1.08 nm flex / +1.88 nm rigid); (3) **flexibility does NOT increase availability — flexible ≈ rigid** (avgBound 0.379 vs 0.388) because canonical actin at 2 µm is
+  nearly rigid (bend 0.25°, e2e/contour 0.986) — honest physics, not softened; (4) bends gently + explores laterally (yExplore 112 nm) WITHOUT leaving the surface (RMS z 1.1 nm), contour conserved, no buckling; (5) **multi-section
+  engagement — up to 7 distinct segments bound to independent motors at once** (mean 1.24); (6) no snagging/buckling/conflict (joint gaps bounded ~9.6 nm); (7) flexible vs rigid: same recruitment + both pointed-first, but
+  **flexible per-stroke COM displacement is SMALLER** (compliance absorbs the stroke into local bending — the filament-level compliance story). **Both controls clean:** B(no-motor) avgBound 0/vel~0, C(binding-disabled, full
+  mat) avgBound 0/vel~0 — the anchor lawn creates NO directed motion. 0 forbidden transitions. dt-stable (polarity/bending/stroke); engagement carries the ~15% coarse-dt bias.
+- **CLASSIFICATION: feasibility positive; 4C assay limitations corrected.** The 2D-mat + flexible-chain assay is realistic and works; the flexibility effect on recruitment is small at canonical stiffness (2 µm actin is stiff).
+  **NEXT (recommended, NOT started): a continuity/velocity study on the validated 2D-mat assay** (velocity vs reachable-count/duty, toward a regression vs the fine-dt canonical curve) — OR, to isolate a real flexibility effect,
+  **a longer filament (8–15 µm, Lp/contour<1)**. Keep dt ≤ 5e-6.
+
+### 2026-07-14 — EXPERIMENT 4C: first low-density gliding of the cycling two-body motor — FEASIBILITY DEMONSTRATED (recruitment + pointed-first polarity + completing strokes); motion recruitment-limited
+
+The first FREE-filament gliding tests: a free Brownian filament glides over a sparse bed of INDEPENDENT cycling 4A two-body motors. Reuses the 4B `Multi` machinery VERBATIM (per-motor 4A cycle, canonical CSR gather, ONE
+filament integrate/step) + two changes: (i) filament Brownian ON (`filBrown`); (ii) the restoring end-traps become a SURFACE — axial (glide) FREE (kAx=0), transverse y,z softly confined to the motor plane (kTr=2 pN/nm).
+Non-canonical, default-off `-exp4c` / `-twobody-lowdensity-gliding`, CPU-only; **4A motor, canonical kinetics, RNG, force order, and `BoA-v1ref` untouched** (5 canonical files byte-clean; 4B byte-identical — the `filBrown`
+line is guarded off). Deliverables: `docs/TWOBODY_LOWDENSITY_GLIDING.md`, `scripts/twobody4c_analyze.py`, `RUN_LOGS/twobody_lowdensity_gliding/`, viewer frames `~/Code/SoftBox/threejs_twobody4c_{control,low,medium,highlow}`.
+- **APPARATUS (canonical gliding, reused):** density motors/µm² → `nMot=density·bedX(2.6µm)·bedY(±8nm strip)` (250/500/1000 ⇒ 10/21/42); random anchors placed by the 3E construction to reach `(ax,ay,0)`; a motor binds
+  only when the gliding filament passes within the 3E gate reach (recruitment EMERGES from the gate). Filament = 1µm rigid rod, Brownian ON; surface = `applyTraps3D` kAx=0/kTr=2 (transverse pin, axial glide); force via the
+  CSR gather; **filament integrated ONCE/step after summation** (verified). Velocity = net-displacement rate + the Brownian-FREE per-stroke directed displacement·p̂ (polarity); OLS-slope kept as a noise-dominated diagnostic.
+- **BUG FOUND+FIXED:** `stepMulti` never advanced the FILAMENT RNG step index ⇒ with Brownian ON, `BrownianForceSystem` redrew the SAME force every step ⇒ a spurious constant ~165 µm/s DC drift (visible even in the
+  0-motor control). Fixed by advancing `fil.counts` each step (guarded by `filBrown` ⇒ 4B byte-identical). Post-fix control = proper bounded Brownian (COM ±60 nm/0.2s, D_par≈0.031 µm²/s, net vel ~0).
+- **RESULT — FEASIBILITY DEMONSTRATED (primary dt=2.5e-6, 8 ep × 0.20 s):** (1) recruitment YES, scales with density — reachable 7/16/32, avgBound 0.047/0.093/0.169; (2) **polarity POINTED-FIRST at every density** —
+  per-stroke directed disp·p̂ **+3.19/+3.34/+3.32 nm** (Brownian-free, dt-stable); (3) motion INTERMITTENT — continuity (frac ≥1 bound) 0.05/0.08/0.15, longest gap 200→160→64 ms (shrinks with density); (4) continuity needs
+  MORE than 1000/µm² (limited by the low single-motor duty ~0.013, search+recovery-dominated — the 4B carry-forward); (5) **stroke completion ≈1.0** (0.99/0.99/1.01) — strokes complete before ADP release/detachment;
+  (6) drift/rotation minimal — RMS z/y ~1 nm, tilt 0.1° (well confined, no contact loss); (7) polarity+completion dt-stable, avgBound carries the ~17% coarse-dt variation. **0 forbidden transitions; control ≈0.** Net velocity
+  Brownian-noise-limited at low duty (the per-stroke disp is the robust signal). Phase-1 `-3js` frames (control/low/medium/highlow, ~1500 frames each) written for direct inspection.
+- **CLASSIFICATION: feasibility positive, motion recruitment-limited** (not force-limited) — the cycling two-body motor glides a free filament in the correct polarity with completing strokes + clean mechanics; sustained
+  continuous gliding is not reached at ≤1000/µm² (low duty). **NEXT (recommended, NOT started): a focused recruitment/continuity study** (continuity vs reachable-count / duty at higher density or wider reach) to find where
+  coverage becomes continuous, THEN a proper gliding velocity vs the fine-dt canonical curve as a REGRESSION. Keep dt ≤ 5e-6.
+
+### 2026-07-14 — EXPERIMENT 4B: sparse multi-motor (N=1..4) composition of the 4A cycle — OUTCOME A (independent composition); proceed to low-density gliding
+
+N∈{1,2,3,4} INDEPENDENT 4A two-body motors share ONE trap-held filament, interacting ONLY through the shared filament mechanics + the canonical CSR force gather — NO motor–motor coupling, NO shared chemistry, NO
+cooperative rates, NO tuning. Non-canonical, default-off `-exp4b` / `-twobody-sparse-multimotor`; **4A motor, canonical kinetics, joint arithmetic, force order, RNG, and `BoA-v1ref` untouched** (5 canonical files
+byte-clean). Deliverables: `docs/TWOBODY_SPARSE_MULTIMOTOR.md`, `scripts/twobody4b_analyze.py`, `RUN_LOGS/twobody_sparse_multimotor/`.
+- **ARCHITECTURE (reused, audited):** ONE `FilamentStore(1)` (trap-held, Brownian off, moves under motor load) integrated ONCE/step; ONE `MotorStore(N)` (motor m head at slot 3m+2; per-motor boundSeg/bindArc/
+  nucleotideState/forceDotFil/state); `cycleLymnTaylor` per-motor (wang-hash keyed on m ⇒ independent chemistry streams); `CrossBridgeSystem.bondForces` writes bondData[m·STRIDE], the CSR gather (histogram/scan/
+  scatter/segGather keyed by boundSeg) sums every bound motor's seg reaction into fil.forceSum — order-independent, no atomics, no double-count. Per-motor generalized coords (φ_m,ψ_m): bound → the 4A F8 implicit
+  solve, free → the 3E Brownian search (independent salt per motor). Binding = the 3E gate, ADP·Pi-only, from the PRE-integration filament state; latches live pose + material coord (no teleport). Detach zeroes only
+  motor m's bondData row.
+- **GEOMETRY (fixed pre-production):** filament half 0.5 µm; anchors below the filament at axial spacing 0.15 µm (transverse 0), interior sites; none begin bound; barbedDir NOT in the stroke sign. Traps 0.05 pN/nm
+  dual-end (3F/4A value, restoring ⇒ NO net translocation — a trapped assay, not gliding). dt primary 5e-6, subset 2.5e-6.
+- **RESULT — OUTCOME A (independent composition), 24 ep × 300k steps/N:** per-motor bound fraction **FLAT with N** (0.0126/0.0123/0.0127/0.0123); mean bound ∝ N; ADP·Pi dwell 0.10 ms, ATP-free 10.0 ms, **ADP dwell
+  ~1.25 ms FLAT with N (NO catch-locking)**; native stochastic stroke **~2.9 nm flat** (vs clean-capture 6.9 nm; smaller/broader as 4A); **productive 72% flat**, near-zero/backward 5–6% flat; **0 forbidden, 0 stalls,
+  0 numerical instability** at every N. Occupancy near-independent-binomial with a SMALL filament-mediated positive co-binding correlation (P(≥2) ~2× binomial but tiny absolute, ≤0.0017) — mechanical, NOT biochemical
+  cooperativity. mean |motor force| 0.65 pN flat; longest co-bound 3.1 ms (transient).
+- **CONTROLS (all pass):** N=1 reproduces 4A; **force balance Σ_i F_{i,∥} = gathered filament force to ≤8.7e-7 pN** (order-independent, no double-count); **inactive-neighbor: N=4 with only motor0 active gives the
+  active motor's bound frac 0.0125 vs N=1 0.0126, Δ=0.0001** (idle motors don't perturb chemistry/force); **fixed-seed bit-identical**; index/anchor-permutation ensemble-invariant; catch-modulated ADP release tracks
+  the UNCHANGED canonical onADP·⟨g(F)⟩ at all N (dominant +0.25 pN bin matches to a few %). Polarity: net disp trap-nulled ⇒ read from the pointedward productive fraction + inherited 3C/3D covariance.
+- **dt-convergence (N=2, 5e-6 vs 2.5e-6):** composition/independence dt-STABLE; ADP dwell 1.26→1.05 ms (bound frac 0.0137→0.0161) keeps the inherited 4A ~17% coarse-dt release-dwell bias (converging); native stroke
+  dt-stable (2.84→2.90 nm). Both dt give Outcome A. **All 11 pass criteria met.**
+- **NEXT (recommended, NOT started): low-density single-filament GLIDING** — free the filament (surface/bed, small carpet), measure velocity vs the fine-dt canonical curve as a REGRESSION (not a fit). Carry-forward:
+  native stroke 2.9 nm < clean 6.9 nm; low duty ~0.013 is search+recovery-dominated (gliding will be recruitment-limited); use dt ≤ 5e-6.
+
+### 2026-07-14 — EXPERIMENT 4A: canonical nucleotide cycle ported onto the two-body motor — FULL PASS (single-molecule cycle closed; 3E/3F mechanics preserved)
+
+Closed the minimal stochastic biochemical cycle of the validated 3C–3F two-body motor by **REUSING the canonical `NucleotideCycleSystem.cycleLymnTaylor` kernel VERBATIM** over the two-body motor's own
+1-motor `MotorStore` — NO second chemistry framework, NO new rate constants, NO renamed states. The two-body mechanics (`stepC` bound / `stepU` search / the 3E gate) are the thin mechanical ADAPTER.
+Non-canonical, default-off `-exp4a` / `-twobody-cycle`; **canonical motor, production defaults, joint arithmetic, force order, RNG, and `BoA-v1ref` untouched** (`NucleotideCycleSystem`/`MotorStore`/
+`CrossBridgeSystem`/`GlidingHarness`/`CanonicalMotorHarness` byte-clean). Deliverables: `docs/TWOBODY_BIOCHEMICAL_CYCLE.md`, `scripts/twobody4a_analyze.py`, `RUN_LOGS/twobody_biochemical_cycle/`.
+- **PHASE 1 (source map, traced not commented):** the ratified `-lymntaylor` cycle — states NONE/ATP/ADPPi/ADP (`MotorStore:145`); rates `setNucParams` (atpOn 2e4, onATP/offATP 100, onPi 1e4/offPi 0,
+  onADP/offADP 1e3); ADP→NONE = onADP·g(F), g=αCatch·e^(−F·xCatch/kT)+αSlip·e^(+F·xSlip/kT) (`setKinParams`, unchanged); **bind ONLY in ADP·Pi** (welded `ADPPI_BIND`); **cocking isCocked()=!isADPPi**;
+  **F = forceDotFil = Dot(F8_head, seg.uVec)** (`CrossBridgeSystem:204`, bondData[12]) — the SAME quantity+sign the canonical bond kernel writes; **one-step-stale** force; ATP-binding IS detachment (NONE→ATP).
+- **ADAPTER:** θ_s (converter target) switched by state via `isCocked` — ADP·Pi = −30° (uncocked), else +30° (cocked) ⇒ the Pi-release ADP·Pi→ADP swing IS the validated +60°/6.9 nm 3D/3F stroke (emergent,
+  no direct position write). forceDotFil copied from `cm.bondData[12]` each step; binding = the 3E stereospecific gate gated on `state==ADPPi`; detach drops the bond (`bondForces:100` `if(s<0) continue`),
+  φ/ψ/A preserved (no teleport); recovery = off-fil ATP→ADPPi (re-primes/uncocks the lever) → waits primed in ADP·Pi → Brownian rebind. Order matches canonical gliding **bind→cycle→bond/integrate**.
+- **PHASE 3 (single-motor, all PASS):** (A) 6 cycles, **0 forbidden transitions**, actin walks pointed-ward ~5 nm/cycle. (B) 40 ep × 400k steps: **915 full cycles, 0 stalls, 0 NaN, 0 forbidden**; dwells
+  NONE-bound 0.050 (canon 0.050), ADP·Pi-bound 0.097 (0.100), ATP-free 9.66 (10.0), ADP-bound 4.40 ms (load-modulated). (C) **force-clamp catch-slip**: +barbed/opposing → forceDotFil>0 → **catch (slower)**,
+  assisting → forceDotFil<0 → **slip (faster)** — sign ESTABLISHED from geometry+force flow; censoring-aware measRate tracks canonical onADP·⟨g(F)⟩ (excess over g(⟨F⟩) = Jensen thermal-fluctuation term,
+  NOT re-tuning; xCatch untouched). (D) ATP detach n=200: latency 0.053 ms (canon 0.050), via NONE→ATP 200/200, bond removed ONCE 200/200, no pos-jump 200/200, **zero residual F8** 200/200. (E) recovery/
+  rebind n=40: recovered→ADP·Pi 40/40, rebound 40/40, 2nd stroke pointed-first 39/40 (multiple cycles, no manual reset).
+- **PHASE 4 (mechanics protected, cycle ON, n=118):** capture 0.983, cap preload 1.49→relaxed 0.10 pN, **stroke 6.90±0.04 nm**, transverse 0.10 nm, **k_ext 0.624 pN/nm**, force·b̂ −0.664 pN, pointed 118/118
+  — every 3E/3F observable AT baseline. **No mechanical regression** (adapter reuses `stepC`/the 3E gate; the chemistry only KEYS the same θ_s switch 3F applied manually).
+- **PHASE 5:** max per-step transition prob 0.40/0.20/0.10/0.05 (<1) at dt {2e-5..2.5e-6}; ADP dwell converges dt→0 (rate 721/731 /s at the two finest, ~1% apart; production 1e-5 ~28% high — the known
+  coarse-dt bias); **fixed-seed bit-identical, different seed differs**; executed order reported; 3C/3E/3F byte-identical. **Classification: FULL PASS** (all 10 pass criteria).
+- **NEXT (recommended, NOT started):** begin **sparse multi-motor cycling** (2–4 independent cycling two-body motors, one filament, no gliding-density sweep) — the catch-slip law is already validated here, so
+  a deeper catch-slip run is redundant and there is no integration defect to repair. Flags (not defects): bound-ADP dwell is load-modulated (~4.4 ms resting-strain catch); τ-avg left at ratified default
+  (instantaneous); force-cap detachment diagnostic kept OFF.
+
+### 2026-07-14 — EXPERIMENT 3G-B: REALISTIC-ONLY tweezers HOLDOUT — step+polarity survive twin-free; stiffness becomes weakly identifiable (twin-free pipeline hides a real systematic)
+
+The 3G-A-recommended follow-up: a small SEALED **realistic-only** optical-tweezers holdout (NO ideal twins) with a BETTER perturbation protocol, analysed once by a FROZEN strategy, to test whether
+the developed analysis recovers step / pre&post stiffness / polarity without the noise-free twins that assisted 3G-A. Non-canonical, default-off `-exp3gb`; canonical + `BoA-v1ref` untouched.
+Deliverables: `docs/TWOBODY_BLIND_TWEEZERS_HOLDOUT.md`; frozen pipeline `scripts/frozen_tweezers_holdout_analysis/` (+SPEC+hashes); sealed pkg + truth + scorecard + census `RUN_LOGS/twobody_blind_tweezers_holdout/`.
+- **FROZE THE ANALYSIS FIRST** (before generating): copied the 3G-A analyst pipeline verbatim, removed ONLY the ideal-twin code paths (every threshold/filter/exclusion/estimator preserved),
+  wrote `FROZEN_ANALYSIS_SPEC.md`, hashed. Validated it reproduces 3G-A's realistic numbers. The pre/post-difference verdict uses the analyst's OWN ideal-free criterion (0.15 pN/nm inversion resolution).
+- **HOLDOUT** (`-exp3gb`, fresh seeds, restart bit-identical): 75 stroke + 18 bound-no-release + 27 controls + 3 calibration; k_ax 0.02/0.05/0.10; 5 preloads {−1,−0.5,0,+0.5,+1}. Improved perturbation =
+  common-mode trap **steps HELD ≥5.5·τ_det** (23/9.2/4.6 ms), **force-matched** amplitudes, 2 amps + sign. Realistic traces ONLY; truth computed off-trace (never saved as a readable trace).
+- **DESIGN FINDING (fixed):** held steps ADJACENT to the stroke make the frozen stroke-detector (tuned on 3G-A short spikes) latch onto the held-step relaxation TAILS → step failed (−3.0 vs 7.85).
+  Root-caused (detector fired at 45ms, true stroke 153ms), redesigned so the stroke sits in a LONG QUIET stable dwell with perturbations POST-stroke only, separated → level-A detection 25/25.
+- **BLIND run by a SEPARATE CC session** (no source/truth access), verified after the fact by a transcript **CENSUS** (`private_truth/census_blind_session.py`) = CLEAN (touched only the handoff dir);
+  frozen pipeline re-verified UNMODIFIED (12/12 hashes), 142 sealed files intact. [jba correctly required a real separate session + post-hoc census rather than a same-machine sub-agent.]
+- **SCORECARD vs external k_xb truth (NOT the 1.0 F8 spring):** step **7.00 [6.53,7.44]** vs 7.85 (−11%, CI narrowly misses; robust ±0.04nm to cal, 0.6nm over 14× k_post); **k_pre 0.577 [0.221,0.934]**
+  (−10%, CI covers); **k_post 0.651 [0.595,0.708]** (+4%, CI covers); **pointed-first** ✓ (55/59); pre/post diff correctly **NOT identifiable**. Detection 58/75 (level A/B 81%, C 29%); 5/21 control false-attach, 0 false strokes.
+- **THE REAL FINDINGS (blind analyst, running the frozen method unchanged then diagnosing read-only):** (1) held steps break the attach detector's mask→interpolate → **5 false attachments** (f_att=0.30
+  zero-FP point doesn't transfer from short pulses); (2) the E0 systematic-floor stage **silently NaNs 11/21 controls** (measured detached chunk var 15.5 > model ceiling 11.8 at level A — the realistic
+  variance model under-predicts by ~30%, drift residual), so the k_post floor is unmeasured AT level A and is −0.14 where checkable (level C); (3) force-matched held steps are **sub-thermal** (disp
+  1.5/0.6/0.3nm vs sd 11/6.5/4.4) → the improved perturbation did NOT rescue stiffness (E2 dead), stiffness rests on variance+mean-shift.
+- **IDEAL-TWIN VERDICT:** step + polarity (DC observables) survive twin-free unchanged; the **stiffness loses its forward-model validation** — the 30% variance-model gap would be immediately visible
+  as a twin-vs-realistic mismatch but surfaces twin-free only as a silent NaN + an under-estimated systematic floor. "A twin-free package leaves the DC observables intact and quietly guts the
+  variance-based ones." Point estimates landed within CI by E1/E3 robustness, NOT because the twin-free pipeline could prove them.
+- **DECISION:** main 3G-A conclusions (step ≈7nm, stiffness ≈0.6, pointed-first, tiny pre/post diff unresolved) SURVIVE without twins, but post-stroke stiffness is weakly identifiable with an
+  unmeasured systematic. Two named, fixable frozen-pipeline failures (held-step/attach mask; E0 variance-ceiling NaN) ⇒ a co-designed **newly-blinded future test** (drift-aware variance model +
+  held-step-aware detector). No canonical/model change. Full-scale digital twin still waits on the closed stochastic biochemical cycle (per 3G-A synthesis).
+
 ### 2026-07-14 — FINE-dt FREE-GLIDING DENSITY SWEEP: canonical curve is CLASS-B bounded-approach, already biological at ρ≈2000; fine dt's real effect is de-biasing production bistability (NOT the mean)
 
 Directly measured the canonical free-gliding velFitX–density curve at production dt=1e-5 vs fine dt=5e-6 (matched 0.6 s, matbox-50, coltol-8), to answer whether the fine-dt curve
@@ -25,6 +141,46 @@ raw `RUN_LOGS/finedt_cells/`. Canonical stack UNMODIFIED; no parameter changed; 
 - **matbox-50 control:** benign no-op at d2000 (ON 4.52 / OFF 4.38, within noise); the d8000 ON/OFF gap is the same production basin-tip, not a chamber effect. matbox fixes the y-coverage escape
   (established sweep VIOLATED at d8000) but NOT the free-x-runway graze at fast high-ρ glide (marginal flags d6000–8000, fine-dt YES/VIOLATED seeds agree ⇒ non-corrupting). Benchmark: GPU
   306→130→40 steps/s (d500→8000), CPU ~11× slower; 3 GPU seeds practical, 4 not.
+
+### 2026-07-14 — EXPERIMENT 3G-A: fuller SEALED blinded optical-tweezers dataset GENERATED (supersedes 3G's package); NO analysis; NO canonical change
+
+Rebuilt the 3G blind challenge to the fuller spec (`-exp3ga`/`-twobody-tweezers2`, default-off). **GENERATED + SEALED ONLY — no blinded analysis, no step/stiffness estimation
+here** (blinding genuine). `RUN_LOGS/twobody_blind_tweezers/{PREREGISTRATION.md, blind_package/, private_truth/, generation_and_audit.log}`; report `docs/TWOBODY_BLIND_TWEEZERS_GENERATION.md`.
+3C/3D/3E/3F byte-identical; `BoA-v1ref` clean; canonical untouched.
+- **Frozen truth definitions (external, not assigned constants):** event step (pre→post COM plateau); unloaded step (zero-preload intercept + compliance-free zero-trap-stiffness
+  intercept ≈7.9 nm); apparent stiffness (raw follow fraction); **crossbridge stiffness k_xb=2k_ax(Δ−δ)/δ** measured BOTH sides — **pre-stroke ≈0.64, post-stroke ≈0.62 pN/nm** (small
+  real pre>post); truth is k_xb NOT the assigned F8 spring (1.0).
+- **Matrix:** 165 stroke events (55/stiffness ≥50) at k_ax{0.02,0.05,0.10}×preload{−1,−0.5,0,+0.5,+1 pN, assist/zero/oppose} + 15 bound-no-release (attach,no-stroke, unlabeled in
+  raw_traces) + 21 controls (9 no_motor / 6 motor_present / 6 no_motor_perturbation_calibration) + 3 long calibration. **Two-sided perturbations** (pre-stroke ADP·Pi + post-stroke
+  ADP dwells) at amplitudes 1/2/3 nm × timescales ~3 ms & ~0.6 ms. Two datasets: ideal_observable_only (50 kHz noise-free) + instrument_realistic (20 kHz + 3 kHz LP + 0.8 nm noise +
+  2.5 nm drift + ±10% calib), paired by trace ID in the specified subtree layout.
+- **Physics (generator-side):** step scales with trap stiffness (7.5/6.9/6.0 nm = compliance division of intrinsic ~8 nm), weakly load-dependent (~1%/pN, honest not inflated);
+  attachment=variance drop; deterministic k_xb clean-linear. Recovering step/stiffness from thermal+instrument noise is the analyst's identifiability question — NOT pre-judged.
+- **Validation:** natural stereospecific capture (every event); polarity-correct (165/165 pointed-first); pre-transition trap force ~0 at preload 0; perturbations linear (≤0.5 nm bead);
+  **restart reproducible (bit-identical)**; copy-without-repo; leakage audit CLEAN (no forbidden fields/names; honest control labels; randomized tr_<hash> IDs); MANIFEST_SHA256 verifies (412 files).
+- **PENDING (separate session):** independent analyst (blind_package ONLY) → analyst_results.json → `python3 private_truth/unblind_compare.py` → `docs/TWOBODY_BLIND_TWEEZERS.md`.
+  NO detachment/catch-release/ensemble until the blinded result is reviewed.
+
+### 2026-07-14 — EXPERIMENTS 3F/3G: native Pi-release stroke on natural captures (3F) + blinded optical-tweezers challenge GENERATED & SEALED (3G); NO canonical change
+
+**3F (Pi-release stroke, `-exp3f`/`-twobody-pistroke`):** extends 3E — search→ADP·Pi capture→pre-stroke relax→ADP·Pi→ADP (θ_s −30°→+30°, the FIXED material-frame ordering of
+3C–3D, an absolute target, NOT from barbedDir)→post-stroke dwell — on NATURALLY captured motors (not reconstructed ideal). NO ADP-release/ATP/catch-slip/recovery/gliding/ensembles.
+Default-off; 3C/3D/3E byte-identical; `BoA-v1ref` clean. Report `docs/TWOBODY_PI_STROKE.md`; artifacts `RUN_LOGS/twobody_pi_stroke/`.
+- **PRELOAD DISTINCTION (resolved before any blinded data):** **capture** preload = F8 bond force at latch = **1.49±0.39 pN**; **relaxed** preload = after the passive ADP·Pi
+  relaxation = **0.10±0.03 pN** (~15× drop — the pose relaxes the bond onto the material site); **pre-transition TRAP force** = the AXIAL force the trap reads = **−0.03±0.15 pN
+  (~0)** because the relaxed F8 bond is nearly PERPENDICULAR to actin ⇒ ~0 axial projection. So the externally-observable pre-stroke tension is ~0 (a clean force-free step baseline).
+- **118/118 natural captures RETAIN the 3D mechanics:** axial **6.90±0.04 nm**, transverse 0.10±0.06, force-on-actin·b̂ **−0.66±0.15 pN (pointed)**, k_ext(ADP) 0.624±0.004 pN/nm,
+  load-sensitive (6.90→6.67 nm @2pN opposing), stable dwell (<0.5 nm drift). Chemistry-integration (the ADP·Pi→ADP switch) VALIDATED on real captures.
+**3G (blinded tweezers GENERATOR, `-exp3g`/`-twobody-tweezers`):** a Langevin dual-trap actin-dumbbell (filament between 2 endpoint traps, filament Brownian ON) driven by natural
+captures + the 3F Pi-stroke. **GENERATED + SEALED ONLY — this session does NOT analyze** (blinding kept genuine). `RUN_LOGS/twobody_blind_tweezers/{blind_package,private_truth}`.
+- 48 events (×2 datasets: `ideal_observable_only` 50 kHz noise-free + `instrument_realistic` 20 kHz, 3 kHz low-pass, 0.8 nm noise, 2.5 nm drift, ±10% calib) at k_ax {0.02,0.05,0.10}
+  × preload {0,1 pN} × 8, + 3 long calibration traces + 3 no-motor controls. Randomized IDs (`tr_<hash>`), SHA-256 manifests in both dirs.
+- **Blinding verified:** blind exports ONLY {t, bead1, bead2, trapL_cmd, trapR_cmd} + calibrated k + polarity marker + sampling/filter metadata; NO binding/Pi times, chemical states,
+  angles, head coords, F8 ext, assigned stiffness, or expected step leak; private truth not referenced from the package.
+- **Physics (generator-side): calibration recovers k by equipartition (0.021/0.056/0.102); attachment = clear variance drop (~6.9→2.6 nm rms @0.05); pointed-first step ~7 nm
+  matches noise-free truth; step scales with trap stiffness (7.5/6.9/6.0 nm @0.02/0.05/0.10 = compliance division of an intrinsic ~8 nm stroke); kext_true≈0.62 (NOT the F8 spring 1.0).**
+- **PENDING (separate session):** independent analyst (blind_package ONLY) → `analyst_results.json` → `python3 private_truth/unblind_compare.py` → `docs/TWOBODY_BLIND_TWEEZERS.md`.
+  Analyst prompt `blind_package/BLIND_ANALYST_PROMPT.md`; notes `RUN_LOGS/twobody_blind_tweezers/GENERATION_NOTES.md`. **No detachment/catch-release/ensemble until the blinded result is reviewed.**
 
 ### 2026-07-14 — EXPERIMENT 3E: Brownian + stereospecific binding capture (frozen ADP·Pi) — binding naturally recruits the 3D +30° basin; chemistry LICENSED; NO canonical change
 
