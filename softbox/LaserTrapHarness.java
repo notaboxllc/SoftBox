@@ -260,6 +260,10 @@ public final class LaserTrapHarness {
                 case "-exp4b", "-twobody-sparse-multimotor" -> { TwoBodyConverterMotor.run4b(args); return; }   // Experiment 4B: sparse multi-motor (N=1..4) composition of the 4A cycle on one shared filament
                 case "-exp4c", "-twobody-lowdensity-gliding" -> { TwoBodyConverterMotor.run4c(args); return; }   // Experiment 4C: first low-density free-filament gliding of the cycling two-body motor
                 case "-exp4d", "-twobody-flexible-mat-gliding" -> { TwoBodyConverterMotor.run4d(args); return; }   // Experiment 4D: flexible filament gliding over a dense 2D myosin mat
+                case "-exp4d2", "-twobody-fullcoverage-mat" -> { TwoBodyConverterMotor.run4d2(args); return; }   // Experiment 4D-ii: full-length active-motor coverage on the dense 2D mat (audit + correction)
+                case "-exp4e", "-twobody-tail-recruitment" -> { TwoBodyConverterMotor.run4e(args); return; }   // Experiment 4E: passive myosin-tail geometry as a recruitment mechanism
+                case "-exp4f", "-twobody-supported-s2-tail" -> { TwoBodyConverterMotor.run4f(args); return; }   // Experiment 4F: supported two-region tail (search-mobile, load-bearing)
+                case "-exp4g", "-twobody-explicit-s2" -> { TwoBodyConverterMotor.run4g(args); return; }   // Experiment 4G: MD-informed EXPLICIT fixed-contour S2 geometry
                 case "-target" -> EXP2A_TARGET = Integer.parseInt(args[++i]);   // snapshots/stage for Exp-2A
                 case "-fast" -> EXP2A_FAST = true;                  // Exp-2A: reduced snapshot counts (quick smoke)
                 case "-viz", "-3js" -> { runViz = true; if (i + 1 < args.length && !args[i + 1].startsWith("-")) JS_DIR = args[++i]; }

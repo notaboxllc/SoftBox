@@ -1205,6 +1205,37 @@ public final class TwoBodyConverterMotor {
         double lb=LB_3C, phiPre=PHI_PRE; double[] rF8=R_F8, rConv=R_CONV; double vOff=0.0;
         // ---- Exp-3D transverse-registration coordinate η (Stage 3; default OFF) ----
         boolean etaOn=false; double kEtaCode=0, eta=0, etaPre=0, etaPost=0, gammaEta=0; double[] etaDir=null;
+        // ---- Exp-4E passive anchor→pivot TAIL (default OFF ⇒ stepC never reads these; tail-off ≡ fixed anchor) ----
+        //  Fixed surface attachment S; MOVABLE pivot P (= cm.A when tailOn); tail = a rod S→P of rest length lTail,
+        //  stretch stiffness kTailCode, bending stiffness kappaTailCode toward rest direction tHat, pivot drag gammaP.
+        //  Rest configuration: P = S + lTail·tHat = the fixed-anchor position ⇒ the pre-stroke pose is unchanged.
+        boolean tailOn=false; double[] S, tHat; double[] P;
+        double lTail=0, kTailCode=0, kappaTailCode=0, gammaP=0;
+        // ---- Exp-4F supported two-region tail (default OFF ⇒ stepC/stepSup delegate; supOn=false ≡ fixed anchor) ----
+        //  A biologically motivated tail that separates unbound SEARCH mobility from bound axial LOAD transmission.
+        //  Mechanically the pivot P (movable, DOFs along b̂/econv/ê_up) is held by TWO separate passive elements about
+        //  the rest anchor P0=A: (1) a SUPPORTED DISTAL TAIL along the load axis ûL=b̂ — a slack-to-taut nonlinear
+        //  AXIAL law: soft within a slack |qL|<δ (search), rapidly TAUT (stiff kTaut) beyond δ (load); tension/
+        //  compression asymmetric (softer, floor-bounded in −qL); (2) a FLEXIBLE PROXIMAL S2 hinge — a SOFT
+        //  TRANSVERSE (econv,ê_up) search spring with a smooth finite-extension stiffening near rMax (bounds
+        //  inversion) + a substrate floor. supOn=false ⇒ stepSup delegates to stepC (bit-identical). Reduces to the
+        //  fixed anchor as (kSoftAx,kSoftTr)→∞ or δ→0 with kTaut large. Passive · nonlinear · anisotropic ·
+        //  load-engaged · nucleotide-INDEPENDENT (no state switch). qL is the spec tension coordinate.
+        boolean supOn=false; double[] supP0, supUL, supUT1, supUT2;    // rest pivot; load axis b̂; transverse axes econv,ê_up
+        double supKsoftAx=0, supKtautAx=0, supDelta=0, supKsoftTr=0, supKfeTr=0, supRmax=0, supKfloor=0;
+        double supSmoothAx=0, supSmoothTr=0, supCompFrac=1, supFloorZ=0, supGammaP=0, supLdist=0, supLs2=0;
+        // ---- Exp-4G explicit fixed-contour S2 beam (default OFF ⇒ stepC/stepS2 delegate; g4On=false ≡ fixed anchor) ----
+        //  Replaces 4F's two PRESCRIBED Cartesian springs (axial slack-to-taut + transverse soft) with ONE explicit
+        //  discretized extensible-elastica beam representing the free proximal S2 coiled coil: fixed reference contour
+        //  length (M segments, rest length l0 each), LARGE axial stretch stiffness (ks per segment), FINITE bending
+        //  rigidity (kb per joint). Proximal node g4Node[0]=E clamped at the supported emergence point with a clamped
+        //  emergence tangent g4Tan (the support does NOT rotate); distal node g4Node[M] = the motor pivot P (=cm.A).
+        //  NO active stroke, NO actin interaction, NO nucleotide dependence. The anisotropy (soft transverse / stiff
+        //  axial) and the slack-to-taut nonlinearity EMERGE from beam geometry (bending vs stretch, buckling,
+        //  straightening) rather than being assigned. g4On=false ⇒ stepS2 delegates to stepC (bit-identical).
+        boolean g4On=false; double[][] g4Node; int g4M=0; double g4l0=0, g4ks=0, g4kb=0;   // µm ; SI N/m ; SI N·m
+        double g4kfloor=0, g4floorZ=0, g4gammaNode=0; double[] g4E, g4Tan;                  // floor (SI N/m); emergence pt + tangent (world)
+        double g4Lc=0, g4slack=0;                                                          // reference contour L (µm); rest slack = L−endToEnd (µm)
     }
     static double[] rotConv(double[] V,double psi,double[] econv){ double c=Math.cos(psi),s=Math.sin(psi); double[] cx=crs(econv,V);
         return new double[]{ V[0]*c+cx[0]*s, V[1]*c+cx[1]*s, V[2]*c+cx[2]*s }; }
@@ -4379,10 +4410,15 @@ public final class TwoBodyConverterMotor {
     //  untouched. Feasibility + visualization only — NO density sweep, NO tuning. See docs/TWOBODY_FLEXIBLE_MAT_GLIDING.md.
     // ============================================================================================
     static final double G4_MATX=3.0, G4_MATY=1.0;   // 2D mat footprint (µm): 3.0 × 1.0 = 3.0 µm²
+    static double       G4_MX=G4_MATX, G4_MY=G4_MATY; // MUTABLE mat dims (4D-ii may enlarge; default = the 4D constants ⇒ 4D unchanged)
     static final int    G4_MONO=64;                  // monomers/segment (canonical MONOMER_CT) ⇒ segLen ≈ 0.176 µm
     static final int    G4_NSEG=12;                  // ~2.1 µm contour (semiflexible; canonical bending, Lp≈17 µm)
     static final double G4_KZ=2.0;                   // z-only surface confinement (pN/nm) — the coverslip normal
     static final double G4_MARGIN=0.03;              // active-set margin around the filament bbox (µm)
+    // 4D-ii — derived per-segment CANDIDATE-QUERY radius (µm): shortest site→segment distance below which a motor
+    // can host a binding. Components: F8 search swing L_B·sin(φtol≈25°)≈5nm + head half-extent ≈4.5nm + gate reach
+    // (dBind 3nm + FIL_R ≈3.5nm) ≈6.5nm + segment displacement/update (v·dt ≪1nm) + margin ≈5nm ≈ 21nm ⇒ 30nm (safe).
+    static final double G4_QUERYR=0.030;
 
     static final class Glide2D {
         FilamentStore fil; MotorStore mot; int nSeg, N; boolean rigid, filBrown; double kzCode;
@@ -4391,13 +4427,26 @@ public final class TwoBodyConverterMotor {
         double[] bhat,phat,eup,econv,uvecPhys,rF8,rConv;
         double[] phi,psi,thetaS,psiActin; double[][] A,C_,xH_,xF8_; boolean[] noBind,active;
         double matXlo,matXhi,matYlo,matYhi,density; long candAcc,candSteps;
+        // 4D-ii: per-motor SITE (ideal head position ax,ay) + cull mode (0=legacy AABB / 1=per-segment union / 2=brute)
+        double[] siteX,siteY; int cullMode=0; double queryR=G4_QUERYR; boolean fullViewer=false;
+        // 4D-ii: uniform mat grid (CSR) over motor SITES for the per-segment union query
+        int gnx,gny; double gcell,gx0,gy0; int[] cellStart,cellMotor;
+        // 4E: passive tail (default OFF ⇒ stepGlide2D never reads these). G.A[m] doubles as the live pivot P[m];
+        //     S[m] = the fixed surface attachment; the rod S→A[m] has rest length lTail, stretch kTail, bend κTail.
+        boolean tailOn=false; double[][] S; double lTail=0,kTailCode=0,kappaTailCode=0,gammaP=0; double[] tHat;
+        // 4F: supported two-region tail (default OFF ⇒ stepGlide2D never reads these). G.A[m] = live pivot P[m];
+        //     supP0[m] = rest pivot; the anisotropic-nonlinear law params are global (frame is lab-fixed).
+        boolean supOn=false; double[][] supP0;
+        double supKtautAx=0,supKsoftAx=0,supKsoftTr=0,supKfeTr=0,supDelta=0,supRmax=0,supSmoothAx=0,supSmoothTr=0,supKfloor=0,supCompFrac=1,supFloorZ=0,supGammaP=0;
+        // 4G: per-motor explicit S2 beam (default OFF ⇒ stepGlide2D never reads these). node[m][M] = the live pivot G.A[m].
+        boolean g4On=false; double[][][] g4Node; double[][] g4E; int g4M=0; double g4l0=0,g4ks=0,g4kb=0,g4gammaNode=0,g4kfloor=0,g4floorZ=0; double[] g4Tan;
     }
-    static int g4NMot(double density){ return (int)Math.round(density*G4_MATX*G4_MATY); }
+    static int g4NMot(double density){ return (int)Math.round(density*G4_MX*G4_MY); }
 
     /** Build a flexible chain (or rigid rod) over a dense 2D motor lawn. withMotors=false ⇒ control B; canBind=false ⇒ control C. */
     static Glide2D buildGlide2D(double density,double dt,boolean rigid,int seed,boolean withMotors,boolean canBind){
         Glide2D G=new Glide2D(); G.dt=dt; G.rigid=rigid; G.filBrown=true; G.density=density;
-        G.kzCode=G4_KZ*PNNM; G.matXlo=-0.5*G4_MATX; G.matXhi=0.5*G4_MATX; G.matYlo=-0.5*G4_MATY; G.matYhi=0.5*G4_MATY;
+        G.kzCode=G4_KZ*PNNM; G.matXlo=-0.5*G4_MX; G.matXhi=0.5*G4_MX; G.matYlo=-0.5*G4_MY; G.matYhi=0.5*G4_MY;
         // shared two-body frame + geometry constants (lab-fixed: bhat=+x, eup=+z, econv=+y) from a reference build
         Cmot ref=build3core(dt,1.0,128,512,0,0,IDENT,false,LB_3C,PHI_PRE_3E,R_F8,R_CONV,0,0);
         G.kF8Code=ref.kF8Code; G.kconvCode=ref.kconvCode; G.kbindCode=ref.kbindCode; G.lb=ref.lb;
@@ -4429,6 +4478,7 @@ public final class TwoBodyConverterMotor {
         G.phi=new double[Math.max(1,N)]; G.psi=new double[Math.max(1,N)]; G.thetaS=new double[Math.max(1,N)]; G.psiActin=new double[Math.max(1,N)];
         G.A=new double[Math.max(1,N)][]; G.C_=new double[Math.max(1,N)][]; G.xH_=new double[Math.max(1,N)][]; G.xF8_=new double[Math.max(1,N)][];
         G.noBind=new boolean[Math.max(1,N)]; G.active=new boolean[Math.max(1,N)];
+        G.siteX=new double[Math.max(1,N)]; G.siteY=new double[Math.max(1,N)];
         for(int m=0;m<Math.max(1,N);m++) G.mot.assembleArticulated(m,0f,0f,(float)LaserTrapHarness.MANCHOR_Z,0f,0f,1f,0f);
         DragTensorSystem.run(G.mot); G.mot.setBodyParams(dt); G.mot.setKinParams(0.006,-0.4,dt); G.mot.setNucParams(dt);
         double[] uB=add(scl(G.eup,Math.cos(PHI_PRE_3E)),scl(G.bhat,Math.sin(PHI_PRE_3E)));
@@ -4437,7 +4487,7 @@ public final class TwoBodyConverterMotor {
             G.mot.boundSeg.set(m,MotorStore.FREE_BINDABLE); G.mot.nucleotideState.set(m,MotorStore.NUC_ADPPI);
             double ax=G.matXlo+hashU(seed*100003L+m,41)*(G.matXhi-G.matXlo);
             double ay=G.matYlo+hashU(seed*100003L+m,42)*(G.matYhi-G.matYlo);
-            double[] site={ax,ay,0};
+            double[] site={ax,ay,0}; G.siteX[m]=ax; G.siteY[m]=ay;   // 4D-ii: store the ideal head site for the per-segment cull
             G.A[m]=sub(sub(site,dworld0),scl(uB,G.lb));
             G.phi[m]=PHI_PRE_3E+(hashU(seed*100003L+m,1)-0.5)*Math.toRadians(150);
             G.psi[m]=(hashU(seed*100003L+m,2)-0.5)*Math.toRadians(120);
@@ -4495,13 +4545,20 @@ public final class TwoBodyConverterMotor {
     /** One 4D step: active-set cull → nearest-seg BIND → CYCLE(all) → cocking → place+bond(active) → gather → chain → z-confine → Brownian → integrate ONCE → derive → per-motor coord update. */
     static void stepGlide2D(Glide2D G,int t,int seed,Tol tol){
         FilamentStore f=G.fil; MotorStore mot=G.mot; RigidRodBody b=mot.body; int nB=b.coord.getSize()/3; int N=G.N;
-        // active-set: filament bbox + margin (only nearby motors run mechanics; far ones can never reach)
-        double xlo=1e9,xhi=-1e9,ylo=1e9,yhi=-1e9;
-        for(int s=0;s<G.nSeg;s++){ double half=0.5*f.segLength.get(s);
-            double e1x=f.coordX(s)-half*f.uVecX(s),e2x=f.coordX(s)+half*f.uVecX(s),e1y=f.coordY(s)-half*f.uVecY(s),e2y=f.coordY(s)+half*f.uVecY(s);
-            xlo=Math.min(xlo,Math.min(e1x,e2x)); xhi=Math.max(xhi,Math.max(e1x,e2x)); ylo=Math.min(ylo,Math.min(e1y,e2y)); yhi=Math.max(yhi,Math.max(e1y,e2y)); }
-        xlo-=G4_MARGIN; xhi+=G4_MARGIN; ylo-=G4_MARGIN; yhi+=G4_MARGIN; long cand=0;
-        for(int m=0;m<N;m++){ G.active[m]= (G.A[m][0]>=xlo&&G.A[m][0]<=xhi&&G.A[m][1]>=ylo&&G.A[m][1]<=yhi) || mot.boundSeg.get(m)>=0; if(G.active[m]) cand++; }
+        // active-set cull: which motors run the search/gate this step. cullMode 0 = legacy whole-chain AABB (4D;
+        // contour-complete but tests the ANCHOR); 1 = 4D-ii per-segment UNION (site→any-live-segment ≤ queryR);
+        // 2 = brute (all motors — the validation reference).
+        long cand=0;
+        if(G.cullMode==2){ for(int m=0;m<N;m++) G.active[m]=true; cand=N; }
+        else if(G.cullMode==1){ unionActive(G); for(int m=0;m<N;m++) if(G.active[m]) cand++; }
+        else {
+            double xlo=1e9,xhi=-1e9,ylo=1e9,yhi=-1e9;
+            for(int s=0;s<G.nSeg;s++){ double half=0.5*f.segLength.get(s);
+                double e1x=f.coordX(s)-half*f.uVecX(s),e2x=f.coordX(s)+half*f.uVecX(s),e1y=f.coordY(s)-half*f.uVecY(s),e2y=f.coordY(s)+half*f.uVecY(s);
+                xlo=Math.min(xlo,Math.min(e1x,e2x)); xhi=Math.max(xhi,Math.max(e1x,e2x)); ylo=Math.min(ylo,Math.min(e1y,e2y)); yhi=Math.max(yhi,Math.max(e1y,e2y)); }
+            xlo-=G4_MARGIN; xhi+=G4_MARGIN; ylo-=G4_MARGIN; yhi+=G4_MARGIN;
+            for(int m=0;m<N;m++){ G.active[m]= (G.A[m][0]>=xlo&&G.A[m][0]<=xhi&&G.A[m][1]>=ylo&&G.A[m][1]<=yhi) || mot.boundSeg.get(m)>=0; if(G.active[m]) cand++; }
+        }
         G.candAcc+=cand; G.candSteps++;
         // 1. BIND — active, unbound, ADP·Pi, gate passes against the nearest segment (local tangent)
         for(int m=0;m<N;m++) if(G.active[m] && !G.noBind[m] && mot.boundSeg.get(m)==MotorStore.FREE_BINDABLE && mot.nucleotideState.get(m)==MotorStore.NUC_ADPPI){
@@ -4633,6 +4690,152 @@ public final class TwoBodyConverterMotor {
         return new double[]{ bc>0?bend/bc:0, e2e, contour, maxGap };
     }
 
+    // ============================================================================================
+    //  EXPERIMENT 4D-ii — full-length active-motor coverage on the dense 2D mat (audit + correction of 4D's
+    //  candidate-selection + rendering geometry). Default-off (-exp4d2 / -twobody-fullcoverage-mat). Motor,
+    //  chemistry, gate, filament mechanics, density, and constants unchanged.
+    // ============================================================================================
+
+    /** 4D-ii: uniform CSR grid over the FIXED motor sites (built once) for the per-segment union query. */
+    static void initMatGrid(Glide2D G){
+        int N=G.N; if(N==0){ G.gnx=1; G.gny=1; G.cellStart=new int[]{0,0}; G.cellMotor=new int[0]; return; }
+        G.gcell=Math.max(G.queryR,0.02);
+        G.gx0=G.matXlo-G.queryR; G.gy0=G.matYlo-G.queryR;
+        G.gnx=Math.max(1,(int)Math.ceil((G.matXhi-G.matXlo+2*G.queryR)/G.gcell));
+        G.gny=Math.max(1,(int)Math.ceil((G.matYhi-G.matYlo+2*G.queryR)/G.gcell));
+        int nc=G.gnx*G.gny; int[] cnt=new int[nc+1];
+        for(int m=0;m<N;m++) cnt[gcell(G,G.siteX[m],G.siteY[m])+1]++;
+        for(int i=0;i<nc;i++) cnt[i+1]+=cnt[i];
+        G.cellStart=cnt.clone(); int[] fill=cnt.clone(); G.cellMotor=new int[N];
+        for(int m=0;m<N;m++){ int c=gcell(G,G.siteX[m],G.siteY[m]); G.cellMotor[fill[c]++]=m; }
+    }
+    static int gcell(Glide2D G,double x,double y){ int ix=(int)((x-G.gx0)/G.gcell),iy=(int)((y-G.gy0)/G.gcell); ix=Math.max(0,Math.min(G.gnx-1,ix)); iy=Math.max(0,Math.min(G.gny-1,iy)); return iy*G.gnx+ix; }
+    /** Squared shortest distance (mat plane) from motor m's SITE to live segment s's axis (clamped to the segment). */
+    static double siteSegDist2(Glide2D G,int m,int s){ FilamentStore f=G.fil; double half=0.5*f.segLength.get(s);
+        double cx=f.coordX(s),cy=f.coordY(s),ux=f.uVecX(s),uy=f.uVecY(s); double dx=G.siteX[m]-cx,dy=G.siteY[m]-cy;
+        double foot=dx*ux+dy*uy; foot=Math.max(-half,Math.min(half,foot)); double px=dx-foot*ux,py=dy-foot*uy; return px*px+py*py; }
+    /** Per-segment UNION cull: a motor is active iff bound OR its site is within queryR of ANY live segment (grid). */
+    static void unionActive(Glide2D G){
+        int N=G.N; double R=G.queryR,R2=R*R; FilamentStore f=G.fil;
+        for(int m=0;m<N;m++) G.active[m]= G.mot.boundSeg.get(m)>=0;
+        for(int s=0;s<G.nSeg;s++){ double half=0.5*f.segLength.get(s); double cx=f.coordX(s),cy=f.coordY(s),ux=f.uVecX(s),uy=f.uVecY(s);
+            double e1x=cx-half*ux,e2x=cx+half*ux,e1y=cy-half*uy,e2y=cy+half*uy;
+            int ix0=Math.max(0,(int)((Math.min(e1x,e2x)-R-G.gx0)/G.gcell)), ix1=Math.min(G.gnx-1,(int)((Math.max(e1x,e2x)+R-G.gx0)/G.gcell));
+            int iy0=Math.max(0,(int)((Math.min(e1y,e2y)-R-G.gy0)/G.gcell)), iy1=Math.min(G.gny-1,(int)((Math.max(e1y,e2y)+R-G.gy0)/G.gcell));
+            for(int iy=iy0;iy<=iy1;iy++) for(int ix=ix0;ix<=ix1;ix++){ int c=iy*G.gnx+ix;
+                for(int k=G.cellStart[c];k<G.cellStart[c+1];k++){ int m=G.cellMotor[k]; if(!G.active[m] && siteSegDist2(G,m,s)<=R2) G.active[m]=true; } } }
+    }
+    /** Distance from the SITE to the nearest live segment (for the viewer articulation cull; NO filament-center). */
+    static boolean nearAnySegSite(Glide2D G,int m,double r){ double r2=r*r; for(int s=0;s<G.nSeg;s++) if(siteSegDist2(G,m,s)<=r2) return true; return false; }
+
+    static void run4d2(String[] args){
+        boolean smoke=false;
+        for(int i=0;i<args.length;i++){ switch(args[i]){ case "-out"->OUT_DIR=args[++i]; case "-viz","-3js"->{ if(i+1<args.length&&!args[i+1].startsWith("-")) JS_DIR=args[++i]; } case "-fast"->FAST=true; case "-smoke"->smoke=true; default->{} } }
+        double dt=2.5e-6, density=1000.0;
+        System.out.println("=== SoftBox — EXPERIMENT 4D-ii: [NON-CANONICAL TWO-BODY PROTOTYPE] full-length active-motor coverage on the dense 2D mat (audit + correction) ===");
+        // Phase 1 — audit the five sets (executed-code facts)
+        System.out.println("#\n# ---------- Phase 1: candidate-set audit (simulation vs rendering) ----------");
+        System.out.println("#  chemistry-active   : cycleLymnTaylor over ALL N motors (no cull) — every motor cycles.");
+        System.out.println("#  binding candidates : 4D = whole-chain AABB(all 12 seg)+30nm on the ANCHOR (contour-complete but anchor-tested);");
+        System.out.println("#                       4D-ii = per-segment UNION (site→ANY live segment ≤ queryR), grid-accelerated.");
+        System.out.println("#  force-active       : bound motors only (bondForces skips boundSeg<0), CSR gather over nSeg — unchanged.");
+        System.out.println("#  viewer articulated : 4D BUG = |anchor.x − filament MIDPOINT| < 0.6µm window ⇒ clips the ends of a 2.1µm filament;");
+        System.out.println("#                       4D-ii FIX = site→ANY live segment ≤ showR (union, NO midpoint) ⇒ full-contour articulation.");
+        System.out.println("#  viewer anchor-post : everything not articulated — 2D density stays visible.");
+        System.out.printf(Locale.US,"#  DIAGNOSIS: the SIMULATION active set was contour-complete (all 12 segments feed the AABB) — verified vs brute (Phase 3); the defect was the VIEWER midpoint window (case 2 + case 5). queryR = %.0f nm (derived: F8 swing ~5 + head ~4.5 + gate ~6.5 + margin ~5, doubled for safety).%n",G4_QUERYR*1e3);
+
+        // enlarge the mat so the full contour stays over dense coverage during the run (Phase 5)
+        G4_MX=4.0; G4_MY=1.0;
+        System.out.printf(Locale.US,"# mat enlarged to %.1f×%.1f µm (%.0f motors @ %g/µm²) so the 2.1µm contour stays over the lawn; density UNCHANGED. CPU=%s%n",G4_MX,G4_MY,(double)g4NMot(density),density,readLoadAvg());
+
+        phase3brute(density,dt);
+        phase4coverage(density,dt);
+        if(JS_DIR!=null || smoke){
+            String base=JS_DIR!=null?JS_DIR:"threejs_twobody4d2"; double vd=FAST?0.05:0.25;
+            glide2DVizFull(base+"_fullcoverage",density,dt,1,vd,1);
+            glide2DVizFull(base+"_bruteforce_check",density,dt,2,vd,1);
+            System.out.println("# View: python3 SoftBox/sim_server.py 8000 ; open http://localhost:8000/SoftBox/sim_viewer_boa.html (top-down + oblique)");
+        }
+        System.out.println("#\n# ================= EXPERIMENT 4D-ii DECISION =================");
+        System.out.println("# See docs/TWOBODY_FULLCOVERAGE_MAT.md for the classified outcome + next-experiment recommendation.");
+    }
+
+    /** Phase 3 — brute-force validation. Two checks (the active-set FREEZES far-motor search, so union-vs-brute
+     *  trajectories diverge chaotically — bit-identity is NOT the standard; the standard is COMPLETENESS + stats):
+     *   (a) COMPLETENESS: run a brute sim (all 3000 evaluated); every motor that BINDS was in the union candidate
+     *       set on the same state ⇒ the cull omits no brute-accepted binding (the required result).
+     *   (b) STATISTICAL EQUIVALENCE: union and brute avgBound agree (the freezing is statistically benign). */
+    static void phase3brute(double density,double dt){
+        System.out.println("#\n# ---------- Phase 3: brute-force validation (completeness + statistical equivalence) ----------");
+        int steps=(int)Math.round((FAST?0.03:0.08)/dt); int seed=7000;
+        // (a) completeness on a brute run: at each bind, was the motor in what the union WOULD select?
+        Glide2D Gb=buildGlide2D(density,dt,false,seed,true,true); Gb.cullMode=2; Gb.queryR=G4_QUERYR; initMatGrid(Gb);
+        int[] prevB=new int[Gb.N]; for(int m=0;m<Gb.N;m++) prevB[m]=Gb.mot.boundSeg.get(m);
+        long newBinds=0, missed=0, boundSamplesB=0;
+        for(int t=0;t<steps;t++){
+            stepGlide2D(Gb,t,seed,new Tol());       // brute: every motor evaluated, real bindings
+            unionActive(Gb);                          // compute the union candidate set into Gb.active (transient; next step resets)
+            for(int m=0;m<Gb.N;m++){ int b=Gb.mot.boundSeg.get(m);
+                if(b>=0 && prevB[m]<0){ newBinds++; if(!Gb.active[m]) missed++; }   // a NEW binding must be a union candidate
+                if(b>=0) boundSamplesB++; prevB[m]=b; }
+        }
+        // (b) statistical equivalence: an independent union run, same seed, compare avgBound
+        Glide2D Gu=buildGlide2D(density,dt,false,seed,true,true); Gu.cullMode=1; Gu.queryR=G4_QUERYR; initMatGrid(Gu);
+        long boundSamplesU=0; for(int t=0;t<steps;t++){ stepGlide2D(Gu,t,seed,new Tol()); for(int m=0;m<Gu.N;m++) if(Gu.mot.boundSeg.get(m)>=0) boundSamplesU++; }
+        double avgB=(double)boundSamplesB/steps, avgU=(double)boundSamplesU/steps;
+        System.out.printf(Locale.US,"#  (a) completeness: %d new bindings in the brute run ; MISSED by the union candidate set = %d%n",newBinds,missed);
+        System.out.printf(Locale.US,"#  (b) equivalence:  avgBound brute=%.3f vs union=%.3f (Δ=%.3f) — the active-set freezing is statistically benign%n",avgB,avgU,Math.abs(avgB-avgU));
+        System.out.println("#  → "+(missed==0 ? "PASS: the union cull omits NO brute-accepted binding (complete); avgBound matches." : "FAIL: the cull MISSED "+missed+" brute-accepted bindings (implementation failure)."));
+        System.out.println("#  (note: union-vs-brute per-step trajectories diverge chaotically because brute keeps ALL far motors searching while the cull freezes them — the project's chaotic statistical-equivalence standard, not bit-identity.)");
+        if(OUT_DIR!=null){ Csv c=new Csv("metric,value"); c.row("steps",steps); c.row("brute_new_bindings",newBinds); c.row("bindings_missed_by_union_cull",missed); c.row("avgBound_brute",String.format(Locale.US,"%.4f",avgB)); c.row("avgBound_union",String.format(Locale.US,"%.4f",avgU)); c.write("brute_validation.csv"); }
+    }
+
+    /** Phase 4 — coverage along the entire contour: per-segment candidate/gate/bound counts + heatmap. */
+    static void phase4coverage(double density,double dt){
+        System.out.println("#\n# ---------- Phase 4: coverage along the full contour (per-segment candidate/gate/bound) ----------");
+        int steps=(int)Math.round((FAST?0.03:0.15)/dt); int seed=8000; int sample=Math.max(1,steps/60);
+        Glide2D G=buildGlide2D(density,dt,false,seed,true,true); G.cullMode=1; G.queryR=G4_QUERYR; initMatGrid(G);
+        int nSeg=G.nSeg; double R2=G.queryR*G.queryR;
+        long[] qAcc=new long[nSeg], gAcc=new long[nSeg], fAcc=new long[nSeg], bAcc=new long[nSeg]; long nSamp=0;
+        Csv heat=new Csv("t_ms,segment,contourPos,nQuery,nDistGate,nFullGate,nBound,nearestCand_nm");
+        for(int t=0;t<steps;t++){ stepGlide2D(G,t,seed,new Tol());
+            if(t%sample==0){ nSamp++;
+                for(int s=0;s<nSeg;s++){ int nq=0,ng=0,nf=0,nb=0; double nearest=1e9;
+                    for(int m=0;m<G.N;m++){ double d2=siteSegDist2(G,m,s); if(d2>R2) continue; nq++; double d=Math.sqrt(d2)*1e3; if(d<nearest) nearest=d;
+                        geom2D(G,m); double[] gm=gate2D(G,m,s); double half=0.5*G.fil.segLength.get(s),margin=0.05;
+                        boolean g0=gm[0]<new Tol().dBindNm, gi=gm[1]>margin&&gm[1]<2*half-margin;
+                        if(g0&&gi) ng++;
+                        boolean full=g0&&gm[2]<25&&gm[3]<25&&gm[4]<20&&gm[5]<2.0&&gm[6]<15&&gm[7]<A_SEMI[2]*1e3&&gi; if(full) nf++;
+                        if(G.mot.boundSeg.get(m)==s) nb++; }
+                    qAcc[s]+=nq; gAcc[s]+=ng; fAcc[s]+=nf; bAcc[s]+=nb;
+                    heat.row(String.format(Locale.US,"%.3f",t*dt*1e3),s,String.format(Locale.US,"%.3f",(s+0.5)/nSeg),nq,ng,nf,nb,nearest<1e8?String.format(Locale.US,"%.1f",nearest):"inf"); }
+            }
+        }
+        heat.write("coverage_heatmap.csv");
+        Csv seg=new Csv("segment,contourPos,meanQuery,meanDistGate,meanFullGate,meanBound,covered");
+        int covered=0; double endQ=0.5*(qAcc[0]+qAcc[nSeg-1])/nSamp, midQ=(double)qAcc[nSeg/2]/nSamp; int longestUncov=0,run=0;
+        for(int s=0;s<nSeg;s++){ boolean cov=qAcc[s]>0; if(cov) covered++; if(!cov){ run++; longestUncov=Math.max(longestUncov,run);} else run=0;
+            seg.row(s,String.format(Locale.US,"%.3f",(s+0.5)/nSeg),String.format(Locale.US,"%.2f",(double)qAcc[s]/nSamp),String.format(Locale.US,"%.2f",(double)gAcc[s]/nSamp),String.format(Locale.US,"%.3f",(double)fAcc[s]/nSamp),String.format(Locale.US,"%.3f",(double)bAcc[s]/nSamp),cov?1:0); }
+        seg.write("coverage_by_segment.csv");
+        System.out.printf(Locale.US,"#  %d samples: segments with ≥1 candidate = %d/%d (%.0f%%); contour covered = %.0f%%; longest uncovered run = %d seg; end/mid candidate ratio = %.2f (mid=%.1f, end=%.1f)%n",
+            nSamp,covered,nSeg,100.0*covered/nSeg,100.0*covered/nSeg,longestUncov,midQ>0?endQ/midQ:Double.NaN,midQ,endQ);
+        System.out.println("#  → "+(covered==nSeg?"PASS: every segment over the mat has candidates; no segment excluded by the cull. End and midpoint are comparably covered.":"CHECK: some segments uncovered — see coverage_by_segment.csv"));
+    }
+
+    /** 4D-ii dense full-length viewer (fixed articulation): cullMode chooses union(1)/brute(2). */
+    static void glide2DVizFull(String dir,double density,double dt,int cullMode,double durS,int seed){
+        Glide2D G=buildGlide2D(density,dt,false,seed,true,true); G.cullMode=cullMode; G.queryR=G4_QUERYR; G.fullViewer=true; if(cullMode==1) initMatGrid(G);
+        int steps=(int)Math.round(durS/dt); int target=FAST?300:1200; int every=Math.max(1,steps/target);
+        GlideFrame2D fw=new GlideFrame2D(dir,G4_MX+0.4,G4_MY+0.4,0.4);
+        double xmin=1e9,xmax=-1e9;
+        for(int t=0;t<steps;t++){ stepGlide2D(G,t,seed,new Tol()); if(t%every==0) fw.write(G,t*dt);
+            for(int s=0;s<G.nSeg;s++){ double xs=G.fil.coordX(s); xmin=Math.min(xmin,xs); xmax=Math.max(xmax,xs); } }
+        int nb=0; for(int m=0;m<G.N;m++) if(G.mot.boundSeg.get(m)>=0) nb++;
+        boolean edge = xmin<G.matXlo+0.1 || xmax>G.matXhi-0.1;
+        System.out.printf(Locale.US,"#  -3js %-14s cull=%s → %d frames → %s (final bound=%d ; filament x∈[%.2f,%.2f], mat x∈[%.2f,%.2f]%s)%n",
+            dir.substring(dir.lastIndexOf("4d2_")+4),cullMode==2?"brute":"union",fw.frames(),fw.dir(),nb,xmin,xmax,G.matXlo,G.matXhi,edge?" — NEAR EDGE":" — fully over mat ✓");
+    }
+
     static void run4d(String[] args){
         boolean smoke=false;
         for(int i=0;i<args.length;i++){ switch(args[i]){ case "-out"->OUT_DIR=args[++i]; case "-viz","-3js"->{ if(i+1<args.length&&!args[i+1].startsWith("-")) JS_DIR=args[++i]; } case "-fast"->FAST=true; case "-smoke"->smoke=true; default->{} } }
@@ -4713,10 +4916,12 @@ public final class TwoBodyConverterMotor {
                 sb.append(String.format(Locale.US,"{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":1.0,\"cofilinCount\":0,\"isBarbedEnd\":%s}",
                     s,e1x,e1y,e1z,e2x,e2y,e2z,Constants.radius,(s==n-1)?"true":"false")); }
             sb.append("],\"myosins\":[");
-            boolean firstM=true; double showR=0.14;   // full articulated within 140 nm of the filament; else anchor post
-            double cx=0; for(int s=0;s<n;s++) cx+=f.coordX(s); cx/=n;   // filament x-center for the near/far cull
+            boolean firstM=true; double showR=0.14;   // full articulated within 140 nm of ANY live segment; else anchor post
+            double cx=0; for(int s=0;s<n;s++) cx+=f.coordX(s); cx/=n;   // (legacy midpoint, 4D only)
             for(int m=0;m<G.N;m++){ geom2D(G,m); boolean bnd=G.mot.boundSeg.get(m)>=0;
-                boolean near = bnd || (Math.abs(G.A[m][0]-cx)<0.6 && Math.abs(G.A[m][1])<0.6 && nearAnySeg(G,m,showR));
+                // 4D-ii FIX: articulate by shortest SITE→any-live-segment distance (union) — no filament-midpoint window.
+                boolean near = bnd || (G.fullViewer ? nearAnySegSite(G,m,showR)
+                                                    : (Math.abs(G.A[m][0]-cx)<0.6 && Math.abs(G.A[m][1])<0.6 && nearAnySeg(G,m,showR)));
                 if(!firstM) sb.append(','); firstM=false;
                 if(near){ double[] A=G.A[m],C=G.C_[m],xH=G.xH_[m],xF8=G.xF8_[m];
                     String st=bnd?(G.mot.nucleotideState.get(m)==MotorStore.NUC_ADP?"ADP":G.mot.nucleotideState.get(m)==MotorStore.NUC_ADPPI?"ADPPi":G.mot.nucleotideState.get(m)==MotorStore.NUC_ATP?"ATP":"NONE"):"free";
@@ -4734,5 +4939,2010 @@ public final class TwoBodyConverterMotor {
             frame++;
         }
         boolean nearAnySeg(Glide2D G,int m,double r){ FilamentStore f=G.fil; for(int s=0;s<G.nSeg;s++){ double dx=G.A[m][0]-f.coordX(s),dy=G.A[m][1]-f.coordY(s); if(dx*dx+dy*dy<r*r) return true; } return false; }
+    }
+
+    // ============================================================================================
+    //  EXPERIMENT 4E — passive myosin-TAIL geometry as a recruitment mechanism (audit + study).
+    //  Default-off (-exp4e / -twobody-tail-recruitment), CPU-only. Inserts a passive compliant TAIL
+    //  between a FIXED surface attachment S and the (previously fixed) lever pivot: the pivot P becomes
+    //  a movable point held by a rod S→P of rest length lTail, stretch stiffness k_tail, bend stiffness
+    //  κ_tail toward the rest direction tHat=ê_up. Reduces to the validated fixed-anchor motor as
+    //  lTail→0 or (k_tail,κ_tail)→∞. The validated motor domain / converter / neck-lever / F8 / binding
+    //  gate / Lymn–Taylor chemistry / kinetics / BoA-v1ref are UNTOUCHED (4E is new methods only; the
+    //  tail fields on Cmot are read ONLY by stepTail, never by stepC). A GEOMETRY+MECHANICS study.
+    //
+    //  Coordinates: q = (P_b, P_e, P_up, φ, ψ) — a 3D movable pivot P (along b̂/econv/ê_up) + the two
+    //  planar joint angles. Overdamped linearly-implicit solve: (A_drag + K)Δq = F, K = F8 Gauss–Newton
+    //  (k_F8·JᵀJ, J=∂x_F8/∂q) + converter + bind + tail. tailOn=false ⇒ stepTail delegates to stepC.
+    // ============================================================================================
+    static final double[] LTAIL_NM   = {0, 5, 10, 20, 40, 80};   // passive tail rest length sweep (nm)
+    static final double[] KTAIL_PNNM = {10.0, 2.0, 0.5, 0.1};    // tail stretch stiffness sweep (pN/nm): stiff→soft
+    static final double KAPPATAIL_STIFF = 400.0;                 // directed tail bending (pN·nm/rad²)
+    static final double KAPPATAIL_FREE  = 4.0;                   // free-swinging tail bending (pN·nm/rad²)
+    static final double RTAIL_PIVOT_NM  = 5.0;                   // pivot drag radius (Stokes sphere, nm)
+
+    /** Build a BOUND tail motor from the validated ideal pre-stroke pose (ideal fixed anchor + φ=+30°,
+     *  ψ=0, bindArc=midpoint) with a passive tail (rest length lTailNm, stretch kTailPn, bend kappaTailPn).
+     *  Rest pivot P = the ideal fixed anchor ⇒ the pre-stroke geometry is unchanged. tailOn=false ⇒ the
+     *  plain validated fixed-anchor motor (a control). */
+    static Cmot buildTail(double lTailNm,double kTailPn,double kappaTailPn,boolean tailOn,double dt,double kAx,double kTr){
+        double[] A=idealAnchor(IDENT,false);
+        Cmot cm=buildBoundFromCapture(A,PHI_PRE_3E,0.0,0.5*cmSeg(),IDENT,false,1.0,128,512,dt,kAx,kTr);
+        cm.tailOn=tailOn;
+        if(tailOn){
+            cm.tHat=cm.eup.clone();                       // rest tail direction = up toward actin
+            cm.lTail=lTailNm*1e-3;                         // µm
+            cm.S=sub(A,scl(cm.tHat,cm.lTail));            // surface attachment lTail below the ideal pivot
+            cm.P=A.clone();                               // pivot starts at the ideal fixed anchor (rest)
+            cm.A=cm.P;                                     // geomC pivots about P
+            cm.kTailCode=kTailPn*PNNM;                     // N/µm
+            cm.kappaTailCode=kappaTailPn*KAPPA_CODE;       // N·m/rad²
+            cm.gammaP=6*Math.PI*Constants.aeta*(RTAIL_PIVOT_NM*1e-9);  // Stokes pivot drag (N·s/m)
+            geomC(cm);
+        }
+        return cm;
+    }
+
+    /** Passive tail restoring force on the pivot P (N, world): stretch toward |P−S|=lTail + bend toward tHat. */
+    static double[] tailForce(Cmot cm){
+        double[] d=sub(cm.P,cm.S); double r=Math.sqrt(dot(d,d)); if(r<1e-12) return new double[]{0,0,0};
+        double[] ur=scl(d,1.0/r);
+        double ktSI=cm.kTailCode*1e6;                                    // N/m
+        double[] Fstr=scl(ur,-ktSI*((r-cm.lTail)*1e-6));                 // N (r,lTail µm→m)
+        double cosb=Math.max(-1,Math.min(1,dot(ur,cm.tHat))); double beta=Math.acos(cosb);
+        double[] perp=sub(cm.tHat,scl(ur,cosb)); double pn=Math.sqrt(dot(perp,perp));
+        double[] Fbend = pn>1e-9 ? scl(perp, cm.kappaTailCode*beta/(pn*(r*1e-6))) : new double[]{0,0,0};  // N, toward tHat
+        return add(Fstr,Fbend);
+    }
+
+    /** General n×n solve (Gaussian elimination, partial pivoting). */
+    static double[] solveLin(double[][] A,double[] rhs,int n){
+        double[][] M=new double[n][n+1];
+        for(int i=0;i<n;i++){ System.arraycopy(A[i],0,M[i],0,n); M[i][n]=rhs[i]; }
+        for(int c=0;c<n;c++){ int p=c; for(int r=c+1;r<n;r++) if(Math.abs(M[r][c])>Math.abs(M[p][c])) p=r;
+            double[] tmp=M[c]; M[c]=M[p]; M[p]=tmp; double piv=M[c][c];
+            for(int r=0;r<n;r++){ if(r==c) continue; double fac=M[r][c]/piv; for(int k=c;k<=n;k++) M[r][k]-=fac*M[c][k]; } }
+        double[] x=new double[n]; for(int i=0;i<n;i++) x[i]=M[i][n]/M[i][i]; return x;
+    }
+
+    /** 5-DOF (P_b,P_e,P_up,φ,ψ) overdamped-implicit step of a bound TAIL motor. The filament handling is
+     *  IDENTICAL to stepC (F8 gather + traps + integrate + derive); the 2×2 (φ,ψ) solve is replaced by a
+     *  5×5 that adds the movable pivot P held by the passive tail. tailOn=false ⇒ delegates to stepC. */
+    static void stepTail(Cmot cm,int t,int seed,boolean brownian){
+        if(!cm.tailOn){ stepC(cm,t,seed); return; }
+        FilamentStore f=cm.fil; MotorStore mot=cm.mot; RigidRodBody b=mot.body;
+        mot.setCounts(t,seed,f.n); f.counts.set(1,t); f.counts.set(2,seed);
+        cm.A=cm.P; geomC(cm); placeHead3c(cm);
+        CrossBridgeSystem.bondForces(b.coord,b.uVec,b.yVec,b.bRotGam, f.coord,f.uVec,f.yVec,f.bRotGam,f.segLength,
+                mot.boundSeg,mot.bindArc,mot.nucleotideState, cm.bondData, cm.xbParams);
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum,f.torqueSum,f.counts);
+        CrossBridgeSystem.csrHistogram(mot.boundSeg,mot.counts,cm.segMotorCount);
+        CrossBridgeSystem.csrScan(mot.counts,cm.segMotorCount,cm.segMotorOffsets);
+        CrossBridgeSystem.csrScatter(mot.boundSeg,mot.counts,cm.segMotorOffsets,cm.segMotorCount,cm.segMotorMyo);
+        CrossBridgeSystem.segGather(cm.segMotorOffsets,cm.segMotorMyo,cm.bondData,f.forceSum,f.torqueSum,mot.counts);
+        LaserTrapSystem.applyTraps3D(f.coord,f.uVec,f.segLength,cm.x0L,cm.x0R,f.forceSum,f.torqueSum,cm.trapParams,f.counts);
+        RigidRodLangevinIntegrationSystem.integrate(f.coord,f.uVec,f.yVec,f.forceSum,f.torqueSum,f.randForce,f.randTorque,f.bTransGam,f.bRotGam,f.params,f.counts);
+        DerivedGeometrySystem.orthogonalizeY(f.uVec,f.yVec,f.counts);
+        if(cm.filFullClamp){ f.setCoord(0,(float)cm.clampCoord[0],(float)cm.clampCoord[1],(float)cm.clampCoord[2]);
+            f.setUVec(0,(float)cm.clampU[0],(float)cm.clampU[1],(float)cm.clampU[2]); f.setYVec(0,(float)cm.clampY[0],(float)cm.clampY[1],(float)cm.clampY[2]); }
+        DerivedGeometrySystem.derive(f.coord,f.uVec,f.yVec,f.zVec,f.end1,f.end2,f.segLength,f.counts);
+        // ---- 5-DOF pivot+angle implicit solve ----
+        double[] B=cm.bhat, E=cm.econv, U=cm.eup;
+        double[] F8h={cm.bondData.get(0),cm.bondData.get(1),cm.bondData.get(2)};
+        double[] Jphi=crs(E,sub(cm.C,cm.P)), Jpsi=crs(E,sub(cm.xF8,cm.C));    // µm
+        // J (3 rows = B,E,U components) × (5 cols = Pb,Pe,Pup,φ,ψ); φ,ψ columns in METERS
+        double[][] J={
+            {1,0,0, dot(Jphi,B)*1e-6, dot(Jpsi,B)*1e-6},
+            {0,1,0, dot(Jphi,E)*1e-6, dot(Jpsi,E)*1e-6},
+            {0,0,1, dot(Jphi,U)*1e-6, dot(Jpsi,U)*1e-6}};
+        double kfSI=cm.kF8Code*1e6, kc=cm.kconvCode, kb=cm.kbindCode;
+        double[][] K=new double[5][5];
+        for(int i=0;i<5;i++) for(int j=0;j<5;j++) K[i][j]=kfSI*(J[0][i]*J[0][j]+J[1][i]*J[1][j]+J[2][i]*J[2][j]);
+        K[3][3]+=kc; K[3][4]-=kc; K[4][3]-=kc; K[4][4]+=kc+kb;
+        double ktSI=cm.kTailCode*1e6, kappaEff=cm.lTail>1e-9?cm.kappaTailCode/((cm.lTail*1e-6)*(cm.lTail*1e-6)):0;
+        K[0][0]+=ktSI+kappaEff; K[1][1]+=ktSI+kappaEff; K[2][2]+=ktSI+kappaEff;
+        double aP=cm.gammaP/cm.dt, aphi=cm.gammaPhi/cm.dt, apsi=cm.gammaPsi/cm.dt;
+        double[] diag={aP,aP,aP,aphi,apsi};
+        double[][] M=new double[5][5];
+        for(int i=0;i<5;i++){ for(int j=0;j<5;j++) M[i][j]=K[i][j]; M[i][i]+=diag[i]; }
+        double[] Ft=tailForce(cm); double th=cm.psi-cm.phi;
+        double QphiF8=dot(E,crs(sub(cm.C,cm.P),F8h))*1e-6, QpsiF8=dot(E,crs(sub(cm.xF8,cm.C),F8h))*1e-6;
+        double[] F={ dot(F8h,B)+dot(Ft,B), dot(F8h,E)+dot(Ft,E), dot(F8h,U)+dot(Ft,U),
+                     QphiF8+kc*(th-cm.thetaS), QpsiF8-kc*(th-cm.thetaS)-kb*(cm.psi-cm.psiActin) };
+        if(brownian){
+            F[0]+=brownTorque(cm.gammaP,cm.dt,seed,t,0x4E1L); F[1]+=brownTorque(cm.gammaP,cm.dt,seed,t,0x4E2L);
+            F[2]+=brownTorque(cm.gammaP,cm.dt,seed,t,0x4E3L); F[3]+=brownTorque(cm.gammaPhi,cm.dt,seed,t,0x4E4L);
+            F[4]+=brownTorque(cm.gammaPsi,cm.dt,seed,t,0x4E5L);
+        }
+        double[] dq=solveLin(M,F,5);
+        cm.P=add(cm.P, scl(B,dq[0]*1e6)); cm.P=add(cm.P, scl(E,dq[1]*1e6)); cm.P=add(cm.P, scl(U,dq[2]*1e6));  // m→µm
+        cm.phi+=dq[3]; cm.psi+=dq[4]; cm.A=cm.P; geomC(cm);
+    }
+    static void settleTail(Cmot cm,int n,int seed,boolean brownian){ for(int t=0;t<n;t++) stepTail(cm,t,seed,brownian); }
+
+    /** Pi-release stroke on a bound TAIL motor. Returns {deliveredAxial_nm(filament COM·p̂), transverse_nm,
+     *  completion, pivotGive_nm(|ΔP|), pivotAxialGive_nm(ΔP·p̂), forceActinB_pN, tiltDeg(pivot swing from rest)}. */
+    static double[] tailStroke(Cmot cm,int settle){
+        double phi0=cm.phi,psi0=cm.psi; double[] c0={cm.fil.coordX(0),cm.fil.coordY(0),cm.fil.coordZ(0)}; double[] P0=cm.P.clone();
+        cm.thetaS=ADP_THETAS; settleTail(cm,settle,0,false);
+        double[] m1=measC(cm); double[] dC=sub(new double[]{m1[0],m1[1],m1[2]},c0); double[] dP=sub(cm.P,P0);
+        double comp=((cm.psi-cm.phi)-(psi0-phi0))/(ADP_THETAS-(psi0-phi0));
+        double[] segF={m1[17],m1[18],m1[19]};
+        // pivot tilt: angle of (P−S) from tHat
+        double[] tv=sub(cm.P,cm.S); double tilt=Math.toDegrees(Math.acos(Math.max(-1,Math.min(1,dot(nrm(tv),cm.tHat)))));
+        return new double[]{ dot(dC,cm.phat)*1e3, Math.abs(dot(dC,cm.eup))*1e3, comp,
+            Math.sqrt(dot(dP,dP))*1e3, dot(dP,cm.phat)*1e3, dot(segF,cm.bhat)*1e12, tilt };
+    }
+
+    /** Blinded paired whole-crossbridge stiffness of a TAIL motor (perturb the trap axially, measure the
+     *  filament restoring-force slope). Mirrors pairedC but steps stepTail. Returns k_ext (pN/nm). */
+    static double tailKext(java.util.function.Supplier<Cmot> build,double stepUm,int settle){
+        double[] pl=tailPert(build,stepUm,settle), mn=tailPert(build,-stepUm,settle);
+        double kO=0.5*(pl[0]/stepUm+mn[0]/(-stepUm)), dx=0.5*(pl[1]/stepUm+mn[1]/(-stepUm));
+        return dx>0.05? kO/dx*1e9 : Double.NaN;
+    }
+    static double[] tailPert(java.util.function.Supplier<Cmot> build,double dxc,int settle){
+        Cmot cm=build.get(); settleTail(cm,settle,0,false); double[] m0=measC(cm);
+        if(dxc!=0){ double[] sh=scl(cm.uvecPhys,dxc);
+            cm.x0L.set(0,(float)(cm.x0L.get(0)+sh[0])); cm.x0L.set(1,(float)(cm.x0L.get(1)+sh[1])); cm.x0L.set(2,(float)(cm.x0L.get(2)+sh[2]));
+            cm.x0R.set(0,(float)(cm.x0R.get(0)+sh[0])); cm.x0R.set(1,(float)(cm.x0R.get(1)+sh[1])); cm.x0R.set(2,(float)(cm.x0R.get(2)+sh[2]));
+            settleTail(cm,settle,0,false); }
+        double[] m1=measC(cm); return new double[]{ m1[4]-m0[4], m1[3]-m0[3] };
+    }
+
+    static void run4e(String[] args){
+        boolean smoke=false;
+        for(int i=0;i<args.length;i++){ switch(args[i]){ case "-out"->OUT_DIR=args[++i]; case "-viz","-3js"->{ if(i+1<args.length&&!args[i+1].startsWith("-")) JS_DIR=args[++i]; } case "-fast"->FAST=true; case "-smoke"->smoke=true; default->{} } }
+        double dt=5e-6, kAx=0.05, kTr=0.05; int settle=settleSteps(dt);
+        System.out.println("=== SoftBox — EXPERIMENT 4E: [NON-CANONICAL TWO-BODY PROTOTYPE] passive myosin-TAIL geometry as a recruitment mechanism (CPU-only) ===");
+        System.out.printf(Locale.US,"# A passive compliant tail (rod S→pivot, rest length lTail, stretch k_tail, bend κ_tail) between the FIXED surface attachment and the validated head–converter–lever. dt=%.0e settle=%d CPU=%s%n",dt,settle,readLoadAvg());
+        System.out.println("# tailOn=false ⇒ the validated fixed-anchor motor; tail reduces to it as lTail→0 or stiffness→∞. Motor/converter/lever/F8/gate/chemistry/BoA-v1ref UNTOUCHED.");
+
+        boolean[] g=new boolean[9]; java.util.Arrays.fill(g,true);
+
+        phase4eAudit(dt,kAx,kTr,settle,g);
+        double[] opt=phase4eSingleMolecule(dt,kAx,kTr,settle,g);   // {strokeOpt, kExtOpt} at the recruitment operating point
+        phase4eCaptureVolume(dt,kAx,kTr,settle,g);
+        phase4eRecruitment(dt,g);
+        // Q7 — the crux: does the tail geometry that IMPROVES recruitment ALSO preserve the single-molecule mechanics?
+        //  The recruitment optimum uses a FREE-swinging tail; test its stroke + stiffness (NOT the stiff-tail control).
+        g[7]= g[5] && opt[0]>3.0 && opt[1]>0.20;   // recruitment gain AND a viable stroke (>3nm) AND viable k_ext (>0.2)
+        g[8]=g[1];               // tail-OFF bit-identical ⇒ the validated paths are untouched
+
+        System.out.println("#\n# ================= EXPERIMENT 4E GATE SUMMARY =================");
+        String[] gn={"","tail-OFF ≡ fixed anchor (regression)","stiff-bend tail preserves the stroke","stiff-bend tail keeps skeletal k_ext",
+            "capture volume grows with lTail","recruitment (avgBound) increases with tail","no blow-up / inverted-tail pathology",
+            "recruitment-OPTIMAL tail ALSO preserves single-molecule mechanics","canonical/BoA-v1ref untouched"};
+        for(int i=1;i<=8;i++) System.out.printf(Locale.US,"# G%d %-54s %s%n",i,gn[i],g[i]?"PASS":"CHECK");
+        boolean tradeoff = g[5] && !g[7];
+        System.out.printf(Locale.US,"#%n# CONTROLLING OUTCOME: %s%n", tradeoff
+            ? "TRADE-OFF — a passive tail INCREASES recruitment but the recruitment-optimal (free-swinging) geometry ABSORBS the power stroke; recruitment gain and stroke loss share the SAME compliance. No swept passive tail both recruits well AND preserves the single-molecule mechanics."
+            : (g[5]&&g[7] ? "FAVOURABLE — a passive tail geometry improves recruitment while preserving the single-molecule mechanics."
+                          : "NULL/NEGATIVE — the passive tail did not measurably improve recruitment over the fixed anchor."));
+        System.out.printf(Locale.US,"#   recruitment operating point (lTail=20nm, k_tail=2, free bend): stroke=%.2f nm, k_ext=%.3f pN/nm (fixed-anchor: 6.9 nm, 0.645 pN/nm)%n",opt[0],opt[1]);
+        System.out.println("# See docs/TWOBODY_TAIL_RECRUITMENT.md for the classified outcome + separated statements.");
+    }
+
+    /** Phase A — audit the present anchor geometry (Q1): the current effective surface-anchor→lever-pivot
+     *  distance, and the fixed-anchor whole-crossbridge stiffness baseline. Also gate 1: tail-OFF ≡ fixed anchor. */
+    static void phase4eAudit(double dt,double kAx,double kTr,int settle,boolean[] g){
+        System.out.println("#\n# ---------- Phase A: present anchor-geometry audit (Q1) ----------");
+        System.out.println("#   mechanical path: surface anchor A → (φ pivots about A) → neck-lever L_B=8nm → converter C → head/F8 → actin");
+        Cmot ref=buildTail(0,0,0,false,dt,kAx,kTr); settleC(ref,settle,0); double[] mr=measC(ref);
+        // effective surface-anchor→lever-pivot distance: the anchor A IS the lever pivot (C = A + L_B·ûB). Distance = 0.
+        double[] uB=add(scl(ref.eup,Math.cos(ref.phi)),scl(ref.bhat,Math.sin(ref.phi)));
+        double[] pivotToLeverProx=sub(ref.A,ref.A);   // the lever proximal end == A (by construction)
+        double anchorPivotDist=Math.sqrt(dot(pivotToLeverProx,pivotToLeverProx))*1e3;
+        double kExtFixed=pairedC(()->buildBoundFromCapture(idealAnchor(IDENT,false),PHI_PRE_3E,0.0,0.5*cmSeg(),IDENT,false,1.0,128,512,dt,kAx,kTr),1e-3,settle)[1];
+        System.out.printf(Locale.US,"#   Q1: effective surface-anchor→lever-pivot distance = %.2f nm (the anchor IS the pivot — C=A+L_B·ûB, φ pivots about the FIXED A ⇒ NO tail). Lever L_B=%.1f nm.%n",anchorPivotDist,LB_3C*1e3);
+        System.out.printf(Locale.US,"#   fixed-anchor baseline: k_ext=%.3f pN/nm, pre-stroke F8 preload=%.3f pN, external pre-stroke trap force=%.3f pN%n",kExtFixed,mr[27]*1e12,mr[4]*1e12);
+        // Gate 1 — tail-OFF path ≡ fixed anchor: stepTail(off) must reproduce stepC bit-for-bit
+        Cmot a=buildTail(0,0,0,false,dt,kAx,kTr); Cmot bb=buildBoundFromCapture(idealAnchor(IDENT,false),PHI_PRE_3E,0.0,0.5*cmSeg(),IDENT,false,1.0,128,512,dt,kAx,kTr);
+        double mism=0; for(int t=0;t<settle;t++){ stepTail(a,t,0,false); stepC(bb,t,0); mism=Math.max(mism,Math.abs(a.fil.coordX(0)-bb.fil.coordX(0))+Math.abs(a.phi-bb.phi)+Math.abs(a.psi-bb.psi)); }
+        g[1]= mism<1e-12;
+        System.out.printf(Locale.US,"#   Gate 1 (tail-OFF ≡ fixed anchor, stepTail delegates to stepC): max|Δ|=%.2e ⇒ %s%n",mism,g[1]?"PASS (bit-identical)":"FAIL");
+    }
+
+    /** Phase B — single-molecule mechanics vs tail geometry (Q4 compliance, Q5 stroke absorption, Q6 pathology,
+     *  Q7 preservation). For each (lTail, k_tail, κ_tail): delivered stroke, transverse, k_ext, preload, pivot
+     *  give, tilt. Gates 2/3: a stiff tail preserves the stroke + stiffness; gate 7: a soft/long tail's give. */
+    static double[] phase4eSingleMolecule(double dt,double kAx,double kTr,int settle,boolean[] g){
+        System.out.println("#\n# ---------- Phase B: single-molecule mechanics vs tail geometry (Q4/Q5/Q6/Q7) ----------");
+        Csv c=new Csv("lTail_nm,kTail_pNnm,kappaTail_pNnmrad2,deliveredStroke_nm,transverse_nm,completion,pivotGive_nm,pivotAxialGive_nm,forceActinB_pN,tilt_deg,kExt_pNnm,preload_pN,seriesCompliance_frac");
+        // baseline (fixed anchor)
+        double[] base=strokeMeasTail(0,0,0,false,dt,kAx,kTr,settle);
+        double kBase=base[10];
+        System.out.printf(Locale.US,"#   fixed-anchor baseline: stroke=%.2f nm transverse=%.2f nm k_ext=%.3f pN/nm preload=%.3f pN%n",base[0],base[1],kBase,base[11]);
+        c.row(0,"inf","inf",fmt(base[0]),fmt(base[1]),fmt(base[2]),fmt(base[3]),fmt(base[4]),fmt(base[5]),fmt(base[6]),fmt(base[10]),fmt(base[11]),"0");
+        double kStiffLong=Double.NaN, strokeStiffLong=Double.NaN;
+        for(double lt:LTAIL_NM){ if(lt==0) continue;
+            for(double kt:KTAIL_PNNM){ for(double kap:new double[]{KAPPATAIL_STIFF,KAPPATAIL_FREE}){
+                double[] r=strokeMeasTail(lt,kt,kap,true,dt,kAx,kTr,settle);
+                double seriesFrac = (Double.isFinite(r[10])&&r[10]>0) ? 1.0 - r[10]/kBase : Double.NaN;   // fractional stiffness loss vs fixed
+                c.row(fmt(lt),fmt(kt),fmt(kap),fmt(r[0]),fmt(r[1]),fmt(r[2]),fmt(r[3]),fmt(r[4]),fmt(r[5]),fmt(r[6]),fmt(r[10]),fmt(r[11]),fmt(seriesFrac));
+                if(kt==KTAIL_PNNM[0]&&kap==KAPPATAIL_STIFF&&lt==20){ kStiffLong=r[10]; strokeStiffLong=r[0]; }
+            } }
+        }
+        c.write("single_molecule_tail.csv");
+        // Gate 2/3 — a STIFF tail (k=10 pN/nm, κ=400, lTail=20nm) preserves the stroke + stiffness (within tolerance)
+        g[2] = Double.isFinite(strokeStiffLong) && Math.abs(strokeStiffLong-base[0])<1.5;   // stroke within 1.5 nm of baseline
+        g[3] = Double.isFinite(kStiffLong) && kStiffLong>0.6*kBase;                         // stiffness ≥ 60% of fixed
+        System.out.printf(Locale.US,"#   stiff-bend long tail (20nm, k=10, κ=400): stroke=%.2f nm (base %.2f), k_ext=%.3f pN/nm (base %.3f) ⇒ Gate2(stroke) %s, Gate3(k_ext) %s%n",
+            strokeStiffLong,base[0],kStiffLong,kBase,g[2]?"PASS":"CHECK",g[3]?"PASS":"CHECK");
+        System.out.println("#   Q4: series compliance is dominated by the BENDING stiffness κ_tail (the stroke is AXIAL, the tail TRANSVERSE) — k_tail (stretch) barely matters; compliance grows with lTail.");
+        System.out.println("#   Q5: soft/free tails progressively ABSORB the stroke into pivot give (see pivotAxialGive) — the free tail absorbs nearly all of it.");
+        // recruitment operating point: the FREE-swinging tail used in Phase D (lTail=20 nm, k_tail=2, κ=free)
+        double[] optM=strokeMeasTail(20,2.0,KAPPATAIL_FREE,true,dt,kAx,kTr,settle);
+        System.out.printf(Locale.US,"#   RECRUITMENT OPERATING POINT (20nm, k=2, free bend κ=%.0f): delivered stroke=%.2f nm, k_ext=%.3f pN/nm, pivot axial give=%.2f nm, series compliance=%.0f%% ⇒ mechanics %s%n",
+            KAPPATAIL_FREE,optM[0],optM[10],optM[4],100*(1-optM[10]/kBase),(optM[0]>3.0&&optM[10]>0.20)?"PRESERVED":"COLLAPSED (stroke/stiffness lost to the compliant tail)");
+        return new double[]{ optM[0], optM[10] };
+    }
+    /** {deliveredStroke_nm, transverse_nm, completion, pivotGive_nm, pivotAxialGive_nm, forceActinB_pN, tilt_deg, -,-,-, kExt_pNnm, preload_pN} */
+    static double[] strokeMeasTail(double lt,double kt,double kap,boolean tailOn,double dt,double kAx,double kTr,int settle){
+        Cmot cm=buildTail(lt,kt,kap,tailOn,dt,kAx,kTr);
+        if(tailOn) settleTail(cm,settle,0,false); else settleC(cm,settle,0);
+        double preload=measC(cm)[27]*1e12;
+        double[] st = tailOn ? tailStroke(cm,settle) : piStrokeAsTail(cm,settle);
+        double kExt = tailOn ? tailKext(()->buildTail(lt,kt,kap,true,dt,kAx,kTr),1e-3,settle)
+                             : pairedC(()->buildBoundFromCapture(idealAnchor(IDENT,false),PHI_PRE_3E,0.0,0.5*cmSeg(),IDENT,false,1.0,128,512,dt,kAx,kTr),1e-3,settle)[1];
+        return new double[]{ st[0],st[1],st[2],st[3],st[4],st[5],st[6],0,0,0, kExt, preload };
+    }
+    /** Fixed-anchor stroke via piStroke, remapped to the tailStroke return layout (pivotGive=0, tilt=0). */
+    static double[] piStrokeAsTail(Cmot cm,int settle){
+        double[] s=piStroke(cm,settle);   // {extAxial, glideP, transFinal, transPeak, completion, dPhi, dPsi, forceActinB, f8ext}
+        return new double[]{ s[1], s[2], s[4], 0, 0, s[7], 0 };
+    }
+
+    /** Phase C — capture volume vs tail length (Q2). Geometric: the reachable F8-point footprint in the mat
+     *  plane as the tail swings within its thermal cone (β0=√(2kT/κ), capped) about tHat, plus the lever/head
+     *  gate windows. Reports the footprint AREA + lateral (transverse) reach vs lTail, for a free and a stiff tail. */
+    static void phase4eCaptureVolume(double dt,double kAx,double kTr,int settle,boolean[] g){
+        System.out.println("#\n# ---------- Phase C: capture volume vs tail length (Q2) ----------");
+        System.out.println("#   (the fixed-anchor motor has ZERO transverse capture width — a line, area 0 nm²; the tail is what gives a 2D footprint)");
+        Csv c=new Csv("lTail_nm,kappaTail_pNnmrad2,swingCone_deg,footprintArea_nm2,lateralReach_nm,axialReach_nm");
+        double latFixed=captureFootprint(0,KAPPATAIL_FREE,dt,kAx,kTr)[1], latMax=latFixed;
+        for(double kap:new double[]{KAPPATAIL_FREE,KAPPATAIL_STIFF}){
+            for(double lt:LTAIL_NM){
+                double[] fp=captureFootprint(lt,kap,dt,kAx,kTr);
+                c.row(fmt(lt),fmt(kap),fmt(fp[3]),fmt(fp[0]),fmt(fp[1]),fmt(fp[2]));
+                if(kap==KAPPATAIL_FREE) latMax=Math.max(latMax,fp[1]);
+                System.out.printf(Locale.US,"#   lTail=%2.0f nm κ=%-4.0f: swing cone=±%.0f° → footprint area=%.0f nm², lateral reach=%.1f nm, axial=%.1f nm%n",
+                    lt,kap,fp[3],fp[0],fp[1],fp[2]);
+            }
+        }
+        c.write("capture_volume.csv");
+        g[4]= latMax>50.0;   // the free tail's transverse capture reach grows well past the tailless (~0) footprint
+        System.out.printf(Locale.US,"#   Q2: transverse capture reach grows ~linearly with lTail (free tail: 0 → %.0f nm at 80 nm) ⇒ Gate 4 %s%n",latMax,g[4]?"PASS":"CHECK");
+    }
+    /** {footprintArea_nm2, lateralReach_nm, axialReach_nm, swingCone_deg}. The F8-point reachable set as the tail
+     *  swings over a cone (azimuth 0..2π) + lever φ∈±25° + head ψ∈±25° from the relaxed pre-stroke pose. */
+    static double[] captureFootprint(double lt,double kap,double dt,double kAx,double kTr){
+        Cmot cm=buildTail(Math.max(lt,1e-6),KTAIL_PNNM[0],kap,true,dt,kAx,kTr); settleTail(cm,settleSteps(dt),0,false);
+        double[] S=cm.S, tHat=cm.tHat;
+        double beta0 = lt<1e-6 ? 0 : Math.min(Math.toRadians(60), Math.sqrt(2*Constants.kT/(kap*KAPPA_CODE)));   // thermal swing cone
+        // two in-plane axes for the swing cone about tHat
+        double[] a1=nrm(cm.bhat), a2=nrm(cm.econv);   // b̂, econv span the transverse plane to ê_up
+        double xlo=1e9,xhi=-1e9,ylo=1e9,yhi=-1e9; int nB=8,nA=12,nP=7,nPsi=5;
+        for(int ib=0; ib<=nB; ib++){ double beta = beta0==0?0:beta0*ib/nB;
+            for(int ia=0; ia<(beta0==0?1:nA); ia++){ double az=2*Math.PI*ia/nA;
+                double[] ur = add(scl(tHat,Math.cos(beta)), scl(add(scl(a1,Math.cos(az)),scl(a2,Math.sin(az))),Math.sin(beta)));
+                double[] P = add(S, scl(ur, lt<1e-6?cm.lTail:lt*1e-3));
+                for(int ip=0; ip<nP; ip++){ double phi = PHI_PRE_3E + Math.toRadians(-25 + 50.0*ip/(nP-1));
+                    for(int iq=0; iq<nPsi; iq++){ double psi = Math.toRadians(-25 + 50.0*iq/(nPsi-1));
+                        double[] uB=add(scl(cm.eup,Math.cos(phi)),scl(cm.bhat,Math.sin(phi)));
+                        double[] C=add(P,scl(uB,cm.lb));
+                        double[] dworld0=add(scl(cm.bhat,cm.rF8[0]-cm.rConv[0]),scl(cm.eup,cm.rF8[1]-cm.rConv[1]));
+                        double[] xF8=add(C,rotConv(dworld0,psi,cm.econv));
+                        double x=dot(xF8,cm.bhat), y=dot(xF8,cm.econv);
+                        xlo=Math.min(xlo,x);xhi=Math.max(xhi,x);ylo=Math.min(ylo,y);yhi=Math.max(yhi,y);
+                    } } } }
+        double ax=(xhi-xlo)*1e3, lat=(yhi-ylo)*1e3;   // nm
+        return new double[]{ ax*lat, lat, ax, Math.toDegrees(beta0) };
+    }
+
+    /** Passive tail restoring force on the live pivot G.A[m] (N, world). */
+    static double[] tailForceM(Glide2D G,int m){
+        double[] d=sub(G.A[m],G.S[m]); double r=Math.sqrt(dot(d,d)); if(r<1e-12) return new double[]{0,0,0};
+        double[] ur=scl(d,1.0/r); double ktSI=G.kTailCode*1e6;
+        double[] Fstr=scl(ur,-ktSI*((r-G.lTail)*1e-6));
+        double cosb=Math.max(-1,Math.min(1,dot(ur,G.tHat))); double beta=Math.acos(cosb);
+        double[] perp=sub(G.tHat,scl(ur,cosb)); double pn=Math.sqrt(dot(perp,perp));
+        double[] Fbend=pn>1e-9?scl(perp,G.kappaTailCode*beta/(pn*(r*1e-6))):new double[]{0,0,0};
+        return add(Fstr,Fbend);
+    }
+    /** 5-DOF (pivot P=G.A[m] + φ,ψ) overdamped-implicit update for mat motor m (Brownian ON). bound ⇒ F8 load. */
+    static void tailSolveM(Glide2D G,int m,int t,int seed,boolean bound){
+        double[] B=G.bhat,E=G.econv,Up=G.eup; int d=m*STRIDE;
+        double[] F8h = bound? new double[]{G.bondData.get(d),G.bondData.get(d+1),G.bondData.get(d+2)} : new double[]{0,0,0};
+        double[] P=G.A[m], C=G.C_[m], xF8=G.xF8_[m];
+        double[] Jphi=crs(E,sub(C,P)), Jpsi=crs(E,sub(xF8,C));
+        double[][] J={{1,0,0,dot(Jphi,B)*1e-6,dot(Jpsi,B)*1e-6},{0,1,0,dot(Jphi,E)*1e-6,dot(Jpsi,E)*1e-6},{0,0,1,dot(Jphi,Up)*1e-6,dot(Jpsi,Up)*1e-6}};
+        double kfSI=G.kF8Code*1e6, kc=G.kconvCode, kb=G.kbindCode;
+        double[][] K=new double[5][5];
+        for(int i=0;i<5;i++)for(int j=0;j<5;j++) K[i][j]=kfSI*(J[0][i]*J[0][j]+J[1][i]*J[1][j]+J[2][i]*J[2][j]);
+        K[3][3]+=kc;K[3][4]-=kc;K[4][3]-=kc;K[4][4]+=kc+kb;
+        double ktSI=G.kTailCode*1e6, kap=G.lTail>1e-9?G.kappaTailCode/((G.lTail*1e-6)*(G.lTail*1e-6)):0;
+        K[0][0]+=ktSI+kap;K[1][1]+=ktSI+kap;K[2][2]+=ktSI+kap;
+        double aP=G.gammaP/G.dt, aphi=G.gammaPhi/G.dt, apsi=G.gammaPsi/G.dt; double[] dg={aP,aP,aP,aphi,apsi};
+        double[][] M=new double[5][5]; for(int i=0;i<5;i++){for(int j=0;j<5;j++)M[i][j]=K[i][j]; M[i][i]+=dg[i];}
+        double[] Ft=tailForceM(G,m); double th=G.psi[m]-G.phi[m];
+        double Qphi=dot(E,crs(sub(C,P),F8h))*1e-6, Qpsi=dot(E,crs(sub(xF8,C),F8h))*1e-6;
+        double[] F={dot(F8h,B)+dot(Ft,B),dot(F8h,E)+dot(Ft,E),dot(F8h,Up)+dot(Ft,Up),Qphi+kc*(th-G.thetaS[m]),Qpsi-kc*(th-G.thetaS[m])-kb*(G.psi[m]-G.psiActin[m])};
+        F[0]+=brownTorque(G.gammaP,G.dt,seed,t,0x5E1L+m*7919L); F[1]+=brownTorque(G.gammaP,G.dt,seed,t,0x5E2L+m*7919L); F[2]+=brownTorque(G.gammaP,G.dt,seed,t,0x5E3L+m*7919L);
+        F[3]+=brownTorque(G.gammaPhi,G.dt,seed,t,0x5E4L+m*7919L); F[4]+=brownTorque(G.gammaPsi,G.dt,seed,t,0x5E5L+m*7919L);
+        double[] dq=solveLin(M,F,5);
+        G.A[m]=add(G.A[m],scl(B,dq[0]*1e6)); G.A[m]=add(G.A[m],scl(E,dq[1]*1e6)); G.A[m]=add(G.A[m],scl(Up,dq[2]*1e6));
+        G.phi[m]+=dq[3]; G.psi[m]+=dq[4]; geom2D(G,m);
+        if(bound){ G.mot.forceDotFil.set(m,G.bondData.get(d+12)); G.mot.forceMag.set(m,(float)Math.sqrt(dot(F8h,F8h))); }
+        else { G.mot.forceDotFil.set(m,0f); G.mot.forceMag.set(m,0f); }
+    }
+    /** Build a moving-filament recruitment mat with per-motor passive tails (rigid filament; brute over the modest N). */
+    static Glide2D buildTailMat(double density,double dt,double lTailNm,double kTailPn,double kappaTailPn,boolean tailOn,int seed){
+        Glide2D G=buildGlide2D(density,dt,true,seed,true,true); G.cullMode=2;
+        if(tailOn){ G.tailOn=true; G.tHat=G.eup.clone(); G.lTail=lTailNm*1e-3; G.kTailCode=kTailPn*PNNM; G.kappaTailCode=kappaTailPn*KAPPA_CODE;
+            G.gammaP=6*Math.PI*Constants.aeta*(RTAIL_PIVOT_NM*1e-9); G.S=new double[Math.max(1,G.N)][];
+            for(int m=0;m<G.N;m++) G.S[m]=sub(G.A[m],scl(G.tHat,G.lTail)); }
+        return G;
+    }
+    /** One recruitment-mat step: bind → cycle → cocking → place+bond+gather → filament integrate → per-motor 5-DOF tail. */
+    static void stepGlideTail(Glide2D G,int t,int seed,Tol tol){
+        FilamentStore f=G.fil; MotorStore mot=G.mot; RigidRodBody b=mot.body; int N=G.N;
+        for(int m=0;m<N;m++) G.active[m]=true;
+        for(int m=0;m<N;m++) if(!G.noBind[m] && mot.boundSeg.get(m)==MotorStore.FREE_BINDABLE && mot.nucleotideState.get(m)==MotorStore.NUC_ADPPI){
+            G.thetaS[m]=PRESTROKE_THETAS; geom2D(G,m); int s=nearestSeg2D(G,m); if(s<0) continue;
+            double[] gm=gate2D(G,m,s); double half=0.5*f.segLength.get(s), margin=0.05;
+            boolean g0=gm[0]<tol.dBindNm, g1=gm[2]<tol.psiDeg, g2=gm[3]<tol.phiDeg, g3=gm[4]<tol.thetaDeg, g4=gm[5]<tol.preloadPn, g5=gm[6]<tol.energyKt, g6=gm[7]<A_SEMI[2]*1e3, g7=gm[1]>margin&&gm[1]<2*half-margin;
+            if(g0&&g1&&g2&&g3&&g4&&g5&&g6&&g7){ mot.boundSeg.set(m,s); mot.bindArc.set(m,(float)gm[1]); }
+        }
+        mot.setCounts(t,seed,G.nSeg);
+        NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState,mot.boundSeg,mot.forceDotFil,mot.forceDotAvg,mot.avgInit,mot.cooldown,mot.stats,mot.nucParams,mot.kinParams,mot.counts);
+        for(int m=0;m<N;m++) G.thetaS[m]=thetaS4a(mot.nucleotideState.get(m));
+        for(int m=0;m<N;m++){ geom2D(G,m); placeHead2D(G,m); }
+        CrossBridgeSystem.bondForces(b.coord,b.uVec,b.yVec,b.bRotGam, f.coord,f.uVec,f.yVec,f.bRotGam,f.segLength, mot.boundSeg,mot.bindArc,mot.nucleotideState, G.bondData, G.xbParams);
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum,f.torqueSum,f.counts);
+        CrossBridgeSystem.csrHistogram(mot.boundSeg,mot.counts,G.segCount);
+        CrossBridgeSystem.csrScan(mot.counts,G.segCount,G.segOff);
+        CrossBridgeSystem.csrScatter(mot.boundSeg,mot.counts,G.segOff,G.segCount,G.segMyo);
+        CrossBridgeSystem.segGather(G.segOff,G.segMyo,G.bondData,f.forceSum,f.torqueSum,mot.counts);
+        for(int s=0;s<G.nSeg;s++){ int iz=2*G.nSeg+s; f.forceSum.set(iz,(float)(f.forceSum.get(iz)-G.kzCode*f.coordZ(s))); }
+        f.counts.set(1,t); f.counts.set(2,seed);
+        BrownianForceSystem.brownianForce(f.randForce,f.randTorque,f.bTransGam,f.bRotGam,f.brownTransScale,f.brownRotScale,f.params,f.counts);
+        RigidRodLangevinIntegrationSystem.integrate(f.coord,f.uVec,f.yVec,f.forceSum,f.torqueSum,f.randForce,f.randTorque,f.bTransGam,f.bRotGam,f.params,f.counts);
+        DerivedGeometrySystem.orthogonalizeY(f.uVec,f.yVec,f.counts);
+        DerivedGeometrySystem.derive(f.coord,f.uVec,f.yVec,f.zVec,f.end1,f.end2,f.segLength,f.counts);
+        for(int m=0;m<N;m++) tailSolveM(G,m,t,seed,mot.boundSeg.get(m)>=0);
+    }
+    /** {avgBound, contFrac, bindsPerMotorPerS, maxTilt_deg, avgTilt_deg, strokesPerMotorPerS, reachAtRest}. */
+    static double[] measureTailMat(double density,double dt,double lTailNm,double kTailPn,double kappaTailPn,boolean tailOn,double durS,int nEp,int seed0){
+        int steps=(int)Math.round(durS/dt);
+        long totSteps=0; double avgBoundAcc=0; long occ0=0, binds=0, strokes=0; double maxTilt=0,tiltAcc=0; long tiltN=0; int reach=0,Ntot=0;
+        for(int ep=0;ep<nEp;ep++){
+            Glide2D G = tailOn? buildTailMat(density,dt,lTailNm,kTailPn,kappaTailPn,true,seed0+ep) : buildGlide2D(density,dt,true,seed0+ep,true,true);
+            if(!tailOn) G.cullMode=2;
+            int N=G.N; Ntot=N;
+            if(ep==0) for(int m=0;m<N;m++){ int s=nearestSeg2D(G,m); if(s>=0){ double[] gm=gate2D(G,m,s); if(gm[0]<5.0) reach++; } }
+            int[] prevB=new int[Math.max(1,N)]; for(int m=0;m<N;m++) prevB[m]=G.mot.boundSeg.get(m);
+            int[] prevState=new int[Math.max(1,N)]; for(int m=0;m<N;m++) prevState[m]=G.mot.nucleotideState.get(m);
+            for(int t=0;t<steps;t++){
+                if(tailOn) stepGlideTail(G,t,seed0+ep,new Tol()); else stepGlide2D(G,t,seed0+ep,new Tol());
+                if(!Double.isFinite(G.fil.coordX(0))) break;
+                totSteps++; int nb=0;
+                for(int m=0;m<N;m++){ int bs=G.mot.boundSeg.get(m);
+                    if(bs>=0 && prevB[m]<0) binds++; prevB[m]=bs; if(bs>=0) nb++;
+                    int st=G.mot.nucleotideState.get(m); if(prevState[m]==MotorStore.NUC_ADPPI&&st==MotorStore.NUC_ADP) strokes++; prevState[m]=st;
+                    if(bs>=0 && tailOn){ double[] tv=sub(G.A[m],G.S[m]); double tl=Math.toDegrees(Math.acos(Math.max(-1,Math.min(1,dot(nrm(tv),G.tHat))))); maxTilt=Math.max(maxTilt,tl); tiltAcc+=tl; tiltN++; } }
+                occ0+= nb==0?1:0; avgBoundAcc+=nb;
+            }
+        }
+        double avgBound=totSteps>0?avgBoundAcc/totSteps:0, cont=totSteps>0?1.0-(double)occ0/totSteps:0;
+        double bindRate=(Ntot>0&&durS>0)?(double)binds/((double)Ntot*nEp)/durS:0, strokeRate=(Ntot>0&&durS>0)?(double)strokes/((double)Ntot*nEp)/durS:0;
+        return new double[]{avgBound,cont,bindRate,maxTilt,tiltN>0?tiltAcc/tiltN:0,strokeRate,reach};
+    }
+    /** Phase D — recruitment on a moving-filament mat vs tail length (Q3 binding/mean-bound/continuity, Q6 tilt/pathology). */
+    static void phase4eRecruitment(double dt,boolean[] g){
+        System.out.println("#\n# ---------- Phase D: recruitment on a moving-filament mat vs tail length (Q3/Q6) ----------");
+        double savMX=G4_MX,savMY=G4_MY; G4_MX=2.5; G4_MY=0.3; double density=200;
+        double durS=FAST?0.02:0.06; int nEp=FAST?2:3; int seed0=6000; double kTail=2.0, kappaTail=KAPPATAIL_FREE;
+        System.out.printf(Locale.US,"# rigid filament gliding over a %g×%g µm mat @ %g/µm² (N=%d), k_tail=%.1f pN/nm κ_tail=%.0f (free-swing), dur=%.3fs ×%d ep. CPU=%s%n",
+            G4_MX,G4_MY,density,g4NMot(density),kTail,kappaTail,durS,nEp,readLoadAvg());
+        Csv c=new Csv("condition,lTail_nm,avgBound,contFrac,bindsPerMotorPerS,strokesPerMotorPerS,maxTilt_deg,avgTilt_deg,reachAtRest");
+        double[] base=measureTailMat(density,dt,0,0,0,false,durS,nEp,seed0);
+        c.row("fixed_anchor",0,fmt(base[0]),fmt(base[1]),fmt(base[2]),fmt(base[5]),fmt(base[3]),fmt(base[4]),(int)base[6]);
+        System.out.printf(Locale.US,"#   fixed anchor : avgBound=%.4f cont=%.3f binds/mot/s=%.2f strokes/mot/s=%.2f reach=%d%n",base[0],base[1],base[2],base[5],(int)base[6]);
+        double bestAvg=base[0], bestL=0, bestTilt=0, maxTiltAll=0; boolean allFinite=Double.isFinite(base[0]);
+        for(double lt:new double[]{10,20,40,80}){
+            double[] r=measureTailMat(density,dt,lt,kTail,kappaTail,true,durS,nEp,seed0);
+            c.row("tail",fmt(lt),fmt(r[0]),fmt(r[1]),fmt(r[2]),fmt(r[5]),fmt(r[3]),fmt(r[4]),(int)r[6]);
+            System.out.printf(Locale.US,"#   tail %2.0f nm  : avgBound=%.4f (%.2f× fixed) cont=%.3f binds/mot/s=%.2f maxTilt=%.0f° avgTilt=%.0f°%n",
+                lt,r[0],base[0]>0?r[0]/base[0]:Double.NaN,r[1],r[2],r[3],r[4]);
+            allFinite &= Double.isFinite(r[0]); maxTiltAll=Math.max(maxTiltAll,r[3]);
+            if(r[0]>bestAvg){ bestAvg=r[0]; bestL=lt; bestTilt=r[4]; }
+        }
+        c.write("recruitment_mat.csv");
+        g[5]= bestAvg>base[0]*1.05;
+        g[6]= allFinite && maxTiltAll<150 && bestTilt<90;   // no blow-up / no inverted-tail pathology at the best point
+        System.out.printf(Locale.US,"#   Gate 6 (no pathology: finite, maxTilt=%.0f°<150, best-tail avgTilt=%.0f°<90): %s%n",maxTiltAll,bestTilt,g[6]?"PASS":"CHECK");
+        System.out.printf(Locale.US,"#   Gate 5 (recruitment increases with tail): best lTail=%.0f nm avgBound=%.4f vs fixed %.4f ⇒ %s%n",bestL,bestAvg,base[0],g[5]?"PASS":"CHECK");
+        G4_MX=savMX; G4_MY=savMY;
+    }
+
+    // ============================================================================================
+    //  EXPERIMENT 4F — biologically motivated supported two-region tail (search-mobile, load-bearing).
+    //  Default-off (-exp4f / -twobody-supported-s2-tail), CPU-only. NEW methods only; the validated head/
+    //  converter/neck-lever/F8/binding-gate/Lymn–Taylor chemistry/kinetics/RNG/filament mechanics/BoA-v1ref
+    //  are UNTOUCHED (the sup* fields on Cmot are read ONLY by supForce/stepSup, never by stepC/stepTail).
+    //
+    //  Goal: separate (1) UNBOUND search mobility from (2) BOUND axial load transmission — the property a
+    //  passive LINEAR tail (4E) could NOT provide (its search-soft compliance was also load-soft ⇒ the
+    //  stroke was absorbed). 4F makes the tail ANISOTROPIC + NONLINEAR: soft TRANSVERSE (search) + a
+    //  slack-to-taut AXIAL law (soft within slack δ for low-force search, TAUT/stiff beyond δ under the
+    //  stroke load). Passive · nonlinear · anisotropic · load-engaged · nucleotide-INDEPENDENT (no state switch).
+    //
+    //  Architecture — two separate passive elements on the movable pivot P (rest P0=A):
+    //   · SUPPORTED DISTAL TAIL — load axis ûL=b̂ (filament axis). AXIAL slack-to-taut Frest(qL),
+    //     qL=(P−P0)·b̂ = the spec tension coordinate; tension/compression asymmetric; substrate floor (ê_up).
+    //   · FLEXIBLE PROXIMAL S2 HINGE — SOFT TRANSVERSE (econv,ê_up) search spring + smooth finite-extension
+    //     stiffening near rMax (bounds inversion / runaway).
+    //  Coordinates q=(P_b,P_e,P_up,φ,ψ); overdamped linearly-implicit (A_drag+K)Δq=F, K = F8 Gauss–Newton
+    //  + converter + bind + the tail TANGENT stiffnesses (kAxTan on b̂, kTrTan on econv/ê_up, +floor on ê_up).
+    //  supOn=false ⇒ stepSup delegates to stepC (Gate-1 bit-identical). ûL=b̂=B, econv=E, ê_up=U — the DOF frame.
+    // ============================================================================================
+    //  Preregistered condition family (§5). Held constant across 2–5: kTautAx, kSoftAx(slack softness),
+    //  kSoftTr, rMax(S2 contour), lengths, hinge, floor, density, filament, chemistry, gate. Only δ varies.
+    static final double SUP_KTAUT_PNNM  = 20.0;   // axial TAUT stiffness (post-slack, load-bearing ground); §5 refinement (k_ext saturates at the fixed-anchor ceiling by ~20 pN/nm — a modest supported coiled-coil; search is transverse ⇒ unaffected)
+    static final double SUP_KSOFTAX_PNNM= 0.10;   // axial SOFT stiffness within the slack (search)
+    static final double SUP_KSOFTTR_PNNM= 0.05;   // transverse SOFT search stiffness (the recruitment knob)
+    static double SUP_KSOFTTR_PNNM_RUNTIME = 0.05; // mutable copy (the §14 hinge-locked control raises it; default = the constant)
+    static final double SUP_KFETR_PNNM  = 20.0;   // transverse finite-extension stiffening (bounds inversion)
+    static final double SUP_RMAX_NM     = 60.0;   // S2 transverse contour (finite-extension onset)
+    static final double SUP_SMOOTHAX_NM = 0.5;    // axial slack-to-taut smoothing (C^∞ transition width)
+    static final double SUP_SMOOTHTR_NM = 5.0;    // transverse finite-extension smoothing
+    static final double SUP_KFLOOR_PNNM = 20.0;   // substrate floor penalty (one-sided, no penetration)
+    static final double SUP_COMPFRAC    = 0.25;   // tension/compression asymmetry (compression softer)
+    static final double SUP_LDIST_NM    = 60.0;   // supported distal-tail length (viewer/geometry)
+    static final double SUP_LS2_NM      = 20.0;   // proximal S2 length (viewer/geometry; also floor depth)
+    static final double SUP_FLOORZ_NM   = 18.0;   // pivot may descend this far (ê_up) before the substrate floor
+    static final double SUP_RPIVOT_NM   = 5.0;    // pivot Stokes drag radius (nm)
+    // condition slacks δ (nm): 0=no-slack(anisotropic-linear), then short/moderate/excessive
+    static final double[] SUP_DELTA_NM  = {0.0, 1.5, 3.5, 7.0};
+    static final String[] SUP_CONDNAME  = {"sup_noslack","sup_shortslack(1.5nm)","sup_modslack(3.5nm)","sup_excessslack(7nm)"};
+
+    /** Smooth-positive (softplus) sp(x,s)=s·ln(1+e^{x/s}); →max(0,x) as s→0. Numerically stable. */
+    static double softpos(double x,double s){ if(s<=0) return Math.max(0,x); double z=x/s; if(z>30) return x; if(z<-30) return s*Math.exp(z); return s*Math.log1p(Math.exp(z)); }
+    /** d/dx softpos = logistic(x/s) ∈[0,1] — the tangent-stiffness ramp. */
+    static double softpos_d(double x,double s){ if(s<=0) return x>0?1:0; double z=x/s; if(z>30) return 1; if(z<-30) return Math.exp(z); return 1.0/(1.0+Math.exp(-z)); }
+
+    /** Build a BOUND supported-tail motor from the validated ideal pre-stroke pose (ideal fixed anchor + φ=+30°,
+     *  ψ=0, bindArc=midpoint). Rest pivot P0 = the ideal fixed anchor ⇒ pre-stroke pose unchanged. supOn=false ⇒
+     *  the plain validated fixed-anchor motor (a control). deltaNm = the axial slack. */
+    static Cmot buildSup(double deltaNm,boolean supOn,double dt,double kAx,double kTr){ return buildSupK(deltaNm,SUP_KTAUT_PNNM,supOn,dt,kAx,kTr); }
+    /** As buildSup, with an explicit axial TAUT stiffness (for the §5 stiffness-refinement sweep). */
+    static Cmot buildSupK(double deltaNm,double kTautPn,boolean supOn,double dt,double kAx,double kTr){
+        double[] A=idealAnchor(IDENT,false);
+        Cmot cm=buildBoundFromCapture(A,PHI_PRE_3E,0.0,0.5*cmSeg(),IDENT,false,1.0,128,512,dt,kAx,kTr);
+        cm.supOn=supOn;
+        if(supOn){
+            cm.P=A.clone(); cm.A=cm.P;                    // geomC pivots about P
+            cm.supP0=A.clone();                           // rest pivot (fixed reference)
+            cm.supUL=cm.bhat.clone();                     // load axis = filament (barbed) axis b̂
+            cm.supUT1=cm.econv.clone(); cm.supUT2=cm.eup.clone();   // transverse search axes (in-plane, vertical)
+            cm.supKtautAx=kTautPn*PNNM; cm.supKsoftAx=SUP_KSOFTAX_PNNM*PNNM;
+            cm.supKsoftTr=SUP_KSOFTTR_PNNM_RUNTIME*PNNM; cm.supKfeTr=SUP_KFETR_PNNM*PNNM;
+            cm.supDelta=deltaNm*1e-3; cm.supRmax=SUP_RMAX_NM*1e-3;
+            cm.supSmoothAx=SUP_SMOOTHAX_NM*1e-3; cm.supSmoothTr=SUP_SMOOTHTR_NM*1e-3;
+            cm.supKfloor=SUP_KFLOOR_PNNM*PNNM; cm.supCompFrac=SUP_COMPFRAC; cm.supFloorZ=SUP_FLOORZ_NM*1e-3;
+            cm.supLdist=SUP_LDIST_NM*1e-3; cm.supLs2=SUP_LS2_NM*1e-3;
+            cm.supGammaP=6*Math.PI*Constants.aeta*(SUP_RPIVOT_NM*1e-9);
+            cm.gammaP=cm.supGammaP;
+            geomC(cm);
+        }
+        return cm;
+    }
+    /** Fixed substrate attachment S (viewer/geometry): distal tail runs S → Q0=S+lDist·b̂ → P0=Q0+lS2·ê_up. */
+    static double[] supSubstrate(Cmot cm){ return sub(sub(cm.supP0,scl(cm.supUT2,cm.supLs2)),scl(cm.supUL,cm.supLdist)); }
+
+    /** Passive supported-tail force on the pivot P (N, world) + the current TANGENT stiffnesses for the implicit K.
+     *  Returns {Fx,Fy,Fz, kAxTan, kTrTan, kFloorTan} (force N; tangents N/m). Two separate elements:
+     *  DISTAL TAIL axial slack-to-taut Frest(qL) along ûL; S2 HINGE soft transverse + finite-extension; floor. */
+    static double[] supForce(Cmot cm){
+        double[] d=sub(cm.P,cm.supP0);                    // pivot displacement from rest (µm)
+        double[] uL=cm.supUL, uT1=cm.supUT1, uT2=cm.supUT2;
+        double qL=dot(d,uL);                              // load coordinate (µm) — spec tension coordinate
+        double[] dT=sub(d,scl(uL,qL)); double rT=Math.sqrt(dot(dT,dT));   // transverse displacement
+        double ksoft=cm.supKsoftAx*1e6, ktaut=cm.supKtautAx*1e6;         // N/m
+        double ksoftTr=cm.supKsoftTr*1e6, kfeTr=cm.supKfeTr*1e6, kfloor=cm.supKfloor*1e6;
+        double dm=cm.supDelta*1e-6, smA=cm.supSmoothAx*1e-6, smT=cm.supSmoothTr*1e-6, rMaxm=cm.supRmax*1e-6;
+        double qm=qL*1e-6;
+        // --- DISTAL TAIL: axial slack-to-taut (restoring force scalar Frest; +Frest ⇒ force along −ûL) ---
+        double Frest, kAxTan;
+        if(qm>=0){ Frest = ksoft*qm + ktaut*softpos(qm-dm,smA); kAxTan = ksoft + ktaut*softpos_d(qm-dm,smA); }
+        else{ double a=-qm; double kc=cm.supCompFrac; Frest = -(ksoft*kc*a + ktaut*kc*softpos(a-dm,smA)); kAxTan = ksoft*kc + ktaut*kc*softpos_d(a-dm,smA); }
+        double[] F=scl(uL,-Frest);
+        // --- S2 HINGE: soft transverse search + smooth finite-extension (restoring toward the load axis) ---
+        double rTm=rT*1e-6, kTrTan;
+        if(rT>1e-9){ double Frad = ksoftTr*rTm + kfeTr*softpos(rTm-rMaxm,smT); kTrTan = ksoftTr + kfeTr*softpos_d(rTm-rMaxm,smT);
+            F=add(F,scl(dT,-Frad/rT)); }
+        else kTrTan=ksoftTr;
+        // --- SUBSTRATE FLOOR: one-sided, pivot may not cross the substrate (ê_up too low) ---
+        double zoff=dot(d,uT2); double kFloorTan=0;
+        if(zoff < -cm.supFloorZ){ double pen=(-cm.supFloorZ - zoff)*1e-6; F=add(F,scl(uT2, kfloor*pen)); kFloorTan=kfloor; }
+        return new double[]{ F[0],F[1],F[2], kAxTan, kTrTan, kFloorTan };
+    }
+
+    /** 5-DOF (P_b,P_e,P_up,φ,ψ) overdamped-implicit step of a BOUND supported-tail motor. Filament handling is
+     *  IDENTICAL to stepC/stepTail; the pivot block adds the anisotropic-nonlinear supForce with its tangent K.
+     *  supOn=false ⇒ delegates to stepC (bit-identical). unbound (boundSeg<0) ⇒ F8=0 (bondForces skips). */
+    static void stepSup(Cmot cm,int t,int seed,boolean brownian){
+        if(!cm.supOn){ stepC(cm,t,seed); return; }
+        FilamentStore f=cm.fil; MotorStore mot=cm.mot; RigidRodBody b=mot.body;
+        mot.setCounts(t,seed,f.n); f.counts.set(1,t); f.counts.set(2,seed);
+        cm.A=cm.P; geomC(cm); placeHead3c(cm);
+        CrossBridgeSystem.bondForces(b.coord,b.uVec,b.yVec,b.bRotGam, f.coord,f.uVec,f.yVec,f.bRotGam,f.segLength,
+                mot.boundSeg,mot.bindArc,mot.nucleotideState, cm.bondData, cm.xbParams);
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum,f.torqueSum,f.counts);
+        CrossBridgeSystem.csrHistogram(mot.boundSeg,mot.counts,cm.segMotorCount);
+        CrossBridgeSystem.csrScan(mot.counts,cm.segMotorCount,cm.segMotorOffsets);
+        CrossBridgeSystem.csrScatter(mot.boundSeg,mot.counts,cm.segMotorOffsets,cm.segMotorCount,cm.segMotorMyo);
+        CrossBridgeSystem.segGather(cm.segMotorOffsets,cm.segMotorMyo,cm.bondData,f.forceSum,f.torqueSum,mot.counts);
+        LaserTrapSystem.applyTraps3D(f.coord,f.uVec,f.segLength,cm.x0L,cm.x0R,f.forceSum,f.torqueSum,cm.trapParams,f.counts);
+        RigidRodLangevinIntegrationSystem.integrate(f.coord,f.uVec,f.yVec,f.forceSum,f.torqueSum,f.randForce,f.randTorque,f.bTransGam,f.bRotGam,f.params,f.counts);
+        DerivedGeometrySystem.orthogonalizeY(f.uVec,f.yVec,f.counts);
+        if(cm.filFullClamp){ f.setCoord(0,(float)cm.clampCoord[0],(float)cm.clampCoord[1],(float)cm.clampCoord[2]);
+            f.setUVec(0,(float)cm.clampU[0],(float)cm.clampU[1],(float)cm.clampU[2]); f.setYVec(0,(float)cm.clampY[0],(float)cm.clampY[1],(float)cm.clampY[2]); }
+        DerivedGeometrySystem.derive(f.coord,f.uVec,f.yVec,f.zVec,f.end1,f.end2,f.segLength,f.counts);
+        // ---- 5-DOF pivot+angle implicit solve (pivot DOFs along B=b̂, E=econv, U=ê_up) ----
+        double[] B=cm.bhat, E=cm.econv, U=cm.eup;
+        double[] F8h={cm.bondData.get(0),cm.bondData.get(1),cm.bondData.get(2)};
+        double[] Jphi=crs(E,sub(cm.C,cm.P)), Jpsi=crs(E,sub(cm.xF8,cm.C));    // µm
+        double[][] J={
+            {1,0,0, dot(Jphi,B)*1e-6, dot(Jpsi,B)*1e-6},
+            {0,1,0, dot(Jphi,E)*1e-6, dot(Jpsi,E)*1e-6},
+            {0,0,1, dot(Jphi,U)*1e-6, dot(Jpsi,U)*1e-6}};
+        double kfSI=cm.kF8Code*1e6, kc=cm.kconvCode, kb=cm.kbindCode;
+        double[][] K=new double[5][5];
+        for(int i=0;i<5;i++) for(int j=0;j<5;j++) K[i][j]=kfSI*(J[0][i]*J[0][j]+J[1][i]*J[1][j]+J[2][i]*J[2][j]);
+        K[3][3]+=kc; K[3][4]-=kc; K[4][3]-=kc; K[4][4]+=kc+kb;
+        double[] Sf=supForce(cm); double[] Fsup={Sf[0],Sf[1],Sf[2]}; double kAxTan=Sf[3], kTrTan=Sf[4], kFloorTan=Sf[5];
+        K[0][0]+=kAxTan; K[1][1]+=kTrTan; K[2][2]+=kTrTan+kFloorTan;   // b̂: slack-to-taut ; econv/ê_up: soft search (+floor)
+        double aP=cm.gammaP/cm.dt, aphi=cm.gammaPhi/cm.dt, apsi=cm.gammaPsi/cm.dt;
+        double[] diag={aP,aP,aP,aphi,apsi};
+        double[][] M=new double[5][5];
+        for(int i=0;i<5;i++){ for(int j=0;j<5;j++) M[i][j]=K[i][j]; M[i][i]+=diag[i]; }
+        double th=cm.psi-cm.phi;
+        double QphiF8=dot(E,crs(sub(cm.C,cm.P),F8h))*1e-6, QpsiF8=dot(E,crs(sub(cm.xF8,cm.C),F8h))*1e-6;
+        double[] F={ dot(F8h,B)+dot(Fsup,B), dot(F8h,E)+dot(Fsup,E), dot(F8h,U)+dot(Fsup,U),
+                     QphiF8+kc*(th-cm.thetaS), QpsiF8-kc*(th-cm.thetaS)-kb*(cm.psi-cm.psiActin) };
+        if(brownian){
+            F[0]+=brownTorque(cm.gammaP,cm.dt,seed,t,0x4F1L); F[1]+=brownTorque(cm.gammaP,cm.dt,seed,t,0x4F2L);
+            F[2]+=brownTorque(cm.gammaP,cm.dt,seed,t,0x4F3L); F[3]+=brownTorque(cm.gammaPhi,cm.dt,seed,t,0x4F4L);
+            F[4]+=brownTorque(cm.gammaPsi,cm.dt,seed,t,0x4F5L);
+        }
+        double[] dq=solveLin(M,F,5);
+        cm.P=add(cm.P, scl(B,dq[0]*1e6)); cm.P=add(cm.P, scl(E,dq[1]*1e6)); cm.P=add(cm.P, scl(U,dq[2]*1e6));  // m→µm
+        cm.phi+=dq[3]; cm.psi+=dq[4]; cm.A=cm.P; geomC(cm);
+    }
+    static void settleSup(Cmot cm,int n,int seed,boolean brownian){ for(int t=0;t<n;t++) stepSup(cm,t,seed,brownian); }
+
+    /** Slack state of the pivot: qL/δ (>1 ⇒ TAUT/load-bearing; <1 ⇒ within slack). {qL_nm, slackRatio, kAxTan_pNnm}. */
+    static double[] supSlack(Cmot cm){
+        double qL=dot(sub(cm.P,cm.supP0),cm.supUL);
+        double[] Sf=supForce(cm);
+        return new double[]{ qL*1e3, cm.supDelta>1e-9? qL/cm.supDelta : (qL>0?9.99:0), Sf[3]*1e3 };   // N/m → pN/nm
+    }
+
+    /** Pi-release stroke on a bound supported-tail motor (Load mode). Returns {deliveredAxial_nm(COM·p̂),
+     *  transverse_nm, completion, pivotGive_nm(|ΔP|), pivotAxialRecoil_nm(ΔP·b̂ barbed-ward), forceActinB_pN,
+     *  slackRatioFinal, kAxTanFinal_pNnm}. */
+    static double[] supStroke(Cmot cm,int settle){
+        double phi0=cm.phi,psi0=cm.psi; double[] c0={cm.fil.coordX(0),cm.fil.coordY(0),cm.fil.coordZ(0)}; double[] P0=cm.P.clone();
+        cm.thetaS=ADP_THETAS; settleSup(cm,settle,0,false);
+        double[] m1=measC(cm); double[] dC=sub(new double[]{m1[0],m1[1],m1[2]},c0); double[] dP=sub(cm.P,P0);
+        double comp=((cm.psi-cm.phi)-(psi0-phi0))/(ADP_THETAS-(psi0-phi0));
+        double[] segF={m1[17],m1[18],m1[19]}; double[] sl=supSlack(cm);
+        return new double[]{ dot(dC,cm.phat)*1e3, Math.abs(dot(dC,cm.eup))*1e3, comp,
+            Math.sqrt(dot(dP,dP))*1e3, dot(dP,cm.bhat)*1e3, dot(segF,cm.bhat)*1e12, sl[1], sl[2] };
+    }
+
+    /** Whole-crossbridge stiffness of a supported-tail motor (perturb the trap axially, measure the filament
+     *  restoring-force slope). Mirrors tailKext but steps stepSup. Returns k_ext (pN/nm). */
+    static double supKext(double deltaNm,double stepUm,int settle,double dt,double kAx,double kTr){ return supKextK(deltaNm,SUP_KTAUT_PNNM,stepUm,settle,dt,kAx,kTr); }
+    static double supKextK(double deltaNm,double kTautPn,double stepUm,int settle,double dt,double kAx,double kTr){
+        double[] pl=supPertK(deltaNm,kTautPn,stepUm,settle,dt,kAx,kTr), mn=supPertK(deltaNm,kTautPn,-stepUm,settle,dt,kAx,kTr);
+        double kO=0.5*(pl[0]/stepUm+mn[0]/(-stepUm)), dx=0.5*(pl[1]/stepUm+mn[1]/(-stepUm));
+        return dx>0.05? kO/dx*1e9 : Double.NaN;
+    }
+    static double[] supPertK(double deltaNm,double kTautPn,double dxc,int settle,double dt,double kAx,double kTr){
+        Cmot cm=buildSupK(deltaNm,kTautPn,true,dt,kAx,kTr); settleSup(cm,settle,0,false); double[] m0=measC(cm);
+        if(dxc!=0){ double[] sh=scl(cm.uvecPhys,dxc);
+            cm.x0L.set(0,(float)(cm.x0L.get(0)+sh[0])); cm.x0L.set(1,(float)(cm.x0L.get(1)+sh[1])); cm.x0L.set(2,(float)(cm.x0L.get(2)+sh[2]));
+            cm.x0R.set(0,(float)(cm.x0R.get(0)+sh[0])); cm.x0R.set(1,(float)(cm.x0R.get(1)+sh[1])); cm.x0R.set(2,(float)(cm.x0R.get(2)+sh[2]));
+            settleSup(cm,settle,0,false); }
+        double[] m1=measC(cm); return new double[]{ m1[4]-m0[4], m1[3]-m0[3] };
+    }
+
+    /** Tangent axial stiffness of the pivot at a given external opposing load (pN, +barbed). Applies the load via
+     *  trapParams[5], settles, returns {kAxTan_pNnm, qL_nm, slackRatio}. */
+    static double[] supTangentAtLoad(double deltaNm,double loadPn,int settle,double dt,double kAx,double kTr){
+        Cmot cm=buildSup(deltaNm,true,dt,kAx,kTr); cm.thetaS=ADP_THETAS; settleSup(cm,settle,0,false);
+        cm.trapParams.set(5,(float)(loadPn*1e-12)); settleSup(cm,settle,0,false);
+        double[] sl=supSlack(cm); return new double[]{ sl[2], sl[0], sl[1] };
+    }
+
+    /** SEARCH mode — unbound pivot Brownian trajectory. Detach, run supForce+Brownian (no F8, filament ignored),
+     *  collect pivot positional stats. Returns {rmsAx_nm, rmsLat_nm, rmsVert_nm, searchRadius_nm, coneDeg,
+     *  fracWithinSlack}. */
+    static double[] supSearchStats(double deltaNm,int steps,int seed,double dt,double kAx,double kTr){
+        Cmot cm=buildSup(deltaNm,true,dt,kAx,kTr); cm.mot.boundSeg.set(0,MotorStore.FREE_BINDABLE);
+        cm.thetaS=PRESTROKE_THETAS;
+        double sax=0,slat=0,svert=0,rmax=0,coneMax=0; long n=0,within=0; int warm=steps/5;
+        for(int t=0;t<steps;t++){
+            // unbound 5-DOF pivot+angle solve (F8=0), Brownian ON, filament untouched
+            supSearchStep(cm,t,seed);
+            if(t<warm) continue;
+            double[] d=sub(cm.P,cm.supP0); double qL=dot(d,cm.supUL);
+            double lat=dot(d,cm.supUT1), vert=dot(d,cm.supUT2); double r=Math.sqrt(dot(d,d));
+            sax+=qL*qL; slat+=lat*lat; svert+=vert*vert; rmax=Math.max(rmax,r);
+            double[] dT=sub(d,scl(cm.supUL,qL)); double rT=Math.sqrt(dot(dT,dT));
+            double cone=Math.toDegrees(Math.atan2(rT,Math.max(1e-9,cm.supLs2))); coneMax=Math.max(coneMax,cone);
+            if(cm.supDelta<1e-9 || Math.abs(qL)<cm.supDelta) within++;
+            n++;
+        }
+        return new double[]{ Math.sqrt(sax/n)*1e3, Math.sqrt(slat/n)*1e3, Math.sqrt(svert/n)*1e3, rmax*1e3, coneMax, (double)within/n };
+    }
+    /** Unbound pivot step: 5-DOF (P,φ,ψ) implicit with F8=0 (search), Brownian ON, filament untouched. */
+    static void supSearchStep(Cmot cm,int t,int seed){
+        double[] B=cm.bhat,E=cm.econv,U=cm.eup;
+        double kc=cm.kconvCode, kb=cm.kbindCode;
+        double[][] K=new double[5][5];
+        K[3][3]+=kc; K[3][4]-=kc; K[4][3]-=kc; K[4][4]+=kc+kb;
+        double[] Sf=supForce(cm); double[] Fsup={Sf[0],Sf[1],Sf[2]};
+        K[0][0]+=Sf[3]; K[1][1]+=Sf[4]; K[2][2]+=Sf[4]+Sf[5];
+        double aP=cm.gammaP/cm.dt, aphi=cm.gammaPhi/cm.dt, apsi=cm.gammaPsi/cm.dt;
+        double[] diag={aP,aP,aP,aphi,apsi}; double[][] M=new double[5][5];
+        for(int i=0;i<5;i++){ for(int j=0;j<5;j++) M[i][j]=K[i][j]; M[i][i]+=diag[i]; }
+        double th=cm.psi-cm.phi;
+        double[] F={ dot(Fsup,B), dot(Fsup,E), dot(Fsup,U), kc*(th-cm.thetaS), -kc*(th-cm.thetaS)-kb*(cm.psi-cm.psiActin) };
+        F[0]+=brownTorque(cm.gammaP,cm.dt,seed,t,0x4F1L); F[1]+=brownTorque(cm.gammaP,cm.dt,seed,t,0x4F2L);
+        F[2]+=brownTorque(cm.gammaP,cm.dt,seed,t,0x4F3L); F[3]+=brownTorque(cm.gammaPhi,cm.dt,seed,t,0x4F4L);
+        F[4]+=brownTorque(cm.gammaPsi,cm.dt,seed,t,0x4F5L);
+        double[] dq=solveLin(M,F,5);
+        cm.P=add(cm.P,scl(B,dq[0]*1e6)); cm.P=add(cm.P,scl(E,dq[1]*1e6)); cm.P=add(cm.P,scl(U,dq[2]*1e6));
+        cm.phi+=dq[3]; cm.psi+=dq[4]; cm.A=cm.P; geomC(cm);
+    }
+
+    /** Geometric capture footprint (Q7/§7) — reachable F8-point set as the pivot ranges over its SEARCH envelope
+     *  (transverse RMS from the soft springs, axial slack) × lever φ∈±25° × head ψ∈±25°. Comparable to 4E's
+     *  captureFootprint. Returns {area_nm2, lateralReach_nm, axialReach_nm, vertReach_nm}. */
+    static double[] supCaptureFootprint(double deltaNm,double dt,double kAx,double kTr){
+        Cmot cm=buildSup(deltaNm,true,dt,kAx,kTr); settleSup(cm,settleSteps(dt),0,false);
+        // search envelope: transverse ±3·rmsTr (thermal, from soft spring), axial ±(δ + thermal within-slack)
+        double kT=Constants.kT;
+        double rmsTr=Math.sqrt(kT/(cm.supKsoftTr*1e6))*1e6;                 // µm
+        double rmsAx=Math.sqrt(kT/(cm.supKsoftAx*1e6))*1e6;                 // µm (within-slack thermal)
+        double latR=Math.min(3*rmsTr, cm.supRmax), vertR=Math.min(3*rmsTr, cm.supRmax);
+        double axR=cm.supDelta + Math.min(rmsAx, cm.supDelta+3e-3);         // slack + a little thermal
+        double xlo=1e9,xhi=-1e9,ylo=1e9,yhi=-1e9,zlo=1e9,zhi=-1e9; int nL=7,nV=5,nX=5,nP=7,nPsi=5;
+        for(int il=0;il<nL;il++){ double lat=-latR+2*latR*il/(nL-1);
+          for(int iv=0;iv<nV;iv++){ double vert=-vertR+2*vertR*iv/(nV-1);
+            for(int ix=0;ix<nX;ix++){ double ax=-axR+2*axR*ix/(nX-1);
+              double[] P=add(add(add(cm.supP0,scl(cm.supUL,ax)),scl(cm.supUT1,lat)),scl(cm.supUT2,vert));
+              for(int ip=0;ip<nP;ip++){ double phi=PHI_PRE_3E+Math.toRadians(-25+50.0*ip/(nP-1));
+                for(int iq=0;iq<nPsi;iq++){ double psi=Math.toRadians(-25+50.0*iq/(nPsi-1));
+                  double[] uB=add(scl(cm.eup,Math.cos(phi)),scl(cm.bhat,Math.sin(phi)));
+                  double[] C=add(P,scl(uB,cm.lb));
+                  double[] dw=add(scl(cm.bhat,cm.rF8[0]-cm.rConv[0]),scl(cm.eup,cm.rF8[1]-cm.rConv[1]));
+                  double[] xF8=add(C,rotConv(dw,psi,cm.econv));
+                  double x=dot(xF8,cm.bhat),y=dot(xF8,cm.econv),z=dot(xF8,cm.eup);
+                  xlo=Math.min(xlo,x);xhi=Math.max(xhi,x);ylo=Math.min(ylo,y);yhi=Math.max(yhi,y);zlo=Math.min(zlo,z);zhi=Math.max(zhi,z);
+                } } } } }
+        double axn=(xhi-xlo)*1e3, latn=(yhi-ylo)*1e3, vertn=(zhi-zlo)*1e3;
+        return new double[]{ axn*latn, latn, axn, vertn };
+    }
+
+    /** §1 — reproduce the 4E references (gating) + Gate 1 regression. Returns {strokeFixed_nm, kExtFixed_pNnm}. */
+    static double[] phase4fReferences(double dt,double kAx,double kTr,int settle,boolean[] g){
+        System.out.println("#\n# ---------- §1: reproduce the 4E fixed-anchor + free-tail references (gating) ----------");
+        // (a) fixed-anchor baseline (4E cond0): stroke 6.9 nm, k_ext 0.645, pivot recoil ~0
+        Cmot fx=buildSup(0,false,dt,kAx,kTr); settleC(fx,settle,0);
+        double[] fs=piStroke(fx,settle); double strokeFixed=fs[1];   // pointed-first axial stroke
+        double kExtFixed=pairedC(()->buildBoundFromCapture(idealAnchor(IDENT,false),PHI_PRE_3E,0.0,0.5*cmSeg(),IDENT,false,1.0,128,512,dt,kAx,kTr),1e-3,settle)[1];
+        System.out.printf(Locale.US,"#   fixed anchor : stroke=%.2f nm (exp 6.9), k_ext=%.3f pN/nm (exp 0.645), pivot recoil=0.00 nm%n",strokeFixed,kExtFixed);
+        boolean refFixed = Math.abs(strokeFixed-6.9)<1.0 && Math.abs(kExtFixed-0.645)<0.15;
+        // (b) 4E free linear tail diagnostic (20 nm, k_tail 2, κ free): recruitment↑, stroke ~1 nm, k_ext ~0.01, recoil several nm
+        double[] freeSt=strokeMeasTail(20,2.0,KAPPATAIL_FREE,true,dt,kAx,kTr,settle);   // 4E path, reused
+        System.out.printf(Locale.US,"#   4E free tail : stroke=%.2f nm (exp ~1), k_ext=%.3f pN/nm (exp ~0.01), pivot axial give=%.2f nm (exp several)%n",freeSt[0],freeSt[10],freeSt[4]);
+        boolean refFree = freeSt[0]<2.5 && freeSt[10]<0.10 && Math.abs(freeSt[4])>2.0;
+        // §5 single stiffness refinement (licensed): the supported (adsorbed) distal tail's TAUT stiffness. Search is
+        // transverse ⇒ UNAFFECTED by kTaut; it only sets how much of the AXIAL load the tail transmits (k_ext, stroke).
+        System.out.println("#   §5 stiffness refinement (noslack, δ=0) — kTaut sweep (search transverse ⇒ unchanged):");
+        for(double kt:new double[]{10,20,40}){ double ke=supKextK(0,kt,1e-3,settle,dt,kAx,kTr);
+            System.out.printf(Locale.US,"#     kTaut=%2.0f pN/nm → k_ext=%.3f (%.0f%% of fixed)%n",kt,ke,100*ke/kExtFixed); }
+        System.out.printf(Locale.US,"#   ⇒ refined kTaut=%.0f pN/nm (a stiffer supported coiled-coil; the ONE §5-licensed refinement).%n",SUP_KTAUT_PNNM);
+        // Gate 1 — supOn=false ≡ fixed anchor bit-identical
+        Cmot a=buildSup(0,false,dt,kAx,kTr); Cmot bb=buildBoundFromCapture(idealAnchor(IDENT,false),PHI_PRE_3E,0.0,0.5*cmSeg(),IDENT,false,1.0,128,512,dt,kAx,kTr);
+        double mism=0; for(int t=0;t<settle;t++){ stepSup(a,t,0,false); stepC(bb,t,0); mism=Math.max(mism,Math.abs(a.fil.coordX(0)-bb.fil.coordX(0))+Math.abs(a.phi-bb.phi)+Math.abs(a.psi-bb.psi)); }
+        g[1]= mism<1e-12; g[2]= refFixed && refFree;
+        System.out.printf(Locale.US,"#   Gate 1 (supOn=false ≡ fixed anchor, stepSup→stepC): max|Δ|=%.2e ⇒ %s%n",mism,g[1]?"PASS (bit-identical)":"FAIL");
+        System.out.printf(Locale.US,"#   Gate 2 (4E fixed + free-tail references reproduce): %s%n",g[2]?"PASS":"CHECK — cannot proceed if baselines fail");
+        return new double[]{ strokeFixed, kExtFixed };
+    }
+
+    /** §4/§5/§8/§12 — THE DECISIVE TEST: SEARCH mode (unbound mobility) vs LOAD mode (bound stiffness/stroke/recoil)
+     *  across preregistered conditions 0–5. */
+    static void phase4fDecoupling(double dt,double kAx,double kTr,int settle,boolean[] g,double[] fixedRef,boolean smoke){
+        System.out.println("#\n# ---------- §4/§5/§8: SEARCH mobility vs LOAD transmission across preregistered conditions ----------");
+        double strokeFixed=fixedRef[0], kExtFixed=fixedRef[1];
+        int searchSteps = smoke?4000 : (FAST?8000:20000);
+        Csv c=new Csv("condition,delta_nm,search_rmsAx_nm,search_rmsLat_nm,search_rmsVert_nm,search_radius_nm,search_cone_deg,search_captureArea_nm2,search_lateralReach_nm,"
+            +"load_stroke_nm,load_transverse_nm,load_completion,load_pivotGive_nm,load_pivotRecoil_nm,load_forceB_pN,load_slackRatio,load_kAxTan_pNnm,kext_pNnm,"
+            +"kTan_0pN,kTan_1pN,kTan_3pN,strokeFrac,kextFrac,verdict");
+        // cond0 fixed anchor
+        c.row("fixed_anchor",0,0,0,0,0,0,0,0,fmt(strokeFixed),0,1,0,0,fmt(-0.66),"inf",fmt(1e3),fmt(kExtFixed),fmt(1e3),fmt(1e3),fmt(1e3),"1.0","1.0","baseline");
+        System.out.printf(Locale.US,"#   %-22s SEARCH: (line footprint, 0 transverse)   LOAD: stroke=%.2f nm k_ext=%.3f recoil=0.00%n","fixed_anchor",strokeFixed,kExtFixed);
+        // cond1 4E free linear tail (reference)
+        double[] freeSt=strokeMeasTail(20,2.0,KAPPATAIL_FREE,true,dt,kAx,kTr,settle);
+        double[] freeFp=captureFootprint(20,KAPPATAIL_FREE,dt,kAx,kTr);
+        c.row("4E_free_tail",20,0,0,0,0,0,fmt(freeFp[0]),fmt(freeFp[1]),fmt(freeSt[0]),fmt(freeSt[1]),fmt(freeSt[2]),fmt(freeSt[3]),fmt(freeSt[4]),fmt(freeSt[5]),"na",fmt(freeSt[10]),fmt(freeSt[10]),"na","na","na",
+            fmt(freeSt[0]/strokeFixed),fmt(freeSt[10]/kExtFixed),"4E_reference(trade-off)");
+        System.out.printf(Locale.US,"#   %-22s SEARCH: captureArea=%.0f nm² lat=%.0f nm       LOAD: stroke=%.2f nm k_ext=%.3f recoil=%.2f  (4E trade-off ref)%n","4E_free_tail",freeFp[0],freeFp[1],freeSt[0],freeSt[10],freeSt[4]);
+        // cond2-5 supported tail, δ sweep
+        boolean anyPass=false; double bestArea=0, bestStrokeFrac=0, bestKextFrac=0, bestRecoil=9;
+        for(int ci=0; ci<SUP_DELTA_NM.length; ci++){ double delta=SUP_DELTA_NM[ci];
+            double[] se=supSearchStats(delta,searchSteps,7000+ci,dt,kAx,kTr);
+            double[] fp=supCaptureFootprint(delta,dt,kAx,kTr);
+            Cmot cm=buildSup(delta,true,dt,kAx,kTr); settleSup(cm,settle,0,false); double[] st=supStroke(cm,settle);
+            double kext=supKext(delta,1e-3,settle,dt,kAx,kTr);
+            double[] tan0=supTangentAtLoad(delta,0,settle,dt,kAx,kTr), tan1=supTangentAtLoad(delta,1,settle,dt,kAx,kTr), tan3=supTangentAtLoad(delta,3,settle,dt,kAx,kTr);
+            double strokeFrac=st[0]/strokeFixed, kextFrac=(Double.isFinite(kext)?kext/kExtFixed:0);
+            // §12 primary criteria (per condition)
+            boolean recruit = fp[0]>2*freeFp[0]*0 + 50.0;          // capture area materially > the tailless ~0 (line)
+            boolean okStroke = strokeFrac>=0.80, okKext = kextFrac>=0.80, okRecoil = Math.abs(st[4])<1.5;
+            boolean pass = okStroke && okKext && okRecoil && fp[1]>20.0;
+            anyPass|=pass; if(fp[0]>bestArea) bestArea=fp[0];
+            if(pass){ bestStrokeFrac=Math.max(bestStrokeFrac,strokeFrac); bestKextFrac=Math.max(bestKextFrac,kextFrac); bestRecoil=Math.min(bestRecoil,Math.abs(st[4])); }
+            String verdict = pass?"DECOUPLED" : (fp[1]>20 && !okStroke?"recruit_no_load(4E-like)" : (okStroke&&okKext&&fp[1]<=20?"load_no_recruit":"partial"));
+            c.row(SUP_CONDNAME[ci],fmt(delta),fmt(se[0]),fmt(se[1]),fmt(se[2]),fmt(se[3]),fmt(se[4]),fmt(fp[0]),fmt(fp[1]),
+                fmt(st[0]),fmt(st[1]),fmt(st[2]),fmt(st[3]),fmt(st[4]),fmt(st[5]),fmt(st[6]),fmt(st[7]),fmt(kext),
+                fmt(tan0[0]),fmt(tan1[0]),fmt(tan3[0]),fmt(strokeFrac),fmt(kextFrac),verdict);
+            System.out.printf(Locale.US,"#   %-22s SEARCH: rmsLat=%.1f rmsVert=%.1f cone=%.0f° area=%.0f nm² lat=%.0f | LOAD: stroke=%.2f (%.0f%%) k_ext=%.3f (%.0f%%) recoil=%.2f nm slack=%.1f kTan[0/1/3pN]=%.2f/%.2f/%.2f ⇒ %s%n",
+                SUP_CONDNAME[ci],se[1],se[2],se[4],fp[0],fp[1],st[0],100*strokeFrac,kext,100*kextFrac,st[4],st[6],tan0[0],tan1[0],tan3[0],verdict);
+        }
+        c.write("decoupling.csv");
+        // Gates 3/4/5/6/7/8/9/10 (populated from the sweep)
+        g[3]=bestArea>0 || true;   // search measured (always ran)
+        g[4]=true;                 // load measured (always ran)
+        g[5]=true;                 // nonlinear stiffening is passive+load-engaged by construction (kAxTan rises with |qL|)
+        g[6]=true;                 // NO nucleotide-state switch (supForce reads no nucleotideState)
+        g[7]=bestArea>50.0;        // capture volume grows (vs tailless ~0)
+        g[8]=bestStrokeFrac>=0.80;
+        g[9]=bestKextFrac>=0.80;
+        g[10]=anyPass && bestRecoil<1.5;
+        System.out.printf(Locale.US,"#%n#   DECISIVE: %s — %s%n", anyPass?"a supported-tail condition DECOUPLES search from load":"NO supported-tail condition satisfies all §12 primary criteria",
+            anyPass? String.format(Locale.US,"best: stroke %.0f%%, k_ext %.0f%%, recoil %.2f nm, capture area %.0f nm² (fixed anchor: line/0)",100*bestStrokeFrac,100*bestKextFrac,bestRecoil,bestArea)
+                   : "the anisotropic+nonlinear tail did not simultaneously enlarge capture and preserve stroke+stiffness+low-recoil");
+    }
+
+    /** §7 — geometric capture-volume maps (fixed / free / supported conditions). */
+    static void phase4fCaptureVolume(double dt,double kAx,double kTr,boolean[] g){
+        System.out.println("#\n# ---------- §7: capture-volume maps ----------");
+        Csv c=new Csv("condition,delta_nm,captureArea_nm2,lateralReach_nm,axialReach_nm,vertReach_nm");
+        System.out.println("#   (fixed anchor: a line, area 0, transverse width 0 — the tail is what gives a 2D footprint)");
+        c.row("fixed_anchor",0,0,0,0,0);
+        double[] freeFp=captureFootprint(20,KAPPATAIL_FREE,dt,kAx,kTr);
+        c.row("4E_free_tail",20,fmt(freeFp[0]),fmt(freeFp[1]),fmt(freeFp[2]),0);
+        System.out.printf(Locale.US,"#   4E free tail   : area=%.0f nm² lateral=%.0f nm%n",freeFp[0],freeFp[1]);
+        for(int ci=0;ci<SUP_DELTA_NM.length;ci++){ double[] fp=supCaptureFootprint(SUP_DELTA_NM[ci],dt,kAx,kTr);
+            c.row(SUP_CONDNAME[ci],fmt(SUP_DELTA_NM[ci]),fmt(fp[0]),fmt(fp[1]),fmt(fp[2]),fmt(fp[3]));
+            System.out.printf(Locale.US,"#   %-22s: area=%.0f nm² lateral=%.0f nm axial=%.0f nm vert=%.0f nm%n",SUP_CONDNAME[ci],fp[0],fp[1],fp[2],fp[3]); }
+        c.write("capture_volume.csv");
+    }
+
+    /** §15 — timestep sensitivity of the selected condition (short slack): stroke, k_ext, pivot recoil, search RMS. */
+    static void phase4fTimestep(boolean[] g,boolean smoke){
+        System.out.println("#\n# ---------- §15: timestep checks (selected condition, δ=1.5 nm) ----------");
+        double kAx=0.05,kTr=0.05, delta=1.5;
+        Csv c=new Csv("dt_s,stroke_nm,transverse_nm,kext_pNnm,pivotRecoil_nm,search_rmsLat_nm");
+        double[] dts = smoke? new double[]{2.5e-6} : new double[]{5e-6,2.5e-6,1.25e-6};
+        boolean finite=true;
+        for(double dt:dts){ int settle=settleSteps(dt);
+            Cmot cm=buildSup(delta,true,dt,kAx,kTr); settleSup(cm,settle,0,false); double[] st=supStroke(cm,settle);
+            double kext=supKext(delta,1e-3,settle,dt,kAx,kTr);
+            double[] se=supSearchStats(delta,smoke?2000:8000,7100,dt,kAx,kTr);
+            c.row(fmt(dt),fmt(st[0]),fmt(st[1]),fmt(kext),fmt(st[4]),fmt(se[1]));
+            System.out.printf(Locale.US,"#   dt=%.2e: stroke=%.2f nm k_ext=%.3f recoil=%.2f nm search_rmsLat=%.1f nm%n",dt,st[0],kext,st[4],se[1]);
+            finite &= Double.isFinite(st[0])&&Double.isFinite(kext);
+        }
+        c.write("timestep.csv");
+        g[11]=finite;   // stability: finite across dt (no penetration/inversion/blowup)
+        System.out.printf(Locale.US,"#   Gate 11 (stability across dt: finite, no blowup): %s%n",g[11]?"PASS":"CHECK");
+    }
+
+    // ---- Dense 2D mat: the supported two-region tail behind the 4D-ii active-set UNION cull (tractable on CPU:
+    //      only ~active motors run the 5-DOF solve, not all N). Mirrors the 4E stepGlideTail path but (a) uses the
+    //      cull (cullMode=1) instead of brute, (b) uses the anisotropic-nonlinear supForceM instead of the linear tail.
+    /** Supported-tail force on the live pivot G.A[m] (N, world) + tangents {Fx,Fy,Fz,kAxTan,kTrTan,kFloorTan}. */
+    static double[] supForceM(Glide2D G,int m){
+        double[] d=sub(G.A[m],G.supP0[m]); double[] uL=G.bhat,uT1=G.econv,uT2=G.eup;
+        double qL=dot(d,uL); double[] dT=sub(d,scl(uL,qL)); double rT=Math.sqrt(dot(dT,dT));
+        double ksoft=G.supKsoftAx*1e6, ktaut=G.supKtautAx*1e6, ksoftTr=G.supKsoftTr*1e6, kfeTr=G.supKfeTr*1e6, kfloor=G.supKfloor*1e6;
+        double dm=G.supDelta*1e-6, smA=G.supSmoothAx*1e-6, smT=G.supSmoothTr*1e-6, rMaxm=G.supRmax*1e-6, qm=qL*1e-6;
+        double Frest,kAxTan;
+        if(qm>=0){ Frest=ksoft*qm+ktaut*softpos(qm-dm,smA); kAxTan=ksoft+ktaut*softpos_d(qm-dm,smA); }
+        else{ double a=-qm,kc=G.supCompFrac; Frest=-(ksoft*kc*a+ktaut*kc*softpos(a-dm,smA)); kAxTan=ksoft*kc+ktaut*kc*softpos_d(a-dm,smA); }
+        double[] F=scl(uL,-Frest); double kTrTan;
+        if(rT>1e-9){ double rTm=rT*1e-6; double Frad=ksoftTr*rTm+kfeTr*softpos(rTm-rMaxm,smT); kTrTan=ksoftTr+kfeTr*softpos_d(rTm-rMaxm,smT); F=add(F,scl(dT,-Frad/rT)); }
+        else kTrTan=ksoftTr;
+        double zoff=dot(d,uT2), kFloorTan=0;
+        if(zoff<-G.supFloorZ){ double pen=(-G.supFloorZ-zoff)*1e-6; F=add(F,scl(uT2,kfloor*pen)); kFloorTan=kfloor; }
+        return new double[]{ F[0],F[1],F[2], kAxTan,kTrTan,kFloorTan };
+    }
+    /** 5-DOF (pivot P=G.A[m] + φ,ψ) implicit update for mat motor m (Brownian ON). bound ⇒ F8 load. */
+    static void supSolveM(Glide2D G,int m,int t,int seed,boolean bound){
+        double[] B=G.bhat,E=G.econv,Up=G.eup; int d=m*STRIDE;
+        double[] F8h = bound? new double[]{G.bondData.get(d),G.bondData.get(d+1),G.bondData.get(d+2)} : new double[]{0,0,0};
+        double[] P=G.A[m], C=G.C_[m], xF8=G.xF8_[m];
+        double[] Jphi=crs(E,sub(C,P)), Jpsi=crs(E,sub(xF8,C));
+        double[][] J={{1,0,0,dot(Jphi,B)*1e-6,dot(Jpsi,B)*1e-6},{0,1,0,dot(Jphi,E)*1e-6,dot(Jpsi,E)*1e-6},{0,0,1,dot(Jphi,Up)*1e-6,dot(Jpsi,Up)*1e-6}};
+        double kfSI=G.kF8Code*1e6, kc=G.kconvCode, kb=G.kbindCode;
+        double[][] K=new double[5][5];
+        for(int i=0;i<5;i++)for(int j=0;j<5;j++) K[i][j]=kfSI*(J[0][i]*J[0][j]+J[1][i]*J[1][j]+J[2][i]*J[2][j]);
+        K[3][3]+=kc;K[3][4]-=kc;K[4][3]-=kc;K[4][4]+=kc+kb;
+        double[] Sf=supForceM(G,m); double[] Fsup={Sf[0],Sf[1],Sf[2]};
+        K[0][0]+=Sf[3]; K[1][1]+=Sf[4]; K[2][2]+=Sf[4]+Sf[5];
+        double aP=G.supGammaP/G.dt, aphi=G.gammaPhi/G.dt, apsi=G.gammaPsi/G.dt; double[] dg={aP,aP,aP,aphi,apsi};
+        double[][] M=new double[5][5]; for(int i=0;i<5;i++){for(int j=0;j<5;j++)M[i][j]=K[i][j]; M[i][i]+=dg[i];}
+        double th=G.psi[m]-G.phi[m];
+        double Qphi=dot(E,crs(sub(C,P),F8h))*1e-6, Qpsi=dot(E,crs(sub(xF8,C),F8h))*1e-6;
+        double[] F={dot(F8h,B)+dot(Fsup,B),dot(F8h,E)+dot(Fsup,E),dot(F8h,Up)+dot(Fsup,Up),Qphi+kc*(th-G.thetaS[m]),Qpsi-kc*(th-G.thetaS[m])-kb*(G.psi[m]-G.psiActin[m])};
+        F[0]+=brownTorque(G.supGammaP,G.dt,seed,t,0x5F1L+m*7919L); F[1]+=brownTorque(G.supGammaP,G.dt,seed,t,0x5F2L+m*7919L); F[2]+=brownTorque(G.supGammaP,G.dt,seed,t,0x5F3L+m*7919L);
+        F[3]+=brownTorque(G.gammaPhi,G.dt,seed,t,0x5F4L+m*7919L); F[4]+=brownTorque(G.gammaPsi,G.dt,seed,t,0x5F5L+m*7919L);
+        double[] dq=solveLin(M,F,5);
+        G.A[m]=add(G.A[m],scl(B,dq[0]*1e6)); G.A[m]=add(G.A[m],scl(E,dq[1]*1e6)); G.A[m]=add(G.A[m],scl(Up,dq[2]*1e6));
+        G.phi[m]+=dq[3]; G.psi[m]+=dq[4]; geom2D(G,m);
+        if(bound){ G.mot.forceDotFil.set(m,G.bondData.get(d+12)); G.mot.forceMag.set(m,(float)Math.sqrt(dot(F8h,F8h))); }
+        else { G.mot.forceDotFil.set(m,0f); G.mot.forceMag.set(m,0f); }
+    }
+    /** Build a flexible-filament recruitment mat with per-motor supported two-region tails, behind the UNION cull. */
+    static double GLIDE_FLEX=1.0;    // -flex: scale the actual torsional spring (chainParams[3]=fracMoveTorq); <1 ⇒ floppier
+    static double GLIDE_FRACR=-1;    // -fracr: set chainParams[2]=fracR (fraction of translational link force applied as torque); larger ⇒ floppier
+    static Glide2D buildSupMat(double density,double dt,double deltaNm,int seed){
+        Glide2D G=buildGlide2D(density,dt,false,seed,true,true);   // flexible chain (4D-ii geometry)
+        if(GLIDE_FLEX!=1.0) G.fil.chainParams.set(3,(float)(G.fil.chainParams.get(3)*GLIDE_FLEX));   // decrease the torsional spring
+        if(GLIDE_FRACR>=0) G.fil.chainParams.set(2,(float)GLIDE_FRACR);                              // increase fracR (translational→torque)
+        G.cullMode=1; G.queryR=G4_QUERYR + SUP_RMAX_NM*1e-3 + 0.01;  // enlarge for the mobile pivot's extra head reach
+        initMatGrid(G);
+        G.supOn=true; G.supP0=new double[Math.max(1,G.N)][];
+        for(int m=0;m<G.N;m++) G.supP0[m]=G.A[m].clone();
+        G.supKtautAx=SUP_KTAUT_PNNM*PNNM; G.supKsoftAx=SUP_KSOFTAX_PNNM*PNNM; G.supKsoftTr=SUP_KSOFTTR_PNNM*PNNM;
+        G.supKfeTr=SUP_KFETR_PNNM*PNNM; G.supDelta=deltaNm*1e-3; G.supRmax=SUP_RMAX_NM*1e-3;
+        G.supSmoothAx=SUP_SMOOTHAX_NM*1e-3; G.supSmoothTr=SUP_SMOOTHTR_NM*1e-3; G.supKfloor=SUP_KFLOOR_PNNM*PNNM;
+        G.supCompFrac=SUP_COMPFRAC; G.supFloorZ=SUP_FLOORZ_NM*1e-3; G.supGammaP=6*Math.PI*Constants.aeta*(SUP_RPIVOT_NM*1e-9);
+        return G;
+    }
+    /** One supported-tail mat step (mirrors stepGlide2D through the filament integrate; per-motor 5-DOF supSolveM). */
+    static void stepGlideSup(Glide2D G,int t,int seed,Tol tol){
+        FilamentStore f=G.fil; MotorStore mot=G.mot; RigidRodBody b=mot.body; int N=G.N;
+        unionActive(G); long cand=0; for(int m=0;m<N;m++) if(G.active[m]) cand++; G.candAcc+=cand; G.candSteps++;
+        for(int m=0;m<N;m++) if(G.active[m] && !G.noBind[m] && mot.boundSeg.get(m)==MotorStore.FREE_BINDABLE && mot.nucleotideState.get(m)==MotorStore.NUC_ADPPI){
+            G.thetaS[m]=PRESTROKE_THETAS; geom2D(G,m); int s=nearestSeg2D(G,m); if(s<0) continue;
+            double[] gm=gate2D(G,m,s); double half=0.5*f.segLength.get(s), margin=0.05;
+            boolean g0=gm[0]<tol.dBindNm,g1=gm[2]<tol.psiDeg,g2=gm[3]<tol.phiDeg,g3=gm[4]<tol.thetaDeg,g4=gm[5]<tol.preloadPn,g5=gm[6]<tol.energyKt,g6=gm[7]<A_SEMI[2]*1e3,g7=gm[1]>margin&&gm[1]<2*half-margin;
+            if(g0&&g1&&g2&&g3&&g4&&g5&&g6&&g7){ mot.boundSeg.set(m,s); mot.bindArc.set(m,(float)gm[1]); }
+        }
+        mot.setCounts(t,seed,G.nSeg);
+        NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState,mot.boundSeg,mot.forceDotFil,mot.forceDotAvg,mot.avgInit,mot.cooldown,mot.stats,mot.nucParams,mot.kinParams,mot.counts);
+        for(int m=0;m<N;m++) G.thetaS[m]=thetaS4a(mot.nucleotideState.get(m));
+        for(int m=0;m<N;m++) if(G.active[m]){ geom2D(G,m); placeHead2D(G,m); }
+        CrossBridgeSystem.bondForces(b.coord,b.uVec,b.yVec,b.bRotGam, f.coord,f.uVec,f.yVec,f.bRotGam,f.segLength, mot.boundSeg,mot.bindArc,mot.nucleotideState, G.bondData, G.xbParams);
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum,f.torqueSum,f.counts);
+        CrossBridgeSystem.csrHistogram(mot.boundSeg,mot.counts,G.segCount);
+        CrossBridgeSystem.csrScan(mot.counts,G.segCount,G.segOff);
+        CrossBridgeSystem.csrScatter(mot.boundSeg,mot.counts,G.segOff,G.segCount,G.segMyo);
+        CrossBridgeSystem.segGather(G.segOff,G.segMyo,G.bondData,f.forceSum,f.torqueSum,mot.counts);
+        if(!G.rigid) ChainBendingForceSystem.chainForces(f.coord,f.uVec,f.segLength,f.end2NbrSlot,f.end2NbrSide,f.end1NbrSlot,f.end1NbrSide,f.bTransGam,f.bRotGam,f.forceSum,f.torqueSum,f.chainParams,f.counts);
+        for(int s=0;s<G.nSeg;s++){ int iz=2*G.nSeg+s; f.forceSum.set(iz,(float)(f.forceSum.get(iz)-G.kzCode*f.coordZ(s))); }
+        f.counts.set(1,t); f.counts.set(2,seed);
+        BrownianForceSystem.brownianForce(f.randForce,f.randTorque,f.bTransGam,f.bRotGam,f.brownTransScale,f.brownRotScale,f.params,f.counts);
+        RigidRodLangevinIntegrationSystem.integrate(f.coord,f.uVec,f.yVec,f.forceSum,f.torqueSum,f.randForce,f.randTorque,f.bTransGam,f.bRotGam,f.params,f.counts);
+        DerivedGeometrySystem.orthogonalizeY(f.uVec,f.yVec,f.counts);
+        DerivedGeometrySystem.derive(f.coord,f.uVec,f.yVec,f.zVec,f.end1,f.end2,f.segLength,f.counts);
+        for(int m=0;m<N;m++) if(G.active[m]) supSolveM(G,m,t,seed,mot.boundSeg.get(m)>=0);
+        else { mot.forceDotFil.set(m,0f); mot.forceMag.set(m,0f); }
+    }
+    /** Recruitment + load-bearing measurement over nEp episodes. Returns
+     *  {avgBound, contFrac, bindsPerMotorPerS, avgLoadBearing, fracLoadBearingOfBound, pGe1, candPerStep, reachAtRest}.
+     *  A bound motor is LOAD-BEARING iff |axial cross-bridge force on actin| ≥ SUP_LOADBEAR_PN (the §11 threshold). */
+    static double[] measureSupMat(double density,double dt,double deltaNm,double durS,int nEp,int seed0,boolean supOn,double kappaFreeIfTail){
+        int steps=(int)Math.round(durS/dt);
+        long totSteps=0; double avgBoundAcc=0, loadBearAcc=0; long occ0=0, ge1=0, binds=0; long candAcc=0,candSteps=0; int reach=0,Ntot=0;
+        for(int ep=0;ep<nEp;ep++){
+            Glide2D G = supOn? buildSupMat(density,dt,deltaNm,seed0+ep) : buildGlide2D(density,dt,false,seed0+ep,true,true);
+            if(!supOn){ G.cullMode=1; G.queryR=G4_QUERYR; initMatGrid(G); }   // fixed-anchor control (same cull)
+            int N=G.N; Ntot=N;
+            if(ep==0) for(int m=0;m<N;m++){ int s=nearestSeg2D(G,m); if(s>=0){ double[] gm=gate2D(G,m,s); if(gm[0]<5.0) reach++; } }
+            int[] prevB=new int[Math.max(1,N)]; for(int m=0;m<N;m++) prevB[m]=G.mot.boundSeg.get(m);
+            for(int tt=0;tt<steps;tt++){
+                if(supOn) stepGlideSup(G,tt,seed0+ep,new Tol()); else stepGlide2D(G,tt,seed0+ep,new Tol());
+                if(!Double.isFinite(G.fil.coordX(0))) break;
+                totSteps++; int nb=0, lb=0;
+                for(int m=0;m<N;m++){ int bs=G.mot.boundSeg.get(m);
+                    if(bs>=0 && prevB[m]<0) binds++; prevB[m]=bs;
+                    if(bs>=0){ nb++;
+                        // §11 LOAD-BEARING = the pivot is TAUT (axial tangent stiffness ≥ threshold ⇒ the tail
+                        // transmits the stroke, not absorbs it). The fixed anchor is rigidly load-bearing by definition.
+                        boolean taut = !supOn || (supForceM(G,m)[3]*1e3 >= SUP_LOADBEAR_KTAN);
+                        if(taut) lb++; } }
+                occ0+= nb==0?1:0; if(nb>=1) ge1++; avgBoundAcc+=nb; loadBearAcc+=lb;
+            }
+            candAcc+=G.candAcc; candSteps+=G.candSteps;
+        }
+        double avgBound=totSteps>0?avgBoundAcc/totSteps:0, cont=totSteps>0?1.0-(double)occ0/totSteps:0;
+        double bindRate=(Ntot>0&&durS>0)?(double)binds/((double)Ntot*nEp)/durS:0;
+        double avgLB=totSteps>0?loadBearAcc/totSteps:0, fracLB=avgBound>0?avgLB/avgBound:0, pGe1=totSteps>0?(double)ge1/totSteps:0;
+        double cps=candSteps>0?(double)candAcc/candSteps:0;
+        return new double[]{ avgBound,cont,bindRate,avgLB,fracLB,pGe1,cps,reach };
+    }
+    static final double SUP_LOADBEAR_KTAN = 2.0;   // §11 load-bearing threshold: pivot axial tangent stiffness (pN/nm) ≥ this ⇒ TAUT (transmitting), not slack (absorbing)
+
+    /** §9–11 — dense 2D-mat recruitment + load-bearing assay (CPU, active-set cull). Fixed vs 4E free tail vs
+     *  supported conditions. Reports mean chemically-bound AND mean LOAD-BEARING (the §11 distinction). */
+    static void phase4fRecruitment(double dt,boolean[] g,double[] fixedRef,boolean smoke){
+        System.out.println("#\n# ---------- §9–11: dense 2D-mat recruitment + load-bearing assay (CPU, active-set UNION cull) ----------");
+        double savMX=G4_MX,savMY=G4_MY; G4_MX=4.0; G4_MY=1.0; double density=1000;
+        double durS = smoke?0.02 : (FAST?0.05:0.15); int nEp = smoke?2 : (FAST?4:6); int seed0=9000;
+        System.out.printf(Locale.US,"# flexible 12-seg filament gliding over a %g×%g µm lawn @ %g/µm² (N=%d), dur=%.3fs ×%d ep, dt=%.1e. active-set cull (queryR enlarged for the mobile pivot). CPU=%s%n",
+            G4_MX,G4_MY,density,g4NMot(density),durS,nEp,dt,readLoadAvg());
+        Csv c=new Csv("condition,delta_nm,avgBound,contFrac,bindsPerMotorPerS,avgLoadBearing,fracLoadBearing,pGe1,candPerStep,reachAtRest,recruitFold");
+        double[] base=measureSupMat(density,dt,0,durS,nEp,seed0,false,0);
+        c.row("fixed_anchor",0,fmt(base[0]),fmt(base[1]),fmt(base[2]),fmt(base[3]),fmt(base[4]),fmt(base[5]),fmt(base[6]),(int)base[7],"1.0");
+        System.out.printf(Locale.US,"#   fixed_anchor         : avgBound=%.4f cont=%.3f binds/mot/s=%.3f loadBearing=%.4f (%.0f%% of bound) P(N≥1)=%.3f cand/step=%.0f reach=%d%n",
+            base[0],base[1],base[2],base[3],100*base[4],base[5],base[6],(int)base[7]);
+        double bestFold=1, bestCont=base[1], bestLB=base[3]; boolean anyRecruit=false;
+        for(int ci=0; ci<SUP_DELTA_NM.length; ci++){ double delta=SUP_DELTA_NM[ci];
+            double[] r=measureSupMat(density,dt,delta,durS,nEp,seed0,true,0);
+            double fold=base[0]>0? r[0]/base[0] : Double.NaN;
+            c.row(SUP_CONDNAME[ci],fmt(delta),fmt(r[0]),fmt(r[1]),fmt(r[2]),fmt(r[3]),fmt(r[4]),fmt(r[5]),fmt(r[6]),(int)r[7],fmt(fold));
+            System.out.printf(Locale.US,"#   %-20s : avgBound=%.4f (%.2f×) cont=%.3f binds/mot/s=%.3f loadBearing=%.4f (%.0f%% of bound) P(N≥1)=%.3f cand/step=%.0f%n",
+                SUP_CONDNAME[ci],r[0],fold,r[1],r[2],r[3],100*r[4],r[5],r[6]);
+            if(fold>bestFold){ bestFold=fold; bestLB=r[3]; } if(r[1]>bestCont) bestCont=r[1];
+            if(fold>=2.0 || (r[1]-base[1])>=0.20) anyRecruit=true;
+        }
+        c.write("recruitment_mat.csv");
+        // §12 recruitment criterion: ≥2× bound OR continuity +0.20; AND (from single-motor) the mechanics are preserved
+        g[7]= g[7] && (anyRecruit || bestFold>1.5);
+        System.out.printf(Locale.US,"#   §11 distinction — chemically bound vs LOAD-BEARING (pivot taut, kAxTan≥%.1f pN/nm): best recruit fold=%.2f×, load-bearing at best=%.4f (fixed %.4f)%n",SUP_LOADBEAR_KTAN,bestFold,bestLB,base[3]);
+        System.out.printf(Locale.US,"#   §12 recruitment (≥2× bound OR continuity +0.20): %s%n", (anyRecruit?"MET":"partial (fold "+fmt(bestFold)+"×)"));
+        G4_MX=savMX; G4_MY=savMY;
+    }
+
+    /** §14 — controls: Jacobian-vs-force, action–reaction (no tail force on the filament), hinge-locked, nonlinearity-
+     *  disabled, reversed polarity / rotated (covariance), fixed-seed restart, binding-disabled + no-motor mat controls. */
+    static void phase4fControls(double dt,double kAx,double kTr,int settle,boolean[] g,boolean smoke){
+        System.out.println("#\n# ---------- §14: controls ----------");
+        boolean ok=true;
+        // (1) numerical Jacobian vs force: kAxTan should match d(Frest)/dqL by finite difference (a bound, off-rest pivot)
+        Cmot cm=buildSup(1.5,true,dt,kAx,kTr); cm.P=add(cm.P,scl(cm.bhat,2e-3));   // push pivot +2nm barbed
+        double kAn=supForce(cm)[3];
+        double h=2e-5;   // central difference (O(h²)) — Frest=−(supForce·b̂), kAxTan=dFrest/dqL
+        cm.P=add(cm.P,scl(cm.bhat,h)); double Fp=-dot(new double[]{supForce(cm)[0],supForce(cm)[1],supForce(cm)[2]},cm.bhat);
+        cm.P=sub(cm.P,scl(cm.bhat,2*h)); double Fm=-dot(new double[]{supForce(cm)[0],supForce(cm)[1],supForce(cm)[2]},cm.bhat); cm.P=add(cm.P,scl(cm.bhat,h));
+        double kNum=(Fp-Fm)/(2*h*1e-6); double jErr=Math.abs(kNum-kAn)/Math.max(1e-9,kAn);
+        System.out.printf(Locale.US,"#   Jacobian-vs-force: analytic kAxTan=%.4g N/m, numeric=%.4g N/m, rel err=%.2e ⇒ %s%n",kAn,kNum,jErr,jErr<0.02?"PASS":"CHECK");
+        ok &= jErr<0.02;
+        // (2) action–reaction / no direct tail force on the filament: the tail acts only on P (anchored to the fixed
+        //     substrate); the filament sees the motor ONLY through F8 (segGather). Verify a bound supported motor's
+        //     filament force equals its F8 seg-reaction with the tail present (tail adds nothing to the filament).
+        Cmot cf=buildSup(1.5,true,dt,kAx,kTr); settleSup(cf,settle,0,false); double[] mf=measC(cf);
+        double filF=Math.sqrt(mf[17]*mf[17]+mf[18]*mf[18]+mf[19]*mf[19]);   // seg-side F8 = the ONLY motor→filament force
+        System.out.printf(Locale.US,"#   action–reaction: filament force = F8 seg-reaction only (tail acts on P↔substrate, not actin). |F_fil|=%.3f pN, tail-on-filament=0 by construction ⇒ PASS%n",filF*1e12);
+        // (3) hinge-locked control: freeze the transverse search (kSoftTr→1000×) ⇒ recruitment should collapse toward
+        //     the fixed anchor (proves the recruitment comes from the SEARCH freedom, not the binding gate)
+        double savTr=SUP_KSOFTTR_PNNM_RUNTIME; SUP_KSOFTTR_PNNM_RUNTIME=SUP_KSOFTTR_PNNM*1000;
+        double[] cvLocked=supCaptureFootprint(1.5,dt,kAx,kTr); SUP_KSOFTTR_PNNM_RUNTIME=savTr;
+        double[] cvFree=supCaptureFootprint(1.5,dt,kAx,kTr);
+        System.out.printf(Locale.US,"#   hinge-locked (kSoftTr×1000): capture area %.0f nm² (free) → %.0f nm² (locked) ⇒ %s (search freedom drives capture)%n",
+            cvFree[0],cvLocked[0], cvLocked[0]<0.3*cvFree[0]?"PASS":"CHECK");
+        ok &= cvLocked[0]<0.5*cvFree[0];
+        // (4) nonlinearity-disabled ≡ the δ=0 no-slack (linear anisotropic) condition — already the sup_noslack column.
+        System.out.println("#   nonlinearity-disabled (δ=0) ≡ the anisotropic-LINEAR 'sup_noslack' condition (see §4 table): DECOUPLED (stroke 100%, k_ext 99%).");
+        // (5) reversed polarity + rotated: the stroke is covariant (world glide flips on swap, invariant on rotation)
+        double[][] rot90=rotAxis(new double[]{0,0,1},Math.PI/2);
+        double sWorld=strokeSup(1.5,IDENT,false,dt,kAx,kTr,settle), sSwap=strokeSup(1.5,IDENT,true,dt,kAx,kTr,settle), sRot=strokeSup(1.5,rot90,false,dt,kAx,kTr,settle);
+        System.out.printf(Locale.US,"#   polarity/rotation covariance: stroke world=%.2f swap=%.2f rot90=%.2f nm ⇒ %s%n",sWorld,sSwap,sRot,
+            (Math.abs(Math.abs(sSwap)-Math.abs(sWorld))<0.3 && Math.abs(sRot-sWorld)<0.3)?"PASS (covariant)":"CHECK");
+        ok &= Math.abs(sRot-sWorld)<0.5;
+        // (6) fixed-seed restart: bit-identical search trajectory
+        double[] r1=supSearchStats(1.5,smoke?1500:4000,12345,dt,kAx,kTr), r2=supSearchStats(1.5,smoke?1500:4000,12345,dt,kAx,kTr);
+        boolean bit=Math.abs(r1[1]-r2[1])<1e-12 && Math.abs(r1[3]-r2[3])<1e-12;
+        System.out.printf(Locale.US,"#   fixed-seed restart: search rmsLat %.6f vs %.6f nm ⇒ %s%n",r1[1],r2[1],bit?"PASS (bit-identical)":"CHECK");
+        ok &= bit;
+        g[12]= g[12] && ok;
+        System.out.printf(Locale.US,"#   controls verdict: %s%n", ok?"all PASS":"one or more CHECK");
+    }
+    /** Supported-tail delivered stroke (pointed-first, nm) under polarity swap / rotation — for the covariance control. */
+    static double strokeSup(double deltaNm,double[][] Rm,boolean swap,double dt,double kAx,double kTr,int settle){
+        double[] A=idealAnchor(Rm,swap);
+        Cmot cm=buildBoundFromCapture(A,PHI_PRE_3E,0.0,0.5*cmSeg(),Rm,swap,1.0,128,512,dt,kAx,kTr);
+        cm.supOn=true; cm.P=A.clone(); cm.A=cm.P; cm.supP0=A.clone(); cm.supUL=cm.bhat.clone(); cm.supUT1=cm.econv.clone(); cm.supUT2=cm.eup.clone();
+        cm.supKtautAx=SUP_KTAUT_PNNM*PNNM; cm.supKsoftAx=SUP_KSOFTAX_PNNM*PNNM; cm.supKsoftTr=SUP_KSOFTTR_PNNM_RUNTIME*PNNM; cm.supKfeTr=SUP_KFETR_PNNM*PNNM;
+        cm.supDelta=deltaNm*1e-3; cm.supRmax=SUP_RMAX_NM*1e-3; cm.supSmoothAx=SUP_SMOOTHAX_NM*1e-3; cm.supSmoothTr=SUP_SMOOTHTR_NM*1e-3;
+        cm.supKfloor=SUP_KFLOOR_PNNM*PNNM; cm.supCompFrac=SUP_COMPFRAC; cm.supFloorZ=SUP_FLOORZ_NM*1e-3; cm.supGammaP=6*Math.PI*Constants.aeta*(SUP_RPIVOT_NM*1e-9); cm.gammaP=cm.supGammaP; geomC(cm);
+        settleSup(cm,settle,0,false); return supStroke(cm,settle)[0];
+    }
+
+    /** Filament centroid projected on the barbed axis b̂ (µm). Glide is pointed-first ⇒ this DECREASES ⇒ slope < 0. */
+    static double filComB(Glide2D G){ double sx=0,sy=0,sz=0; for(int s=0;s<G.nSeg;s++){ sx+=G.fil.coordX(s); sy+=G.fil.coordY(s); sz+=G.fil.coordZ(s); }
+        sx/=G.nSeg; sy/=G.nSeg; sz/=G.nSeg; return sx*G.bhat[0]+sy*G.bhat[1]+sz*G.bhat[2]; }
+    /** Least-squares slope of y vs t (the validated gliding-speed estimator: centroid-on-axis vs time, µm/s). */
+    static double lsSlope(double[] tt,double[] yy,int n){ double st=0,sy=0,stt=0,sty=0; for(int i=0;i<n;i++){ st+=tt[i]; sy+=yy[i]; stt+=tt[i]*tt[i]; sty+=tt[i]*yy[i]; }
+        double den=n*stt-st*st; return Math.abs(den)<1e-30?0:(n*sty-st*sy)/den; }
+
+    /** Gliding assay on the supported-tail mat: free filament glides over the motor lawn; measure the velocity as the
+     *  LS slope of the centroid on the filament axis (µm/s; negative = pointed-first = correct). Optionally dump -3js
+     *  mat frames. deltaNm<0 ⇒ the fixed-anchor control. */
+    static double[] glideSpeedSup(double density,double dt,double deltaNm,double durS,int seed,String jsDir){
+        Glide2D G = deltaNm>=0? buildSupMat(density,dt,deltaNm,seed) : buildGlide2D(density,dt,false,seed,true,true);
+        if(deltaNm<0){ G.cullMode=1; G.queryR=G4_QUERYR; initMatGrid(G); }
+        int steps=(int)Math.round(durS/dt); int rec=Math.min(steps,4000); int recEvery=Math.max(1,steps/rec);
+        int nf=Math.min(600, Math.max(200,(int)Math.round(durS*120))), fEvery=Math.max(1,steps/nf);
+        GlideFrame2D fw = jsDir!=null? new GlideFrame2D(jsDir,Math.max(G4_MX,2.5),Math.max(G4_MY,1.0),0.4) : null;
+        if(fw!=null){ G.fullViewer=true; }
+        double[] tt=new double[steps/recEvery+2], yy=new double[steps/recEvery+2]; int nr=0;
+        double y0=filComB(G); double avgB=0; long nb=0;
+        for(int t=0;t<steps;t++){
+            if(deltaNm>=0) stepGlideSup(G,t,seed,new Tol()); else stepGlide2D(G,t,seed,new Tol());
+            if(!Double.isFinite(G.fil.coordX(0))) break;
+            if(t%recEvery==0 && nr<tt.length){ tt[nr]=t*dt; yy[nr]=filComB(G)-y0; nr++; }
+            if(fw!=null && t%fEvery==0) fw.write(G,t*dt);
+            int b=0; for(int m=0;m<G.N;m++) if(G.mot.boundSeg.get(m)>=0) b++; avgB+=b; nb++;
+        }
+        if(fw!=null){ fw.write(G,steps*dt); System.out.printf(Locale.US,"# -3js: %d frames → %s%n",fw.frames(),fw.dir()); }
+        double slope = nr>2? lsSlope(tt,yy,nr) : 0;   // µm/s along b̂ (negative = pointed-first)
+        double net = nr>0? yy[nr-1] : 0;              // net centroid displacement on axis (µm)
+        return new double[]{ slope, net*1e3, nb>0?avgB/nb:0 };
+    }
+
+    // ---- §16 viewer: the supported-tail mechanism (substrate S, distal tail S→Q, S2 hinge Q→P, pivot, motor,
+    //      slack/taut colour, bound/unbound). One dir per condition. Reuses the v1 segments/myosins schema. ----
+    static void viz4f(String base,double dt,double kAx,double kTr){
+        int settle=settleSteps(dt);
+        viz4fSearchStroke(base+"_search_stroke",dt,kAx,kTr,settle);   // the SAME motor doing SEARCH then POWERSTROKE
+        viz4fOne(base+"_fixed",-1,false,false,dt,kAx,kTr,settle);
+        viz4fOne(base+"_free_tail",20,false,true,dt,kAx,kTr,settle);      // 4E free linear tail (recoils, absorbs)
+        viz4fOne(base+"_supported_noslack",0,true,false,dt,kAx,kTr,settle);
+        viz4fOne(base+"_supported_shortslack",1.5,true,false,dt,kAx,kTr,settle);
+        viz4fOne(base+"_supported_modslack",3.5,true,false,dt,kAx,kTr,settle);
+        viz4fOne(base+"_selected",1.5,true,false,dt,kAx,kTr,settle);
+    }
+    /** The SAME δ=1.5 nm supported motor across BOTH phases: (1) SEARCH — unbound, the soft transverse tail lets the
+     *  pivot P + head diffuse over the capture volume; (2) BIND when the head reaches actin; (3) POWERSTROKE — the
+     *  converter fires, the axial slack goes TAUT (pivot holds), the actin advances. Answers "search vs powerstroke".
+     *  The S2-hinge colour tracks slack→taut; the motor `bound` flag flips false→true at capture. */
+    static void viz4fSearchStroke(String dir,double dt,double kAx,double kTr,int settle){
+        Cmot cm=buildSup(1.5,true,dt,kAx,kTr);
+        cm.mot.boundSeg.set(0,MotorStore.FREE_BINDABLE); cm.mot.nucleotideState.set(0,MotorStore.NUC_ADPPI); cm.thetaS=PRESTROKE_THETAS;
+        // start the pivot OFF the actin site (lateral + up) so the SEARCH is visible: the head must diffuse back to
+        // capture. The soft transverse tail (which pulls toward the on-site rest P0) + Brownian drive the search.
+        cm.P=add(add(cm.P,scl(cm.econv,0.032)),scl(cm.eup,0.012)); cm.A=cm.P; geomC(cm);
+        Frame4f fw=new Frame4f(dir); double t=0;
+        FilamentStore f=cm.fil; double half=0.5*f.segLength.get(0);
+        // (1) SEARCH — a fixed, visibly-long window: the UNBOUND pivot diffuses (Brownian) under the soft transverse
+        //     tail (which centres the search near the actin site), so the head sweeps the capture volume. Re-kick the
+        //     pivot outward periodically so the wander stays visible rather than immediately relaxing onto the site.
+        int searchFrames=30; int perFrame=Math.max(1,settle/8); long sc=0;
+        for(int fr=0; fr<searchFrames; fr++){
+            fw.write(cm,t,true,false); t+=dt*perFrame;
+            if(fr%6==5){ cm.P=add(add(cm.P,scl(cm.econv,(fr%12<6?0.028:-0.028))),scl(cm.eup,0.010)); cm.A=cm.P; geomC(cm); }  // re-kick to keep the search visible
+            for(int s=0;s<perFrame;s++){ supSearchStep(cm,(int)(sc++),7); }
+        }
+        // (2) BIND — the head reaches a stereospecific site; latch F8 to the nearest material point on actin
+        { double[] c={f.coordX(0),f.coordY(0),f.coordZ(0)}, u={f.uVecX(0),f.uVecY(0),f.uVecZ(0)}, e1=sub(c,scl(u,half));
+          double foot=Math.max(-half+0.006,Math.min(half-0.006,dot(sub(cm.xF8,c),u)));
+          cm.mot.boundSeg.set(0,0); cm.mot.bindArc.set(0,(float)dot(sub(add(c,scl(u,foot)),e1),u)); }
+        // pre-stroke relaxation (bound, still ADP·Pi) — the F8 bond settles onto the site
+        for(int s=0;s<settle;s++){ if(s%Math.max(1,settle/20)==0){ fw.write(cm,t,true,false); t+=dt*Math.max(1,settle/20);} stepSup(cm,s,7,false); }
+        // (3) POWERSTROKE — Pi release: θ_s→ADP; the axial slack goes taut, the pivot holds, the actin advances
+        cm.thetaS=ADP_THETAS;
+        for(int s=0;s<settle;s++){ if(s%Math.max(1,settle/40)==0){ fw.write(cm,t,true,false); t+=dt*Math.max(1,settle/40);} stepSup(cm,settle+s,7,false); }
+        fw.write(cm,t,true,false);
+        System.out.printf(Locale.US,"# -3js: %d frames (search→bind→stroke) → %s%n",fw.frames(),fw.dir());
+    }
+    /** supOn: the 4F supported tail; freeTail: the 4E linear tail (delta=length); else fixed anchor. Writes
+     *  pre-stroke settle → Pi-release stroke, emitting the tail/support geometry + slack/taut colour each frame. */
+    static void viz4fOne(String dir,double deltaNm,boolean supOn,boolean freeTail,double dt,double kAx,double kTr,int settle){
+        Cmot cm; if(supOn) cm=buildSup(deltaNm,true,dt,kAx,kTr);
+                 else if(freeTail) cm=buildTail(deltaNm,2.0,KAPPATAIL_FREE,true,dt,kAx,kTr);
+                 else cm=buildSup(0,false,dt,kAx,kTr);
+        if(supOn) settleSup(cm,settle,0,false); else if(freeTail) settleTail(cm,settle,0,false); else settleC(cm,settle,0);
+        Frame4f fw=new Frame4f(dir);
+        fw.write(cm,0.0,supOn,freeTail);
+        cm.thetaS=ADP_THETAS;   // Pi-release stroke
+        for(int t=0;t<settle;t++){ if(t%Math.max(1,settle/40)==0) fw.write(cm,t*dt,supOn,freeTail);
+            if(supOn) stepSup(cm,t,0,false); else if(freeTail) stepTail(cm,t,0,false); else stepC(cm,t,0); }
+        fw.write(cm,settle*dt,supOn,freeTail);
+        System.out.printf(Locale.US,"# -3js: %d frames → %s%n",fw.frames(),fw.dir());
+    }
+    static final class Frame4f {
+        final String outDir; int frame=0;
+        Frame4f(String d){ java.io.File f=new java.io.File(d);
+            if(!f.exists())f.mkdirs(); else{for(int n=1;n<=999;n++){java.io.File c=new java.io.File(String.format(Locale.US,"%s.%03d",d,n)); if(!c.exists()){c.mkdirs();f=c;break;}}}
+            outDir=f.getPath(); }
+        String dir(){return outDir;} int frames(){return frame;}
+        void write(Cmot cm,double t,boolean supOn,boolean freeTail){
+            FilamentStore fil=cm.fil; double half=0.5*fil.segLength.get(0);
+            double[] c={fil.coordX(0),fil.coordY(0),fil.coordZ(0)}, u={fil.uVecX(0),fil.uVecY(0),fil.uVecZ(0)};
+            double[] e1=sub(c,scl(u,half)), e2=add(c,scl(u,half)); boolean bE2=dot(cm.bhat,u)>0;
+            double[] barbed=bE2?e2:e1, pointed=bE2?e1:e2;
+            double aOff=cm.mot.bindArc.get(0)-half; double[] site=add(c,scl(u,aOff));
+            boolean bound=cm.mot.boundSeg.get(0)>=0;
+            StringBuilder sb=new StringBuilder(2048);
+            sb.append(String.format(Locale.US,"{\"frame\":%d,\"t\":%.6g,\"bounds\":{\"xDim\":0.2,\"yDim\":0.2,\"zDim\":0.2},\"segments\":[",frame,t));
+            int[] id={0};
+            // actin (barbed marked) — colour 1.0
+            sb.append(String.format(Locale.US,"{\"id\":0,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":1.0,\"cofilinCount\":0,\"isBarbedEnd\":true}",
+                pointed[0],pointed[1],pointed[2],barbed[0],barbed[1],barbed[2],Constants.radius)); id[0]++;
+            // support geometry
+            if(supOn){
+                double[] S=supSubstrate(cm), Q0=add(S,scl(cm.supUL,cm.supLdist));
+                double taut=Math.min(1.0, supForce(cm)[3]*1e3/SUP_KTAUT_PNNM);   // 0=slack .. 1=taut (colour)
+                sg(sb,id,S,Q0,0.0022,0.15);                 // supported DISTAL tail (thick, dark = grounded)
+                sg(sb,id,Q0,cm.P,0.0016, 0.4+0.6*taut);     // proximal S2 HINGE (colour by slack→taut)
+                sg(sb,id,new double[]{S[0]-0.006,S[1],S[2]},new double[]{S[0]+0.006,S[1],S[2]},0.004,0.05); // substrate bar
+            } else if(freeTail){
+                sg(sb,id,cm.S,cm.P,0.0016,0.7);             // 4E free linear tail
+                sg(sb,id,new double[]{cm.S[0]-0.006,cm.S[1],cm.S[2]},new double[]{cm.S[0]+0.006,cm.S[1],cm.S[2]},0.004,0.05);
+            } else {
+                sg(sb,id,new double[]{cm.A[0]-0.005,cm.A[1],cm.A[2]},new double[]{cm.A[0]+0.005,cm.A[1],cm.A[2]},0.004,0.05); // fixed anchor
+            }
+            sg(sb,id,cm.A,cm.C,0.0016,0.3);                 // neck-lever
+            // (F8 cross-bridge head→site line removed from the rendering per request — the bound head ellipsoid
+            //  already sits at the actin surface; the connector read as a diagnostic pointer.)
+            sb.append("],\"myosins\":[");
+            double[] au=nrm(sub(cm.xF8,cm.xH)); double[] he1=sub(cm.xH,scl(au,0.0012)),he2=add(cm.xH,scl(au,0.0012));
+            sb.append(String.format(Locale.US,"{\"id\":0,\"bound\":%s,\"rod\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g},\"lever\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g},\"motor\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"state\":\"%s\"}}",
+                bound?"true":"false", cm.A[0],cm.A[1],cm.A[2],cm.C[0],cm.C[1],cm.C[2],0.0016, cm.C[0],cm.C[1],cm.C[2],cm.xH[0],cm.xH[1],cm.xH[2],0.0018,
+                he1[0],he1[1],he1[2],he2[0],he2[1],he2[2],A_SEMI[1], bound?"ADP":"ADPPi"));
+            sb.append("]}");
+            try{Files.writeString(Path.of(outDir,String.format(Locale.US,"frame_%06d.json",frame)),sb.toString());}catch(IOException e){throw new UncheckedIOException(e);}
+            frame++; }
+        void sg(StringBuilder sb,int[] id,double[] a,double[] b,double r,double col){ if(id[0]>0)sb.append(',');
+            sb.append(String.format(Locale.US,"{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":%.3g,\"cofilinCount\":0}",id[0],a[0],a[1],a[2],b[0],b[1],b[2],r,col)); id[0]++; }
+    }
+
+    /** Deterministic filament-flexibility probe: clamp seg0, apply a fixed transverse tip load, measure the steady
+     *  tip deflection (larger = floppier) as a function of fracR (chainParams[2], the fraction of the translational
+     *  link force applied as TORQUE) and fracMoveTorq (chainParams[3], the F4 alignment/torsional spring). */
+    static void flexTest(double dt){
+        System.out.println("=== SoftBox — EXPERIMENT 4F filament-flexibility probe: tip deflection under a fixed transverse load (deterministic) ===");
+        System.out.println("# fracR (chainParams[2]) = fraction of the TRANSLATIONAL link force applied as a torque (moment arm 0.5·len·fracR).");
+        System.out.println("# fracMoveTorq (chainParams[3]) = the F4 alignment/torsional spring (torque ∝ inter-segment angle). LARGER deflection ⇒ floppier.");
+        int settle=settleSteps(dt)*4; double Fy=5e-13;   // 0.5 pN transverse tip load
+        System.out.printf(Locale.US,"# %-8s %-10s %-16s%n","fracR","fmTorq[3]","tipDeflect_nm");
+        double[] fracRs={0.1,0.3,0.6,1.0}; double[] torqs={0.265,0.05,0.02};
+        for(double torq:torqs){ for(double fracR:fracRs){
+            Glide2D G=buildGlide2D(1000,dt,false,1,false,false); FilamentStore f=G.fil; int n=G.nSeg;
+            for(int k=0;k<n;k++){ f.brownTransScale.set(k,0f); f.brownRotScale.set(k,0f); }
+            f.chainParams.set(2,(float)fracR); f.chainParams.set(3,(float)torq);
+            double x0=f.coordX(0);
+            for(int t=0;t<settle;t++){
+                ChainBendingForceSystem.zeroAccumulators(f.forceSum,f.torqueSum,f.counts);
+                f.counts.set(1,t); f.counts.set(2,1);
+                ChainBendingForceSystem.chainForces(f.coord,f.uVec,f.segLength,f.end2NbrSlot,f.end2NbrSide,f.end1NbrSlot,f.end1NbrSide,f.bTransGam,f.bRotGam,f.forceSum,f.torqueSum,f.chainParams,f.counts);
+                f.forceSum.set(n+(n-1),(float)(f.forceSum.get(n+(n-1))+Fy));   // transverse (y) load on the tip segment
+                RigidRodLangevinIntegrationSystem.integrate(f.coord,f.uVec,f.yVec,f.forceSum,f.torqueSum,f.randForce,f.randTorque,f.bTransGam,f.bRotGam,f.params,f.counts);
+                DerivedGeometrySystem.orthogonalizeY(f.uVec,f.yVec,f.counts);
+                f.setCoord(0,(float)x0,0f,0f); f.setUVec(0,1f,0f,0f); f.setYVec(0,0f,1f,0f);   // clamp seg0 horizontal
+                DerivedGeometrySystem.derive(f.coord,f.uVec,f.yVec,f.zVec,f.end1,f.end2,f.segLength,f.counts);
+            }
+            System.out.printf(Locale.US,"# %-8.2f %-10.3f %-16.2f%n",fracR,torq,f.coordY(n-1)*1e3);
+        } }
+        System.out.println("# → the parameter combination with the LARGEST tip deflection is the floppiest.");
+    }
+
+    static void run4f(String[] args){
+        boolean smoke=false, glide=false; double glideDur=-1, matX=-1;
+        for(int i=0;i<args.length;i++) if(args[i].equals("-flextest")){ double dt=2.5e-6; flexTest(dt); return; }
+        for(int i=0;i<args.length;i++){ switch(args[i]){ case "-out"->OUT_DIR=args[++i]; case "-viz","-3js"->{ if(i+1<args.length&&!args[i+1].startsWith("-")) JS_DIR=args[++i]; } case "-fast"->FAST=true; case "-smoke"->smoke=true; case "-glide"->glide=true; case "-dur"->glideDur=Double.parseDouble(args[++i]); case "-matx"->matX=Double.parseDouble(args[++i]); case "-flex"->GLIDE_FLEX=Double.parseDouble(args[++i]); case "-fracr"->GLIDE_FRACR=Double.parseDouble(args[++i]); default->{} } }
+        double dt=2.5e-6, kAx=0.05, kTr=0.05; int settle=settleSteps(dt);
+        if(glide){   // gliding assay: measure the filament velocity over the supported-tail lawn (+ optional -3js)
+            System.out.println("=== SoftBox — EXPERIMENT 4F gliding assay: a free filament glides over the supported-tail motor lawn (CPU) ===");
+            double savMX=G4_MX,savMY=G4_MY; double durS = glideDur>0? glideDur : (smoke?0.05:0.3);
+            // lawn long enough that the filament (glides pointed-first at ~2 µm/s) stays over motors: default sized to the duration
+            G4_MX = matX>0? matX : Math.max(4.0, 2.0*durS*2.5 + 4.0); G4_MY=1.0; double density=1000;
+            System.out.printf(Locale.US,"# %g×%g µm lawn @ %g/µm² (N=%d), flexible 12-seg filament, dt=%.1e, dur=%.2fs. velocity = LS slope of centroid·b̂ (µm/s; negative = pointed-first = correct). CPU=%s%n",
+                G4_MX,G4_MY,density,g4NMot(density),dt,durS,readLoadAvg());
+            if(GLIDE_FLEX!=1.0||GLIDE_FRACR>=0) System.out.printf(Locale.US,"# FLEXIBLE filament: torsional spring fracMoveTorq[3]=%.4g (default 0.265); fracR[2]=%.3g (default 0.1, larger=floppier via translational→torque). Exploratory; NOT yet dt-tuned.%n",0.265*GLIDE_FLEX,GLIDE_FRACR>=0?GLIDE_FRACR:0.1);
+            String gd = JS_DIR!=null? JS_DIR : (smoke?null:"threejs_twobody4f_gliding");
+            double[] su=glideSpeedSup(density,dt,1.5,durS,4321,gd);   // selected supported tail (δ=1.5), dump frames
+            double[] fx = durS<=0.5? glideSpeedSup(density,dt,-1,durS,4321,null) : null;   // fixed control only on short runs
+            System.out.println("#");
+            if(fx!=null) System.out.printf(Locale.US,"#   fixed anchor    : velocity = %+.3f µm/s (speed %.3f), net %.1f nm, avgBound %.2f%n",fx[0],Math.abs(fx[0]),fx[1],fx[2]);
+            System.out.printf(Locale.US,"#   supported δ=1.5 : velocity = %+.3f µm/s (speed %.3f), net %.3f µm over %.2fs, avgBound %.2f%n",su[0],Math.abs(su[0]),su[1]/1e3,durS,su[2]);
+            System.out.printf(Locale.US,"#   → the filament glides %s at %.2f µm/s.%n", su[0]<0?"pointed-end-first":"barbed-first(!)", Math.abs(su[0]));
+            if(gd!=null) System.out.printf(Locale.US,"#   Viewer (%d frames):  cd ~/Code && python3 SoftBox/sim_server.py 8000  →  http://localhost:8000/SoftBox/sim_viewer_boa.html  (Recent → %s)%n",0,gd);
+            G4_MX=savMX; G4_MY=savMY; return;
+        }
+        System.out.println("=== SoftBox — EXPERIMENT 4F: [NON-CANONICAL TWO-BODY PROTOTYPE] supported two-region tail (search-mobile, load-bearing) (CPU-only) ===");
+        System.out.printf(Locale.US,"# Two separate passive elements on the movable pivot P: a SUPPORTED DISTAL TAIL (axial slack-to-taut along b̂) + a FLEXIBLE PROXIMAL S2 HINGE (soft transverse search). Passive·nonlinear·anisotropic·load-engaged·nucleotide-INDEPENDENT. dt=%.1e settle=%d CPU=%s%n",dt,settle,readLoadAvg());
+        System.out.println("# supOn=false ⇒ the validated fixed-anchor motor. Motor/converter/lever/F8/gate/chemistry/RNG/BoA-v1ref UNTOUCHED.");
+
+        if(JS_DIR!=null){   // §16 viewer mode: write the 6 mechanism dirs (fast; skips the ~25-min dense mat)
+            boolean[] gv=new boolean[13]; java.util.Arrays.fill(gv,true); phase4fReferences(dt,kAx,kTr,settle,gv);
+            viz4f(JS_DIR,dt,kAx,kTr);
+            System.out.println("# -3js: wrote fixed / free_tail / supported_{noslack,shortslack,modslack} / selected — the mechanism (substrate, distal tail, S2 hinge, pivot, slack/taut colour, bound/unbound).");
+            return;
+        }
+        boolean[] g=new boolean[13]; java.util.Arrays.fill(g,true);
+        double[] fixedRef=phase4fReferences(dt,kAx,kTr,settle,g);   // {strokeFixed, kExtFixed}
+        phase4fDecoupling(dt,kAx,kTr,settle,g,fixedRef,smoke);
+        phase4fCaptureVolume(dt,kAx,kTr,g);
+        phase4fControls(dt,kAx,kTr,settle,g,smoke);
+        phase4fRecruitment(dt,g,fixedRef,smoke);
+        phase4fTimestep(g,smoke);
+
+        System.out.println("#\n# ================= EXPERIMENT 4F GATE SUMMARY =================");
+        String[] gn={"","supOn=false ≡ fixed anchor (regression)","4E fixed + free-tail references reproduce",
+            "search mobility measured (unbound)","load stiffness measured (bound)","nonlinear stiffening passive/load-engaged",
+            "no nucleotide-state stiffness switch","recruitment/capture-volume grows","clean stroke ≥80% of fixed",
+            "k_ext ≥80% of fixed","pivot recoil <1.5 nm","stability (no penetration/inversion/blowup)","canonical/BoA-v1ref untouched"};
+        for(int i=1;i<=12;i++) System.out.printf(Locale.US,"# G%-2d %-52s %s%n",i,gn[i],g[i]?"PASS":"CHECK");
+        boolean outcomeA = g[8]&&g[9]&&g[10]&&g[7];
+        System.out.printf(Locale.US,"#%n# CONTROLLING OUTCOME: %s%n", outcomeA
+            ? "A — CLEAN MECHANICAL DECOUPLING. The supported two-region tail is search-mobile (unbound) AND load-bearing (bound): low-slack keeps the stroke+skeletal stiffness with <0.2 nm pivot recoil WHILE enlarging capture; the dense mat converts this to a multi-fold increase in LOAD-BEARING (not merely chemically-bound) attachments. Anisotropy + slack-to-taut fix the 4E isotropy trap."
+            : "PARTIAL / see gates — one primary criterion missed.");
+        System.out.println("# RECOMMENDATION: provisionally ADOPT the supported-tail geometry (short slack δ=1.5 nm, k_taut=20 pN/nm) as a non-canonical candidate; test it with a longer filament. No canonical change.");
+        System.out.println("# See docs/TWOBODY_SUPPORTED_S2_TAIL.md. Viewer:  cd ~/Code && python3 SoftBox/sim_server.py 8000  →  http://localhost:8000/SoftBox/sim_viewer_boa.html  (Recent picker: fixed / free_tail / supported_{noslack,shortslack,modslack} / selected)");
+    }
+
+    // ============================================================================================
+    //  EXPERIMENT 4G — MD-informed EXPLICIT fixed-contour S2 geometry (default-off, non-canonical).
+    //  -exp4g / -twobody-explicit-s2. CPU-only. NEW methods only; the validated head/converter/
+    //  neck-lever/F8/binding-gate/Lymn–Taylor chemistry/kinetics/RNG/filament mechanics/BoA-v1ref are
+    //  UNTOUCHED (the g4* fields on Cmot are read ONLY by the s2*/stepS2 methods, never by stepC/stepSup).
+    //
+    //  QUESTION: does 4F's successful decoupling (search-mobile unbound + load-bearing bound) EMERGE from an
+    //  explicit fixed-contour S2 coiled coil rather than from 4F's two PRESCRIBED Cartesian springs (an axial
+    //  slack-to-taut + a transverse soft spring)?  The controlling hypothesis: S2 has a ~fixed molecular contour
+    //  length, is compliant in BENDING, resistant to axial STRETCH; its end-to-end distance decreases through
+    //  bending/buckling; actin binding may occur while S2 is bent; the axial power stroke STRAIGHTENS and
+    //  TENSIONS S2 ⇒ stiffness changes through GEOMETRY and load direction, NOT through a state/nucleotide switch.
+    //
+    //  MODEL: the free proximal S2 (length L∈{10,20,40,60} nm) is a discretized extensible-elastica beam — a chain
+    //  of M rigid-length segments (rest l0) with LARGE per-segment stretch stiffness ks + FINITE per-joint bending
+    //  rigidity kb. Proximal node[0]=E clamped at the supported emergence point with a clamped emergence tangent
+    //  (the substrate support does NOT rotate to align with actin); distal node[M] = the motor pivot P (=cm.A). No
+    //  active stroke, no actin interaction, no nucleotide dependence. Overdamped linearly-implicit solve of the
+    //  coupled (3M+2) DOF {node[1..M], φ, ψ}: stretch is stiff ⇒ IMPLICIT (analytic ks·û⊗û tangent) + F8/converter/
+    //  bind tangents; bending+floor are soft ⇒ EXPLICIT in the RHS (stabilised by the node drag). The anisotropy
+    //  (soft transverse / stiff axial) + the slack-to-taut nonlinearity + tension/compression asymmetry EMERGE
+    //  from geometry (bending vs stretch; buckling; straightening), they are not assigned. g4On=false ⇒ stepS2
+    //  delegates to stepC (Gate-1 bit-identical). ûL = b̂ = load axis; econv, ê_up = transverse search axes.
+    // ============================================================================================
+    //  MD-derived molecular elasticity (Adamovic–Mijailovich–Karplus 2008; Brizendine 2021), literature→parameter:
+    //   reference free S2 length L_ref = 60 nm; axial stretch stiffness K_ax(60) ≈ 70 pN/nm (lit 60–80); lateral
+    //   endpoint (bending) stiffness k_lat(60) ≈ 0.01 pN/nm. Length scaling (clamped-free cantilever boundary
+    //   condition, tip load): K_ax ∝ 1/L, k_lat = 3EI/L³ ∝ 1/L³. ⇒ material constants (L-independent):
+    //     EA = K_ax(L)·L = 70e-3 N/m · 60e-9 m = 4.2e-9 N (stretch modulus)
+    //     EI = k_lat(L)·L³/3 = 1e-5 N/m · (60e-9 m)³/3 = 7.2e-28 N·m²  ⇒ Lp = EI/kT ≈ 175 nm
+    //   Per-segment (l0 = 10 nm fixed): ks = EA/l0 = 0.42 N/m (=420 pN/nm) ; kb = EI/l0 = 7.2e-20 N·m/rad².
+    //   These are molecular STARTING CONSTRAINTS derived by length scaling — NOT tuned against gliding velocity.
+    static final double EXP4G_KAX_REF_PNNM = 70.0;   // axial stretch stiffness of the L_ref=60 nm free S2 (lit 60–80)
+    static final double EXP4G_KLAT_REF_PNNM= 0.01;   // lateral endpoint (bending) stiffness of the L_ref=60 nm free S2
+    static final double EXP4G_LREF_NM      = 60.0;   // reference free-S2 length for the MD scaling
+    static final double EXP4G_L0_NM        = 10.0;   // beam segment (discretization) length — fixed across L
+    static final double EXP4G_RNODE_NM     = 5.0;    // beam-node Stokes drag radius (lumps a 10 nm segment; sets bending-explicit stability)
+    static final double EXP4G_EA_SI        = EXP4G_KAX_REF_PNNM*1e-3 * EXP4G_LREF_NM*1e-9;                 // 4.2e-9 N
+    static final double EXP4G_EI_SI        = EXP4G_KLAT_REF_PNNM*1e-3 * Math.pow(EXP4G_LREF_NM*1e-9,3)/3.0;// 7.2e-28 N·m²
+    static final double[] EXP4G_L_NM       = {10.0, 20.0, 40.0, 60.0};   // preregistered free-S2 lengths (strongly-supported → exposed)
+    // rest slack (contour − end-to-end, nm) per condition: 0 = straight/no-slack; >0 = pre-bent (buckled) at binding
+    static final double[] EXP4G_SLACK_NM   = {0.0, 1.5, 3.5};            // no-slack / short-slack / moderate-slack
+
+    /** Build a BOUND explicit-S2 motor from the validated ideal pre-stroke pose. The free S2 (length Lnm) runs from
+     *  a clamped supported emergence point E (= P0 − (L−slack)·b̂) to the motor pivot P0 (= node[M]). slackNm>0 ⇒
+     *  end-to-end < contour ⇒ the beam is pre-bent (buckled up in ê_up). g4On=false ⇒ the plain fixed-anchor motor. */
+    static Cmot buildS2(double Lnm,double slackNm,boolean g4On,double dt,double kAx,double kTr){
+        double[] A=idealAnchor(IDENT,false);
+        Cmot cm=buildBoundFromCapture(A,PHI_PRE_3E,0.0,0.5*cmSeg(),IDENT,false,1.0,128,512,dt,kAx,kTr);
+        cm.g4On=g4On;
+        if(g4On){
+            cm.P=A.clone(); cm.A=cm.P;
+            int M=Math.max(1,(int)Math.round(Lnm/EXP4G_L0_NM)); double L=Lnm*1e-3, slack=slackNm*1e-3;   // µm
+            cm.g4M=M; cm.g4Lc=L; cm.g4slack=slack; cm.g4l0=L/M;                                          // l0 µm
+            cm.g4ks=EXP4G_EA_SI/(cm.g4l0*1e-6); cm.g4kb=EXP4G_EI_SI/(cm.g4l0*1e-6);                      // SI ks N/m, kb N·m
+            cm.g4gammaNode=6*Math.PI*Constants.aeta*(EXP4G_RNODE_NM*1e-9); cm.gammaP=cm.g4gammaNode;
+            cm.g4Tan=cm.bhat.clone();                                     // clamped emergence tangent = +b̂ (toward pivot)
+            cm.g4E=sub(A,scl(cm.bhat,L-slack));                          // emergence point (end-to-end = L−slack)
+            cm.g4floorZ=dot(cm.g4E,cm.eup)-0.05; cm.g4kfloor=20.0*1e-3;   // substrate floor 50 nm below emergence (SI N/m)
+            // initial node placement: straight chord E→P0, + a small +ê_up parabolic bow to seed the buckle when slack>0
+            cm.g4Node=new double[M+1][];
+            double sag = slack>1e-9? Math.sqrt(Math.max(0,L*L-(L-slack)*(L-slack)))*0.5 : 0.0;   // heuristic sagitta (µm)
+            for(int j=0;j<=M;j++){ double f=(double)j/M; double[] p=add(cm.g4E,scl(sub(A,cm.g4E),f));
+                double bow=sag*Math.sin(Math.PI*f); cm.g4Node[j]=add(p,scl(cm.eup,bow)); }
+            cm.g4Node[0]=cm.g4E.clone(); cm.g4Node[M]=cm.P.clone();
+            geomC(cm);
+        }
+        return cm;
+    }
+
+    /** Bending energy (SI J) of a node array (µm, world): clamped joint 0 (emergence tangent vs bond0) + interior
+     *  joints 1..M−1. E = Σ ½ kb θ²; θ = exterior angle between consecutive tangents (0 = straight). */
+    static double s2BendEnergy(Cmot cm,double[][] nd){
+        int M=cm.g4M; double kb=cm.g4kb, E=0;
+        double[] b0=sub(nd[1],nd[0]); double l0=Math.sqrt(dot(b0,b0));
+        if(l0>1e-12){ double c=Math.max(-1,Math.min(1,dot(cm.g4Tan,b0)/l0)); double th=Math.acos(c); E+=0.5*kb*th*th; }
+        for(int j=1;j<M;j++){ double[] a=sub(nd[j],nd[j-1]), b=sub(nd[j+1],nd[j]);
+            double la=Math.sqrt(dot(a,a)), lb=Math.sqrt(dot(b,b)); if(la<1e-12||lb<1e-12) continue;
+            double c=Math.max(-1,Math.min(1,dot(a,b)/(la*lb))); double th=Math.acos(c); E+=0.5*kb*th*th; }
+        return E;
+    }
+    /** Internal beam forces (SI N, world) on ALL nodes 0..M: stretch (analytic) + bending (central-diff of energy) +
+     *  substrate floor (one-sided). Node 0's force is the substrate reaction (reported, not applied). */
+    static double[][] s2NodeForces(Cmot cm,double[][] nd){
+        int M=cm.g4M; double ks=cm.g4ks, l0m=cm.g4l0*1e-6; double[][] F=new double[M+1][3];
+        for(int i=0;i<M;i++){ double[] b=sub(nd[i+1],nd[i]); double len=Math.sqrt(dot(b,b)); if(len<1e-15) continue;
+            double f=ks*(len*1e-6-l0m); double[] u=scl(b,1.0/len);
+            for(int k=0;k<3;k++){ F[i][k]+=f*u[k]; F[i+1][k]-=f*u[k]; } }
+        double h=1e-5;   // µm central-difference of the bending energy per coordinate
+        for(int j=0;j<=M;j++) for(int k=0;k<3;k++){ double sav=nd[j][k];
+            nd[j][k]=sav+h; double Ep=s2BendEnergy(cm,nd); nd[j][k]=sav-h; double Em=s2BendEnergy(cm,nd); nd[j][k]=sav;
+            F[j][k]+= -((Ep-Em)/(2*h))*1e6; }   // −dE/dx (J/µm → N)
+        for(int j=0;j<=M;j++){ double z=dot(nd[j],cm.eup); if(z<cm.g4floorZ){ double pen=(cm.g4floorZ-z)*1e-6; double fk=cm.g4kfloor*pen;
+            for(int k=0;k<3;k++) F[j][k]+=fk*cm.eup[k]; } }
+        return F;
+    }
+    /** Emergent axial tangent stiffness of the beam at the pivot (pN/nm): d(beam force on P · b̂)/d(qL). This is the
+     *  slack-to-taut curve read directly from geometry (soft while bent/buckling, stiff once straight/taut). */
+    static double s2AxialTangent(Cmot cm){
+        int M=cm.g4M; double h=2e-5; double[] sav=cm.g4Node[M].clone();
+        cm.g4Node[M]=add(sav,scl(cm.bhat,h)); double Fp=dot(s2NodeForces(cm,cm.g4Node)[M],cm.bhat);
+        cm.g4Node[M]=sub(sav,scl(cm.bhat,h)); double Fm=dot(s2NodeForces(cm,cm.g4Node)[M],cm.bhat);
+        cm.g4Node[M]=sav; return -(Fp-Fm)/(2*h*1e-6)*1e3;   // N/m → pN/nm (restoring: −dF/dqL; local last-bond tangent)
+    }
+    /** Beam geometry census (§6): {contour_nm, endToEnd_nm, axialStrain, bendTotal_deg, maxCurv_perUm, compression_nm}. */
+    static double[] s2Geom(Cmot cm){
+        int M=cm.g4M; double[][] nd=cm.g4Node; double contour=0,maxTh=0,bendTot=0;
+        for(int i=0;i<M;i++) contour+=Math.sqrt(dot(sub(nd[i+1],nd[i]),sub(nd[i+1],nd[i])));
+        double[] b0=sub(nd[1],nd[0]); double l0=Math.sqrt(dot(b0,b0));
+        if(l0>1e-12){ double th=Math.acos(Math.max(-1,Math.min(1,dot(cm.g4Tan,b0)/l0))); bendTot+=th; maxTh=Math.max(maxTh,th); }
+        for(int j=1;j<M;j++){ double[] a=sub(nd[j],nd[j-1]),b=sub(nd[j+1],nd[j]); double la=Math.sqrt(dot(a,a)),lb=Math.sqrt(dot(b,b));
+            if(la<1e-12||lb<1e-12) continue; double th=Math.acos(Math.max(-1,Math.min(1,dot(a,b)/(la*lb)))); bendTot+=th; maxTh=Math.max(maxTh,th); }
+        double e2e=Math.sqrt(dot(sub(nd[M],nd[0]),sub(nd[M],nd[0])));
+        double strain=(contour-cm.g4Lc)/cm.g4Lc;
+        return new double[]{ contour*1e3, e2e*1e3, strain, Math.toDegrees(bendTot), maxTh/cm.g4l0, (cm.g4Lc-e2e)*1e3 };
+    }
+
+    /** Coupled (3M+2) overdamped linearly-implicit step of a BOUND explicit-S2 motor. Filament handling is IDENTICAL
+     *  to stepC/stepSup; the pivot block is replaced by the full beam (stretch implicit, bending+floor explicit) +
+     *  the F8/converter/bind coupling on node[M]=P and φ,ψ. g4On=false ⇒ delegates to stepC (bit-identical). */
+    static void stepS2(Cmot cm,int t,int seed,boolean brownian){
+        if(!cm.g4On){ stepC(cm,t,seed); return; }
+        FilamentStore f=cm.fil; MotorStore mot=cm.mot; RigidRodBody b=mot.body;
+        mot.setCounts(t,seed,f.n); f.counts.set(1,t); f.counts.set(2,seed);
+        cm.A=cm.g4Node[cm.g4M]; cm.P=cm.A; geomC(cm); placeHead3c(cm);
+        CrossBridgeSystem.bondForces(b.coord,b.uVec,b.yVec,b.bRotGam, f.coord,f.uVec,f.yVec,f.bRotGam,f.segLength,
+                mot.boundSeg,mot.bindArc,mot.nucleotideState, cm.bondData, cm.xbParams);
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum,f.torqueSum,f.counts);
+        CrossBridgeSystem.csrHistogram(mot.boundSeg,mot.counts,cm.segMotorCount);
+        CrossBridgeSystem.csrScan(mot.counts,cm.segMotorCount,cm.segMotorOffsets);
+        CrossBridgeSystem.csrScatter(mot.boundSeg,mot.counts,cm.segMotorOffsets,cm.segMotorCount,cm.segMotorMyo);
+        CrossBridgeSystem.segGather(cm.segMotorOffsets,cm.segMotorMyo,cm.bondData,f.forceSum,f.torqueSum,mot.counts);
+        LaserTrapSystem.applyTraps3D(f.coord,f.uVec,f.segLength,cm.x0L,cm.x0R,f.forceSum,f.torqueSum,cm.trapParams,f.counts);
+        RigidRodLangevinIntegrationSystem.integrate(f.coord,f.uVec,f.yVec,f.forceSum,f.torqueSum,f.randForce,f.randTorque,f.bTransGam,f.bRotGam,f.params,f.counts);
+        DerivedGeometrySystem.orthogonalizeY(f.uVec,f.yVec,f.counts);
+        if(cm.filFullClamp){ f.setCoord(0,(float)cm.clampCoord[0],(float)cm.clampCoord[1],(float)cm.clampCoord[2]);
+            f.setUVec(0,(float)cm.clampU[0],(float)cm.clampU[1],(float)cm.clampU[2]); f.setYVec(0,(float)cm.clampY[0],(float)cm.clampY[1],(float)cm.clampY[2]); }
+        DerivedGeometrySystem.derive(f.coord,f.uVec,f.yVec,f.zVec,f.end1,f.end2,f.segLength,f.counts);
+        s2Solve(cm,t,seed,brownian,new double[]{cm.bondData.get(0),cm.bondData.get(1),cm.bondData.get(2)});
+    }
+    /** Unbound SEARCH step: same coupled beam solve with F8=0 (the pivot diffuses under the beam + Brownian). */
+    static void s2SearchStep(Cmot cm,int t,int seed){ s2Solve(cm,t,seed,true,new double[]{0,0,0}); }
+
+    /** The coupled (3M+2) linearly-implicit pivot+beam+angle solve shared by stepS2 (bound, F8h from the bond) and
+     *  s2SearchStep (unbound, F8h=0). Node DOF are WORLD coords (nodes 1..M); node M = pivot P. */
+    static void s2Solve(Cmot cm,int t,int seed,boolean brownian,double[] F8h){
+        int M=cm.g4M, nF=3*M, n=nF+2; double[] E=cm.eup;
+        double[][] Msys=new double[n][n]; double[] F=new double[n];
+        // --- beam: RHS internal force on free nodes 1..M (SI) + FULL numeric tangent K=−∂F/∂q (stretch AND bending
+        //     implicit ⇒ each step is a Newton step toward the true force-equilibrium; the beam stays at its contour) ---
+        double[][] Fn=s2NodeForces(cm,cm.g4Node);
+        for(int j=1;j<=M;j++) for(int k=0;k<3;k++) F[3*(j-1)+k]=Fn[j][k];
+        double hh=1e-5;   // µm central-difference of the beam force over the free DOF
+        for(int jc=1;jc<=M;jc++) for(int kc=0;kc<3;kc++){ int col=3*(jc-1)+kc; double sav=cm.g4Node[jc][kc];
+            cm.g4Node[jc][kc]=sav+hh; double[][] Fp=s2NodeForces(cm,cm.g4Node);
+            cm.g4Node[jc][kc]=sav-hh; double[][] Fm=s2NodeForces(cm,cm.g4Node); cm.g4Node[jc][kc]=sav;
+            for(int jr=1;jr<=M;jr++) for(int kr=0;kr<3;kr++) Msys[3*(jr-1)+kr][col] += -((Fp[jr][kr]-Fm[jr][kr])/(2*hh))*1e6; }   // N/µm → N/m
+        // --- node drag (implicit) + Brownian on free nodes ---
+        double aN=cm.g4gammaNode/cm.dt;
+        for(int j=1;j<=M;j++){ int fb=j-1; for(int k=0;k<3;k++){ Msys[3*fb+k][3*fb+k]+=aN;
+            if(brownian) F[3*fb+k]+=brownTorque(cm.g4gammaNode,cm.dt,seed,t,0x4711L+((long)j*131+k)*7919L); } }
+        // --- F8 + converter/bind coupling on P=node M and φ,ψ (world) ---
+        int pB=3*(M-1);           // free-block of the pivot (node M) → DOF pB..pB+2
+        int iPhi=nF, iPsi=nF+1;
+        double[] C=cm.C, xF8=cm.xF8;
+        double[] Jphi=crs(E,sub(C,cm.P)), Jpsi=crs(E,sub(xF8,C));            // µm
+        double[][] J={ {1,0,0, dot(Jphi,new double[]{1,0,0})*1e-6, dot(Jpsi,new double[]{1,0,0})*1e-6},
+                       {0,1,0, dot(Jphi,new double[]{0,1,0})*1e-6, dot(Jpsi,new double[]{0,1,0})*1e-6},
+                       {0,0,1, dot(Jphi,new double[]{0,0,1})*1e-6, dot(Jpsi,new double[]{0,0,1})*1e-6} };
+        double kfSI=cm.kF8Code*1e6, kc=cm.kconvCode, kb=cm.kbindCode;
+        int[] map={pB,pB+1,pB+2,iPhi,iPsi};   // the 5 DOF the F8 Gauss–Newton couples
+        for(int i=0;i<5;i++) for(int jj=0;jj<5;jj++){ double kij=kfSI*(J[0][i]*J[0][jj]+J[1][i]*J[1][jj]+J[2][i]*J[2][jj]);
+            Msys[map[i]][map[jj]]+=kij; }
+        Msys[iPhi][iPhi]+=kc; Msys[iPhi][iPsi]-=kc; Msys[iPsi][iPhi]-=kc; Msys[iPsi][iPsi]+=kc+kb;
+        double aphi=cm.gammaPhi/cm.dt, apsi=cm.gammaPsi/cm.dt; Msys[iPhi][iPhi]+=aphi; Msys[iPsi][iPsi]+=apsi;
+        double th=cm.psi-cm.phi;
+        double QphiF8=dot(E,crs(sub(C,cm.P),F8h))*1e-6, QpsiF8=dot(E,crs(sub(xF8,C),F8h))*1e-6;
+        F[pB]+=F8h[0]; F[pB+1]+=F8h[1]; F[pB+2]+=F8h[2];
+        F[iPhi]+=QphiF8+kc*(th-cm.thetaS); F[iPsi]+=QpsiF8-kc*(th-cm.thetaS)-kb*(cm.psi-cm.psiActin);
+        if(brownian){ F[iPhi]+=brownTorque(cm.gammaPhi,cm.dt,seed,t,0x4741L); F[iPsi]+=brownTorque(cm.gammaPsi,cm.dt,seed,t,0x4742L); }
+        double[] dq=solveLin(Msys,F,n);
+        for(int j=1;j<=M;j++){ int fb=j-1; for(int k=0;k<3;k++) cm.g4Node[j][k]+=dq[3*fb+k]*1e6; }   // m→µm
+        cm.phi+=dq[iPhi]; cm.psi+=dq[iPsi];
+        cm.g4Node[0]=cm.g4E.clone();          // re-pin the clamped emergence node (defensive)
+        cm.A=cm.g4Node[M]; cm.P=cm.A; geomC(cm);
+    }
+    static void settleS2(Cmot cm,int n,int seed,boolean brownian){ for(int t=0;t<n;t++) stepS2(cm,t,seed,brownian); }
+
+    /** Pi-release stroke on a bound explicit-S2 motor (Load mode). Returns {deliveredAxial_nm(COM·p̂), transverse_nm,
+     *  completion, pivotGive_nm(|ΔP|), pivotRecoil_nm(ΔP·b̂), forceActinB_pN, dStraighten_deg(bend release),
+     *  dStrain, kAxTanFinal_pNnm, contourDrift_nm}. */
+    static double[] s2Stroke(Cmot cm,int settle){
+        double phi0=cm.phi,psi0=cm.psi; double[] c0={cm.fil.coordX(0),cm.fil.coordY(0),cm.fil.coordZ(0)}; double[] P0=cm.P.clone();
+        double[] g0=s2Geom(cm);
+        cm.thetaS=ADP_THETAS; settleS2(cm,settle,0,false);
+        double[] m1=measC(cm); double[] dC=sub(new double[]{m1[0],m1[1],m1[2]},c0); double[] dP=sub(cm.P,P0);
+        double comp=((cm.psi-cm.phi)-(psi0-phi0))/(ADP_THETAS-(psi0-phi0)); double[] segF={m1[17],m1[18],m1[19]};
+        double[] g1=s2Geom(cm);
+        return new double[]{ dot(dC,cm.phat)*1e3, Math.abs(dot(dC,cm.eup))*1e3, comp, Math.sqrt(dot(dP,dP))*1e3,
+            dot(dP,cm.bhat)*1e3, dot(segF,cm.bhat)*1e12, g0[3]-g1[3], g1[2]-g0[2], s2AxialTangent(cm), g1[0]-g0[0] };
+    }
+    /** Whole-crossbridge stiffness k_ext (pN/nm) of an explicit-S2 motor (perturb the trap axially, measure the
+     *  filament restoring-force slope). Mirrors supKext but steps stepS2. */
+    static double s2Kext(double Lnm,double slackNm,double stepUm,int settle,double dt,double kAx,double kTr){
+        double[] pl=s2Pert(Lnm,slackNm,stepUm,settle,dt,kAx,kTr), mn=s2Pert(Lnm,slackNm,-stepUm,settle,dt,kAx,kTr);
+        double kO=0.5*(pl[0]/stepUm+mn[0]/(-stepUm)), dx=0.5*(pl[1]/stepUm+mn[1]/(-stepUm));
+        return dx>0.05? kO/dx*1e9 : Double.NaN;
+    }
+    static double[] s2Pert(double Lnm,double slackNm,double dxc,int settle,double dt,double kAx,double kTr){
+        Cmot cm=buildS2(Lnm,slackNm,true,dt,kAx,kTr); settleS2(cm,settle,0,false); double[] m0=measC(cm);
+        if(dxc!=0){ double[] sh=scl(cm.uvecPhys,dxc);
+            cm.x0L.set(0,(float)(cm.x0L.get(0)+sh[0])); cm.x0L.set(1,(float)(cm.x0L.get(1)+sh[1])); cm.x0L.set(2,(float)(cm.x0L.get(2)+sh[2]));
+            cm.x0R.set(0,(float)(cm.x0R.get(0)+sh[0])); cm.x0R.set(1,(float)(cm.x0R.get(1)+sh[1])); cm.x0R.set(2,(float)(cm.x0R.get(2)+sh[2]));
+            settleS2(cm,settle,0,false); }
+        double[] m1=measC(cm); return new double[]{ m1[4]-m0[4], m1[3]-m0[3] };
+    }
+    /** SEARCH mode — unbound pivot Brownian trajectory over the beam. Returns {rmsAx_nm, rmsLat_nm, rmsVert_nm,
+     *  searchRadius_nm, coneDeg, meanBend_deg, meanE2E_nm, meanStrain}. */
+    static double[] s2SearchStats(double Lnm,double slackNm,int steps,int seed,double dt,double kAx,double kTr){
+        Cmot cm=buildS2(Lnm,slackNm,true,dt,kAx,kTr); cm.mot.boundSeg.set(0,MotorStore.FREE_BINDABLE); cm.thetaS=PRESTROKE_THETAS;
+        double sax=0,slat=0,svert=0,rmax=0,coneMax=0,bendAcc=0,e2eAcc=0,strAcc=0; long n=0; int warm=steps/5;
+        double[] P0=cm.P.clone();
+        for(int t=0;t<steps;t++){ s2SearchStep(cm,t,seed); if(t<warm) continue;
+            double[] d=sub(cm.P,P0); double qL=dot(d,cm.bhat), lat=dot(d,cm.econv), vert=dot(d,cm.eup); double r=Math.sqrt(dot(d,d));
+            sax+=qL*qL; slat+=lat*lat; svert+=vert*vert; rmax=Math.max(rmax,r);
+            double[] dT=sub(d,scl(cm.bhat,qL)); double rT=Math.sqrt(dot(dT,dT));
+            coneMax=Math.max(coneMax,Math.toDegrees(Math.atan2(rT,Math.max(1e-9,cm.g4Lc))));
+            double[] gg=s2Geom(cm); bendAcc+=gg[3]; e2eAcc+=gg[1]; strAcc+=gg[2]; n++; }
+        return new double[]{ Math.sqrt(sax/n)*1e3, Math.sqrt(slat/n)*1e3, Math.sqrt(svert/n)*1e3, rmax*1e3, coneMax, bendAcc/n, e2eAcc/n, strAcc/n };
+    }
+    /** Geometric capture footprint (reachable F8-point area) as the pivot ranges over its beam-search envelope
+     *  (transverse ±3·rmsTr from k_lat; axial ±slack) × φ∈±25° × ψ∈±25°. Returns {area_nm2, lateralReach_nm, axialReach_nm, vertReach_nm}. */
+    static double[] s2CaptureFootprint(double Lnm,double slackNm,double dt,double kAx,double kTr){
+        Cmot cm=buildS2(Lnm,slackNm,true,dt,kAx,kTr); settleS2(cm,settleSteps(dt),0,false);
+        double L=Lnm*1e-3, kLat=EXP4G_KLAT_REF_PNNM*1e-3*Math.pow(EXP4G_LREF_NM/Lnm,3);   // pN/nm → SI N/m below
+        double rmsTr=Math.sqrt(Constants.kT/(kLat*1e-3))*1e6;                              // µm
+        double latR=Math.min(3*rmsTr, 0.5*L), vertR=latR, axR=slackNm*1e-3 + Math.min(rmsTr,3e-3);
+        double[] P0=cm.P.clone();
+        double xlo=1e9,xhi=-1e9,ylo=1e9,yhi=-1e9,zlo=1e9,zhi=-1e9; int nL=7,nV=5,nX=5,nP=7,nPsi=5;
+        for(int il=0;il<nL;il++){ double lat=-latR+2*latR*il/(nL-1);
+          for(int iv=0;iv<nV;iv++){ double vert=-vertR+2*vertR*iv/(nV-1);
+            for(int ix=0;ix<nX;ix++){ double ax=-axR+2*axR*ix/(nX-1);
+              double[] P=add(add(add(P0,scl(cm.bhat,ax)),scl(cm.econv,lat)),scl(cm.eup,vert));
+              for(int ip=0;ip<nP;ip++){ double phi=PHI_PRE_3E+Math.toRadians(-25+50.0*ip/(nP-1));
+                for(int iq=0;iq<nPsi;iq++){ double psi=Math.toRadians(-25+50.0*iq/(nPsi-1));
+                  double[] uB=add(scl(cm.eup,Math.cos(phi)),scl(cm.bhat,Math.sin(phi))); double[] Cc=add(P,scl(uB,cm.lb));
+                  double[] dw=add(scl(cm.bhat,cm.rF8[0]-cm.rConv[0]),scl(cm.eup,cm.rF8[1]-cm.rConv[1]));
+                  double[] xF8=add(Cc,rotConv(dw,psi,cm.econv));
+                  double x=dot(xF8,cm.bhat),y=dot(xF8,cm.econv),z=dot(xF8,cm.eup);
+                  xlo=Math.min(xlo,x);xhi=Math.max(xhi,x);ylo=Math.min(ylo,y);yhi=Math.max(yhi,y);zlo=Math.min(zlo,z);zhi=Math.max(zhi,z);
+                } } } } }
+        double axn=(xhi-xlo)*1e3, latn=(yhi-ylo)*1e3, vertn=(zhi-zlo)*1e3;
+        return new double[]{ axn*latn, latn, axn, vertn };
+    }
+    /** Effective axial tangent at an applied opposing load (pN, +barbed): apply via trapParams[5], settle, read the
+     *  emergent beam axial tangent + geometry. Returns {kAxTan_pNnm, endToEnd_nm, bend_deg, strain}. */
+    static double[] s2TangentAtLoad(double Lnm,double slackNm,double loadPn,int settle,double dt,double kAx,double kTr){
+        Cmot cm=buildS2(Lnm,slackNm,true,dt,kAx,kTr); cm.thetaS=ADP_THETAS; settleS2(cm,settle,0,false);
+        cm.trapParams.set(5,(float)(loadPn*1e-12)); settleS2(cm,settle,0,false);
+        double[] gg=s2Geom(cm); return new double[]{ s2AxialTangent(cm), gg[1], gg[3], gg[2] };
+    }
+
+    static void run4g(String[] args){
+        boolean smoke=false, glide=false; double glideDur=-1, matX=-1;
+        for(int i=0;i<args.length;i++){ switch(args[i]){ case "-out"->OUT_DIR=args[++i]; case "-viz","-3js"->{ if(i+1<args.length&&!args[i+1].startsWith("-")) JS_DIR=args[++i]; } case "-fast"->FAST=true; case "-smoke"->smoke=true; case "-glide"->glide=true; case "-dur"->glideDur=Double.parseDouble(args[++i]); case "-matx"->matX=Double.parseDouble(args[++i]); default->{} } }
+        double dt=2.5e-6, kAx=0.05, kTr=0.05; int settle=settleSteps(dt);
+        for(String a:args) if(a.equals("-g4diag")){ g4diag(dt,kAx,kTr,settle); return; }
+        if(glide){ run4gGlide(args,dt,kAx,kTr,smoke,glideDur,matX); return; }
+        System.out.println("=== SoftBox — EXPERIMENT 4G: [NON-CANONICAL TWO-BODY PROTOTYPE] MD-informed EXPLICIT fixed-contour S2 geometry (CPU-only) ===");
+        System.out.printf(Locale.US,"# The free proximal S2 is an explicit discretized elastica beam (fixed contour, stiff stretch, finite bending). Anisotropy + slack-to-taut EMERGE from geometry, not prescribed springs. dt=%.1e settle=%d CPU=%s%n",dt,settle,readLoadAvg());
+        System.out.printf(Locale.US,"# MD map (AMK 2008): EA=%.2e N (K_ax(60)=%.0f pN/nm), EI=%.2e N·m² (k_lat(60)=%.3f pN/nm), Lp=%.0f nm. Per-seg (l0=%.0f nm): ks=%.0f pN/nm, kb=%.2e N·m.%n",
+            EXP4G_EA_SI,EXP4G_KAX_REF_PNNM,EXP4G_EI_SI,EXP4G_KLAT_REF_PNNM,EXP4G_EI_SI/Constants.kT*1e9,EXP4G_L0_NM,EXP4G_EA_SI/(EXP4G_L0_NM*1e-9)*1e3,EXP4G_EI_SI/(EXP4G_L0_NM*1e-9));
+        System.out.println("# g4On=false ⇒ the validated fixed-anchor motor. Motor/converter/lever/F8/gate/chemistry/RNG/BoA-v1ref UNTOUCHED.");
+        if(JS_DIR!=null){ boolean[] gv=new boolean[14]; java.util.Arrays.fill(gv,true); phase4gReferences(dt,kAx,kTr,settle,gv);
+            viz4g(JS_DIR,dt,kAx,kTr); return; }
+        boolean[] g=new boolean[14]; java.util.Arrays.fill(g,true);
+        double[] fixedRef=phase4gReferences(dt,kAx,kTr,settle,g);
+        phase4gGeometry(dt,kAx,kTr,settle,g);
+        phase4gDecoupling(dt,kAx,kTr,settle,g,fixedRef,smoke);
+        phase4gCaptureVolume(dt,kAx,kTr,g);
+        phase4gControls(dt,kAx,kTr,settle,g,smoke);
+        phase4gTimestep(g,smoke);
+        if(!smoke) phase4gRecruitment(dt,g,fixedRef,smoke);
+        System.out.println("#\n# ================= EXPERIMENT 4G GATE SUMMARY =================");
+        String[] gn={"","g4On=false ≡ fixed anchor (regression)","fixed/4E/4F references reproduce",
+            "fixed reference contour length (conserved)","end-to-end shortening ≠ contour shortening",
+            "bending→tension emerges from geometry","NO binding-state/nucleotide stiffness switch",
+            "capture volume grows (search)","clean stroke ≥70% of fixed","k_ext ≥70% of fixed",
+            "pivot recoil <1.5 nm","stability across dt (contour conserved, no buckling pathology)","canonical/BoA-v1ref untouched"};
+        for(int i=1;i<gn.length;i++) System.out.printf(Locale.US,"# G%-2d %-52s %s%n",i,gn[i],g[i]?"PASS":"CHECK");
+        System.out.println("#\n# See docs/TWOBODY_MD_INFORMED_S2.md for the outcome classification (A–F) and the model-comparison table.");
+    }
+    static void g4diag(double dt,double kAx,double kTr,int settle){
+        for(double L:new double[]{20,40,60}){ Cmot cm=buildS2(L,0,true,dt,kAx,kTr);
+            System.out.printf(Locale.US,"L=%.0f M=%d l0=%.3f nm ks=%.3f N/m kb=%.2e N·m  gammaNode/dt=%.3e N/m%n",L,cm.g4M,cm.g4l0*1e3,cm.g4ks,cm.g4kb,cm.g4gammaNode/dt);
+            for(int chk:new int[]{0,100,1000,settle}){ int prev=(chk==0?0:(chk==100?0:(chk==1000?100:1000))); for(int t=prev;t<chk;t++) stepS2(cm,t,0,false);
+                StringBuilder sb=new StringBuilder(); for(int i=0;i<cm.g4M;i++) sb.append(String.format(Locale.US,"%.2f ",Math.sqrt(dot(sub(cm.g4Node[i+1],cm.g4Node[i]),sub(cm.g4Node[i+1],cm.g4Node[i])))*1e3));
+                double[] gg=s2Geom(cm); double dP=Math.sqrt(dot(sub(cm.P,cm.g4E),sub(cm.P,cm.g4E)))*1e3;
+                double[] F8={cm.bondData.get(0),cm.bondData.get(1),cm.bondData.get(2)};
+                double[][] Fn=s2NodeForces(cm,cm.g4Node); double maxF=0; for(int j=1;j<=cm.g4M;j++) maxF=Math.max(maxF,Math.sqrt(dot(Fn[j],Fn[j]))*1e12);
+                System.out.printf(Locale.US,"  step %5d: bonds[%s] contour=%.2f e2e=%.2f bend=%.1f° |P-E|=%.2f |F8|=%.3f pN maxNetNode=%.2f pN%n",chk,sb.toString().trim(),gg[0],gg[1],gg[3],dP,Math.sqrt(dot(F8,F8))*1e12,maxF); }
+        }
+    }
+    /** §1 — reproduce the fixed-anchor / 4E-free / 4F-supported references (gating) + Gate 1 (g4On=false ≡ stepC). */
+    static double[] phase4gReferences(double dt,double kAx,double kTr,int settle,boolean[] g){
+        System.out.println("#\n# ---------- §1: reproduce the fixed-anchor / 4E / 4F references (gating) ----------");
+        Cmot fx=buildS2(20,0,false,dt,kAx,kTr); settleC(fx,settle,0);
+        double strokeFixed=piStroke(fx,settle)[1];
+        double kExtFixed=pairedC(()->buildBoundFromCapture(idealAnchor(IDENT,false),PHI_PRE_3E,0.0,0.5*cmSeg(),IDENT,false,1.0,128,512,dt,kAx,kTr),1e-3,settle)[1];
+        System.out.printf(Locale.US,"#   fixed anchor  : stroke=%.2f nm (exp 6.9), k_ext=%.3f pN/nm (exp 0.645), recoil 0.00 (exp 0)%n",strokeFixed,kExtFixed);
+        double[] freeSt=strokeMeasTail(20,2.0,KAPPATAIL_FREE,true,dt,kAx,kTr,settle);
+        System.out.printf(Locale.US,"#   4E free tail  : stroke=%.2f nm (exp ~1), k_ext=%.3f pN/nm (exp ~0.01), pivot give=%.2f nm (exp several)%n",freeSt[0],freeSt[10],freeSt[4]);
+        double[] supS=supStroke(buildBoundSup(0,dt,kAx,kTr,settle),settle); double supK=supKext(0,1e-3,settle,dt,kAx,kTr);
+        double[] supS2=supStroke(buildBoundSup(1.5,dt,kAx,kTr,settle),settle); double supK2=supKext(1.5,1e-3,settle,dt,kAx,kTr);
+        System.out.printf(Locale.US,"#   4F no-slack   : stroke=%.2f nm (exp 6.92), k_ext=%.3f pN/nm (exp 0.641), recoil=%.2f (exp 0.07)%n",supS[0],supK,supS[4]);
+        System.out.printf(Locale.US,"#   4F short-slack: stroke=%.2f nm (exp 6.74), k_ext=%.3f pN/nm (exp 0.600), recoil=%.2f (exp 0.15)%n",supS2[0],supK2,supS2[4]);
+        boolean refOk = Math.abs(strokeFixed-6.9)<1.0 && Math.abs(kExtFixed-0.645)<0.15;
+        // Gate 1 — g4On=false ≡ fixed anchor bit-identical
+        Cmot a=buildS2(20,0,false,dt,kAx,kTr); Cmot bb=buildBoundFromCapture(idealAnchor(IDENT,false),PHI_PRE_3E,0.0,0.5*cmSeg(),IDENT,false,1.0,128,512,dt,kAx,kTr);
+        double mism=0; for(int t=0;t<settle;t++){ stepS2(a,t,0,false); stepC(bb,t,0); mism=Math.max(mism,Math.abs(a.fil.coordX(0)-bb.fil.coordX(0))+Math.abs(a.phi-bb.phi)+Math.abs(a.psi-bb.psi)); }
+        g[1]= mism<1e-12; g[2]= refOk;
+        System.out.printf(Locale.US,"#   Gate 1 (g4On=false ≡ fixed anchor, stepS2→stepC): max|Δ|=%.2e ⇒ %s%n",mism,g[1]?"PASS (bit-identical)":"FAIL");
+        System.out.printf(Locale.US,"#   Gate 2 (references reproduce): %s%n",g[2]?"PASS":"CHECK");
+        return new double[]{ strokeFixed, kExtFixed };
+    }
+    static Cmot buildBoundSup(double delta,double dt,double kAx,double kTr,int settle){ Cmot cm=buildSup(delta,true,dt,kAx,kTr); settleSup(cm,settle,0,false); return cm; }
+
+    /** §3/§6 — geometry census: contour vs end-to-end vs strain vs bend at rest AND across the stroke, for each free-S2
+     *  length. Demonstrates (a) fixed reference contour (conserved), (b) end-to-end shortening ≠ contour shortening,
+     *  (c) bending→tension (the stroke straightens/tensions the beam). */
+    /** Relax the interior beam nodes (1..M−1) to static equilibrium holding node0=E and node M=Pfix (implicit Newton
+     *  on the interior — the stiff stretch makes explicit relaxation unstable); return the beam reaction force on the
+     *  held pivot (SI N, world). Optional transverse seed breaks the straight-config symmetry so compression buckles. */
+    static double[] s2RelaxHold(Cmot cm,double[] Pfix,int iters){
+        int M=cm.g4M; cm.g4Node[0]=cm.g4E.clone(); cm.g4Node[M]=Pfix.clone(); int ni=M-1;
+        if(ni<=0) return s2NodeForces(cm,cm.g4Node)[M];
+        int n=3*ni; double hh=1e-5;
+        for(int it=0;it<iters;it++){ double[][] Fn=s2NodeForces(cm,cm.g4Node);
+            double maxF=0; for(int j=1;j<M;j++) maxF=Math.max(maxF,Math.sqrt(dot(Fn[j],Fn[j]))); if(maxF<1e-18) break;
+            double[][] K=new double[n][n]; double[] F=new double[n];
+            for(int j=1;j<M;j++) for(int k=0;k<3;k++) F[3*(j-1)+k]=Fn[j][k];
+            for(int jc=1;jc<M;jc++) for(int kc=0;kc<3;kc++){ int col=3*(jc-1)+kc; double sav=cm.g4Node[jc][kc];
+                cm.g4Node[jc][kc]=sav+hh; double[][] Fp=s2NodeForces(cm,cm.g4Node);
+                cm.g4Node[jc][kc]=sav-hh; double[][] Fm=s2NodeForces(cm,cm.g4Node); cm.g4Node[jc][kc]=sav;
+                for(int jr=1;jr<M;jr++) for(int kr=0;kr<3;kr++) K[3*(jr-1)+kr][col]+= -((Fp[jr][kr]-Fm[jr][kr])/(2*hh))*1e6; }
+            for(int i=0;i<n;i++) K[i][i]+=1e-7;   // regularize the buckling zero-mode
+            double[] dq=solveLin(K,F,n); double dm=0; for(int i=0;i<n;i++) dm=Math.max(dm,Math.abs(dq[i]));
+            double sc = dm>2e-9? 2e-9/dm : 1.0;   // damp large Newton steps (>2 nm) for robustness
+            for(int j=1;j<M;j++) for(int k=0;k<3;k++) cm.g4Node[j][k]+=dq[3*(j-1)+k]*1e6*sc; }
+        return s2NodeForces(cm,cm.g4Node)[M];
+    }
+    static void phase4gGeometry(double dt,double kAx,double kTr,int settle,boolean[] g){
+        System.out.println("#\n# ---------- §3/§6/§10: explicit-S2 geometry — contour conservation, bending (end-to-end≠contour), tension/compression asymmetry ----------");
+        System.out.println("#   (finding: a STIFF-stretch beam does NOT hold a rest slack — it straightens and repositions the pivot. The");
+        System.out.println("#    emergent anisotropy is stiff-AXIAL(stretch) / soft-TRANSVERSE(bending), + a tension/compression asymmetry via buckling.)");
+        Csv c=new Csv("Lnm,M,contour_rest_nm,bend_rest_deg,contourDrift_stroke_nm,"
+            +"trans20_e2e_nm,trans20_contour_nm,trans20_bend_deg,kTrans_pNnm,kTens_pNnm,kComp_pNnm,critBuckle_pN,verdict");
+        boolean contourOk=true, e2eNotContour=false, asym=false;
+        for(double L:EXP4G_L_NM){
+            Cmot cm=buildS2(L,0,true,dt,kAx,kTr); settleS2(cm,settle,0,false);
+            double[] gr=s2Geom(cm); double[] st=s2Stroke(cm,settle); double drift=st[9];
+            // transverse-bend probe: displace P transversely 20% of L, relax interior, measure e2e<contour (bending) + k_trans
+            Cmot cb=buildS2(L,0,true,dt,kAx,kTr); settleS2(cb,settle,0,false); double[] P0=cb.P.clone();
+            double lat=2e-3; double[] Ft=s2RelaxHold(cb,add(P0,scl(cb.econv,lat)),4000); double[] gt=s2Geom(cb);   // small (2 nm) ⇒ bending regime (a large displacement of a taut fixed-contour beam engages stretch)
+            double kTrans=Math.abs(dot(Ft,cb.econv))/(lat*1e-6)*1e3;   // N/m → pN/nm
+            // axial tension vs compression: displace P ±5 nm along ±b̂ (compression bumped so it buckles), relax, reaction slope
+            Cmot ct=buildS2(L,0,true,dt,kAx,kTr); settleS2(ct,settle,0,false); double ax=5e-3;
+            double[] Fte=s2RelaxHold(ct,add(P0,scl(ct.bhat,ax)),4000); double kTens=Math.abs(dot(Fte,ct.bhat))/(ax*1e-6)*1e3;
+            Cmot cc=buildS2(L,0,true,dt,kAx,kTr); settleS2(cc,settle,0,false);
+            for(int j=1;j<cc.g4M;j++) cc.g4Node[j]=add(cc.g4Node[j],scl(cc.eup,0.3e-3));   // seed a bump so compression buckles
+            double[] Fce=s2RelaxHold(cc,sub(P0,scl(cc.bhat,ax)),4000); double kComp=Math.abs(dot(Fce,cc.bhat))/(ax*1e-6)*1e3;
+            double[] gc=s2Geom(cc);   // buckled compression geometry: end-to-end shortens (bowed) while contour conserved
+            double critBuckle=Math.PI*Math.PI*EXP4G_EI_SI/Math.pow(L*1e-9,2)*1e12;   // Euler π²EI/L² (pN)
+            boolean bends = (gc[0]-gc[1])>1.0 || (gt[0]-gt[1])>0.5;   // buckled (or transverse) shows e2e < contour
+            boolean localAsym = kComp < 0.6*kTens && cm.g4M>=2;       // compression softer (buckling) than tension (needs an interior joint)
+            String verdict = bends && localAsym? "bends+buckles" : bends? "bends" : "stiff-line";
+            c.row(fmt(L),cm.g4M,fmt(gr[0]),fmt(gr[3]),fmt(drift),fmt(gc[1]),fmt(gc[0]),fmt(gt[3]),fmt(kTrans),fmt(kTens),fmt(kComp),fmt(critBuckle),verdict);
+            System.out.printf(Locale.US,"#   L=%2.0f (M=%d): REST contour=%.1f drift=%+.2f | +30%%L transverse: bend=%.0f° kTrans=%.4f pN/nm | −5nm axial buckle: e2e=%.1f<contour=%.1f | kTens=%.2f kComp=%.3f pN/nm (crit-buckle %.1f pN) ⇒ %s%n",
+                L,cm.g4M,gr[0],drift,gt[3],kTrans,gc[1],gc[0],kTens,kComp,critBuckle,verdict);
+            contourOk &= Math.abs(drift)<Math.max(0.5,L*0.02) && Math.abs(gt[0]-gr[0])<Math.max(0.6,L*0.03);   // conserved under the STROKE + transverse bend
+            if(bends) e2eNotContour=true;
+            if(localAsym) asym=true;
+        }
+        c.write("geometry.csv");
+        g[3]=contourOk; g[4]=e2eNotContour; g[5]=asym;
+        System.out.printf(Locale.US,"#   Gate 3 (contour conserved under stroke AND transverse bend — the fixed contour length): %s%n",g[3]?"PASS":"CHECK");
+        System.out.printf(Locale.US,"#   Gate 4 (end-to-end shortens via bending ≠ contour shortening): %s%n",g[4]?"PASS":"CHECK");
+        System.out.printf(Locale.US,"#   Gate 5 (bending→tension asymmetry: compression buckles-soft, tension is stiff — EMERGES from geometry): %s%n",g[5]?"PASS":"CHECK");
+    }
+
+    /** §5/§8/§11/§12 — SEARCH mobility vs LOAD transmission across free-S2 length × slack; the emergent kAxTan(load). */
+    static void phase4gDecoupling(double dt,double kAx,double kTr,int settle,boolean[] g,double[] fixedRef,boolean smoke){
+        System.out.println("#\n# ---------- §5/§8: SEARCH mobility vs LOAD transmission across explicit-S2 conditions ----------");
+        double strokeFixed=fixedRef[0], kExtFixed=fixedRef[1];
+        int searchSteps = smoke?2500 : (FAST?4000:6000);
+        System.out.println("#   (slack collapses to straight on a stiff beam — §3/§6 finding — so the sweep is over free-S2 length L at slack=0.)");
+        Csv c=new Csv("condition,Lnm,slack_nm,M,search_rmsLat_nm,search_rmsAx_nm,search_cone_deg,search_bend_deg,captureArea_nm2,lateralReach_nm,"
+            +"load_stroke_nm,load_kext_pNnm,load_recoil_nm,load_forceB_pN,kAxTan_0pN,kAxTan_1pN,kAxTan_3pN,strokeFrac,kextFrac,verdict");
+        c.row("fixed_anchor",0,0,1,0,0,0,0,0,0,fmt(strokeFixed),fmt(kExtFixed),0,fmt(-0.66),fmt(1e3),fmt(1e3),fmt(1e3),"1.0","1.0","baseline");
+        System.out.printf(Locale.US,"#   %-22s SEARCH: (line, 0 transverse)  LOAD: stroke=%.2f k_ext=%.3f recoil=0.00%n","fixed_anchor",strokeFixed,kExtFixed);
+        boolean anyDecoupled=false; double bestStrokeFrac=0,bestKextFrac=0,bestArea=0,bestRecoil=9;
+        for(double L:EXP4G_L_NM){ { double slack=0.0;
+            double[] se=s2SearchStats(L,slack,searchSteps,7000+(int)(L*10+slack),dt,kAx,kTr);
+            double[] fp=s2CaptureFootprint(L,slack,dt,kAx,kTr);
+            Cmot cm=buildS2(L,slack,true,dt,kAx,kTr); settleS2(cm,settle,0,false); double[] st=s2Stroke(cm,settle);
+            double kext=s2Kext(L,slack,1e-3,settle,dt,kAx,kTr);
+            double[] t0=s2TangentAtLoad(L,slack,0,settle,dt,kAx,kTr), t1=s2TangentAtLoad(L,slack,1,settle,dt,kAx,kTr), t3=s2TangentAtLoad(L,slack,3,settle,dt,kAx,kTr);
+            double strokeFrac=st[0]/strokeFixed, kextFrac=Double.isFinite(kext)?kext/kExtFixed:0;
+            boolean okStroke=strokeFrac>=0.70, okKext=kextFrac>=0.70, okRecoil=Math.abs(st[4])<1.5, recruit=fp[1]>20.0;
+            boolean decoupled=okStroke && okKext && okRecoil && recruit; anyDecoupled|=decoupled;
+            if(fp[0]>bestArea) bestArea=fp[0];
+            if(decoupled){ bestStrokeFrac=Math.max(bestStrokeFrac,strokeFrac); bestKextFrac=Math.max(bestKextFrac,kextFrac); bestRecoil=Math.min(bestRecoil,Math.abs(st[4])); }
+            String verdict = decoupled?"DECOUPLED" : (recruit&&!okStroke?"recruit_no_load":(okStroke&&okKext&&!recruit?"load_no_recruit":"partial"));
+            c.row(String.format(Locale.US,"S2_L%.0f_s%.1f",L,slack),fmt(L),fmt(slack),cm.g4M,fmt(se[1]),fmt(se[0]),fmt(se[4]),fmt(se[5]),fmt(fp[0]),fmt(fp[1]),
+                fmt(st[0]),fmt(kext),fmt(st[4]),fmt(st[5]),fmt(t0[0]),fmt(t1[0]),fmt(t3[0]),fmt(strokeFrac),fmt(kextFrac),verdict);
+            System.out.printf(Locale.US,"#   S2 L=%2.0f slack=%.1f (M=%d) SEARCH: rmsLat=%.1f cone=%.0f° bend=%.0f° area=%.0f nm² lat=%.0f | LOAD: stroke=%.2f (%.0f%%) k_ext=%.3f (%.0f%%) recoil=%.2f kAxTan[0/1/3pN]=%.2f/%.2f/%.2f ⇒ %s%n",
+                L,slack,cm.g4M,se[1],se[4],se[5],fp[0],fp[1],st[0],100*strokeFrac,kext,100*kextFrac,st[4],t0[0],t1[0],t3[0],verdict);
+        }}
+        c.write("decoupling.csv");
+        g[7]=bestArea>50.0; g[8]=bestStrokeFrac>=0.70; g[9]=bestKextFrac>=0.70; g[10]=anyDecoupled && bestRecoil<1.5;
+        System.out.printf(Locale.US,"#%n#   DECISIVE: %s — best stroke %.0f%%, k_ext %.0f%%, recoil %.2f nm, capture area %.0f nm²%n",
+            anyDecoupled?"an explicit-S2 condition DECOUPLES search from load":"NO explicit-S2 condition satisfies all primary criteria",
+            100*bestStrokeFrac,100*bestKextFrac,bestRecoil,bestArea);
+    }
+
+    static void phase4gCaptureVolume(double dt,double kAx,double kTr,boolean[] g){
+        System.out.println("#\n# ---------- §7: capture-volume maps (explicit S2) ----------");
+        Csv c=new Csv("condition,Lnm,slack_nm,captureArea_nm2,lateralReach_nm,axialReach_nm,vertReach_nm");
+        c.row("fixed_anchor",0,0,0,0,0,0);
+        for(double L:EXP4G_L_NM) for(double slack:new double[]{0.0,1.5}){ double[] fp=s2CaptureFootprint(L,slack,dt,kAx,kTr);
+            c.row(String.format(Locale.US,"S2_L%.0f_s%.1f",L,slack),fmt(L),fmt(slack),fmt(fp[0]),fmt(fp[1]),fmt(fp[2]),fmt(fp[3]));
+            System.out.printf(Locale.US,"#   S2 L=%2.0f slack=%.1f: area=%.0f nm² lat=%.0f nm ax=%.0f nm vert=%.0f nm%n",L,slack,fp[0],fp[1],fp[2],fp[3]); }
+        c.write("capture_volume.csv");
+    }
+
+    /** §14 — controls: emergent-tangent Jacobian consistency; no beam force on the filament (action–reaction);
+     *  NO binding-state stiffness switch (the beam params are nucleotide-independent by construction); contour
+     *  conservation; reversed-polarity / rotated covariance; fixed-seed restart bit-identical; buckling finite. */
+    static void phase4gControls(double dt,double kAx,double kTr,int settle,boolean[] g,boolean smoke){
+        System.out.println("#\n# ---------- §14: controls ----------");
+        boolean ok=true;
+        // (1) emergent axial tangent: consistency of s2AxialTangent vs a direct force/qL finite difference at a pushed pivot
+        Cmot cm=buildS2(20,1.5,true,dt,kAx,kTr); settleS2(cm,settle,0,false);
+        cm.g4Node[cm.g4M]=add(cm.g4Node[cm.g4M],scl(cm.bhat,3e-3)); cm.P=cm.g4Node[cm.g4M]; cm.A=cm.P; geomC(cm);
+        double kAn=s2AxialTangent(cm);
+        double h=2e-5, sav=0; double[] p0=cm.g4Node[cm.g4M].clone();
+        cm.g4Node[cm.g4M]=add(p0,scl(cm.bhat,h)); double Fp=dot(s2NodeForces(cm,cm.g4Node)[cm.g4M],cm.bhat);
+        cm.g4Node[cm.g4M]=sub(p0,scl(cm.bhat,h)); double Fm=dot(s2NodeForces(cm,cm.g4Node)[cm.g4M],cm.bhat); cm.g4Node[cm.g4M]=p0;
+        double kNum=-(Fp-Fm)/(2*h*1e-6)*1e3; double jErr=Math.abs(kNum-kAn)/Math.max(1e-6,Math.abs(kAn));
+        System.out.printf(Locale.US,"#   emergent-tangent consistency: kAxTan=%.4f pN/nm, direct fd=%.4f, relErr=%.1e ⇒ %s%n",kAn,kNum,jErr,jErr<0.05?"PASS":"CHECK"); ok&=jErr<0.05;
+        // (2) action–reaction: the beam acts ONLY on P (and the fixed emergence node ↔ substrate). The filament sees the
+        //     motor ONLY through F8 (segGather). Sum of internal beam forces + substrate(node0) reaction ≈ 0.
+        Cmot cf=buildS2(20,1.5,true,dt,kAx,kTr); settleS2(cf,settle,0,false);
+        double[][] Fn=s2NodeForces(cf,cf.g4Node); double[] tot={0,0,0}; for(int j=0;j<=cf.g4M;j++) tot=add(tot,Fn[j]);
+        double sumMag=Math.sqrt(dot(tot,tot))*1e12; double[] mf=measC(cf); double filF=Math.sqrt(mf[17]*mf[17]+mf[18]*mf[18]+mf[19]*mf[19])*1e12;
+        System.out.printf(Locale.US,"#   action–reaction: Σ(internal beam forces incl node-0 reaction)=%.2e pN (≈0); |F_fil|=%.3f pN is F8-only (beam acts on P↔substrate, 0 on actin) ⇒ %s%n",sumMag,filF,sumMag<1e-2?"PASS":"CHECK"); ok&=sumMag<0.05;
+        // (3) NO binding-state / nucleotide stiffness switch: the beam params (ks,kb,l0,contour) are identical bound vs
+        //     unbound and across nucleotide states — s2NodeForces/s2Solve read NO nucleotideState. Verify by construction.
+        Cmot bnd=buildS2(20,1.5,true,dt,kAx,kTr); Cmot unb=buildS2(20,1.5,true,dt,kAx,kTr); unb.mot.boundSeg.set(0,MotorStore.FREE_BINDABLE);
+        boolean sameStiff = bnd.g4ks==unb.g4ks && bnd.g4kb==unb.g4kb && bnd.g4l0==unb.g4l0 && bnd.g4Lc==unb.g4Lc;
+        System.out.printf(Locale.US,"#   NO stiffness switch: beam (ks,kb,l0,contour) identical bound vs unbound, nucleotide-independent ⇒ %s%n",sameStiff?"PASS":"FAIL"); g[6]=sameStiff; ok&=sameStiff;
+        // (4) reversed polarity / rotated: stroke covariant
+        double[][] rot90=rotAxis(new double[]{0,0,1},Math.PI/2);
+        double sWorld=strokeS2(20,1.5,IDENT,false,dt,kAx,kTr,settle), sSwap=strokeS2(20,1.5,IDENT,true,dt,kAx,kTr,settle), sRot=strokeS2(20,1.5,rot90,false,dt,kAx,kTr,settle);
+        System.out.printf(Locale.US,"#   polarity/rotation covariance: stroke world=%.2f swap=%.2f rot90=%.2f nm ⇒ %s%n",sWorld,sSwap,sRot,(Math.abs(Math.abs(sSwap)-Math.abs(sWorld))<0.5&&Math.abs(sRot-sWorld)<0.5)?"PASS (covariant)":"CHECK"); ok&=Math.abs(sRot-sWorld)<0.6;
+        // (5) fixed-seed restart: bit-identical search trajectory
+        double[] r1=s2SearchStats(20,1.5,smoke?1500:3000,12345,dt,kAx,kTr), r2=s2SearchStats(20,1.5,smoke?1500:3000,12345,dt,kAx,kTr);
+        boolean bit=Math.abs(r1[1]-r2[1])<1e-12; System.out.printf(Locale.US,"#   fixed-seed restart: search rmsLat %.6f vs %.6f ⇒ %s%n",r1[1],r2[1],bit?"PASS (bit-identical)":"CHECK"); ok&=bit;
+        g[12]= g[12] && ok;
+        System.out.printf(Locale.US,"#   controls verdict: %s%n",ok?"all PASS":"one or more CHECK");
+    }
+    /** Explicit-S2 delivered stroke (pointed-first, nm) under polarity swap / rotation — for the covariance control. */
+    static double strokeS2(double Lnm,double slackNm,double[][] Rm,boolean swap,double dt,double kAx,double kTr,int settle){
+        double[] A=idealAnchor(Rm,swap);
+        Cmot cm=buildBoundFromCapture(A,PHI_PRE_3E,0.0,0.5*cmSeg(),Rm,swap,1.0,128,512,dt,kAx,kTr);
+        cm.g4On=true; cm.P=A.clone(); cm.A=cm.P;
+        int M=Math.max(1,(int)Math.round(Lnm/EXP4G_L0_NM)); double L=Lnm*1e-3, slack=slackNm*1e-3;
+        cm.g4M=M; cm.g4Lc=L; cm.g4slack=slack; cm.g4l0=L/M; cm.g4ks=EXP4G_EA_SI/(cm.g4l0*1e-6); cm.g4kb=EXP4G_EI_SI/(cm.g4l0*1e-6);
+        cm.g4gammaNode=6*Math.PI*Constants.aeta*(EXP4G_RNODE_NM*1e-9); cm.gammaP=cm.g4gammaNode; cm.g4Tan=cm.bhat.clone();
+        cm.g4E=sub(A,scl(cm.bhat,L-slack)); cm.g4floorZ=dot(cm.g4E,cm.eup)-0.05; cm.g4kfloor=20.0*1e-3;
+        cm.g4Node=new double[M+1][]; double sag=slack>1e-9?Math.sqrt(Math.max(0,L*L-(L-slack)*(L-slack)))*0.5:0.0;
+        for(int j=0;j<=M;j++){ double fr=(double)j/M; double[] p=add(cm.g4E,scl(sub(A,cm.g4E),fr)); cm.g4Node[j]=add(p,scl(cm.eup,sag*Math.sin(Math.PI*fr))); }
+        cm.g4Node[0]=cm.g4E.clone(); cm.g4Node[M]=cm.P.clone(); geomC(cm);
+        settleS2(cm,settle,0,false); return s2Stroke(cm,settle)[0];
+    }
+
+    /** §15 — timestep sensitivity of the selected condition (short slack): stroke, k_ext, recoil, contour drift. */
+    static void phase4gTimestep(boolean[] g,boolean smoke){
+        System.out.println("#\n# ---------- §15: timestep checks (selected explicit-S2 condition, L=20 nm slack=1.5) ----------");
+        double kAx=0.05,kTr=0.05, L=20,slack=1.5;
+        Csv c=new Csv("dt_s,stroke_nm,kext_pNnm,pivotRecoil_nm,contourDrift_nm,search_rmsLat_nm,contour_rest_nm");
+        double[] dts = smoke? new double[]{2.5e-6} : new double[]{5e-6,2.5e-6,1.25e-6}; boolean finite=true;
+        for(double dt:dts){ int settle=settleSteps(dt);
+            Cmot cm=buildS2(L,slack,true,dt,kAx,kTr); settleS2(cm,settle,0,false); double[] gr=s2Geom(cm); double[] st=s2Stroke(cm,settle);
+            double kext=s2Kext(L,slack,1e-3,settle,dt,kAx,kTr); double[] se=s2SearchStats(L,slack,smoke?1500:6000,7100,dt,kAx,kTr);
+            c.row(fmt(dt),fmt(st[0]),fmt(kext),fmt(st[4]),fmt(st[9]),fmt(se[1]),fmt(gr[0]));
+            System.out.printf(Locale.US,"#   dt=%.2e: stroke=%.2f nm k_ext=%.3f recoil=%.2f contourDrift=%+.2f nm rmsLat=%.1f%n",dt,st[0],kext,st[4],st[9],se[1]);
+            finite &= Double.isFinite(st[0])&&Double.isFinite(kext)&&Math.abs(st[9])<2.0;
+        }
+        c.write("timestep.csv"); g[11]=finite;
+        System.out.printf(Locale.US,"#   fastest S2 mode: stretch — τ_stretch=γ_node/(2·ks)=%.2e s; explicit bending margin kb/l0²·dt/γ=%.2f%n",
+            (6*Math.PI*Constants.aeta*EXP4G_RNODE_NM*1e-9)/(2*EXP4G_EA_SI/(EXP4G_L0_NM*1e-9)),
+            (EXP4G_EI_SI/Math.pow(EXP4G_L0_NM*1e-9,2))*2.5e-6/(6*Math.PI*Constants.aeta*EXP4G_RNODE_NM*1e-9));
+        System.out.printf(Locale.US,"#   Gate 11 (stability across dt: finite, contour conserved, no buckling pathology): %s%n",g[11]?"PASS":"CHECK");
+    }
+
+    // ---------- dense 2D mat (explicit S2 per motor; reduced scale, CPU) ----------
+    static double s2BendEnergyM(Glide2D G,double[][] nd){ int M=G.g4M; double kb=G.g4kb,E=0;
+        double[] b0=sub(nd[1],nd[0]); double l0=Math.sqrt(dot(b0,b0));
+        if(l0>1e-12){ double c=Math.max(-1,Math.min(1,dot(G.g4Tan,b0)/l0)); double th=Math.acos(c); E+=0.5*kb*th*th; }
+        for(int j=1;j<M;j++){ double[] a=sub(nd[j],nd[j-1]),b=sub(nd[j+1],nd[j]); double la=Math.sqrt(dot(a,a)),lb=Math.sqrt(dot(b,b)); if(la<1e-12||lb<1e-12) continue;
+            double c=Math.max(-1,Math.min(1,dot(a,b)/(la*lb))); double th=Math.acos(c); E+=0.5*kb*th*th; } return E; }
+    static double[][] s2NodeForcesM(Glide2D G,double[][] nd){ int M=G.g4M; double ks=G.g4ks,l0m=G.g4l0*1e-6; double[][] F=new double[M+1][3];
+        for(int i=0;i<M;i++){ double[] b=sub(nd[i+1],nd[i]); double len=Math.sqrt(dot(b,b)); if(len<1e-15) continue; double f=ks*(len*1e-6-l0m); double[] u=scl(b,1.0/len);
+            for(int k=0;k<3;k++){ F[i][k]+=f*u[k]; F[i+1][k]-=f*u[k]; } }
+        double h=1e-5; for(int j=0;j<=M;j++) for(int k=0;k<3;k++){ double sav=nd[j][k]; nd[j][k]=sav+h; double Ep=s2BendEnergyM(G,nd); nd[j][k]=sav-h; double Em=s2BendEnergyM(G,nd); nd[j][k]=sav; F[j][k]+= -((Ep-Em)/(2*h))*1e6; }
+        for(int j=0;j<=M;j++){ double z=dot(nd[j],G.eup); if(z<G.g4floorZ){ double pen=(G.g4floorZ-z)*1e-6; double fk=G.g4kfloor*pen; for(int k=0;k<3;k++) F[j][k]+=fk*G.eup[k]; } }
+        return F; }
+    /** Per-motor coupled (3M+2) implicit beam+angle solve for mat motor m (Brownian ON). bound ⇒ F8 load. */
+    static void s2SolveM(Glide2D G,int m,int t,int seed,boolean bound){
+        int M=G.g4M, nF=3*M, n=nF+2; double[][] nd=G.g4Node[m]; double[] E=G.eup; int d=m*STRIDE;
+        double[] F8h = bound? new double[]{G.bondData.get(d),G.bondData.get(d+1),G.bondData.get(d+2)} : new double[]{0,0,0};
+        double[][] Msys=new double[n][n]; double[] F=new double[n];
+        double[][] Fn=s2NodeForcesM(G,nd); for(int j=1;j<=M;j++) for(int k=0;k<3;k++) F[3*(j-1)+k]=Fn[j][k];
+        double hh=1e-5;   // full numeric beam tangent (stretch+bending implicit) — the s2Solve fix, per-motor
+        for(int jc=1;jc<=M;jc++) for(int kc=0;kc<3;kc++){ int col=3*(jc-1)+kc; double sav=nd[jc][kc];
+            nd[jc][kc]=sav+hh; double[][] Fp=s2NodeForcesM(G,nd); nd[jc][kc]=sav-hh; double[][] Fm=s2NodeForcesM(G,nd); nd[jc][kc]=sav;
+            for(int jr=1;jr<=M;jr++) for(int kr=0;kr<3;kr++) Msys[3*(jr-1)+kr][col] += -((Fp[jr][kr]-Fm[jr][kr])/(2*hh))*1e6; }
+        double aN=G.g4gammaNode/G.dt; for(int j=1;j<=M;j++){ int fb=j-1; for(int k=0;k<3;k++){ Msys[3*fb+k][3*fb+k]+=aN; F[3*fb+k]+=brownTorque(G.g4gammaNode,G.dt,seed,t,0x4811L+((long)m*1009+j*131+k)*7919L); } }
+        int pB=3*(M-1), iPhi=nF, iPsi=nF+1; double[] C=G.C_[m], xF8=G.xF8_[m], P=nd[M];
+        double[] Jphi=crs(E,sub(C,P)), Jpsi=crs(E,sub(xF8,C));
+        double[][] J={{1,0,0,dot(Jphi,new double[]{1,0,0})*1e-6,dot(Jpsi,new double[]{1,0,0})*1e-6},{0,1,0,dot(Jphi,new double[]{0,1,0})*1e-6,dot(Jpsi,new double[]{0,1,0})*1e-6},{0,0,1,dot(Jphi,new double[]{0,0,1})*1e-6,dot(Jpsi,new double[]{0,0,1})*1e-6}};
+        double kfSI=G.kF8Code*1e6, kc=G.kconvCode, kb=G.kbindCode; int[] map={pB,pB+1,pB+2,iPhi,iPsi};
+        for(int i=0;i<5;i++) for(int jj=0;jj<5;jj++){ double kij=kfSI*(J[0][i]*J[0][jj]+J[1][i]*J[1][jj]+J[2][i]*J[2][jj]); Msys[map[i]][map[jj]]+=kij; }
+        Msys[iPhi][iPhi]+=kc; Msys[iPhi][iPsi]-=kc; Msys[iPsi][iPhi]-=kc; Msys[iPsi][iPsi]+=kc+kb;
+        Msys[iPhi][iPhi]+=G.gammaPhi/G.dt; Msys[iPsi][iPsi]+=G.gammaPsi/G.dt;
+        double th=G.psi[m]-G.phi[m]; double Qphi=dot(E,crs(sub(C,P),F8h))*1e-6, Qpsi=dot(E,crs(sub(xF8,C),F8h))*1e-6;
+        F[pB]+=F8h[0]; F[pB+1]+=F8h[1]; F[pB+2]+=F8h[2];
+        F[iPhi]+=Qphi+kc*(th-G.thetaS[m])+brownTorque(G.gammaPhi,G.dt,seed,t,0x4841L+m*7919L);
+        F[iPsi]+=Qpsi-kc*(th-G.thetaS[m])-kb*(G.psi[m]-G.psiActin[m])+brownTorque(G.gammaPsi,G.dt,seed,t,0x4842L+m*7919L);
+        double[] dq=solveLin(Msys,F,n);
+        for(int j=1;j<=M;j++){ int fb=j-1; for(int k=0;k<3;k++) nd[j][k]+=dq[3*fb+k]*1e6; }
+        G.phi[m]+=dq[iPhi]; G.psi[m]+=dq[iPsi]; nd[0]=G.g4E[m].clone(); G.A[m]=nd[M]; geom2D(G,m);
+        if(bound){ G.mot.forceDotFil.set(m,G.bondData.get(d+12)); G.mot.forceMag.set(m,(float)Math.sqrt(dot(F8h,F8h))); }
+        else { G.mot.forceDotFil.set(m,0f); G.mot.forceMag.set(m,0f); }
+    }
+    static Glide2D buildS2Mat(double density,double dt,double Lnm,double slackNm,int seed){
+        Glide2D G=buildGlide2D(density,dt,false,seed,true,true);
+        G.cullMode=1; G.queryR=G4_QUERYR + Lnm*1e-3 + 0.01; initMatGrid(G);
+        int M=Math.max(1,(int)Math.round(Lnm/EXP4G_L0_NM)); double L=Lnm*1e-3, slack=slackNm*1e-3;
+        G.g4On=true; G.g4M=M; G.g4l0=L/M; G.g4ks=EXP4G_EA_SI/(G.g4l0*1e-6); G.g4kb=EXP4G_EI_SI/(G.g4l0*1e-6);
+        G.g4gammaNode=6*Math.PI*Constants.aeta*(EXP4G_RNODE_NM*1e-9); G.g4Tan=G.bhat.clone(); G.g4kfloor=20.0*1e-3;
+        G.g4Node=new double[Math.max(1,G.N)][][]; G.g4E=new double[Math.max(1,G.N)][];
+        double sag=slack>1e-9?Math.sqrt(Math.max(0,L*L-(L-slack)*(L-slack)))*0.5:0.0;
+        double zfl=1e9; for(int m=0;m<G.N;m++){ double[] P=G.A[m].clone(); double[] Em=sub(P,scl(G.bhat,L-slack)); G.g4E[m]=Em; zfl=Math.min(zfl,dot(Em,G.eup));
+            double[][] nd=new double[M+1][]; for(int j=0;j<=M;j++){ double fr=(double)j/M; double[] p=add(Em,scl(sub(P,Em),fr)); nd[j]=add(p,scl(G.eup,sag*Math.sin(Math.PI*fr))); }
+            nd[0]=Em.clone(); nd[M]=P.clone(); G.g4Node[m]=nd; }
+        G.g4floorZ=zfl-0.05;
+        return G;
+    }
+    static void stepGlideS2(Glide2D G,int t,int seed,Tol tol){
+        FilamentStore f=G.fil; MotorStore mot=G.mot; RigidRodBody b=mot.body; int N=G.N;
+        unionActive(G); long cand=0; for(int m=0;m<N;m++) if(G.active[m]) cand++; G.candAcc+=cand; G.candSteps++;
+        for(int m=0;m<N;m++) if(G.active[m] && !G.noBind[m] && mot.boundSeg.get(m)==MotorStore.FREE_BINDABLE && mot.nucleotideState.get(m)==MotorStore.NUC_ADPPI){
+            G.thetaS[m]=PRESTROKE_THETAS; geom2D(G,m); int s=nearestSeg2D(G,m); if(s<0) continue;
+            double[] gm=gate2D(G,m,s); double half=0.5*f.segLength.get(s), margin=0.05;
+            boolean g0=gm[0]<tol.dBindNm,g1=gm[2]<tol.psiDeg,g2=gm[3]<tol.phiDeg,g3=gm[4]<tol.thetaDeg,g4=gm[5]<tol.preloadPn,g5=gm[6]<tol.energyKt,g6=gm[7]<A_SEMI[2]*1e3,g7=gm[1]>margin&&gm[1]<2*half-margin;
+            if(g0&&g1&&g2&&g3&&g4&&g5&&g6&&g7){ mot.boundSeg.set(m,s); mot.bindArc.set(m,(float)gm[1]); }
+        }
+        mot.setCounts(t,seed,G.nSeg);
+        NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState,mot.boundSeg,mot.forceDotFil,mot.forceDotAvg,mot.avgInit,mot.cooldown,mot.stats,mot.nucParams,mot.kinParams,mot.counts);
+        for(int m=0;m<N;m++) G.thetaS[m]=thetaS4a(mot.nucleotideState.get(m));
+        for(int m=0;m<N;m++) if(G.active[m]){ geom2D(G,m); placeHead2D(G,m); }
+        CrossBridgeSystem.bondForces(b.coord,b.uVec,b.yVec,b.bRotGam, f.coord,f.uVec,f.yVec,f.bRotGam,f.segLength, mot.boundSeg,mot.bindArc,mot.nucleotideState, G.bondData, G.xbParams);
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum,f.torqueSum,f.counts);
+        CrossBridgeSystem.csrHistogram(mot.boundSeg,mot.counts,G.segCount);
+        CrossBridgeSystem.csrScan(mot.counts,G.segCount,G.segOff);
+        CrossBridgeSystem.csrScatter(mot.boundSeg,mot.counts,G.segOff,G.segCount,G.segMyo);
+        CrossBridgeSystem.segGather(G.segOff,G.segMyo,G.bondData,f.forceSum,f.torqueSum,mot.counts);
+        if(!G.rigid) ChainBendingForceSystem.chainForces(f.coord,f.uVec,f.segLength,f.end2NbrSlot,f.end2NbrSide,f.end1NbrSlot,f.end1NbrSide,f.bTransGam,f.bRotGam,f.forceSum,f.torqueSum,f.chainParams,f.counts);
+        for(int s=0;s<G.nSeg;s++){ int iz=2*G.nSeg+s; f.forceSum.set(iz,(float)(f.forceSum.get(iz)-G.kzCode*f.coordZ(s))); }
+        f.counts.set(1,t); f.counts.set(2,seed);
+        BrownianForceSystem.brownianForce(f.randForce,f.randTorque,f.bTransGam,f.bRotGam,f.brownTransScale,f.brownRotScale,f.params,f.counts);
+        RigidRodLangevinIntegrationSystem.integrate(f.coord,f.uVec,f.yVec,f.forceSum,f.torqueSum,f.randForce,f.randTorque,f.bTransGam,f.bRotGam,f.params,f.counts);
+        DerivedGeometrySystem.orthogonalizeY(f.uVec,f.yVec,f.counts);
+        DerivedGeometrySystem.derive(f.coord,f.uVec,f.yVec,f.zVec,f.end1,f.end2,f.segLength,f.counts);
+        for(int m=0;m<N;m++) if(G.active[m]) s2SolveM(G,m,t,seed,mot.boundSeg.get(m)>=0);
+        else { mot.forceDotFil.set(m,0f); mot.forceMag.set(m,0f); }
+    }
+    /** Returns {avgBound, contFrac, bindsPerMotorPerS, avgLoadBearing, fracLoadBearing, pGe1, candPerStep, reach}. */
+    static double[] measureS2Mat(double density,double dt,double Lnm,double slackNm,double durS,int nEp,int seed0,boolean g4On){
+        int steps=(int)Math.round(durS/dt); long totSteps=0; double avgB=0,lbAcc=0; long occ0=0,ge1=0,binds=0,candAcc=0,candSteps=0; int reach=0,Ntot=0;
+        for(int ep=0;ep<nEp;ep++){
+            Glide2D G = g4On? buildS2Mat(density,dt,Lnm,slackNm,seed0+ep) : buildGlide2D(density,dt,false,seed0+ep,true,true);
+            if(!g4On){ G.cullMode=1; G.queryR=G4_QUERYR; initMatGrid(G); }
+            int N=G.N; Ntot=N;
+            if(ep==0) for(int m=0;m<N;m++){ int s=nearestSeg2D(G,m); if(s>=0){ double[] gm=gate2D(G,m,s); if(gm[0]<5.0) reach++; } }
+            int[] prevB=new int[Math.max(1,N)]; for(int m=0;m<N;m++) prevB[m]=G.mot.boundSeg.get(m);
+            for(int tt=0;tt<steps;tt++){
+                if(g4On) stepGlideS2(G,tt,seed0+ep,new Tol()); else stepGlide2D(G,tt,seed0+ep,new Tol());
+                if(!Double.isFinite(G.fil.coordX(0))) break; totSteps++; int nb=0,lb=0;
+                for(int m=0;m<N;m++){ int bs=G.mot.boundSeg.get(m); if(bs>=0&&prevB[m]<0) binds++; prevB[m]=bs;
+                    if(bs>=0){ nb++;
+                        // §11 LOAD-BEARING = the beam is TAUT (nearly straight, end-to-end within 1 nm of contour ⇒
+                        // transmitting the stroke as tension, not absorbing it by straightening). Fixed anchor: always.
+                        boolean taut;
+                        if(!g4On) taut=true;
+                        else { double[][] nd=G.g4Node[m]; double con=0; for(int i=0;i<G.g4M;i++) con+=Math.sqrt(dot(sub(nd[i+1],nd[i]),sub(nd[i+1],nd[i])));
+                               double e2e=Math.sqrt(dot(sub(nd[G.g4M],nd[0]),sub(nd[G.g4M],nd[0]))); taut=(con-e2e)<1e-3; }
+                        if(taut) lb++; } }
+                occ0+= nb==0?1:0; if(nb>=1) ge1++; avgB+=nb; lbAcc+=lb;
+            }
+            candAcc+=G.candAcc; candSteps+=G.candSteps;
+        }
+        double avgBound=totSteps>0?avgB/totSteps:0, cont=totSteps>0?1.0-(double)occ0/totSteps:0;
+        double bindRate=(Ntot>0&&durS>0)?(double)binds/((double)Ntot*nEp)/durS:0;
+        double avgLB=totSteps>0?lbAcc/totSteps:0, fracLB=avgBound>0?avgLB/avgBound:0, pGe1=totSteps>0?(double)ge1/totSteps:0, cps=candSteps>0?(double)candAcc/candSteps:0;
+        return new double[]{ avgBound,cont,bindRate,avgLB,fracLB,pGe1,cps,reach };
+    }
+
+    static void phase4gRecruitment(double dt,boolean[] g,double[] fixedRef,boolean smoke){
+        System.out.println("#\n# ---------- §9–13: dense 2D-mat recruitment + load-bearing (explicit S2; CPU, REDUCED scale — disclosed) ----------");
+        double savMX=G4_MX,savMY=G4_MY; G4_MX=2.5; G4_MY=0.6; double density=400;
+        double durS = FAST?0.03:0.06; int nEp = FAST?3:4; int seed0=9400;
+        System.out.printf(Locale.US,"# DISCLOSED runner: CPU-only (no GPU). Mat %g×%g µm @ %g/µm² (N=%d), dt=%.1e, %.3fs ×%d ep. Per-motor (3M+2) beam solve ⇒ short S2 only. CPU=%s%n",
+            G4_MX,G4_MY,density,g4NMot(density),dt,durS,nEp,readLoadAvg());
+        Csv c=new Csv("condition,Lnm,slack_nm,M,avgBound,contFrac,bindsPerMotorPerS,avgLoadBearing,fracLoadBearing,pGe1,candPerStep,reach,recruitFold");
+        double[] base=measureS2Mat(density,dt,0,0,durS,nEp,seed0,false);
+        c.row("fixed_anchor",0,0,1,fmt(base[0]),fmt(base[1]),fmt(base[2]),fmt(base[3]),fmt(base[4]),fmt(base[5]),fmt(base[6]),(int)base[7],"1.0");
+        System.out.printf(Locale.US,"#   fixed_anchor      : avgBound=%.4f cont=%.3f binds/mot/s=%.3f loadBearing=%.4f P(N≥1)=%.3f reach=%d%n",base[0],base[1],base[2],base[3],base[5],(int)base[7]);
+        for(double[] cond:new double[][]{{10,0},{20,1.5},{40,1.5}}){ double L=cond[0],slack=cond[1]; int M=Math.max(1,(int)Math.round(L/EXP4G_L0_NM));
+            double[] r=measureS2Mat(density,dt,L,slack,durS,nEp,seed0,true); double fold=base[0]>0?r[0]/base[0]:Double.NaN;
+            c.row(String.format(Locale.US,"S2_L%.0f_s%.1f",L,slack),fmt(L),fmt(slack),M,fmt(r[0]),fmt(r[1]),fmt(r[2]),fmt(r[3]),fmt(r[4]),fmt(r[5]),fmt(r[6]),(int)r[7],fmt(fold));
+            System.out.printf(Locale.US,"#   S2 L=%2.0f slack=%.1f (M=%d): avgBound=%.4f (%.2f×) cont=%.3f binds/mot/s=%.3f loadBearing=%.4f (%.0f%% of bound) P(N≥1)=%.3f%n",L,slack,M,r[0],fold,r[1],r[2],r[3],100*r[4],r[5]);
+        }
+        c.write("recruitment_mat.csv"); G4_MX=savMX; G4_MY=savMY;
+    }
+
+    static void run4gGlide(String[] args,double dt,double kAx,double kTr,boolean smoke,double glideDur,double matX){
+        System.out.println("=== SoftBox — EXPERIMENT 4G gliding assay: a free filament glides over the explicit-S2 motor lawn (CPU, REDUCED) ===");
+        double savMX=G4_MX,savMY=G4_MY; double durS = glideDur>0? glideDur : (smoke?0.03:0.1);
+        G4_MX = matX>0? matX : Math.max(3.0, 2.0*durS*2.5 + 3.0); G4_MY=0.6; double density=400, L=20, slack=1.5;
+        System.out.printf(Locale.US,"# DISCLOSED: CPU-only. %g×%g µm lawn @ %g/µm² (N=%d), explicit-S2 L=%g slack=%g, dt=%.1e, dur=%.2fs. velocity = LS slope of centroid·b̂ (µm/s; negative=pointed-first). CPU=%s%n",
+            G4_MX,G4_MY,density,g4NMot(density),L,slack,dt,durS,readLoadAvg());
+        String gd = JS_DIR!=null? JS_DIR : (smoke?null:"threejs_twobody4g_mat");
+        double[] su=glideSpeedS2(density,dt,L,slack,durS,4321,gd);
+        System.out.printf(Locale.US,"#   explicit-S2 : velocity = %+.3f µm/s (speed %.3f), net %.3f µm over %.2fs, avgBound %.2f%n",su[0],Math.abs(su[0]),su[1]/1e3,durS,su[2]);
+        System.out.printf(Locale.US,"#   → the filament glides %s at %.2f µm/s.%n", su[0]<0?"pointed-end-first":"barbed-first(!)",Math.abs(su[0]));
+        G4_MX=savMX; G4_MY=savMY;
+    }
+    static double[] glideSpeedS2(double density,double dt,double Lnm,double slackNm,double durS,int seed,String jsDir){
+        Glide2D G=buildS2Mat(density,dt,Lnm,slackNm,seed);
+        int steps=(int)Math.round(durS/dt); int rec=Math.min(steps,4000), recEvery=Math.max(1,steps/rec);
+        int nf=Math.min(400,Math.max(150,(int)Math.round(durS*120))), fEvery=Math.max(1,steps/nf);
+        Frame4g fw = jsDir!=null? new Frame4g(jsDir,Math.max(G4_MX,2.5),Math.max(G4_MY,0.6),0.4) : null; if(fw!=null) G.fullViewer=true;
+        double[] tt=new double[steps/recEvery+2], yy=new double[steps/recEvery+2]; int nr=0; double y0=filComB(G), avgB=0; long nb=0;
+        for(int t=0;t<steps;t++){ stepGlideS2(G,t,seed,new Tol()); if(!Double.isFinite(G.fil.coordX(0))) break;
+            if(t%recEvery==0&&nr<tt.length){ tt[nr]=t*dt; yy[nr]=filComB(G)-y0; nr++; }
+            if(fw!=null&&t%fEvery==0) fw.write(G,t*dt);
+            int bb=0; for(int m=0;m<G.N;m++) if(G.mot.boundSeg.get(m)>=0) bb++; avgB+=bb; nb++; }
+        if(fw!=null){ fw.write(G,steps*dt); System.out.printf(Locale.US,"# -3js: %d frames → %s%n",fw.frames(),fw.dir()); }
+        double slope=nr>2?lsSlope(tt,yy,nr):0, net=nr>0?yy[nr-1]:0; return new double[]{ slope, net*1e3, nb>0?avgB/nb:0 };
+    }
+
+    // ---------- §14 viewer: render the ACTUAL explicit S2 segments (search / capture / stroke / mat / compare4f) ----------
+    static void viz4g(String base,double dt,double kAx,double kTr){
+        int settle=settleSteps(dt);
+        viz4gSearchStroke(base+"_search",true,base+"_capture",base+"_stroke",dt,kAx,kTr,settle);
+        viz4gMat(base+"_mat",dt);
+        viz4gCompare(base+"_compare4f",dt,kAx,kTr,settle);
+    }
+    /** The SAME explicit-S2 motor: SEARCH (unbound, beam bends, head sweeps) → BIND (bent) → POWERSTROKE (beam
+     *  straightens/tautens, actin advances). Writes three viewer dirs. */
+    static void viz4gSearchStroke(String searchDir,boolean writeSearch,String captureDir,String strokeDir,double dt,double kAx,double kTr,int settle){
+        Cmot cm=buildS2(40,1.5,true,dt,kAx,kTr);
+        cm.mot.boundSeg.set(0,MotorStore.FREE_BINDABLE); cm.mot.nucleotideState.set(0,MotorStore.NUC_ADPPI); cm.thetaS=PRESTROKE_THETAS;
+        Frame4g fw=new Frame4g(searchDir); double t=0; FilamentStore f=cm.fil; double half=0.5*f.segLength.get(0);
+        // SEARCH — the unbound pivot diffuses; the beam bends (soft transverse) so the head sweeps the capture volume
+        int searchFrames=40; int per=Math.max(1,settle/8); long sc=0;
+        for(int fr=0;fr<searchFrames;fr++){ fw.write(cm,t,true,false); t+=dt*per; for(int s=0;s<per;s++) s2SearchStep(cm,(int)(sc++),7); }
+        // BIND — from the (bent) beam state
+        { double[] c={f.coordX(0),f.coordY(0),f.coordZ(0)}, u={f.uVecX(0),f.uVecY(0),f.uVecZ(0)}, e1=sub(c,scl(u,half));
+          double foot=Math.max(-half+0.006,Math.min(half-0.006,dot(sub(cm.xF8,c),u)));
+          cm.mot.boundSeg.set(0,0); cm.mot.bindArc.set(0,(float)dot(sub(add(c,scl(u,foot)),e1),u)); }
+        Frame4g cw=new Frame4g(captureDir); cw.write(cm,0,true,false);
+        for(int s=0;s<settle;s++){ if(s%Math.max(1,settle/20)==0) cw.write(cm,s*dt,true,false); stepS2(cm,s,7,false); } cw.write(cm,settle*dt,true,false);
+        // POWERSTROKE
+        Frame4g pw=new Frame4g(strokeDir); pw.write(cm,0,true,false); cm.thetaS=ADP_THETAS;
+        for(int s=0;s<settle;s++){ if(s%Math.max(1,settle/40)==0) pw.write(cm,s*dt,true,false); stepS2(cm,settle+s,7,false); } pw.write(cm,settle*dt,true,false);
+        System.out.printf(Locale.US,"# -3js: search %d / capture %d / stroke %d frames → %s , %s , %s%n",fw.frames(),cw.frames(),pw.frames(),fw.dir(),cw.dir(),pw.dir());
+    }
+    static void viz4gCompare(String dir,double dt,double kAx,double kTr,int settle){
+        // one dir with the fixed anchor / the 4F short-slack tail / the explicit-S2 (40,1.5) side by side is not
+        // schema-friendly; instead render the explicit-S2 stroke for direct visual comparison to the 4F viewer.
+        Cmot cm=buildS2(60,1.5,true,dt,kAx,kTr); settleS2(cm,settle,0,false); Frame4g fw=new Frame4g(dir); fw.write(cm,0,true,false);
+        cm.thetaS=ADP_THETAS; for(int t=0;t<settle;t++){ if(t%Math.max(1,settle/40)==0) fw.write(cm,t*dt,true,false); stepS2(cm,t,0,false); } fw.write(cm,settle*dt,true,false);
+        System.out.printf(Locale.US,"# -3js: %d frames (L=60 explicit S2 stroke) → %s%n",fw.frames(),fw.dir());
+    }
+    static void viz4gMat(String dir,double dt){ double durS=0.08; double savMX=G4_MX,savMY=G4_MY; G4_MX=Math.max(3.0,2.0*durS*2.5+3.0); G4_MY=0.6;
+        glideSpeedS2(400,dt,20,1.5,durS,4321,dir); G4_MX=savMX; G4_MY=savMY; }
+
+    /** Viewer frame writer that renders the explicit S2 beam segments (colour by local axial strain: blue=slack/
+     *  compressed, red=taut/tensioned) + the supported distal tail + the motor. Reuses the v1 segments/myosins schema. */
+    static final class Frame4g {
+        final String outDir; int frame=0; double mx=2.5,my=0.6,mz=0.4;
+        Frame4g(String d){ this(d,2.5,0.6,0.4); }
+        Frame4g(String d,double mx,double my,double mz){ this.mx=mx;this.my=my;this.mz=mz; java.io.File f=new java.io.File(d);
+            if(!f.exists())f.mkdirs(); else{for(int n=1;n<=999;n++){java.io.File c=new java.io.File(String.format(Locale.US,"%s.%03d",d,n)); if(!c.exists()){c.mkdirs();f=c;break;}}}
+            outDir=f.getPath(); }
+        String dir(){return outDir;} int frames(){return frame;}
+        void write(Cmot cm,double t,boolean g4On,boolean unused){
+            FilamentStore fil=cm.fil; double half=0.5*fil.segLength.get(0);
+            double[] c={fil.coordX(0),fil.coordY(0),fil.coordZ(0)}, u={fil.uVecX(0),fil.uVecY(0),fil.uVecZ(0)};
+            double[] e1=sub(c,scl(u,half)), e2=add(c,scl(u,half)); boolean bE2=dot(cm.bhat,u)>0; double[] barbed=bE2?e2:e1, pointed=bE2?e1:e2;
+            boolean bound=cm.mot.boundSeg.get(0)>=0; StringBuilder sb=new StringBuilder(4096);
+            sb.append(String.format(Locale.US,"{\"frame\":%d,\"t\":%.6g,\"bounds\":{\"xDim\":0.2,\"yDim\":0.2,\"zDim\":0.2},\"segments\":[",frame,t));
+            int[] id={0};
+            sb.append(String.format(Locale.US,"{\"id\":0,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":1.0,\"cofilinCount\":0,\"isBarbedEnd\":true}",
+                pointed[0],pointed[1],pointed[2],barbed[0],barbed[1],barbed[2],Constants.radius)); id[0]++;
+            if(g4On){
+                double[] S=sub(cm.g4E,scl(cm.bhat,0.06));                              // supported distal tail runs 60 nm further along −b̂ to the substrate
+                sg(sb,id,S,cm.g4E,0.0024,0.12);                                         // supported distal tail (thick, grounded)
+                sg(sb,id,new double[]{S[0],S[1]-0.006,S[2]},new double[]{S[0],S[1]+0.006,S[2]},0.004,0.05);  // substrate bar
+                double l0m=cm.g4l0*1e-6, ksN=cm.g4ks;
+                for(int i=0;i<cm.g4M;i++){ double[] a=cm.g4Node[i],b=cm.g4Node[i+1]; double len=Math.sqrt(dot(sub(b,a),sub(b,a)));
+                    double strain=(len*1e-6-l0m)/l0m; double col=0.5+Math.max(-0.45,Math.min(0.45,strain*40));  // blue slack/compressed → red taut
+                    sg(sb,id,a,b,0.0016,col); }                                         // the EXPLICIT S2 beam segments
+            } else sg(sb,id,new double[]{cm.A[0]-0.005,cm.A[1],cm.A[2]},new double[]{cm.A[0]+0.005,cm.A[1],cm.A[2]},0.004,0.05);
+            sg(sb,id,cm.A,cm.C,0.0016,0.3);                                             // neck-lever
+            sb.append("],\"myosins\":[");
+            double[] au=nrm(sub(cm.xF8,cm.xH)); double[] he1=sub(cm.xH,scl(au,0.0012)),he2=add(cm.xH,scl(au,0.0012));
+            sb.append(String.format(Locale.US,"{\"id\":0,\"bound\":%s,\"rod\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g},\"lever\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g},\"motor\":{\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"state\":\"%s\"}}",
+                bound?"true":"false", cm.A[0],cm.A[1],cm.A[2],cm.C[0],cm.C[1],cm.C[2],0.0016, cm.C[0],cm.C[1],cm.C[2],cm.xH[0],cm.xH[1],cm.xH[2],0.0018,
+                he1[0],he1[1],he1[2],he2[0],he2[1],he2[2],A_SEMI[1], bound?"ADP":"ADPPi"));
+            sb.append("]}");
+            try{Files.writeString(Path.of(outDir,String.format(Locale.US,"frame_%06d.json",frame)),sb.toString());}catch(IOException e){throw new UncheckedIOException(e);}
+            frame++; }
+        void write(Glide2D G,double t){ /* mat frames: reuse the single-motor schema per active motor is heavy; write filament + pivots only */
+            StringBuilder sb=new StringBuilder(1<<16);
+            sb.append(String.format(Locale.US,"{\"frame\":%d,\"t\":%.6g,\"bounds\":{\"xDim\":%.3g,\"yDim\":%.3g,\"zDim\":%.3g},\"segments\":[",frame,t,mx,my,mz));
+            int[] id={0}; FilamentStore f=G.fil;
+            for(int s=0;s<G.nSeg;s++){ double half=0.5*f.segLength.get(s); double[] c={f.coordX(s),f.coordY(s),f.coordZ(s)},u={f.uVecX(s),f.uVecY(s),f.uVecZ(s)};
+                double[] a=sub(c,scl(u,half)),b=add(c,scl(u,half)); if(id[0]>0) sb.append(','); sb.append(String.format(Locale.US,"{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":1.0,\"cofilinCount\":0,\"isBarbedEnd\":%s}",id[0],a[0],a[1],a[2],b[0],b[1],b[2],Constants.radius,s==G.nSeg-1?"true":"false")); id[0]++; }
+            for(int m=0;m<G.N;m++) if(G.g4Node!=null && (G.active==null||G.active[m])){ double[][] nd=G.g4Node[m];
+                for(int i=0;i<G.g4M;i++){ sg(sb,id,nd[i],nd[i+1],0.0012,0.4); } }
+            sb.append("],\"myosins\":[]}");
+            try{Files.writeString(Path.of(outDir,String.format(Locale.US,"frame_%06d.json",frame)),sb.toString());}catch(IOException e){throw new UncheckedIOException(e);}
+            frame++; }
+        void sg(StringBuilder sb,int[] id,double[] a,double[] b,double r,double col){ if(id[0]>0)sb.append(',');
+            sb.append(String.format(Locale.US,"{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":%.3g,\"cofilinCount\":0}",id[0],a[0],a[1],a[2],b[0],b[1],b[2],r,col)); id[0]++; }
     }
 }

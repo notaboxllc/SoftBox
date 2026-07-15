@@ -509,6 +509,70 @@ compliance was much softer than intended. It does **not** touch the canonical mo
   `docs/TWOBODY_FLEXIBLE_MAT_GLIDING.md`; viewer `threejs_twobody4d_{flexible_active,flexible_control,flexible_nobind,rigid_active}`.
   **Recommended next step: a continuity/velocity study on the validated 2D-mat assay (velocity vs reachable/duty,
   toward a regression vs the fine-dt canonical curve), or a longer filament (8–15 µm) to isolate flexibility — not started.**
+- **4D-ii (2026-07-14) — 2D-mat coverage audit + correction:** the 4D viewer showed articulation concentrated at
+  the filament midpoint. Audit found the **simulation** candidate set (whole-chain AABB, all 12 segments) was
+  already contour-complete; the defect was a **viewer-only** articulation bug (a `±0.6 µm` window centered on the
+  filament midpoint clipped the ends). Fixed with a grid-accelerated **per-segment union cull** (site → any live
+  segment, queryR = 30 nm derived) for both the sim cull and the viewer. **Brute-force validated** (4000-motor
+  brute: the union cull omits 0 bindings; the freezing-induced trajectory divergence is the chaotic
+  statistical-equivalence standard). **Coverage 100 %** of the contour (every segment 9–18 candidates; both ends
+  covered). Viewer fix verified (articulation spans the full contour; 253 motors articulated near the ends where
+  the old rule gave 0). **4D's numeric results and scientific conclusions are unchanged** (the sim cull is
+  byte-identical by default). Report: `docs/TWOBODY_FULLCOVERAGE_MAT.md`; viewer `threejs_twobody4d2_*`.
+- **4E (2026-07-14) — passive myosin-TAIL as a recruitment mechanism — OUTCOME: TRADE-OFF (default-off `-exp4e`).**
+  Replaces the two-body motor's FIXED calibration anchor with a passive compliant tail (rod from a fixed surface
+  attachment to a now-movable pivot; rest length lTail, stretch k_tail, bend κ_tail; 5-DOF implicit solve; reduces
+  to the fixed anchor as lTail→0 / stiffness→∞; `stepTail(off)` ≡ `stepC` bit-identical). **Q1:** the current
+  effective surface-anchor→lever-pivot distance is **0 nm** (the anchor IS the pivot). **Q2:** a tail strongly
+  enlarges the capture volume (transverse reach 0→139 nm at 80 nm; the fixed motor has a zero-width line footprint)
+  — but only via the **free swing**. **Q3:** recruitment rises sharply (avgBound 0.23→**1.32, 5.7×** at a ~10 nm
+  free tail; continuity 0.20→0.69). **Q4/Q5:** the tail adds large series compliance, dominated by the **bending**
+  stiffness (the stroke is axial, the tail transverse); the recruitment-optimal free tail **absorbs the stroke**
+  (6.9→1.1 nm, k_ext 0.645→0.010 pN/nm, 98 %). **Q7:** the recruitment gain and the stroke loss share the same
+  compliance ⇒ **no passive tail both recruits well and preserves the single-molecule mechanics** — a recruited
+  motor is bound-but-inert (more-bound ≠ more-force). Connects to §5: the tail is a leftward recruitment-map shift
+  that **violates** the §5 requirement to preserve intrinsic single-motor mechanics. What would work (not built): a
+  state-dependent catch-**stiffening** tail. No canonical change. Report: `docs/TWOBODY_TAIL_RECRUITMENT.md`.
+- **4F (2026-07-15) — supported two-region tail (search-mobile, load-bearing) — OUTCOME A: CLEAN DECOUPLING
+  (default-off `-exp4f`).** The follow-up 4E flagged. 4E failed because its compliance was **isotropic** (the
+  softness that enlarged the capture volume also absorbed the stroke). 4F makes the passive tail **anisotropic +
+  nonlinear**: the movable pivot P is held by TWO separate elements — a **supported distal tail** giving a
+  **slack-to-taut AXIAL** law along the load axis b̂ (soft within a slack δ, TAUT/stiff beyond — the spec tension
+  coordinate qL=(P−P0)·b̂) + a **flexible proximal S2 hinge** giving a **soft TRANSVERSE** search spring
+  (finite-extension bounded). Passive · load-engaged · **nucleotide-INDEPENDENT** (no state switch). 5-DOF implicit
+  solve (the 4E structure with the anisotropic-nonlinear law + its tangent); `supOn=false` ≡ `stepC` bit-identical.
+  The ONE §5-licensed refinement is the *supported tail's own* axial stiffness (search is transverse ⇒ unaffected;
+  k_ext saturates at the fixed ceiling by k_taut≈20 pN/nm). **Single-motor (decisive, all 12 gates PASS):** at
+  no-slack (δ=0) and short-slack (δ=1.5 nm) the motor keeps the full stroke (100 % / 98 %), skeletal k_ext
+  (99 % / 93 %), negligible pivot recoil (0.07 / 0.15 nm) **while** gaining a 2-D capture footprint (783 / 1110 nm²
+  vs the fixed anchor's zero-width line); excessive slack (δ≥3.5 nm) reproduces the 4E trap (stroke absorbed,
+  k_ext collapses) — the documented failure edge. **Dense mat (4000 motors, active-set cull — CPU-tractable, no GPU
+  needed):** the low-slack tail recruits several-fold more chemically-bound motors AND — the §11 distinction — those
+  are **LOAD-BEARING** (pivot taut): no-slack ≈100 % of the recruited motors are load-bearing, whereas excess-slack
+  recruits similarly but stays ~inert (≈17 % taut, ≈ the fixed load-bearing count). dt-invariant; covariant;
+  controls (Jacobian, action–reaction, hinge-locked, fixed-seed) pass. **This is the first tail that recruits AND
+  preserves the single-molecule mechanics** — a clean recruitment-map shift satisfying the §5 requirement 4E
+  violated. **Recommendation: provisionally ADOPT the supported tail (short slack δ=1.5 nm, k_taut=20 pN/nm) as a
+  non-canonical candidate; test with a longer filament.** No canonical change. Report:
+  `docs/TWOBODY_SUPPORTED_S2_TAIL.md`.
+- **4G (2026-07-15) — MD-informed EXPLICIT fixed-contour S2 — OUTCOME A (partial): decoupling EMERGES from geometry
+  (default-off `-exp4g`, CPU-only).** Tests whether 4F's decoupling emerges from an **explicit** fixed-contour S2
+  coiled coil rather than 4F's two PRESCRIBED Cartesian springs. The free proximal S2 (L∈{10,20,40,60} nm) is a
+  discretized extensible-elastica **beam** (M=L/10 segments, stiff stretch ks=420 pN/nm, finite bending kb, Lp≈175
+  nm — all from AMK-2008 MD by length scaling: axial ∝1/L, bending ∝1/L³), clamped at a supported emergence point
+  (position + tangent, non-rotating), distal node = the validated pivot; passive, nucleotide-INDEPENDENT. Coupled
+  (3M+2)-DOF implicit solve with a **full numeric beam tangent**; `g4On=false` ≡ `stepC` bit-identical.
+  **DECOUPLED for L≥40 nm** (stroke 105 %, k_ext ~154 %, pivot recoil ≤0.01 nm, capture 576–864 nm²) — 4F's
+  search-mobile + load-bearing decoupling reproduced **with NO prescribed spring**, the anisotropy being the MD 1/L
+  (stretch, stiff) vs 1/L³ (bending, soft) scaling; **short S2 (L≤20) = a stiff link** (the tweezers/strongly-
+  supported boundary condition). **The one honest correction:** a stiff-stretch beam does **NOT hold 4F's rest
+  slack** — it straightens and repositions the pivot; the load-engaged nonlinearity relocates to a **compression-
+  buckling** asymmetry (kComp≪kTens at L=60). Contour conserved (≤0.01 nm); NO binding-state/nucleotide stiffness
+  switch (§17.6); all controls + dt-invariance PASS. Dense mat (CPU, reduced-scale, disclosed): recruits 3.3–4.3×
+  more motors, **load-bearing** (100 % taut at short S2, 69 % at L=40) — the opposite of the 4E trap. **Recommend
+  retaining BOTH the explicit MD-informed S2 (gliding/exposed-tail, L≥40) and the fixed anchor (tweezers) as
+  assay-conditioned variants;** 4F stays valid as a phenomenological fit; the decoupling survives explicit geometry
+  (not Outcome E). No canonical change; `BoA-v1ref` byte-clean. Report: `docs/TWOBODY_MD_INFORMED_S2.md`.
 
 This arc is **not** on the canonical path and does not change any canonical finding above; it is a parallel
 prototype toward a stiffer, mechanically recognizable motor.
@@ -519,7 +583,7 @@ prototype toward a stiffer, mechanically recognizable motor.
 
 Read these before revisiting the associated topic:
 
-- `docs/TWOBODY_BLIND_TWEEZERS_SYNTHESIS.md` · `docs/TWOBODY_BIOCHEMICAL_CYCLE.md` · `docs/TWOBODY_SPARSE_MULTIMOTOR.md` · `docs/TWOBODY_LOWDENSITY_GLIDING.md` · `docs/TWOBODY_FLEXIBLE_MAT_GLIDING.md` (two-body replacement-motor arc; §9b)
+- `docs/TWOBODY_BLIND_TWEEZERS_SYNTHESIS.md` · `docs/TWOBODY_BIOCHEMICAL_CYCLE.md` · `docs/TWOBODY_SPARSE_MULTIMOTOR.md` · `docs/TWOBODY_LOWDENSITY_GLIDING.md` · `docs/TWOBODY_FLEXIBLE_MAT_GLIDING.md` · `docs/TWOBODY_FULLCOVERAGE_MAT.md` · `docs/TWOBODY_TAIL_RECRUITMENT.md` · `docs/TWOBODY_SUPPORTED_S2_TAIL.md` · `docs/TWOBODY_MD_INFORMED_S2.md` (two-body replacement-motor arc; §9b)
 - `docs/FINE_DT_V0_REFERENCE.md`
 - `docs/TIMESTEP_SERVO_AUDIT.md`
 - `docs/CANONICAL_STROKE_DISAMBIGUATION.md`
