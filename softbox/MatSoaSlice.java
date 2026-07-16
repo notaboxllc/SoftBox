@@ -131,7 +131,7 @@ public final class MatSoaSlice {
     // ===============================================================================================
     public static void matStep7(DoubleArray pose4, DoubleArray anchor, DoubleArray sp, DoubleArray supP0,
                                 FloatArray bondData, IntArray boundSeg, IntArray active, IntArray counts,
-                                DoubleArray geomOut, DoubleArray forceOut) {
+                                DoubleArray geomOut, FloatArray forceDotFilOut, FloatArray forceMagOut) {
         int N = counts.get(0);
         int tt = counts.get(1), seed = counts.get(2);
         double bx = sp.get(0), by = sp.get(1), bz = sp.get(2);
@@ -282,8 +282,8 @@ public final class MatSoaSlice {
             geomOut.set(m, Cx2); geomOut.set(N + m, Cy2); geomOut.set(2 * N + m, Cz2);
             geomOut.set(3 * N + m, xF8x2); geomOut.set(4 * N + m, xF8y2); geomOut.set(5 * N + m, xF8z2);
             geomOut.set(6 * N + m, xHx); geomOut.set(7 * N + m, xHy); geomOut.set(8 * N + m, xHz);
-            if (act && bound) { forceOut.set(m, bondData.get(13 * m + 12)); forceOut.set(N + m, Math.sqrt(f8x * f8x + f8y * f8y + f8z * f8z)); }
-            else { forceOut.set(m, 0); forceOut.set(N + m, 0); }
+            if (act && bound) { forceDotFilOut.set(m, bondData.get(13 * m + 12)); forceMagOut.set(m, (float) Math.sqrt(f8x * f8x + f8y * f8y + f8z * f8z)); }
+            else { forceDotFilOut.set(m, 0f); forceMagOut.set(m, 0f); }
         }
     }
 
@@ -311,7 +311,7 @@ public final class MatSoaSlice {
         double dBind = params.get(22), psiDeg = params.get(23), phiDeg = params.get(24), thetaDeg = params.get(25);
         double preloadPn = params.get(26), energyKt = params.get(27), margin = params.get(28), nearMargin = params.get(29);
         for (@Parallel int m = 0; m < N; m++) {
-            double phi = pose.get(m), psi = pose.get(N + m), psiAct = pose.get(2 * N + m);
+            double phi = pose.get(m), psi = pose.get(N + m), psiAct = pose.get(3 * N + m);   // pose4 layout: φ[m] ψ[N+m] θs[2N+m] ψa[3N+m]
             double Ax = anchor.get(m), Ay = anchor.get(N + m), Az = anchor.get(2 * N + m);
             // --- geom2D ---
             double cphi = Math.cos(phi), sphi = Math.sin(phi);
@@ -460,14 +460,13 @@ public final class MatSoaSlice {
         for (int m = 0; m < N; m++) TwoBodyConverterMotor.geom2D(G, m);
         // mat SoA (NOTE: probe tests LOWERING — pose3 for matGeomGate + pose4 for matStep7 are separate here;
         // a correct trajectory unifies phi/psi into one buffer + routes matStep7→mot.forceDotFil. See report.)
-        DoubleArray site = new DoubleArray(2 * N), pose3 = new DoubleArray(3 * N), pose4 = new DoubleArray(4 * N),
+        DoubleArray site = new DoubleArray(2 * N), pose4 = new DoubleArray(4 * N),
                 anchor = new DoubleArray(3 * N), supP0 = new DoubleArray(3 * N), geomOut = new DoubleArray(9 * N),
-                candArc = new DoubleArray(N), forceOut = new DoubleArray(2 * N), redOut = new DoubleArray(6),
+                candArc = new DoubleArray(N), redOut = new DoubleArray(6),
                 eupP = DoubleArray.fromElements(G.eup[0], G.eup[1], G.eup[2]);
         IntArray active = new IntArray(N), noBind = new IntArray(N), candInt = new IntArray(2 * N);
         for (int m = 0; m < N; m++) {
             site.set(m, G.siteX[m]); site.set(N + m, G.siteY[m]);
-            pose3.set(m, G.phi[m]); pose3.set(N + m, G.psi[m]); pose3.set(2 * N + m, G.psiActin[m]);
             pose4.set(m, G.phi[m]); pose4.set(N + m, G.psi[m]); pose4.set(2 * N + m, G.thetaS[m]); pose4.set(3 * N + m, G.psiActin[m]);
             anchor.set(m, G.A[m][0]); anchor.set(N + m, G.A[m][1]); anchor.set(2 * N + m, G.A[m][2]);
             supP0.set(m, G.supP0[m][0]); supP0.set(N + m, G.supP0[m][1]); supP0.set(2 * N + m, G.supP0[m][2]);
@@ -485,17 +484,17 @@ public final class MatSoaSlice {
         try {
             TaskGraph tg = new TaskGraph("matloop")
                 .transferToDevice(DataTransferMode.FIRST_EXECUTION,
-                    site, pose3, pose4, anchor, supP0, geomOut, candArc, forceOut, redOut, eupP, active, noBind, candInt,
+                    site, pose4, anchor, supP0, geomOut, candArc, redOut, eupP, active, noBind, candInt,
                     cullP, gateP, step7P, zP,
                     b.coord, b.uVec, b.yVec, b.bRotGam,
                     f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.forceSum, f.torqueSum,
                     f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.chainParams,
                     f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
-                    mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown,
+                    mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, mot.forceMag, mot.forceDotAvg, mot.avgInit, mot.cooldown,
                     mot.stats, mot.nucParams, mot.kinParams, G.bondData, G.xbParams, G.segCount, G.segOff, G.segMyo)
                 .transferToDevice(DataTransferMode.EVERY_EXECUTION, mc, mot.counts, f.counts)
                 .task("matCull", MatSoaSlice::matCull, mot.boundSeg, site, f.coord, f.uVec, f.segLength, cullP, mc, active)
-                .task("matGeomGate", MatSoaSlice::matGeomGate, anchor, pose3, f.coord, f.uVec, f.segLength, gateP, mc, geomOut, candInt, candArc)
+                .task("matGeomGate", MatSoaSlice::matGeomGate, anchor, pose4, f.coord, f.uVec, f.segLength, gateP, mc, geomOut, candInt, candArc)
                 .task("matBind", MatSoaSlice::matBind, active, noBind, mot.boundSeg, mot.nucleotideState, candInt, candArc, mot.bindArc, mc)
                 .task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts)
                 .task("matPlaceHead", MatSoaSlice::matPlaceHead, geomOut, active, eupP, mc, b.coord, b.uVec, b.yVec)
@@ -511,7 +510,7 @@ public final class MatSoaSlice {
                 .task("integ", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
                 .task("orthoY", DerivedGeometrySystem::orthogonalizeY, f.uVec, f.yVec, f.counts)
                 .task("derive", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
-                .task("matStep7", MatSoaSlice::matStep7, pose4, anchor, step7P, supP0, G.bondData, mot.boundSeg, active, mc, geomOut, forceOut)
+                .task("matStep7", MatSoaSlice::matStep7, pose4, anchor, step7P, supP0, G.bondData, mot.boundSeg, active, mc, geomOut, mot.forceDotFil, mot.forceMag)
                 .task("matReduce", MatSoaSlice::matReduce, mot.boundSeg, active, mot.forceDotFil, f.coord, mc, redOut)
                 .transferToHost(DataTransferMode.EVERY_EXECUTION, redOut);
             GridScheduler sc = new GridScheduler();
@@ -660,12 +659,13 @@ public final class MatSoaSlice {
             }
             DoubleArray sp = packStep7Params(G);
             IntArray counts = new IntArray(4); counts.set(0, N); counts.set(1, T); counts.set(2, seed); counts.set(3, nSeg);
-            DoubleArray geomOut = new DoubleArray(9 * N), forceOut = new DoubleArray(2 * N);
+            DoubleArray geomOut = new DoubleArray(9 * N); FloatArray fdfOut = new FloatArray(N), fmagOut = new FloatArray(N);
             // --- CPU-runner matStep7 (plain loop = the SAME method) on clones, to separate arithmetic-form from GPU-FMA ---
-            DoubleArray cPose = new DoubleArray(4 * N), cAnchor = new DoubleArray(3 * N), cGeom = new DoubleArray(9 * N), cForce = new DoubleArray(2 * N);
+            DoubleArray cPose = new DoubleArray(4 * N), cAnchor = new DoubleArray(3 * N), cGeom = new DoubleArray(9 * N);
+            FloatArray cFdf = new FloatArray(N), cFmag = new FloatArray(N);
             for (int i = 0; i < 4 * N; i++) cPose.set(i, pose4.get(i));
             for (int i = 0; i < 3 * N; i++) cAnchor.set(i, anchor.get(i));
-            matStep7(cPose, cAnchor, sp, supP0, bondData, boundSeg, active, counts, cGeom, cForce);
+            matStep7(cPose, cAnchor, sp, supP0, bondData, boundSeg, active, counts, cGeom, cFdf, cFmag);
             // --- host reference: supSolveM for active (stepGlideSup L5861) ---
             double[][] hA = new double[N][3]; double[] hPhi = new double[N], hPsi = new double[N], hFDF = new double[N], hFMag = new double[N];
             double[][] hC = new double[N][3], hF8 = new double[N][3], hH = new double[N][3];
@@ -681,8 +681,8 @@ public final class MatSoaSlice {
                 TaskGraph tg = new TaskGraph("step7")
                         .transferToDevice(DataTransferMode.FIRST_EXECUTION, sp, supP0, bondData, boundSeg, active)
                         .transferToDevice(DataTransferMode.EVERY_EXECUTION, pose4, anchor, counts)
-                        .task("matStep7", MatSoaSlice::matStep7, pose4, anchor, sp, supP0, bondData, boundSeg, active, counts, geomOut, forceOut)
-                        .transferToHost(DataTransferMode.EVERY_EXECUTION, pose4, anchor, geomOut, forceOut);
+                        .task("matStep7", MatSoaSlice::matStep7, pose4, anchor, sp, supP0, bondData, boundSeg, active, counts, geomOut, fdfOut, fmagOut)
+                        .transferToHost(DataTransferMode.EVERY_EXECUTION, pose4, anchor, geomOut, fdfOut, fmagOut);
                 GridScheduler sched = new GridScheduler();
                 WorkerGrid w = new WorkerGrid1D(N); w.setLocalWork(1, 1, 1); sched.addWorkerGrid("step7.matStep7", w);
                 new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(sched).execute();
@@ -702,7 +702,7 @@ public final class MatSoaSlice {
                 gcPose = Math.max(gcPose, Math.abs(pose4.get(m) - cPose.get(m))); gcPose = Math.max(gcPose, Math.abs(anchor.get(m) - cAnchor.get(m)));
                 for (int c = 0; c < 3; c++) { gGeom = Math.max(gGeom, Math.abs(geomOut.get(c * N + m) - hC[m][c]));
                     gGeom = Math.max(gGeom, Math.abs(geomOut.get((3 + c) * N + m) - hF8[m][c])); gGeom = Math.max(gGeom, Math.abs(geomOut.get((6 + c) * N + m) - hH[m][c])); }
-                gForce = Math.max(gForce, Math.abs(forceOut.get(m) - hFDF[m])); gForce = Math.max(gForce, Math.abs(forceOut.get(N + m) - hFMag[m]));
+                gForce = Math.max(gForce, Math.abs(fdfOut.get(m) - hFDF[m])); gForce = Math.max(gForce, Math.abs(fmagOut.get(m) - hFMag[m]));
             }
             // PASS: force bit-for-decision (F8 identical); pose/geom double last-bit AMPLIFIED by the ill-conditioned 5-DOF
             // solve (the physics is equally sensitive on the host). Classify float-vs-semantic: force<1e-15 ⇒ no semantic error.
@@ -744,12 +744,12 @@ public final class MatSoaSlice {
                     if (g0 && g1 && g2 && g3 && g4 && g5 && g6 && g7) { hBound[m] = s; hArc[m] = gm[1]; }
                 }
                 // --- device: chained matGeomGate → matBind, sharing device buffers (no intermediate host round-trip) ---
-                DoubleArray anchor = new DoubleArray(3 * N), pose = new DoubleArray(3 * N);
+                DoubleArray anchor = new DoubleArray(3 * N), pose = new DoubleArray(4 * N);
                 IntArray active = new IntArray(N), noBind = new IntArray(N), boundSeg = new IntArray(N), nuc = new IntArray(N);
                 FloatArray bindArc = new FloatArray(N);
                 for (int m = 0; m < N; m++) {
                     anchor.set(m, G.A[m][0]); anchor.set(N + m, G.A[m][1]); anchor.set(2 * N + m, G.A[m][2]);
-                    pose.set(m, G.phi[m]); pose.set(N + m, G.psi[m]); pose.set(2 * N + m, G.psiActin[m]);
+                    pose.set(m, G.phi[m]); pose.set(N + m, G.psi[m]); pose.set(2 * N + m, G.thetaS[m]); pose.set(3 * N + m, G.psiActin[m]);
                     active.set(m, G.active[m] ? 1 : 0); noBind.set(m, G.noBind[m] ? 1 : 0);
                     boundSeg.set(m, G.mot.boundSeg.get(m)); nuc.set(m, G.mot.nucleotideState.get(m)); bindArc.set(m, G.mot.bindArc.get(m));
                 }
@@ -815,11 +815,11 @@ public final class MatSoaSlice {
             }
             int nAcc = 0; for (int m = 0; m < N; m++) if (hBound[m] >= 0) nAcc++;
             // device chained geom→bind
-            DoubleArray anchor = new DoubleArray(3 * N), pose = new DoubleArray(3 * N);
+            DoubleArray anchor = new DoubleArray(3 * N), pose = new DoubleArray(4 * N);
             IntArray active = new IntArray(N), noBind = new IntArray(N), boundSeg = new IntArray(N), nuc = new IntArray(N);
             FloatArray bindArc = new FloatArray(N);
             for (int m = 0; m < N; m++) { anchor.set(m, G.A[m][0]); anchor.set(N + m, G.A[m][1]); anchor.set(2 * N + m, G.A[m][2]);
-                pose.set(m, G.phi[m]); pose.set(N + m, G.psi[m]); pose.set(2 * N + m, G.psiActin[m]);
+                pose.set(m, G.phi[m]); pose.set(N + m, G.psi[m]); pose.set(2 * N + m, G.thetaS[m]); pose.set(3 * N + m, G.psiActin[m]);
                 active.set(m, G.active[m] ? 1 : 0); noBind.set(m, G.noBind[m] ? 1 : 0); boundSeg.set(m, MotorStore.FREE_BINDABLE); nuc.set(m, G.mot.nucleotideState.get(m)); bindArc.set(m, 0f); }
             DoubleArray params = packGeomGateParams(G);
             IntArray counts = new IntArray(4); counts.set(0, N); counts.set(1, 0); counts.set(2, 7); counts.set(3, nSeg);
@@ -874,10 +874,10 @@ public final class MatSoaSlice {
                     }
                 }
                 // --- pack device SoA ---
-                DoubleArray anchor = new DoubleArray(3 * N), pose = new DoubleArray(3 * N);
+                DoubleArray anchor = new DoubleArray(3 * N), pose = new DoubleArray(4 * N);
                 for (int m = 0; m < N; m++) {
                     anchor.set(m, G.A[m][0]); anchor.set(N + m, G.A[m][1]); anchor.set(2 * N + m, G.A[m][2]);
-                    pose.set(m, G.phi[m]); pose.set(N + m, G.psi[m]); pose.set(2 * N + m, G.psiActin[m]);
+                    pose.set(m, G.phi[m]); pose.set(N + m, G.psi[m]); pose.set(2 * N + m, G.thetaS[m]); pose.set(3 * N + m, G.psiActin[m]);
                 }
                 DoubleArray params = packGeomGateParams(G);
                 IntArray counts = new IntArray(4); counts.set(0, N); counts.set(1, 0); counts.set(2, seed); counts.set(3, nSeg);
