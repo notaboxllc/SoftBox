@@ -18,14 +18,22 @@ softbox.MatSoaSlice`. Report: `RUN_LOGS/matsoa/STAGE_GATES.md`.
 - **DEVICE RESIDENCY (through the full composed loop): PROVEN** — all motor+filament SoA uploaded
   FIRST_EXECUTION; only `mc`/`mot.counts`/`f.counts` (small) EVERY_EXECUTION; only `redOut` (6 doubles)
   read back. **No full per-motor mat transfer per step.**
-- **CALIBRATED GPU TRAJECTORY:** NOT YET — the composition graph LOWERS/RUNS, but a *correct* multi-step
-  trajectory + the stepwise CPU-vs-GPU comparison (Part 6) is the next increment.
-- **NEXT BLOCKER (Part-6 correctness, not a lowering risk):** two wiring fixes the lowering probe
-  deliberately deferred — (1) UNIFY φ/ψ into one buffer both `matGeomGate` and `matStep7` read/write (the
-  probe used separate `pose3`/`pose4`); (2) route `matStep7`'s force diagnostic to `mot.forceDotFil`
-  (float N) so the NEXT step's `cycleLymnTaylor` reads it (the probe used a separate `forceOut`). Then
-  loop `plan.execute()` per step (device-resident, updating only the counters) + the stepwise CPU-vs-GPU
-  comparison with first-divergence classification. Parts 7 (end-to-end) + 8 (throughput) follow.
+- **CALIBRATED GPU TRAJECTORY (Part 6): DONE + CLEAN.** The device-resident 20-task single graph
+  (`matCock` added — the cocking stage) looped per step vs the mat-kernels' CPU-runner ("one impl, two
+  runners") from identical IC. **t=0 IDENTICAL** (device == CPU on identical inputs ⇒ pipeline
+  semantically identical — no bridge/salt/order bug). First discrete divergence is **exactly 1 boundary
+  motor** @t=16 (N=600) / @t=1 (N=2100), after float-scale filament drift (3.7e-9 / 5.8e-10 µm) — the
+  **expected float-FMA chaotic decorrelation** the Stage-7 1.68e-7/step finding predicted (earlier at
+  higher N = more motors near a gate boundary; statistical, not a bug). **No HARD STOP.**
+- **THROUGHPUT (Part 8): DOUBLE is FP64-limited** — warm device/CPU-runner = **0.54× @ N=600** (launch-
+  bound + FP64 + validation-read-inflated), **1.15× @ N=2100** (GPU parallelism wins at scale); cold
+  compile 239–642 ms. The double `matStep7` 5-DOF solve is FP64-bound ⇒ a **future FLOAT `matStep7`** is
+  the throughput lever (this is the motivating data). Device time here includes the validation reads;
+  production (redOut only) is faster.
+- **NEXT BLOCKER:** Part 7 end-to-end ENSEMBLE validation — since the trajectory is chaotic (decorrelates
+  by float-FMA, correctly), the CPU-vs-GPU comparison of the emergent observables (signed velocity,
+  continuity, avgBound, handoff, ATP/µm, wander, net force) must be an ENSEMBLE-mean-within-SEM check over
+  seeds (CPU-double as arbiter), + the half-dt + enlarged-cull controls. Not reached this pass.
 
 ## Stages built + gated (Part 5)
 | stage | kernel | precision | gate (isolated CPU-vs-GPU, bailout=false) | result |
