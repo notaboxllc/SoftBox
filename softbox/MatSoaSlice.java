@@ -94,6 +94,17 @@ public final class MatSoaSlice {
     static double dabs(double x) { return x < 0 ? -x : x; }              // reinterpret-free |x| (Math.abs uses doubleToRawLongBits)
     static double deg(double x) { return x * 180.0 / Math.PI; }          // == JDK Math.toDegrees(angrad) = angrad*180.0/PI
 
+    // ===============================================================================================
+    // KERNEL — Stage 8 (cocking): matCock.  thetaS[m] = thetaS4a(nuc[m]) (stepGlideSup L5846): nuc==NUC_ADPPI(2)
+    //   ⇒ PRESTROKE_THETAS(−30°) else ADP_THETAS(+30°). Writes pose4[2N+m]. Runs after chemistry, before place.
+    //   cockP[0]=PRESTROKE_THETAS, cockP[1]=ADP_THETAS.
+    // ===============================================================================================
+    public static void matCock(IntArray nucState, DoubleArray pose4, DoubleArray cockP, IntArray counts) {
+        int N = counts.get(0);
+        double pre = cockP.get(0), adp = cockP.get(1);
+        for (@Parallel int m = 0; m < N; m++) pose4.set(2 * N + m, nucState.get(m) == 2 ? pre : adp);
+    }
+
     // --- reinterpret-free double helpers for matStep7 (mirror the validated calibratedStep substitutions) ---
     static double log1pC(double x) { double u = 1.0 + x; return (u == 1.0) ? x : Math.log(u) * (x / (u - 1.0)); }
     static double softposD(double x, double s) {
@@ -428,8 +439,16 @@ public final class MatSoaSlice {
         log.append("# MAT-SOA VERTICAL SLICE — isolated stage gates (calibrated, RTX 5070 / PTX)\n");
         log.append("# bailout disabled: ").append(bailoutOff).append("  | device mem start ").append(gpuMemUsed()).append(" MiB\n\n");
 
-        boolean compose = false; for (String a : args) if (a.equals("-compose")) compose = true;
+        boolean compose = false, traj = false; for (String a : args) { if (a.equals("-compose")) compose = true; if (a.equals("-traj")) traj = true; }
         if (compose) { boolean ok = compositionProbe(log, dir); try { Files.writeString(dir.resolve("COMPOSITION_PROBE.md"), log.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); } System.exit(ok ? 0 : 1); return; }
+        if (traj) {
+            System.out.println("=== PART 6 — device-resident calibrated GPU trajectory (bailout=false) ===");
+            boolean ok = trajectory(log, 200, 11, 3000);           // small case first
+            if (ok) ok &= trajectory(log, 700, 11, 2000);          // production-like density
+            try { Files.writeString(dir.resolve("TRAJECTORY.md"), log.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); }
+            System.out.println("# report: " + dir.resolve("TRAJECTORY.md").toAbsolutePath());
+            System.exit(ok ? 0 : 1); return;
+        }
 
         boolean cullOk = gateCull(log);
         boolean geomOk = gateGeomGate(log);
@@ -447,6 +466,156 @@ public final class MatSoaSlice {
         System.out.println("# report: " + dir.resolve("STAGE_GATES.md").toAbsolutePath());
         System.exit(cullOk && geomOk && bindOk && step7Ok && bridgeOk ? 0 : 1);
     }
+
+    // ================================================================================================
+    //  PART 6 — device-resident multi-step calibrated trajectory + stepwise CPU-vs-GPU comparison.
+    //  The device single-graph = the mat-kernel PIPELINE; the CPU reference = the SAME methods as plain
+    //  loops ("one impl two runners"). Both from identical IC ⇒ differ only by GPU-FMA (Stage-7 finding).
+    // ================================================================================================
+    static final class MatState {
+        DoubleArray site, pose4, anchor, supP0, geomOut, candArc, redOut, eupP, cullP, gateP, step7P, cockP;
+        IntArray active, noBind, candInt, mc;
+        FloatArray zP;
+    }
+    static MatState packMat(TwoBodyConverterMotor.Glide2D G) {
+        int N = G.N, nSeg = G.nSeg; MatState s = new MatState();
+        s.site = new DoubleArray(2 * N); s.pose4 = new DoubleArray(4 * N); s.anchor = new DoubleArray(3 * N);
+        s.supP0 = new DoubleArray(3 * N); s.geomOut = new DoubleArray(9 * N); s.candArc = new DoubleArray(N); s.redOut = new DoubleArray(6);
+        s.eupP = DoubleArray.fromElements(G.eup[0], G.eup[1], G.eup[2]);
+        s.active = new IntArray(N); s.noBind = new IntArray(N); s.candInt = new IntArray(2 * N);
+        for (int m = 0; m < N; m++) {
+            s.site.set(m, G.siteX[m]); s.site.set(N + m, G.siteY[m]);
+            s.pose4.set(m, G.phi[m]); s.pose4.set(N + m, G.psi[m]); s.pose4.set(2 * N + m, G.thetaS[m]); s.pose4.set(3 * N + m, G.psiActin[m]);
+            s.anchor.set(m, G.A[m][0]); s.anchor.set(N + m, G.A[m][1]); s.anchor.set(2 * N + m, G.A[m][2]);
+            s.supP0.set(m, G.supP0[m][0]); s.supP0.set(N + m, G.supP0[m][1]); s.supP0.set(2 * N + m, G.supP0[m][2]);
+            s.noBind.set(m, G.noBind[m] ? 1 : 0);
+        }
+        s.cullP = DoubleArray.fromElements(G.queryR * G.queryR); s.gateP = packGeomGateParams(G); s.step7P = packStep7Params(G);
+        s.cockP = DoubleArray.fromElements(TwoBodyConverterMotor.PRESTROKE_THETAS, TwoBodyConverterMotor.ADP_THETAS);
+        s.zP = FloatArray.fromElements((float) G.kzCode);
+        s.mc = new IntArray(4); s.mc.set(0, N); s.mc.set(3, nSeg);
+        return s;
+    }
+    /** CPU-runner step = the device pipeline as plain Java calls (same 20 kernels, same order). */
+    static void stepMatCPU(TwoBodyConverterMotor.Glide2D G, MatState s, int t, int seed) {
+        int nSeg = G.nSeg; MotorStore mot = G.mot; FilamentStore f = G.fil; RigidRodBody b = mot.body;
+        s.mc.set(1, t); s.mc.set(2, seed);
+        matCull(mot.boundSeg, s.site, f.coord, f.uVec, f.segLength, s.cullP, s.mc, s.active);
+        matGeomGate(s.anchor, s.pose4, f.coord, f.uVec, f.segLength, s.gateP, s.mc, s.geomOut, s.candInt, s.candArc);
+        matBind(s.active, s.noBind, mot.boundSeg, mot.nucleotideState, s.candInt, s.candArc, mot.bindArc, s.mc);
+        mot.setCounts(t, seed, nSeg);
+        NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+        matCock(mot.nucleotideState, s.pose4, s.cockP, s.mc);
+        matPlaceHead(s.geomOut, s.active, s.eupP, s.mc, b.coord, b.uVec, b.yVec);
+        CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams);
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+        CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, G.segCount);
+        CrossBridgeSystem.csrScan(mot.counts, G.segCount, G.segOff);
+        CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, G.segOff, G.segCount, G.segMyo);
+        CrossBridgeSystem.segGather(G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts);
+        ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        matZConfine(f.coord, f.forceSum, s.zP, s.mc);
+        f.counts.set(1, t); f.counts.set(2, seed);
+        BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+        DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        matStep7(s.pose4, s.anchor, s.step7P, s.supP0, G.bondData, mot.boundSeg, s.active, s.mc, s.geomOut, mot.forceDotFil, mot.forceMag);
+        matReduce(mot.boundSeg, s.active, mot.forceDotFil, f.coord, s.mc, s.redOut);
+    }
+    static GridScheduler trajSched;
+    static TornadoExecutionPlan buildTrajGraph(TwoBodyConverterMotor.Glide2D G, MatState s) {
+        MotorStore mot = G.mot; FilamentStore f = G.fil; RigidRodBody b = mot.body;
+        TaskGraph tg = new TaskGraph("traj")
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION,
+                s.site, s.pose4, s.anchor, s.supP0, s.geomOut, s.candArc, s.redOut, s.eupP, s.active, s.noBind, s.candInt,
+                s.cullP, s.gateP, s.step7P, s.cockP, s.zP,
+                b.coord, b.uVec, b.yVec, b.bRotGam,
+                f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.forceSum, f.torqueSum,
+                f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.chainParams,
+                f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
+                mot.bindArc, mot.forceMag, mot.forceDotAvg, mot.avgInit, mot.cooldown,
+                mot.stats, mot.nucParams, mot.kinParams, G.bondData, G.xbParams, G.segCount, G.segOff, G.segMyo)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, s.mc, mot.counts, f.counts,
+                mot.boundSeg, mot.nucleotideState, mot.forceDotFil, f.coord)   // VALIDATION reads these back each step (below)
+            .task("matCull", MatSoaSlice::matCull, mot.boundSeg, s.site, f.coord, f.uVec, f.segLength, s.cullP, s.mc, s.active)
+            .task("matGeomGate", MatSoaSlice::matGeomGate, s.anchor, s.pose4, f.coord, f.uVec, f.segLength, s.gateP, s.mc, s.geomOut, s.candInt, s.candArc)
+            .task("matBind", MatSoaSlice::matBind, s.active, s.noBind, mot.boundSeg, mot.nucleotideState, s.candInt, s.candArc, mot.bindArc, s.mc)
+            .task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts)
+            .task("matCock", MatSoaSlice::matCock, mot.nucleotideState, s.pose4, s.cockP, s.mc)
+            .task("matPlaceHead", MatSoaSlice::matPlaceHead, s.geomOut, s.active, s.eupP, s.mc, b.coord, b.uVec, b.yVec)
+            .task("bondForces", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams)
+            .task("zeroAcc", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
+            .task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, G.segCount)
+            .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, G.segCount, G.segOff)
+            .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, G.segOff, G.segCount, G.segMyo)
+            .task("segGather", CrossBridgeSystem::segGather, G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts)
+            .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
+            .task("zconf", MatSoaSlice::matZConfine, f.coord, f.forceSum, s.zP, s.mc)
+            .task("brown", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
+            .task("integ", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
+            .task("orthoY", DerivedGeometrySystem::orthogonalizeY, f.uVec, f.yVec, f.counts)
+            .task("derive", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
+            .task("matStep7", MatSoaSlice::matStep7, s.pose4, s.anchor, s.step7P, s.supP0, G.bondData, mot.boundSeg, s.active, s.mc, s.geomOut, mot.forceDotFil, mot.forceMag)
+            .task("matReduce", MatSoaSlice::matReduce, mot.boundSeg, s.active, mot.forceDotFil, f.coord, s.mc, s.redOut)
+            .transferToHost(DataTransferMode.EVERY_EXECUTION, s.redOut, mot.boundSeg, mot.nucleotideState, f.coord, f.uVec);
+        int N = G.N, nSeg = G.nSeg, pn = ((N + 63) / 64) * 64, ps = ((nSeg + 63) / 64) * 64;
+        trajSched = new GridScheduler();
+        String[] pnT = {"matCull", "matGeomGate", "matBind", "chem", "matCock", "matPlaceHead", "bondForces", "matStep7"};
+        for (String nm : pnT) addW(trajSched, "traj." + nm, pn);
+        String[] psT = {"zeroAcc", "segGather", "chain", "zconf", "brown", "integ", "orthoY", "derive"};
+        for (String nm : psT) addW(trajSched, "traj." + nm, ps);
+        addW(trajSched, "traj.csrHist", 64); addW(trajSched, "traj.csrScan", 64); addW(trajSched, "traj.csrScatter", 64); addW(trajSched, "traj.matReduce", 64);
+        return new TornadoExecutionPlan(tg.snapshot());
+    }
+
+    static boolean trajectory(StringBuilder log, double density, int seed, int steps) {
+        double dt = 2.5e-6;
+        System.out.printf(Locale.US, "%n--- Part 6 trajectory: density=%.0f seed=%d steps=%d (device single-graph vs CPU-runner) ---%n", density, seed, steps);
+        log.append(String.format(Locale.US, "## Part-6 trajectory density=%.0f seed=%d steps=%d\n", density, seed, steps));
+        TwoBodyConverterMotor.Glide2D Gd = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed);
+        TwoBodyConverterMotor.Glide2D Gc = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed);   // identical IC
+        int N = Gd.N, nSeg = Gd.nSeg;
+        MatState sd = packMat(Gd), sc = packMat(Gc);
+        TornadoExecutionPlan plan;
+        try { plan = buildTrajGraph(Gd, sd); } catch (Throwable ex) { log.append("- graph build FAILED: " + oneLine(ex.getMessage()) + "\n"); System.out.println("  graph build FAILED"); return false; }
+        int firstBoundDiv = -1, firstNucDiv = -1, firstNbDiv = -1; double maxComD = 0, maxFilD = 0;
+        int t0BoundMis = -1, t0NucMis = -1, bMisAtFirst = 0; double filDbeforeFirst = 0, filDsoFar = 0;
+        long tCold = 0;
+        for (int t = 0; t < steps; t++) {
+            sd.mc.set(1, t); Gd.mot.setCounts(t, seed, nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, seed);
+            long t0 = System.nanoTime();
+            try { plan.withGridScheduler(trajSched).execute(); } catch (Throwable ex) { Throwable r = ex; while (r.getCause() != null && r.getCause() != r) r = r.getCause(); log.append("- device execute FAILED @t=" + t + ": `" + r.getClass().getName() + "`: " + oneLine(r.getMessage()) + "\n"); System.out.println("  device execute FAILED @t=" + t + ": " + oneLine(r.getMessage())); return false; }
+            if (t == 0) tCold = System.nanoTime() - t0;
+            stepMatCPU(Gc, sc, t, seed);
+            int nbD = (int) sd.redOut.get(0), nbC = (int) sc.redOut.get(0);
+            if (nbD != nbC && firstNbDiv < 0) firstNbDiv = t;
+            int boundMis = 0, nucMis = 0;
+            for (int m = 0; m < N; m++) { if (Gd.mot.boundSeg.get(m) != Gc.mot.boundSeg.get(m)) boundMis++; if (Gd.mot.nucleotideState.get(m) != Gc.mot.nucleotideState.get(m)) nucMis++; }
+            if (t == 0) { t0BoundMis = boundMis; t0NucMis = nucMis; }   // t=0: identical IC ⇒ any mismatch here is SEMANTIC
+            if (boundMis > 0 && firstBoundDiv < 0) { firstBoundDiv = t; bMisAtFirst = boundMis; filDbeforeFirst = filDsoFar; }
+            if (nucMis > 0 && firstNucDiv < 0) firstNucDiv = t;
+            for (int i = 1; i <= 3; i++) maxComD = Math.max(maxComD, Math.abs(sd.redOut.get(i) - sc.redOut.get(i)));
+            double filStep = 0; for (int i = 0; i < 3 * nSeg; i++) filStep = Math.max(filStep, Math.abs(Gd.fil.coord.get(i) - Gc.fil.coord.get(i)));
+            filDsoFar = filStep; maxFilD = Math.max(maxFilD, filStep);
+        }
+        // RIGOROUS classification: at t=0 both runners see the IDENTICAL IC ⇒ identical discrete outputs. Any t=0
+        // discrete mismatch = SEMANTIC (bridge/salt/order bug — HARD STOP). Divergence only at t≥1 (after matStep7's
+        // ~1.68e-7 FMA pose drift feeds the next gate) = the EXPECTED float-FMA chaotic decorrelation (FINE).
+        boolean t0Identical = (t0BoundMis == 0 && t0NucMis == 0);
+        int firstDisc = min3(firstBoundDiv, firstNucDiv, firstNbDiv);
+        boolean semantic = !t0Identical;
+        String cls = !t0Identical ? "SEMANTIC — DISCRETE DIVERGENCE AT t=0 ON IDENTICAL IC (HARD STOP): boundMis=" + t0BoundMis + " nucMis=" + t0NucMis
+                : firstDisc < 0 ? "no discrete divergence in " + steps + " steps (identical trajectory)"
+                : "float-FMA chaotic decorrelation — t=0 IDENTICAL, first discrete divergence @t=" + firstDisc + " (boundMis=" + bMisAtFirst + " of " + N + ", filament drift before=" + String.format(Locale.US, "%.1e", filDbeforeFirst) + " µm)";
+        System.out.printf(Locale.US, "  t=0 identical=%b | first div boundSeg@%d nuc@%d nBound@%d (boundMis@first=%d/%d) | maxComΔ=%.2e maxFilΔ=%.2e%n  %s | cold %.0f ms%n",
+                t0Identical, firstBoundDiv, firstNucDiv, firstNbDiv, bMisAtFirst, N, maxComD, maxFilD, cls, tCold / 1e6);
+        log.append(String.format(Locale.US, "- t=0 identical=%b; first div boundSeg@%d nuc@%d nBound@%d (boundMis@first=%d/%d, filDrift-before=%.1e µm); maxComΔ=%.2e maxFilΔ=%.2e; **%s**; cold %.0f ms\n",
+                t0Identical, firstBoundDiv, firstNucDiv, firstNbDiv, bMisAtFirst, N, filDbeforeFirst, maxComD, maxFilD, cls, tCold / 1e6));
+        log.append("- residency: FIRST_EXECUTION uploads once; per step only mc/counts up + redOut/boundSeg/nuc/coord DOWN (validation reads; production keeps only redOut). No full-mat UPLOAD/step.\n");
+        return !semantic;
+    }
+    static int min3(int a, int b, int c) { int r = Integer.MAX_VALUE; if (a >= 0) r = Math.min(r, a); if (b >= 0) r = Math.min(r, b); if (c >= 0) r = Math.min(r, c); return r == Integer.MAX_VALUE ? -1 : r; }
 
     // ---------- Step 2 — COMPOSITION-RISK PROBE: does the full ~19-task double mat loop lower as a SINGLE graph? ----------
     static boolean compositionProbe(StringBuilder log, Path dir) {
