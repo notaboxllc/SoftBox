@@ -18,10 +18,18 @@ No motor physics/chemistry/binding/params/model-ID changed. GPU gate closed (`DE
 - `THROUGHPUT (Part 8):` double is **FP64-limited** — 0.54× (device slower) at N=600, **1.15× (device
   faster) at N=2100** as parallelism starts to win. The double `matStep7` 5-DOF solve is FP64-bound ⇒ a
   future **float `matStep7`** is the throughput lever (the quantified motivating data).
-- `NEXT BLOCKER:` **Part 7 ensemble validation** — the trajectory is chaotic (correctly float-decorrelates),
-  so emergent observables (velocity/continuity/avgBound/handoff/ATP-per-µm/wander/net force) need an
-  **ensemble-mean-within-SEM** CPU-vs-GPU check over multiple seeds (CPU-double arbiter) + half-dt + cull
-  controls. Then the float `matStep7` for a real GPU throughput win at scale.
+- `CALIBRATED GPU SLICE VALIDATION (Part 7):` **PASS — VALIDATED (experimental).** CPU-vs-GPU ensemble means
+  within SEM for all 14 observables at 200/700/1500 µm⁻² (8 seeds, combined-SEM 2σ test, every z ≤ 1.11),
+  no systematic direction bias, 0 invalid states; half-dt trend tracks; device `matCull` == host
+  `unionActive` EXACTLY (0 reachable motors missed). Signed velocity negative (pointed-first) at all densities.
+- `PROMOTION:` **NOT promoted — `DEVICE_VALIDATED` stays false.** This is the CONSTRAINED first slice (1
+  filament, fixed anchors, reduced measurements, no density 3000) and the double path is FP64-limited
+  (slower than CPU at small scale). The full promotion gate needs the broader production scene + a **float
+  `matStep7`** (the throughput lever). Validated-but-not-promoted.
+- `NEXT BLOCKER:` (1) float `matStep7` (reuse the validated `calibratedStep` — converts the FP64-limited
+  slice into a throughput win at scale); (2) broaden the slice to the full production scene + density 3000;
+  then the calibrated-GPU promotion gate. Explicit end-to-end reuses this mat-SoA architecture (its Step-7 =
+  the analytic beam kernel).
 
 ## UPDATE — the device-resident calibrated GPU trajectory is validated (Parts 6 + 8 done)
 The first device-resident two-body gliding mat trajectory runs as a single TaskGraph and is validated clean
