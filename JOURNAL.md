@@ -1,5 +1,22 @@
 # Soft Box Project Journal
 
+### 2026-07-16 — PART C: the analytic explicit-S2 beam GPU kernel LOWERS to PTX + runs on the RTX 5070 (≈70× CPU-analytic / ≈900× CPU-FD, batched)
+
+The study's central question answered: **YES — with the nested-FD helper gone, the analytic explicit beam kernel LOWERS to PTX and executes on device**, bit-faithful to the CPU analytic solver. No beam physics/energy/topology/params changed; FD stays production default + physical oracle; `DEVICE_VALIDATED` NOT flipped; new files only; `BoA-v1ref` byte-clean. Report: `docs/explicit_jac/GPU_KERNEL_FINDINGS.md`; logs `RUN_LOGS/explicit_jac/gpu_{cpuvalidate,probe,gate,bench}.txt`.
+
+- **C1 flat kernel** (`TwoBodyBeamAnalyticGpu.beamRelaxAnalytic`): per-thread beam relaxation (analytic residual + exact energy Hessian + flat 14×14 Gauss–Jordan), NO `double[][]`/`new`, per-thread flat `DoubleArray sys` scratch, runtime-bound loops, small helpers, device-safe `accurateAcos` (Math.acos doesn't lower), explicit convergence+singular flags. "One method, two runners" ⇒ CPU mirror bit-faithful. **Bug found+fixed via assembly-diff (`-debugasm`): fixed-node row sentinel `-1` aliased onto node-1 (`-1+p`=0,1 passed the r≥0 guard) ⇒ spurious cross-coupling; fixed with a large-negative sentinel.** Post-fix flat assembly ≡ `ExplicitBeamSolver.assemble` to ΔF~1e-24/ΔK~1e-15; full relax ≡ CPU-FULLY_ANALYTIC to 4.3e-14 µm.
+- **C2 lowering probe (headline):** first attempt FAILED — but NOT node-count: PTX backend NPE in `PTXFMANode.generate` (a TornadoVM FMA-lowering bug; docs warn `tornado.enable.fma` "may cause issues"). **Fixed by a FLAG not an equation:** `-Dtornado.enable.fma=false`. Then **LOWERS + EXECUTES: YES**, status=0, finite, **GPU≡CPU-mirror bit-identical (Δ=0)**. Confirms: removing the nested FD collapses below the 600-node inline cap the FD `explicitBeamStep` (973 nodes) violated.
+- **C3 device fixture gate** (10 golden fixtures, CPU-FD/CPU-analytic/GPU-analytic): GPU vs CPU-analytic ≤2.5e-9 µm (7/10 bit-identical; 2 soft-mode 800-iter fixtures ~2.5e-9 float op-ordering), GPU vs CPU-FD ≤9.1e-9 µm (enRel ≤1.2e-4, contourΔ ≤2.6e-8), **0 failures**, iteration counts match CPU — B4 converged-state-equivalence carries to device.
+- **C4 microbench (solves/s; solve=full relaxation):** CPU-FD ~26 → CPU-analytic ~334 (**×12.8**) → GPU-analytic **473→23205** across batch 128→65536. At 65536: **×69 vs CPU-analytic, ×892 vs CPU-FD**, 0 failures, ~35 avg iters/solve (soft-mode tail to the 800 cap), scaling ×49 with batch (FP64 ~1/64 FP32 on the consumer RTX 5070 = the ceiling). **Isolated beam-solve GPU speedup class: ≥10× (≈70× vs CPU-analytic).**
+- **C5-full/C6 GATED (honest):** the full `stepGlideS2` gliding loop is host-sequential with the same **mat-SoA blocker Part A found** (per-motor host `double[][]`, host-scalar cull/gate/bind) ⇒ end-to-end explicit gliding on device needs a separate mat-SoA increment, NOT buildable here. Isolated beam solve (C4) is the achievable, meaningful measurement; **projection: once the mat is SoA the beam solve stops being the bottleneck (was dominant per-motor cost AND the non-lowering kernel), now ~70× faster batched device-resident, end-to-end bounded by the lighter cull/gate/bind stages.**
+- **Planner note:** `-Dtornado.enable.fma=false` is REQUIRED for this kernel on PTX (default FMA phase NPEs); it also tightens CPU↔GPU agreement.
+```
+./scripts/run_explicitgpu.sh -cpuvalidate    # CPU mirror ≡ CPU analytic solver (bit-faithful) — no GPU needed
+./scripts/run_explicitgpu.sh -probe          # C2 lowering probe (device, no silent fallback)
+./scripts/run_explicitgpu.sh -gate           # C3 device fixture gate (CPU-FD/CPU-analytic/GPU-analytic)
+./scripts/run_explicitgpu.sh -bench          # C4 microbench (batch 128..65536)
+```
+
 ### 2026-07-16 — EXPLICIT-S2 ANALYTIC NEWTON SOLVER: converged-state-equivalent to FD (B1–B6) → GPU gate (Part C) PASSED
 
 CPU double-precision analytic Newton solver for the EXPLICIT_S2_L40 beam, built on the derivative-validated exact residual+Jacobian (`ExplicitBeamAnalytic`, prior commit). Swaps ONLY the beam tangent (frozen nested central-FD → exact analytic energy Hessian); frozen `s2Solve` UNTOUCHED (authoritative oracle + production default); **new files only**; no beam physics/energy/topology/params/chemistry/binding/model-ID changed. `BoA-v1ref` byte-clean. Report: `docs/explicit_jac/ANALYTIC_SOLVER_GATE_FINDINGS.md`; logs `RUN_LOGS/explicit_jac/{solver_gate,dyn_throughput}.txt`.
