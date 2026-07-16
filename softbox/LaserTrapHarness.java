@@ -233,6 +233,14 @@ public final class LaserTrapHarness {
         boolean runA = false, runB = false, runC = false, runE = false, runViz = false;
         boolean run0b = false, runExp1 = false, runExp1bFlag = false, runNativeGenDiagFlag = false;
         boolean runExp2aFlag = false;
+        // Explicit-S2 beam solver selector (production CPU explicit steppers). Default FD; pre-scanned so
+        // order vs -motor/-glide is irrelevant. FD stays the permanent oracle (`-explicitsolver fd`).
+        for (int i = 0; i + 1 < args.length; i++) if (args[i].equals("-explicitsolver")) {
+            String v = args[i + 1].toLowerCase(java.util.Locale.US);
+            TwoBodyConverterMotor.explicitSolver = v.startsWith("a")
+                ? TwoBodyConverterMotor.ExplicitSolver.ANALYTIC : TwoBodyConverterMotor.ExplicitSolver.FD;
+            System.out.println("# explicitSolver = " + TwoBodyConverterMotor.explicitSolver + " (production CPU explicit beam tangent)");
+        }
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-cpu" -> {}                         // CPU is the only runner; accepted no-op

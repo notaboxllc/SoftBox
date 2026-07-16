@@ -1,5 +1,20 @@
 # Soft Box Project Journal
 
+### 2026-07-16 — EXPLICIT CPU ANALYTIC SOLVER PROMOTED: wired into production gliding behind explicitSolver=fd|analytic, FD≡analytic validated, analytic made default (~7× CPU)
+
+Wires the validated analytic explicit-S2 beam solver into the PRODUCTION CPU explicit steppers, validates FD-vs-analytic equivalence IN the gliding loop, and (all gates passing) makes analytic the CPU default with FD retained as the permanent oracle. Branch `explicit-analytic-production`. NO change to model ID / beam energy / residual / constraints / chemistry / binding / parameters. Report: `docs/explprod/EXPLICIT_ANALYTIC_PRODUCTION_FINDINGS.md`; logs `RUN_LOGS/explprod/`.
+
+- **1.1 wiring (3 files + 1 test):** `TwoBodyConverterMotor.ExplicitSolver{FD,ANALYTIC}` + `explicitSolver` static. In `s2Solve` (single) AND `s2SolveM` (mat/gliding via `stepGlideS2`) ONLY the beam tangent branches: ANALYTIC = `ExplicitBeamAnalytic.beamTangentFree(...)` (exact energy Hessian), FD = frozen nested central diff. Residual/drag/F8/Brownian-salts+order/solveLin/apply/re-pin/endpoint-extraction/load-classification byte-IDENTICAL. `ExplicitBeamAnalytic.beamTangentFree` refactored to a **param-based single implementation** (Cmot overload delegates) ⇒ **no duplicated analytic code** (derivative gate reproduces exact pre-refactor numbers). `-explicitsolver fd|analytic` CLI pre-scan.
+- **1.2 failure semantics preserved** (single Newton step/timestep, solveLin, finite-break, taut classification, forceDotFil/forceMag) — nothing improved/simplified.
+- **1.3 gliding validation — FD≡ANALYTIC to displayed precision** (matched seeds, identical IC/RNG) at ρ=200/700/1500 µm⁻² × prod+half dt: velocity (−1.406/−3.074/−4.732 prod), avgBound, continuity, handoff, pDirected, transWander, **load-bearing/bending fraction (68/68/68% prod, 63/62/61% half) all identical**; ATP to ~1e-4; largest divergence 1e-3 (d1500-half aggregate LB 8.328 vs 8.327). 0 new failures, no basin mismatch, no systematic bias, bending-dominated population preserved. Deep 5110-config gate: FD_REPLICA≡s2Solve Δ=0, 0 basin mismatches, bending FD 464=AN 464 — PASS.
+- **1.4 throughput:** isolated beam solve ×9.23 (70.0→7.6µs), full step ×7.96 (59.3→7.5µs), **gliding ×6.67/×7.05/×6.91** (wall s/sim-s at ρ=200/700/1500). Iteration count unchanged; 0 failures.
+- **1.5 PROMOTED — analytic is the CPU default; FD retained as the permanent oracle** (`-explicitsolver fd`). Regression `ExplicitFdRegressionTest` PASS (FD selectable; FD s2Solve ≡ FD_REPLICA **max|Δ|=0** ⇒ FD branch byte-unchanged; selector round-trips; analytic 0 new failures). Post-flip: derivative gate identical, motor-regression A–F PASS (GateE stroke 7.27 unchanged, GateF serialize/restart), default gliding confirmed analytic (wall 389 vs FD 2170). **Committed on the branch for review before main.**
+```
+./scripts/run_lasertrap.sh -motor explicit-s2-l40 -glide      # now ANALYTIC by default (~7× faster)
+./scripts/run_lasertrap.sh -motor explicit-s2-l40 -glide -explicitsolver fd   # the retained FD oracle
+java softbox.ExplicitFdRegressionTest                          # 1.5 FD-availability regression
+```
+
 ### 2026-07-16 — PART C: the analytic explicit-S2 beam GPU kernel LOWERS to PTX + runs on the RTX 5070 (≈70× CPU-analytic / ≈900× CPU-FD, batched)
 
 The study's central question answered: **YES — with the nested-FD helper gone, the analytic explicit beam kernel LOWERS to PTX and executes on device**, bit-faithful to the CPU analytic solver. No beam physics/energy/topology/params changed; FD stays production default + physical oracle; `DEVICE_VALIDATED` NOT flipped; new files only; `BoA-v1ref` byte-clean. Report: `docs/explicit_jac/GPU_KERNEL_FINDINGS.md`; logs `RUN_LOGS/explicit_jac/gpu_{cpuvalidate,probe,gate,bench}.txt`.

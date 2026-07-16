@@ -145,25 +145,36 @@ final class ExplicitBeamAnalytic {
     //  frozen s2Solve builds by nested central FD. block selects stretch/bend/floor/total.
     // ===========================================================================================
     static double[][] beamTangentFree(Cmot cm,double[][] nd,String block){
-        int M=cm.g4M; int nF=3*M;
+        return beamTangentFree(cm.g4M,cm.g4ks,cm.g4kb,cm.g4l0,cm.g4kfloor,cm.g4floorZ,cm.eup,cm.g4Tan,nd,block);
+    }
+    static double[][] beamTangentFree(Cmot cm,double[][] nd){ return beamTangentFree(cm,nd,"total"); }
+    /** Param-based SINGLE implementation — the SAME analytic energy Hessian used by the harness (Cmot
+     *  overload) AND the production mat/gliding path (Glide2D), so there is NO duplicated analytic code.
+     *  Reads the beam constants explicitly; behaviour is byte-identical to the Cmot form. */
+    static double[][] beamTangentFree(int M,double ks,double kb,double l0,double kfloor,double floorZ,
+                                      double[] eup,double[] g4Tan,double[][] nd,String block){
+        int nF=3*M;
         double[][] Hfull=new double[3*(M+1)][3*(M+1)];   // Hessian over ALL nodes 0..M
         boolean all=block.equals("total");
-        if(all||block.equals("stretch")) addStretchHess(cm,nd,Hfull);
-        if(all||block.equals("bend"))    addBendHess(cm,nd,Hfull);
-        if(all||block.equals("floor"))   addFloorHess(cm,nd,Hfull);
+        if(all||block.equals("stretch")) addStretchHess(M,ks,l0,nd,Hfull);
+        if(all||block.equals("bend"))    addBendHess(M,kb,g4Tan,nd,Hfull);
+        if(all||block.equals("floor"))   addFloorHess(M,kfloor,floorZ,eup,nd,Hfull);
         double[][] K=new double[nF][nF];   // free-free block (nodes 1..M), node 0 dropped (fixed)
         for(int r=0;r<nF;r++) for(int col=0;col<nF;col++) K[r][col]=Hfull[3+r][3+col];
         return K;
     }
-    static double[][] beamTangentFree(Cmot cm,double[][] nd){ return beamTangentFree(cm,nd,"total"); }
+    static double[][] beamTangentFree(int M,double ks,double kb,double l0,double kfloor,double floorZ,
+                                      double[] eup,double[] g4Tan,double[][] nd){
+        return beamTangentFree(M,ks,kb,l0,kfloor,floorZ,eup,g4Tan,nd,"total");
+    }
 
     /** scatter a 3×3 block B (N/m) into Hfull at node-block (αNode,βNode). */
     private static void scatter(double[][] H,int aN,int bN,double[][] B){
         int ao=3*aN, bo=3*bN; for(int p=0;p<3;p++) for(int q=0;q<3;q++) H[ao+p][bo+q]+=B[p][q];
     }
 
-    private static void addStretchHess(Cmot cm,double[][] nd,double[][] H){
-        int M=cm.g4M; double ks=cm.g4ks, l0m=cm.g4l0*1e-6;
+    private static void addStretchHess(int M,double ks,double g4l0,double[][] nd,double[][] H){
+        double l0m=g4l0*1e-6;
         for(int i=0;i<M;i++){ double[] b={nd[i+1][0]-nd[i][0],nd[i+1][1]-nd[i][1],nd[i+1][2]-nd[i][2]};
             double len=Math.sqrt(dot(b,b)); if(len<1e-15) continue; double lenM=len*1e-6; double s=1.0/len;
             double[] u={b[0]*s,b[1]*s,b[2]*s}; double t=ks*(lenM-l0m);   // tension (N)
@@ -175,19 +186,17 @@ final class ExplicitBeamAnalytic {
             scatter(H,i,i,Kb); scatter(H,i+1,i+1,Kb); scatter(H,i,i+1,nKb); scatter(H,i+1,i,nKb);
         }
     }
-    private static void addFloorHess(Cmot cm,double[][] nd,double[][] H){
-        int M=cm.g4M; double[] e=cm.eup;
-        for(int j=0;j<=M;j++){ double z=dot(nd[j],e); if(z<cm.g4floorZ){ double[][] B=new double[3][3];
-            for(int p=0;p<3;p++) for(int q=0;q<3;q++) B[p][q]=cm.g4kfloor*e[p]*e[q]; scatter(H,j,j,B); } }
+    private static void addFloorHess(int M,double g4kfloor,double g4floorZ,double[] e,double[][] nd,double[][] H){
+        for(int j=0;j<=M;j++){ double z=dot(nd[j],e); if(z<g4floorZ){ double[][] B=new double[3][3];
+            for(int p=0;p<3;p++) for(int q=0;q<3;q++) B[p][q]=g4kfloor*e[p]*e[q]; scatter(H,j,j,B); } }
     }
     /** Bending Hessian. For each joint: Hess E = kb·A2·∇c⊗∇c − kb·A1·∇²c, evaluated in N/m
      *  (∇c per-µm ⇒ ×1e12 to reach per-m²). ∇c, ∇²c are the exact algebraic derivatives of c=(a·b)/(la·lb). */
-    private static void addBendHess(Cmot cm,double[][] nd,double[][] H){
-        int M=cm.g4M; double kb=cm.g4kb;
+    private static void addBendHess(int M,double kb,double[] g4Tan,double[][] nd,double[][] H){
         // ---- clamped joint 0: only node 1 (t=g4Tan fixed unit, la→1) ----
         {
             double[] b0={nd[1][0]-nd[0][0],nd[1][1]-nd[0][1],nd[1][2]-nd[0][2]}; double lb=Math.sqrt(dot(b0,b0));
-            if(lb>1e-12){ double[] t=cm.g4Tan; double invlb=1.0/lb; double c=clamp1(dot(t,b0)*invlb);
+            if(lb>1e-12){ double[] t=g4Tan; double invlb=1.0/lb; double c=clamp1(dot(t,b0)*invlb);
                 double th=Math.acos(c); double A1=a1(th), A2=a2(th);
                 double c_lb2=c*invlb*invlb;
                 double[] gc=new double[3]; for(int k=0;k<3;k++) gc[k]=t[k]*invlb - c_lb2*b0[k];   // ∂c/∂b0

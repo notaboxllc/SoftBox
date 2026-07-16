@@ -6249,6 +6249,20 @@ public final class TwoBodyConverterMotor {
     // rest slack (contour − end-to-end, nm) per condition: 0 = straight/no-slack; >0 = pre-bent (buckled) at binding
     static final double[] EXP4G_SLACK_NM   = {0.0, 1.5, 3.5};            // no-slack / short-slack / moderate-slack
 
+    /** Explicit-S2 beam solver selector for the PRODUCTION CPU explicit steppers (s2Solve single-motor +
+     *  s2SolveM mat/gliding). FD = the frozen nested-central-difference tangent (the permanent oracle);
+     *  ANALYTIC = the validated exact analytic energy Hessian (ExplicitBeamAnalytic — the SAME implementation
+     *  the derivative/solver harnesses use). ONLY the beam TANGENT is swapped; the residual (s2NodeForces /
+     *  s2NodeForcesM, frozen FD-bend), node drag, F8/converter/bind coupling, Brownian salts+order, solveLin,
+     *  increment application, node-0 re-pin, endpoint force/torque extraction and load-bearing classification
+     *  are byte-IDENTICAL between the two paths. Default = FD. Set via `-explicitsolver fd|analytic`. */
+    enum ExplicitSolver { FD, ANALYTIC }
+    // PROMOTED 2026-07-16 (branch explicit-analytic-production): ANALYTIC is the CPU default after the
+    // production gliding gates passed (FD≡analytic at 200/700/1500 µm⁻², prod+half dt, matched seeds:
+    // identical velocity/avgBound/continuity/handoff/load-bearing, 0 new failures, bending-dominated
+    // population preserved, ~7× faster). FD remains the PERMANENT oracle/debug path — select `-explicitsolver fd`.
+    static ExplicitSolver explicitSolver = ExplicitSolver.ANALYTIC;   // CPU default (FD = the retained oracle)
+
     /** Build a BOUND explicit-S2 motor from the validated ideal pre-stroke pose. The free S2 (length Lnm) runs from
      *  a clamped supported emergence point E (= P0 − (L−slack)·b̂) to the motor pivot P0 (= node[M]). slackNm>0 ⇒
      *  end-to-end < contour ⇒ the beam is pre-bent (buckled up in ê_up). g4On=false ⇒ the plain fixed-anchor motor. */
@@ -6362,11 +6376,17 @@ public final class TwoBodyConverterMotor {
         //     implicit ⇒ each step is a Newton step toward the true force-equilibrium; the beam stays at its contour) ---
         double[][] Fn=s2NodeForces(cm,cm.g4Node);
         for(int j=1;j<=M;j++) for(int k=0;k<3;k++) F[3*(j-1)+k]=Fn[j][k];
-        double hh=1e-5;   // µm central-difference of the beam force over the free DOF
-        for(int jc=1;jc<=M;jc++) for(int kc=0;kc<3;kc++){ int col=3*(jc-1)+kc; double sav=cm.g4Node[jc][kc];
-            cm.g4Node[jc][kc]=sav+hh; double[][] Fp=s2NodeForces(cm,cm.g4Node);
-            cm.g4Node[jc][kc]=sav-hh; double[][] Fm=s2NodeForces(cm,cm.g4Node); cm.g4Node[jc][kc]=sav;
-            for(int jr=1;jr<=M;jr++) for(int kr=0;kr<3;kr++) Msys[3*(jr-1)+kr][col] += -((Fp[jr][kr]-Fm[jr][kr])/(2*hh))*1e6; }   // N/µm → N/m
+        if(explicitSolver==ExplicitSolver.ANALYTIC){
+            // ANALYTIC: exact energy Hessian K=−∂F/∂q (ExplicitBeamAnalytic — same residual, no nested FD)
+            double[][] Kb=ExplicitBeamAnalytic.beamTangentFree(cm,cm.g4Node);
+            for(int r=0;r<nF;r++) for(int c=0;c<nF;c++) Msys[r][c]+=Kb[r][c];
+        } else {
+            double hh=1e-5;   // FD: µm central-difference of the beam force over the free DOF
+            for(int jc=1;jc<=M;jc++) for(int kc=0;kc<3;kc++){ int col=3*(jc-1)+kc; double sav=cm.g4Node[jc][kc];
+                cm.g4Node[jc][kc]=sav+hh; double[][] Fp=s2NodeForces(cm,cm.g4Node);
+                cm.g4Node[jc][kc]=sav-hh; double[][] Fm=s2NodeForces(cm,cm.g4Node); cm.g4Node[jc][kc]=sav;
+                for(int jr=1;jr<=M;jr++) for(int kr=0;kr<3;kr++) Msys[3*(jr-1)+kr][col] += -((Fp[jr][kr]-Fm[jr][kr])/(2*hh))*1e6; }   // N/µm → N/m
+        }
         // --- node drag (implicit) + Brownian on free nodes ---
         double aN=cm.g4gammaNode/cm.dt;
         for(int j=1;j<=M;j++){ int fb=j-1; for(int k=0;k<3;k++){ Msys[3*fb+k][3*fb+k]+=aN;
@@ -6738,10 +6758,16 @@ public final class TwoBodyConverterMotor {
         double[] F8h = bound? new double[]{G.bondData.get(d),G.bondData.get(d+1),G.bondData.get(d+2)} : new double[]{0,0,0};
         double[][] Msys=new double[n][n]; double[] F=new double[n];
         double[][] Fn=s2NodeForcesM(G,nd); for(int j=1;j<=M;j++) for(int k=0;k<3;k++) F[3*(j-1)+k]=Fn[j][k];
-        double hh=1e-5;   // full numeric beam tangent (stretch+bending implicit) — the s2Solve fix, per-motor
-        for(int jc=1;jc<=M;jc++) for(int kc=0;kc<3;kc++){ int col=3*(jc-1)+kc; double sav=nd[jc][kc];
-            nd[jc][kc]=sav+hh; double[][] Fp=s2NodeForcesM(G,nd); nd[jc][kc]=sav-hh; double[][] Fm=s2NodeForcesM(G,nd); nd[jc][kc]=sav;
-            for(int jr=1;jr<=M;jr++) for(int kr=0;kr<3;kr++) Msys[3*(jr-1)+kr][col] += -((Fp[jr][kr]-Fm[jr][kr])/(2*hh))*1e6; }
+        if(explicitSolver==ExplicitSolver.ANALYTIC){
+            // ANALYTIC: exact energy Hessian via the SAME ExplicitBeamAnalytic implementation (param overload)
+            double[][] Kb=ExplicitBeamAnalytic.beamTangentFree(M,G.g4ks,G.g4kb,G.g4l0,G.g4kfloor,G.g4floorZ,G.eup,G.g4Tan,nd);
+            for(int r=0;r<nF;r++) for(int c=0;c<nF;c++) Msys[r][c]+=Kb[r][c];
+        } else {
+            double hh=1e-5;   // FD: full numeric beam tangent (stretch+bending implicit) — the s2Solve fix, per-motor
+            for(int jc=1;jc<=M;jc++) for(int kc=0;kc<3;kc++){ int col=3*(jc-1)+kc; double sav=nd[jc][kc];
+                nd[jc][kc]=sav+hh; double[][] Fp=s2NodeForcesM(G,nd); nd[jc][kc]=sav-hh; double[][] Fm=s2NodeForcesM(G,nd); nd[jc][kc]=sav;
+                for(int jr=1;jr<=M;jr++) for(int kr=0;kr<3;kr++) Msys[3*(jr-1)+kr][col] += -((Fp[jr][kr]-Fm[jr][kr])/(2*hh))*1e6; }
+        }
         double aN=G.g4gammaNode/G.dt; for(int j=1;j<=M;j++){ int fb=j-1; for(int k=0;k<3;k++){ Msys[3*fb+k][3*fb+k]+=aN; F[3*fb+k]+=brownTorque(G.g4gammaNode,G.dt,seed,t,0x4811L+((long)m*1009+j*131+k)*7919L); } }
         int pB=3*(M-1), iPhi=nF, iPsi=nF+1; double[] C=G.C_[m], xF8=G.xF8_[m], P=nd[M];
         double[] Jphi=crs(E,sub(C,P)), Jpsi=crs(E,sub(xF8,C));
