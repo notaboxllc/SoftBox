@@ -30,10 +30,17 @@ softbox.MatSoaSlice`. Report: `RUN_LOGS/matsoa/STAGE_GATES.md`.
   compile 239–642 ms. The double `matStep7` 5-DOF solve is FP64-bound ⇒ a **future FLOAT `matStep7`** is
   the throughput lever (this is the motivating data). Device time here includes the validation reads;
   production (redOut only) is faster.
-- **NEXT BLOCKER:** Part 7 end-to-end ENSEMBLE validation — since the trajectory is chaotic (decorrelates
-  by float-FMA, correctly), the CPU-vs-GPU comparison of the emergent observables (signed velocity,
-  continuity, avgBound, handoff, ATP/µm, wander, net force) must be an ENSEMBLE-mean-within-SEM check over
-  seeds (CPU-double as arbiter), + the half-dt + enlarged-cull controls. Not reached this pass.
+- **END-TO-END ENSEMBLE VALIDATION (Part 7): PASS — the calibrated-GPU vertical slice is FULLY VALIDATED
+  (experimental).** CPU-double-arbiter ensemble (8 seeds) at 200/700/1500 /µm²: device-resident GPU
+  trajectory vs the mat-kernels' CPU-runner, compared by the proper two-mean test (|Δmean| within 2σ
+  combined SEM = error bars overlap). **14/14 observables within-SEM at every density + the half-dt(dt/2)
+  control**, NO systematic direction-of-effect (GPU-hi/lo flips across configs), 0 invalid. Signed velocity
+  agrees and is NEGATIVE (pointed-first glide, correct): @1500 CPU −3.48±0.38 vs GPU −3.93±0.30 µm/s
+  (z=0.94). **Enlarged-cull control: device `matCull` == host `unionActive` EXACTLY, 0 reachable missed,
+  all densities.**
+- **NEXT BLOCKER:** none for validation — the slice is validated experimental. PROMOTION awaits coordinator
+  review of this evidence (`DEVICE_VALIDATED` stays false until then). THROUGHPUT: a future FLOAT `matStep7`
+  (Part 8: double is FP64-limited, 0.54×@N600 → 1.15×@N2100).
 
 ## Stages built + gated (Part 5)
 | stage | kernel | precision | gate (isolated CPU-vs-GPU, bailout=false) | result |
