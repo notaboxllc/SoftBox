@@ -7,18 +7,25 @@
 softbox.MatSoaSlice`. Report: `RUN_LOGS/matsoa/STAGE_GATES.md`.
 
 ## STATUS
-- **MAT-SOA VERTICAL SLICE:** the 4 new-physics kernels (Stages 1, 2, 3, **7**) IMPLEMENTED + isolated
-  CPU-vs-GPU gates PASS on RTX 5070 (bailout=false, no fallback). Stage-7 decision (coordinator): DOUBLE.
-- **CALIBRATED GPU TRAJECTORY:** NOT YET (Part-6 composition of all 12 stages into a device-resident loop
-  is the next increment — see below).
-- **DEVICE RESIDENCY:** PROVEN for the built stages — motor SoA uploaded FIRST_EXECUTION; only `counts`
-  (16 B) + small mutable state re-upload EVERY_EXECUTION; only compact outputs read back. **No full
-  per-motor mat transfer per step.** Chained geom→bind and Step-7 run device-resident (shared buffers).
-- **NEXT BLOCKER:** Part-6 composition — wire `matPlaceHead` (new, small) + the existing device kernels
-  (`cycleLymnTaylor`, `bondForces`, `csr*`/`segGather`, `chainForces`, `brownianForce`, `integrate`,
-  `orthogonalizeY`, `derive`) + `matZConfine` (new, tiny) + `matReduce` (new, small) into ONE chained
-  device graph sharing buffers, then the stepwise CPU-vs-GPU trajectory. The bridge is `matPlaceHead`
-  writing the mat head pose (`geomOut xH_/xF8_`) into `MotorStore.body` so `bondForces` consumes it.
+- **MAT-SOA VERTICAL SLICE:** 7 kernels IMPLEMENTED + isolated CPU-vs-GPU gates PASS (RTX 5070,
+  bailout=false): Stages 1/2/3/7 (`matCull`/`matGeomGate`/`matBind`/`matStep7`) + 3 bridges
+  (`matPlaceHead`/`matZConfine`/`matReduce`, all maxΔ=0).
+- **COMPOSITION-RISK PROBE (the front-loaded unknown): RESOLVED — the full 19-task double mat loop LOWERS
+  + RUNS as a SINGLE TaskGraph** (1259 ms cold, N=600, no `Graph-resize`). Chaining NOT needed — 19 double
+  tasks fit under TornadoVM's single-graph capacity (the ~100-task full-system graph is what hit resize).
+  Order: matCull→matGeomGate→matBind→cycleLymnTaylor→matPlaceHead→bondForces→csrHist/Scan/Scatter/
+  segGather→chainForces→matZConfine→brownianForce→integrate→orthogonalizeY→derive→matStep7→matReduce.
+- **DEVICE RESIDENCY (through the full composed loop): PROVEN** — all motor+filament SoA uploaded
+  FIRST_EXECUTION; only `mc`/`mot.counts`/`f.counts` (small) EVERY_EXECUTION; only `redOut` (6 doubles)
+  read back. **No full per-motor mat transfer per step.**
+- **CALIBRATED GPU TRAJECTORY:** NOT YET — the composition graph LOWERS/RUNS, but a *correct* multi-step
+  trajectory + the stepwise CPU-vs-GPU comparison (Part 6) is the next increment.
+- **NEXT BLOCKER (Part-6 correctness, not a lowering risk):** two wiring fixes the lowering probe
+  deliberately deferred — (1) UNIFY φ/ψ into one buffer both `matGeomGate` and `matStep7` read/write (the
+  probe used separate `pose3`/`pose4`); (2) route `matStep7`'s force diagnostic to `mot.forceDotFil`
+  (float N) so the NEXT step's `cycleLymnTaylor` reads it (the probe used a separate `forceOut`). Then
+  loop `plan.execute()` per step (device-resident, updating only the counters) + the stepwise CPU-vs-GPU
+  comparison with first-divergence classification. Parts 7 (end-to-end) + 8 (throughput) follow.
 
 ## Stages built + gated (Part 5)
 | stage | kernel | precision | gate (isolated CPU-vs-GPU, bailout=false) | result |
