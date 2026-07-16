@@ -94,6 +94,199 @@ public final class MatSoaSlice {
     static double dabs(double x) { return x < 0 ? -x : x; }              // reinterpret-free |x| (Math.abs uses doubleToRawLongBits)
     static double deg(double x) { return x * 180.0 / Math.PI; }          // == JDK Math.toDegrees(angrad) = angrad*180.0/PI
 
+    // --- reinterpret-free double helpers for matStep7 (mirror the validated calibratedStep substitutions) ---
+    static double log1pC(double x) { double u = 1.0 + x; return (u == 1.0) ? x : Math.log(u) * (x / (u - 1.0)); }
+    static double softposD(double x, double s) {
+        if (s <= 0) return (0.0 >= x ? 0.0 : x);
+        double z = x / s; if (z > 30) return x; if (z < -30) return s * Math.exp(z);
+        return s * log1pC(Math.exp(z));
+    }
+    static double softpos_dD(double x, double s) {
+        if (s <= 0) return x > 0 ? 1 : 0;
+        double z = x / s; if (z > 30) return 1; if (z < -30) return Math.exp(z);
+        return 1.0 / (1.0 + Math.exp(-z));
+    }
+    /** brownTorque — EXACT double wang-hash copy (TwoBodyConverterMotor.brownTorque L2174); ep=seed, t=step. */
+    static double brownTorqueD(double gamma, double dt, long ep, long t, long salt) {
+        long h = ((ep * 2654435761L) ^ (t * 40503L) ^ (salt * 0x9E3779B1L));
+        h ^= (h >>> 13); h *= 0x9E3779B1L; h ^= (h >>> 16);
+        double u1 = ((h & 0xFFFFFF) + 1) / 16777217.0;
+        h ^= (h << 7);
+        double u2 = (((h >>> 8) & 0xFFFFFF) + 1) / 16777217.0;
+        double g = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+        return Math.sqrt(2 * Constants.kT * gamma / dt) * g;
+    }
+
+    // ===============================================================================================
+    // KERNEL — Stage 7: matStep7 (DOUBLE, MAT salts).  Faithful port of supSolveM (L5791): analytic 5-DOF
+    //   movable-pivot solve — geomC geometry + supForceM softplus tail (compensated log1pC) + kfSI·JᵀJ +
+    //   converter/bind springs + diagonal γ/dt tangent + 5 brownTorque draws (MAT salts 0x5F1..0x5F5+m·7919L)
+    //   + hand-unrolled 5×5 Gauss–Jordan. E=econv (calibrated Jacobian axis). No double[][]/alloc.
+    //   pose4: phi=[m] psi=[N+m] thetaS=[2N+m] psiActin=[3N+m].  anchor: 3N (pivot P; updated).
+    //   sp: 0..8 bhat/econv/eup, 9 lb,10 rF8x,11 rF8y,12 rCx,13 rCy, 14 kF8Code,15 kconv,16 kbind,
+    //       17 supGammaP,18 gammaPhi,19 gammaPsi,20 dt, 21 ksoftAx,22 ktautAx,23 delta,24 ksoftTr,25 kfeTr,
+    //       26 rMax,27 kfloor,28 smoothAx,29 smoothTr,30 compFrac,31 floorZ,32 buckleCrit,33 kcompPost,34 smoothBuck.
+    //   supP0: 3N.  bondData: 13N (F8h=[13m..13m+2], forceDotFil=[13m+12]).  boundSeg: [m] (bound iff ≥0).
+    //   OUT: anchor,pose4(phi,psi) updated; geomOut(9N) C/xF8/xH; forceOut: forceDotFil=[m] forceMag=[N+m].
+    // ===============================================================================================
+    public static void matStep7(DoubleArray pose4, DoubleArray anchor, DoubleArray sp, DoubleArray supP0,
+                                FloatArray bondData, IntArray boundSeg, IntArray active, IntArray counts,
+                                DoubleArray geomOut, DoubleArray forceOut) {
+        int N = counts.get(0);
+        int tt = counts.get(1), seed = counts.get(2);
+        double bx = sp.get(0), by = sp.get(1), bz = sp.get(2);
+        double ex = sp.get(3), ey = sp.get(4), ez = sp.get(5);
+        double ux = sp.get(6), uy = sp.get(7), uz = sp.get(8);
+        double lb = sp.get(9), rF8x = sp.get(10), rF8y = sp.get(11), rCx = sp.get(12), rCy = sp.get(13);
+        double kF8Code = sp.get(14), kc = sp.get(15), kb = sp.get(16);
+        double gP = sp.get(17), gPhi = sp.get(18), gPsi = sp.get(19), dt = sp.get(20);
+        double ksoftAx = sp.get(21), ktautAx = sp.get(22), supDelta = sp.get(23), ksoftTr = sp.get(24), kfeTr = sp.get(25);
+        double supRmax = sp.get(26), supKfloor = sp.get(27), smoothAx = sp.get(28), smoothTr = sp.get(29);
+        double compFrac = sp.get(30), floorZ = sp.get(31), buckleCrit = sp.get(32), kcompPost = sp.get(33), smoothBuck = sp.get(34);
+        for (@Parallel int m = 0; m < N; m++) {
+            double phi = pose4.get(m), psi = pose4.get(N + m), thetaS = pose4.get(2 * N + m), psiActin = pose4.get(3 * N + m);
+            double Px = anchor.get(m), Py = anchor.get(N + m), Pz = anchor.get(2 * N + m);
+            boolean act = active.get(m) == 1;   // host: supSolveM runs only for active motors (else pose frozen, forces 0)
+            boolean bound = boundSeg.get(m) >= 0;
+            double f8x = 0, f8y = 0, f8z = 0;
+            if (bound) { f8x = bondData.get(13 * m); f8y = bondData.get(13 * m + 1); f8z = bondData.get(13 * m + 2); }
+            double cphi = Math.cos(phi), sphi = Math.sin(phi);
+            double uBx = ux * cphi + bx * sphi, uBy = uy * cphi + by * sphi, uBz = uz * cphi + bz * sphi;
+            double Cx = Px + uBx * lb, Cy = Py + uBy * lb, Cz = Pz + uBz * lb;
+            double cpsi = Math.cos(psi), spsi = Math.sin(psi);
+            double d0x = bx * (rF8x - rCx) + ux * (rF8y - rCy), d0y = by * (rF8x - rCx) + uy * (rF8y - rCy), d0z = bz * (rF8x - rCx) + uz * (rF8y - rCy);
+            double xF8x = Cx + (d0x * cpsi + (ey * d0z - ez * d0y) * spsi);
+            double xF8y = Cy + (d0y * cpsi + (ez * d0x - ex * d0z) * spsi);
+            double xF8z = Cz + (d0z * cpsi + (ex * d0y - ey * d0x) * spsi);
+            double cpx = Cx - Px, cpy = Cy - Py, cpz = Cz - Pz;
+            double fcx = xF8x - Cx, fcy = xF8y - Cy, fcz = xF8z - Cz;
+            double Jphix = ey * cpz - ez * cpy, Jphiy = ez * cpx - ex * cpz, Jphiz = ex * cpy - ey * cpx;
+            double Jpsix = ey * fcz - ez * fcy, Jpsiy = ez * fcx - ex * fcz, Jpsiz = ex * fcy - ey * fcx;
+            double J03 = (Jphix * bx + Jphiy * by + Jphiz * bz) * 1e-6, J04 = (Jpsix * bx + Jpsiy * by + Jpsiz * bz) * 1e-6;
+            double J13 = (Jphix * ex + Jphiy * ey + Jphiz * ez) * 1e-6, J14 = (Jpsix * ex + Jpsiy * ey + Jpsiz * ez) * 1e-6;
+            double J23 = (Jphix * ux + Jphiy * uy + Jphiz * uz) * 1e-6, J24 = (Jpsix * ux + Jpsiy * uy + Jpsiz * uz) * 1e-6;
+            double kfSI = kF8Code * 1e6;
+            double K00 = kfSI, K11 = kfSI, K22 = kfSI;
+            double K03 = kfSI * J03, K04 = kfSI * J04, K13 = kfSI * J13, K14 = kfSI * J14, K23 = kfSI * J23, K24 = kfSI * J24;
+            double K33 = kfSI * (J03 * J03 + J13 * J13 + J23 * J23);
+            double K34 = kfSI * (J03 * J04 + J13 * J14 + J23 * J24);
+            double K44 = kfSI * (J04 * J04 + J14 * J14 + J24 * J24);
+            double sp0x = supP0.get(m), sp0y = supP0.get(N + m), sp0z = supP0.get(2 * N + m);
+            double dx = Px - sp0x, dy = Py - sp0y, dz = Pz - sp0z;
+            double qL = dx * bx + dy * by + dz * bz;
+            double dTx = dx - bx * qL, dTy = dy - by * qL, dTz = dz - bz * qL;
+            double rT = Math.sqrt(dTx * dTx + dTy * dTy + dTz * dTz);
+            double ksoft = ksoftAx * 1e6, ktaut = ktautAx * 1e6, ksoftTrD = ksoftTr * 1e6, kfeTrD = kfeTr * 1e6, kfloor = supKfloor * 1e6;
+            double dm = supDelta * 1e-6, smA = smoothAx * 1e-6, smT = smoothTr * 1e-6, rMaxm = supRmax * 1e-6, qm = qL * 1e-6;
+            double Frest, kAxTan;
+            if (qm >= 0) { Frest = ksoft * qm + ktaut * softposD(qm - dm, smA); kAxTan = ksoft + ktaut * softpos_dD(qm - dm, smA); }
+            else {
+                double a = -qm;
+                if (buckleCrit > 0) {
+                    double k0 = ksoft + ktaut, kpost = kcompPost, acrit = buckleCrit / (1e-30 >= k0 ? 1e-30 : k0), sB = smoothBuck;
+                    Frest = -(k0 * a - (k0 - kpost) * softposD(a - acrit, sB)); kAxTan = k0 - (k0 - kpost) * softpos_dD(a - acrit, sB);
+                } else {
+                    double kcc = compFrac; Frest = -(ksoft * kcc * a + ktaut * kcc * softposD(a - dm, smA));
+                    kAxTan = ksoft * kcc + ktaut * kcc * softpos_dD(a - dm, smA);
+                }
+            }
+            double Fsx = bx * (-Frest), Fsy = by * (-Frest), Fsz = bz * (-Frest);
+            double kTrTan;
+            if (rT > 1e-9) { double rTm = rT * 1e-6; double Frad = ksoftTrD * rTm + kfeTrD * softposD(rTm - rMaxm, smT);
+                kTrTan = ksoftTrD + kfeTrD * softpos_dD(rTm - rMaxm, smT); Fsx += dTx * (-Frad / rT); Fsy += dTy * (-Frad / rT); Fsz += dTz * (-Frad / rT); }
+            else kTrTan = ksoftTrD;
+            double zoff = dx * ux + dy * uy + dz * uz; double kFloorTan = 0;
+            if (zoff < -floorZ) { double pen = (-floorZ - zoff) * 1e-6; Fsx += ux * (kfloor * pen); Fsy += uy * (kfloor * pen); Fsz += uz * (kfloor * pen); kFloorTan = kfloor; }
+            double aP = gP / dt, aphi = gPhi / dt, apsi = gPsi / dt;
+            double a00 = K00 + kAxTan + aP, a01 = 0, a02 = 0, a03 = K03, a04 = K04;
+            double a10 = 0, a11 = K11 + kTrTan + aP, a12 = 0, a13 = K13, a14 = K14;
+            double a20 = 0, a21 = 0, a22 = K22 + (kTrTan + kFloorTan) + aP, a23 = K23, a24 = K24;
+            double a30 = K03, a31 = K13, a32 = K23, a33 = (K33 + kc) + aphi, a34 = K34 - kc;
+            double a40 = K04, a41 = K14, a42 = K24, a43 = K34 - kc, a44 = (K44 + (kc + kb)) + apsi;
+            double th = psi - phi;
+            double caF_x = cpy * f8z - cpz * f8y, caF_y = cpz * f8x - cpx * f8z, caF_z = cpx * f8y - cpy * f8x;
+            double fcF_x = fcy * f8z - fcz * f8y, fcF_y = fcz * f8x - fcx * f8z, fcF_z = fcx * f8y - fcy * f8x;
+            double QphiF8 = (ex * caF_x + ey * caF_y + ez * caF_z) * 1e-6;
+            double QpsiF8 = (ex * fcF_x + ey * fcF_y + ez * fcF_z) * 1e-6;
+            double a05 = (f8x * bx + f8y * by + f8z * bz) + (Fsx * bx + Fsy * by + Fsz * bz);
+            double a15 = (f8x * ex + f8y * ey + f8z * ez) + (Fsx * ex + Fsy * ey + Fsz * ez);
+            double a25 = (f8x * ux + f8y * uy + f8z * uz) + (Fsx * ux + Fsy * uy + Fsz * uz);
+            double a35 = QphiF8 + kc * (th - thetaS);
+            double a45 = QpsiF8 - kc * (th - thetaS) - kb * (psi - psiActin);
+            a05 += brownTorqueD(gP, dt, seed, tt, 0x5F1L + (long) m * 7919L);
+            a15 += brownTorqueD(gP, dt, seed, tt, 0x5F2L + (long) m * 7919L);
+            a25 += brownTorqueD(gP, dt, seed, tt, 0x5F3L + (long) m * 7919L);
+            a35 += brownTorqueD(gPhi, dt, seed, tt, 0x5F4L + (long) m * 7919L);
+            a45 += brownTorqueD(gPsi, dt, seed, tt, 0x5F5L + (long) m * 7919L);
+            int p; double best, tv, piv, fac, s;
+            p = 0; best = dabs(a00);
+            tv = dabs(a10); if (tv > best) { best = tv; p = 1; } tv = dabs(a20); if (tv > best) { best = tv; p = 2; }
+            tv = dabs(a30); if (tv > best) { best = tv; p = 3; } tv = dabs(a40); if (tv > best) { best = tv; p = 4; }
+            if (p == 1) { s=a00;a00=a10;a10=s; s=a01;a01=a11;a11=s; s=a02;a02=a12;a12=s; s=a03;a03=a13;a13=s; s=a04;a04=a14;a14=s; s=a05;a05=a15;a15=s; }
+            else if (p == 2) { s=a00;a00=a20;a20=s; s=a01;a01=a21;a21=s; s=a02;a02=a22;a22=s; s=a03;a03=a23;a23=s; s=a04;a04=a24;a24=s; s=a05;a05=a25;a25=s; }
+            else if (p == 3) { s=a00;a00=a30;a30=s; s=a01;a01=a31;a31=s; s=a02;a02=a32;a32=s; s=a03;a03=a33;a33=s; s=a04;a04=a34;a34=s; s=a05;a05=a35;a35=s; }
+            else if (p == 4) { s=a00;a00=a40;a40=s; s=a01;a01=a41;a41=s; s=a02;a02=a42;a42=s; s=a03;a03=a43;a43=s; s=a04;a04=a44;a44=s; s=a05;a05=a45;a45=s; }
+            piv = a00;
+            fac = a10 / piv; a10 -= fac*a00; a11 -= fac*a01; a12 -= fac*a02; a13 -= fac*a03; a14 -= fac*a04; a15 -= fac*a05;
+            fac = a20 / piv; a20 -= fac*a00; a21 -= fac*a01; a22 -= fac*a02; a23 -= fac*a03; a24 -= fac*a04; a25 -= fac*a05;
+            fac = a30 / piv; a30 -= fac*a00; a31 -= fac*a01; a32 -= fac*a02; a33 -= fac*a03; a34 -= fac*a04; a35 -= fac*a05;
+            fac = a40 / piv; a40 -= fac*a00; a41 -= fac*a01; a42 -= fac*a02; a43 -= fac*a03; a44 -= fac*a04; a45 -= fac*a05;
+            p = 1; best = dabs(a11); tv = dabs(a21); if (tv > best) { best = tv; p = 2; } tv = dabs(a31); if (tv > best) { best = tv; p = 3; } tv = dabs(a41); if (tv > best) { best = tv; p = 4; }
+            if (p == 2) { s=a10;a10=a20;a20=s; s=a11;a11=a21;a21=s; s=a12;a12=a22;a22=s; s=a13;a13=a23;a23=s; s=a14;a14=a24;a24=s; s=a15;a15=a25;a25=s; }
+            else if (p == 3) { s=a10;a10=a30;a30=s; s=a11;a11=a31;a31=s; s=a12;a12=a32;a32=s; s=a13;a13=a33;a33=s; s=a14;a14=a34;a34=s; s=a15;a15=a35;a35=s; }
+            else if (p == 4) { s=a10;a10=a40;a40=s; s=a11;a11=a41;a41=s; s=a12;a12=a42;a42=s; s=a13;a13=a43;a43=s; s=a14;a14=a44;a44=s; s=a15;a15=a45;a45=s; }
+            piv = a11;
+            fac = a01 / piv; a01 -= fac*a11; a02 -= fac*a12; a03 -= fac*a13; a04 -= fac*a14; a05 -= fac*a15;
+            fac = a21 / piv; a21 -= fac*a11; a22 -= fac*a12; a23 -= fac*a13; a24 -= fac*a14; a25 -= fac*a15;
+            fac = a31 / piv; a31 -= fac*a11; a32 -= fac*a12; a33 -= fac*a13; a34 -= fac*a14; a35 -= fac*a15;
+            fac = a41 / piv; a41 -= fac*a11; a42 -= fac*a12; a43 -= fac*a13; a44 -= fac*a14; a45 -= fac*a15;
+            p = 2; best = dabs(a22); tv = dabs(a32); if (tv > best) { best = tv; p = 3; } tv = dabs(a42); if (tv > best) { best = tv; p = 4; }
+            if (p == 3) { s=a20;a20=a30;a30=s; s=a21;a21=a31;a31=s; s=a22;a22=a32;a32=s; s=a23;a23=a33;a33=s; s=a24;a24=a34;a34=s; s=a25;a25=a35;a35=s; }
+            else if (p == 4) { s=a20;a20=a40;a40=s; s=a21;a21=a41;a41=s; s=a22;a22=a42;a42=s; s=a23;a23=a43;a43=s; s=a24;a24=a44;a44=s; s=a25;a25=a45;a45=s; }
+            piv = a22;
+            fac = a02 / piv; a02 -= fac*a22; a03 -= fac*a23; a04 -= fac*a24; a05 -= fac*a25;
+            fac = a12 / piv; a12 -= fac*a22; a13 -= fac*a23; a14 -= fac*a24; a15 -= fac*a25;
+            fac = a32 / piv; a32 -= fac*a22; a33 -= fac*a23; a34 -= fac*a24; a35 -= fac*a25;
+            fac = a42 / piv; a42 -= fac*a22; a43 -= fac*a23; a44 -= fac*a24; a45 -= fac*a25;
+            p = 3; best = dabs(a33); tv = dabs(a43); if (tv > best) { best = tv; p = 4; }
+            if (p == 4) { s=a30;a30=a40;a40=s; s=a31;a31=a41;a41=s; s=a32;a32=a42;a42=s; s=a33;a33=a43;a43=s; s=a34;a34=a44;a44=s; s=a35;a35=a45;a45=s; }
+            piv = a33;
+            fac = a03 / piv; a03 -= fac*a33; a04 -= fac*a34; a05 -= fac*a35;
+            fac = a13 / piv; a13 -= fac*a33; a14 -= fac*a34; a15 -= fac*a35;
+            fac = a23 / piv; a23 -= fac*a33; a24 -= fac*a34; a25 -= fac*a35;
+            fac = a43 / piv; a43 -= fac*a33; a44 -= fac*a34; a45 -= fac*a35;
+            piv = a44;
+            fac = a04 / piv; a04 -= fac*a44; a05 -= fac*a45;
+            fac = a14 / piv; a14 -= fac*a44; a15 -= fac*a45;
+            fac = a24 / piv; a24 -= fac*a44; a25 -= fac*a45;
+            fac = a34 / piv; a34 -= fac*a44; a35 -= fac*a45;
+            double dqB = a05 / a00, dqE = a15 / a11, dqU = a25 / a22, dqPhi = a35 / a33, dqPsi = a45 / a44;
+            if (act) {   // apply the pivot/angle update only for active motors (inactive stay frozen — host stepGlideSup)
+                Px += (bx * dqB + ex * dqE + ux * dqU) * 1e6; Py += (by * dqB + ey * dqE + uy * dqU) * 1e6; Pz += (bz * dqB + ez * dqE + uz * dqU) * 1e6;
+                phi += dqPhi; psi += dqPsi;
+            }
+            double c2 = Math.cos(phi), s2 = Math.sin(phi);
+            double uBx2 = ux * c2 + bx * s2, uBy2 = uy * c2 + by * s2, uBz2 = uz * c2 + bz * s2;
+            double Cx2 = Px + uBx2 * lb, Cy2 = Py + uBy2 * lb, Cz2 = Pz + uBz2 * lb;
+            double cp2 = Math.cos(psi), sp2 = Math.sin(psi);
+            double e0x = bx * (rF8x - rCx) + ux * (rF8y - rCy), e0y = by * (rF8x - rCx) + uy * (rF8y - rCy), e0z = bz * (rF8x - rCx) + uz * (rF8y - rCy);
+            double xF8x2 = Cx2 + (e0x * cp2 + (ey * e0z - ez * e0y) * sp2);
+            double xF8y2 = Cy2 + (e0y * cp2 + (ez * e0x - ex * e0z) * sp2);
+            double xF8z2 = Cz2 + (e0z * cp2 + (ex * e0y - ey * e0x) * sp2);
+            double r0x = bx * rCx + ux * rCy, r0y = by * rCx + uy * rCy, r0z = bz * rCx + uz * rCy;
+            double xHx = Cx2 - (r0x * cp2 + (ey * r0z - ez * r0y) * sp2);
+            double xHy = Cy2 - (r0y * cp2 + (ez * r0x - ex * r0z) * sp2);
+            double xHz = Cz2 - (r0z * cp2 + (ex * r0y - ey * r0x) * sp2);
+            anchor.set(m, Px); anchor.set(N + m, Py); anchor.set(2 * N + m, Pz);
+            pose4.set(m, phi); pose4.set(N + m, psi);
+            geomOut.set(m, Cx2); geomOut.set(N + m, Cy2); geomOut.set(2 * N + m, Cz2);
+            geomOut.set(3 * N + m, xF8x2); geomOut.set(4 * N + m, xF8y2); geomOut.set(5 * N + m, xF8z2);
+            geomOut.set(6 * N + m, xHx); geomOut.set(7 * N + m, xHy); geomOut.set(8 * N + m, xHz);
+            if (act && bound) { forceOut.set(m, bondData.get(13 * m + 12)); forceOut.set(N + m, Math.sqrt(f8x * f8x + f8y * f8y + f8z * f8z)); }
+            else { forceOut.set(m, 0); forceOut.set(N + m, 0); }
+        }
+    }
+
     // ===============================================================================================
     // KERNEL — Stage 2: matGeomGate (DOUBLE, bit-for-decision).  geom2D → nearestSeg2D → gate2D → 8-gate AND.
     //   pose: phi=[m], psi=[N+m], psiActin=[2N+m].  anchor: planar 3N.
@@ -190,14 +383,116 @@ public final class MatSoaSlice {
         boolean cullOk = gateCull(log);
         boolean geomOk = gateGeomGate(log);
         boolean bindOk = gateBind(log);
+        boolean step7Ok = gateStep7(log);
 
         try { Files.writeString(dir.resolve("STAGE_GATES.md"), log.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); }
         System.out.println("\n=== SLICE STATUS ===");
         System.out.printf(Locale.US, "Stage 1 matCull      (active-set identity):        %s%n", cullOk ? "PASS" : "FAIL");
         System.out.printf(Locale.US, "Stage 2 matGeomGate  (geom+nearest+gate identity): %s%n", geomOk ? "PASS" : "FAIL");
         System.out.printf(Locale.US, "Stage 3 matBind      (bind-event identity):        %s%n", bindOk ? "PASS" : "FAIL");
+        System.out.printf(Locale.US, "Stage 7 matStep7     (5-DOF solve vs supSolveM):   %s%n", step7Ok ? "PASS" : "FAIL");
         System.out.println("# report: " + dir.resolve("STAGE_GATES.md").toAbsolutePath());
-        System.exit(cullOk && geomOk && bindOk ? 0 : 1);
+        System.exit(cullOk && geomOk && bindOk && step7Ok ? 0 : 1);
+    }
+
+    static DoubleArray packStep7Params(TwoBodyConverterMotor.Glide2D G) {
+        DoubleArray p = new DoubleArray(35);
+        p.set(0, G.bhat[0]); p.set(1, G.bhat[1]); p.set(2, G.bhat[2]);
+        p.set(3, G.econv[0]); p.set(4, G.econv[1]); p.set(5, G.econv[2]);
+        p.set(6, G.eup[0]); p.set(7, G.eup[1]); p.set(8, G.eup[2]);
+        p.set(9, G.lb); p.set(10, G.rF8[0]); p.set(11, G.rF8[1]); p.set(12, G.rConv[0]); p.set(13, G.rConv[1]);
+        p.set(14, G.kF8Code); p.set(15, G.kconvCode); p.set(16, G.kbindCode);
+        p.set(17, G.supGammaP); p.set(18, G.gammaPhi); p.set(19, G.gammaPsi); p.set(20, G.dt);
+        p.set(21, G.supKsoftAx); p.set(22, G.supKtautAx); p.set(23, G.supDelta); p.set(24, G.supKsoftTr); p.set(25, G.supKfeTr);
+        p.set(26, G.supRmax); p.set(27, G.supKfloor); p.set(28, G.supSmoothAx); p.set(29, G.supSmoothTr);
+        p.set(30, G.supCompFrac); p.set(31, G.supFloorZ); p.set(32, G.supBuckleCrit); p.set(33, G.supKcompPost); p.set(34, G.supSmoothBuck);
+        return p;
+    }
+
+    // ---------- Part 5.4 — Step-7 (5-DOF movable-pivot) vs host supSolveM (double bit-for-decision) ----------
+    static boolean gateStep7(StringBuilder log) {
+        System.out.println("\n--- Part 5.4: matStep7 vs host supSolveM (pose/geometry/force, double) ---");
+        log.append("## Stage 7 — matStep7 (double, MAT salts 0x5F1..0x5F5+m·7919) vs supSolveM\n");
+        double dt = 2.5e-6; boolean allPass = true; int warm = 1500;
+        int[][] scen = { {200, 11}, {700, 11} };
+        for (int[] sc : scen) {
+            double density = sc[0]; int seed = sc[1];
+            TwoBodyConverterMotor.Glide2D G = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed);
+            int N = G.N, nSeg = G.nSeg; MotorStore mot = G.mot;
+            for (int tt = 0; tt < warm; tt++) TwoBodyConverterMotor.stepGlideSup(G, tt, seed, new TwoBodyConverterMotor.Tol());
+            for (int m = 0; m < N; m++) TwoBodyConverterMotor.geom2D(G, m);   // freshen C_/xF8_ = geom2D(current pose)
+            TwoBodyConverterMotor.unionActive(G);
+            int T = warm;   // the test Step-7 index (mat salts key on t)
+            // --- snapshot pre-Step7 state → pack device buffers (BEFORE host mutation) ---
+            DoubleArray pose4 = new DoubleArray(4 * N), anchor = new DoubleArray(3 * N), supP0 = new DoubleArray(3 * N);
+            IntArray boundSeg = new IntArray(N), active = new IntArray(N);
+            FloatArray bondData = new FloatArray(13 * N);
+            int nActive = 0, nBound = 0;
+            for (int m = 0; m < N; m++) {
+                pose4.set(m, G.phi[m]); pose4.set(N + m, G.psi[m]); pose4.set(2 * N + m, G.thetaS[m]); pose4.set(3 * N + m, G.psiActin[m]);
+                anchor.set(m, G.A[m][0]); anchor.set(N + m, G.A[m][1]); anchor.set(2 * N + m, G.A[m][2]);
+                supP0.set(m, G.supP0[m][0]); supP0.set(N + m, G.supP0[m][1]); supP0.set(2 * N + m, G.supP0[m][2]);
+                boundSeg.set(m, mot.boundSeg.get(m)); active.set(m, G.active[m] ? 1 : 0);
+                for (int k = 0; k < 13; k++) bondData.set(13 * m + k, G.bondData.get(m * 13 + k));
+                if (G.active[m]) nActive++; if (mot.boundSeg.get(m) >= 0) nBound++;
+            }
+            DoubleArray sp = packStep7Params(G);
+            IntArray counts = new IntArray(4); counts.set(0, N); counts.set(1, T); counts.set(2, seed); counts.set(3, nSeg);
+            DoubleArray geomOut = new DoubleArray(9 * N), forceOut = new DoubleArray(2 * N);
+            // --- CPU-runner matStep7 (plain loop = the SAME method) on clones, to separate arithmetic-form from GPU-FMA ---
+            DoubleArray cPose = new DoubleArray(4 * N), cAnchor = new DoubleArray(3 * N), cGeom = new DoubleArray(9 * N), cForce = new DoubleArray(2 * N);
+            for (int i = 0; i < 4 * N; i++) cPose.set(i, pose4.get(i));
+            for (int i = 0; i < 3 * N; i++) cAnchor.set(i, anchor.get(i));
+            matStep7(cPose, cAnchor, sp, supP0, bondData, boundSeg, active, counts, cGeom, cForce);
+            // --- host reference: supSolveM for active (stepGlideSup L5861) ---
+            double[][] hA = new double[N][3]; double[] hPhi = new double[N], hPsi = new double[N], hFDF = new double[N], hFMag = new double[N];
+            double[][] hC = new double[N][3], hF8 = new double[N][3], hH = new double[N][3];
+            for (int m = 0; m < N; m++) {
+                if (G.active[m]) TwoBodyConverterMotor.supSolveM(G, m, T, seed, mot.boundSeg.get(m) >= 0);
+                else { mot.forceDotFil.set(m, 0f); mot.forceMag.set(m, 0f); }
+                hA[m] = G.A[m].clone(); hPhi[m] = G.phi[m]; hPsi[m] = G.psi[m];
+                hC[m] = G.C_[m].clone(); hF8[m] = G.xF8_[m].clone(); hH[m] = G.xH_[m].clone();
+                hFDF[m] = mot.forceDotFil.get(m); hFMag[m] = mot.forceMag.get(m);
+            }
+            // --- device ---
+            try {
+                TaskGraph tg = new TaskGraph("step7")
+                        .transferToDevice(DataTransferMode.FIRST_EXECUTION, sp, supP0, bondData, boundSeg, active)
+                        .transferToDevice(DataTransferMode.EVERY_EXECUTION, pose4, anchor, counts)
+                        .task("matStep7", MatSoaSlice::matStep7, pose4, anchor, sp, supP0, bondData, boundSeg, active, counts, geomOut, forceOut)
+                        .transferToHost(DataTransferMode.EVERY_EXECUTION, pose4, anchor, geomOut, forceOut);
+                GridScheduler sched = new GridScheduler();
+                WorkerGrid w = new WorkerGrid1D(N); w.setLocalWork(1, 1, 1); sched.addWorkerGrid("step7.matStep7", w);
+                new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(sched).execute();
+            } catch (Throwable ex) {
+                Throwable root = ex; while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+                System.out.printf(Locale.US, "  density=%.0f seed=%d N=%d: LOWERS=NO — %s: %s%n", density, seed, N, ex.getClass().getName(), oneLine(ex.getMessage()));
+                log.append(String.format(Locale.US, "- density=%.0f seed=%d N=%d: **LOWERS=NO** — `%s`: %s\n", density, seed, N, root.getClass().getName(), oneLine(root.getMessage())));
+                return false;
+            }
+            // --- compare (active motors): GPU-vs-host, CPU-vs-host (arithmetic form), GPU-vs-CPU (pure FMA) ---
+            double gPose = 0, gGeom = 0, gForce = 0, cPoseD = 0, gcPose = 0;
+            for (int m = 0; m < N; m++) if (G.active[m]) {
+                gPose = Math.max(gPose, Math.abs(pose4.get(m) - hPhi[m])); gPose = Math.max(gPose, Math.abs(pose4.get(N + m) - hPsi[m]));
+                gPose = Math.max(gPose, Math.abs(anchor.get(m) - hA[m][0])); gPose = Math.max(gPose, Math.abs(anchor.get(N + m) - hA[m][1])); gPose = Math.max(gPose, Math.abs(anchor.get(2 * N + m) - hA[m][2]));
+                cPoseD = Math.max(cPoseD, Math.abs(cPose.get(m) - hPhi[m])); cPoseD = Math.max(cPoseD, Math.abs(cPose.get(N + m) - hPsi[m]));
+                cPoseD = Math.max(cPoseD, Math.abs(cAnchor.get(m) - hA[m][0])); cPoseD = Math.max(cPoseD, Math.abs(cAnchor.get(N + m) - hA[m][1])); cPoseD = Math.max(cPoseD, Math.abs(cAnchor.get(2 * N + m) - hA[m][2]));
+                gcPose = Math.max(gcPose, Math.abs(pose4.get(m) - cPose.get(m))); gcPose = Math.max(gcPose, Math.abs(anchor.get(m) - cAnchor.get(m)));
+                for (int c = 0; c < 3; c++) { gGeom = Math.max(gGeom, Math.abs(geomOut.get(c * N + m) - hC[m][c]));
+                    gGeom = Math.max(gGeom, Math.abs(geomOut.get((3 + c) * N + m) - hF8[m][c])); gGeom = Math.max(gGeom, Math.abs(geomOut.get((6 + c) * N + m) - hH[m][c])); }
+                gForce = Math.max(gForce, Math.abs(forceOut.get(m) - hFDF[m])); gForce = Math.max(gForce, Math.abs(forceOut.get(N + m) - hFMag[m]));
+            }
+            // PASS: force bit-for-decision (F8 identical); pose/geom double last-bit AMPLIFIED by the ill-conditioned 5-DOF
+            // solve (the physics is equally sensitive on the host). Classify float-vs-semantic: force<1e-15 ⇒ no semantic error.
+            boolean pass = gForce < 1e-15 && gGeom < 1e-6 && gPose < 1e-5 && cPoseD < 1e-5;
+            allPass &= pass;
+            System.out.printf(Locale.US, "  density=%.0f seed=%d N=%d active=%d bound=%d: GPUvsHost poseΔ=%.2e geomΔ=%.2e forceΔ=%.2e | CPUvsHost poseΔ=%.2e | GPUvsCPU poseΔ=%.2e %s%n",
+                    density, seed, N, nActive, nBound, gPose, gGeom, gForce, cPoseD, gcPose, pass ? "PASS" : "FAIL");
+            log.append(String.format(Locale.US, "- density=%.0f seed=%d N=%d active=%d bound=%d: GPUvsHost poseΔ=%.2e geomΔ=%.2e forceΔ=%.2e; CPUvsHost(arith-form) poseΔ=%.2e; GPUvsCPU(FMA) poseΔ=%.2e → %s\n",
+                    density, seed, N, nActive, nBound, gPose, gGeom, gForce, cPoseD, gcPose, pass ? "PASS" : "FAIL"));
+        }
+        log.append("\n");
+        return allPass;
     }
 
     // ---------- Part 5.3 (binding half) — bind-event IDENTITY (chained matGeomGate→matBind on device) ----------
