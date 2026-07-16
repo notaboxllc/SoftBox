@@ -7,18 +7,18 @@
 softbox.MatSoaSlice`. Report: `RUN_LOGS/matsoa/STAGE_GATES.md`.
 
 ## STATUS
-- **MAT-SOA VERTICAL SLICE:** Stages 1–3 IMPLEMENTED + isolated CPU-vs-GPU gates PASS on RTX 5070.
-- **CALIBRATED GPU TRAJECTORY:** NOT YET (composition = Part 6, not reached this increment).
+- **MAT-SOA VERTICAL SLICE:** the 4 new-physics kernels (Stages 1, 2, 3, **7**) IMPLEMENTED + isolated
+  CPU-vs-GPU gates PASS on RTX 5070 (bailout=false, no fallback). Stage-7 decision (coordinator): DOUBLE.
+- **CALIBRATED GPU TRAJECTORY:** NOT YET (Part-6 composition of all 12 stages into a device-resident loop
+  is the next increment — see below).
 - **DEVICE RESIDENCY:** PROVEN for the built stages — motor SoA uploaded FIRST_EXECUTION; only `counts`
-  (16 B) + the small mutable state re-upload EVERY_EXECUTION; only compact outputs read back. **No full
-  per-motor mat transfer per step.** Chained geom→bind runs device-resident (buffers shared, no
-  intermediate host round-trip).
-- **NEXT BLOCKER:** Stage-7 (calibrated Step-7) mat wiring — the validated `calibratedStep` is FLOAT and
-  uses single-motor salts `0x4F1..0x4F5`; the mat needs the `0x5F1..0x5F5+m·7919` salts and (for
-  bit-for-decision vs host `supSolveM`, which is DOUBLE) a double mat solve. Decide: float Step-7
-  (float-classified per-step divergence, chaotic decorrelation — acceptable) vs a double mat solve
-  (bit-for-decision). Then compose Stages 4–11 (chemistry/bondForces/CSR/Langevin are existing kernels;
-  reductions to write) into the first device trajectory (Part 6).
+  (16 B) + small mutable state re-upload EVERY_EXECUTION; only compact outputs read back. **No full
+  per-motor mat transfer per step.** Chained geom→bind and Step-7 run device-resident (shared buffers).
+- **NEXT BLOCKER:** Part-6 composition — wire `matPlaceHead` (new, small) + the existing device kernels
+  (`cycleLymnTaylor`, `bondForces`, `csr*`/`segGather`, `chainForces`, `brownianForce`, `integrate`,
+  `orthogonalizeY`, `derive`) + `matZConfine` (new, tiny) + `matReduce` (new, small) into ONE chained
+  device graph sharing buffers, then the stepwise CPU-vs-GPU trajectory. The bridge is `matPlaceHead`
+  writing the mat head pose (`geomOut xH_/xF8_`) into `MotorStore.body` so `bondForces` consumes it.
 
 ## Stages built + gated (Part 5)
 | stage | kernel | precision | gate (isolated CPU-vs-GPU, bailout=false) | result |
@@ -26,6 +26,16 @@ softbox.MatSoaSlice`. Report: `RUN_LOGS/matsoa/STAGE_GATES.md`.
 | 1 cull | `matCull` | double | active-set IDENTITY vs `unionActive` (200/700 density ×3 seeds, N≤2100) | **PASS** 0 mismatches |
 | 2 geom+nearest+gate | `matGeomGate` | double | nearest-seg selection + 8-gate accept IDENTITY vs `geom2D+nearestSeg2D+gate2D` | **PASS** segMism=0, acceptMism=0; geomΔ~3e-9 (double last-bit) |
 | 3 bind | `matBind` | int (deterministic) | bind-event IDENTITY (chained geom→bind); synthetic positive path 96 accepts | **PASS** boundSegMism=0 |
+| 7 Step-7 | `matStep7` | **double**, mat salts `0x5F1..0x5F5+m·7919` | 5-DOF solve vs `supSolveM` (pose/geom/force) | **PASS** — CPU≡host 6.9e-18 (arithmetic FAITHFUL), GPU-vs-CPU poseΔ=1.68e-7 = FMA amplified by the ill-conditioned solve (physics-intrinsic; force Δ~1e-20 ⇒ no semantic error) |
+
+### Stage-7 finding (the coordinator's DOUBLE decision, validated)
+`matStep7` is a bit-faithful double port of `supSolveM` — the CPU runner (same method, plain loop)
+reproduces host `supSolveM` to **~1e-17** (the compensated `log1pC` + hand-unrolled Gauss-Jordan are exact;
+the `Math.max`→ternary/`log1p`→`log1pC` substitutions are negligible). The GPU shows a **1.68e-7 pose
+divergence that is ENTIRELY GPU FMA op-order** (GPU-vs-CPU = 1.68e-7, and it equals GPU-vs-host), amplified
+by the ill-conditioned angular 5-DOF solve — the same sensitivity the host solve has. F8h is bit-identical
+(force Δ~1e-20). This is the expected "float-not-semantic" decorrelation the Part-6 trajectory classifies,
+and confirms the double slice is uniform and clean (no salt/formula drift).
 
 Reinterpret-free substitutions used (none flipped a gate decision): `Math.abs`→`fabs`/`dabs`,
 `Math.max(double)`→ternary, `Math.toDegrees` inlined `x*180/PI`, `Math.pow(x,2)`→`x*x`. All new kernels
