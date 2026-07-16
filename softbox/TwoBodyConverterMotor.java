@@ -4414,6 +4414,7 @@ public final class TwoBodyConverterMotor {
     static double       G4_MX=G4_MATX, G4_MY=G4_MATY; // MUTABLE mat dims (4D-ii may enlarge; default = the 4D constants ⇒ 4D unchanged)
     static final int    G4_MONO=64;                  // monomers/segment (canonical MONOMER_CT) ⇒ segLen ≈ 0.176 µm
     static final int    G4_NSEG=12;                  // ~2.1 µm contour (semiflexible; canonical bending, Lp≈17 µm)
+    static int          G4_NSEG_RUN=G4_NSEG;         // runtime filament-length override for the canonical length sweep (default = G4_NSEG ⇒ existing paths unchanged)
     static final double G4_KZ=2.0;                   // z-only surface confinement (pN/nm) — the coverslip normal
     static final double G4_MARGIN=0.03;              // active-set margin around the filament bbox (µm)
     // 4D-ii — derived per-segment CANDIDATE-QUERY radius (µm): shortest site→segment distance below which a motor
@@ -4465,7 +4466,7 @@ public final class TwoBodyConverterMotor {
             DerivedGeometrySystem.derive(f.coord,f.uVec,f.yVec,f.zVec,f.end1,f.end2,f.segLength,f.counts);
             G.fil=f;
         } else {
-            int nSeg=G4_NSEG; FilamentStore f=new FilamentStore(nSeg); double x0=-0.5*(nSeg-1)*segLen;
+            int nSeg=G4_NSEG_RUN; FilamentStore f=new FilamentStore(nSeg); double x0=-0.5*(nSeg-1)*segLen;
             for(int k=0;k<nSeg;k++){ f.monomerCount.set(k,G4_MONO); f.setUVec(k,1f,0f,0f); f.setYVec(k,0f,1f,0f);
                 f.setCoord(k,(float)(x0+k*segLen),0f,0f); f.brownTransScale.set(k,(float)Constants.BTransCoeff);
                 boolean interior=(k>0&&k<nSeg-1); f.brownRotScale.set(k,interior?0f:(float)Constants.BRotCoeff);
@@ -7863,6 +7864,7 @@ public final class TwoBodyConverterMotor {
      *  provenance header. This is what `-motor <id>` runs. */
     static void runMotorModel(MotorModel m,String source,String[] args){
         boolean gpu=false; for(String a:args) if(a.equals("-gpu")) gpu=true;
+        for(String a:args) if(a.equals("-glide")){ runMotorGliding(m,source,args); return; }   // canonical gliding assay
         double dt=(m==MotorModel.EXPLICIT_S2_L40)? 2.5e-6 : 2.5e-6;
         for(int i=0;i<args.length;i++) if(args[i].equals("-dt")) dt=Double.parseDouble(args[i+1]);
         // reject incompatible combinations clearly (never silently swap the model)
@@ -7889,6 +7891,349 @@ public final class TwoBodyConverterMotor {
         writeCanon("motor_"+m.id()+"_characterization.csv",sb.toString());
         System.out.printf(Locale.US,"# %s: unloaded stroke %.2f nm, pivot recoil %.3f nm, F8 axial %.2f pN%n",m.id(),strokeNm,recoilNm,f8axPn);
         System.out.println("# wrote "+canonDir().resolve("motor_"+m.id()+"_characterization.csv"));
+    }
+
+    // ============================================================================================
+    //  CANONICAL GLIDING ASSAY — unified over the three canonical motor models. Selected by
+    //  `-motor <id> -glide`. Builds the model's mat (fixed-anchor articulated / explicit-S2 beam /
+    //  calibrated pivot surrogate) and runs ONE shared measurement loop over the VALIDATED, UNCHANGED
+    //  stepGlide2D / stepGlideS2 / stepGlideSup step. Reports the full observable set with the
+    //  validated LS signed-velocity estimator (slope of centroid·b̂ vs time; negative = pointed-first).
+    //  CPU-only. Matched geometry + seeds across models (seed s → episode seed seed0+s). The motor CORE
+    //  (head/converter/F8/binding gate/Lymn–Taylor chemistry/RNG) is IDENTICAL across models; only the
+    //  tail-fixture build+step branch differs. Nothing here changes any historical default.
+    // ============================================================================================
+    static final int    GLIDE_BASE_SEED=4321;
+    static final double EXPLICIT_GLIDE_SLACK_NM=1.5;   // initial S2 beam sag (the documented 4G mat value); fixed contour
+
+    /** Build the mat for a canonical model (matched geometry; saves/restores the CAL_* globals). */
+    static Glide2D buildMatForModel(MotorModel m,double density,double dt,int seed){
+        switch(m){
+            case FIXED_ANCHOR -> { Glide2D G=buildGlide2D(density,dt,false,seed,true,true); G.cullMode=1; G.queryR=G4_QUERYR; initMatGrid(G); return G; }
+            case EXPLICIT_S2_L40 -> { return buildS2Mat(density,dt,m.provenance().freeLenNm(),EXPLICIT_GLIDE_SLACK_NM,seed); }
+            case CALIBRATED_S2_L40 -> {
+                double[] sav={CAL_KAX,CAL_KTR,CAL_KFETR,CAL_RMAX,CAL_SMOOTHTR,CAL_KPOST,CAL_SBUCK,CAL_REF_L,CAL_BUCKCRIT}; boolean savOn=CAL_ON;
+                applyCalibratedFrozen(m.calibrated()); CAL_ON=true;
+                Glide2D G=buildSupMat(density,dt,0,seed);   // δ=0 no-slack calibrated (calApplyMat bakes params into G)
+                CAL_ON=savOn; CAL_KAX=sav[0];CAL_KTR=sav[1];CAL_KFETR=sav[2];CAL_RMAX=sav[3];CAL_SMOOTHTR=sav[4];CAL_KPOST=sav[5];CAL_SBUCK=sav[6];CAL_REF_L=sav[7];CAL_BUCKCRIT=sav[8];
+                return G;
+            }
+            default -> throw new IllegalArgumentException("unhandled model "+m);
+        }
+    }
+    static void stepMatForModel(MotorModel m,Glide2D G,int t,int seed){
+        switch(m){
+            case FIXED_ANCHOR -> stepGlide2D(G,t,seed,new Tol());
+            case EXPLICIT_S2_L40 -> stepGlideS2(G,t,seed,new Tol());
+            case CALIBRATED_S2_L40 -> stepGlideSup(G,t,seed,new Tol());
+        }
+    }
+    /** Per-model load-bearing (TAUT) test for a bound mat motor mm — the same criterion each historical
+     *  measure used: fixed anchor rigid; calibrated pivot axial-tangent ≥ threshold; explicit beam straight. */
+    static boolean matTaut(MotorModel m,Glide2D G,int mm){
+        switch(m){
+            case FIXED_ANCHOR -> { return true; }
+            case CALIBRATED_S2_L40 -> { return supForceM(G,mm)[3]*1e3 >= SUP_LOADBEAR_KTAN; }
+            case EXPLICIT_S2_L40 -> { double[][] nd=G.g4Node[mm]; double con=0; for(int i=0;i<G.g4M;i++) con+=Math.sqrt(dot(sub(nd[i+1],nd[i]),sub(nd[i+1],nd[i])));
+                double e2e=Math.sqrt(dot(sub(nd[G.g4M],nd[0]),sub(nd[G.g4M],nd[0]))); return (con-e2e)<1e-3; }
+            default -> { return false; }
+        }
+    }
+    /** Normalized filament long axis (pointed→barbed end-to-end unit vector). */
+    static double[] filAxis(Glide2D G){ FilamentStore f=G.fil; int n=G.nSeg;
+        double[] e1={f.coordX(0)-0.5*f.segLength.get(0)*f.uVecX(0),f.coordY(0)-0.5*f.segLength.get(0)*f.uVecY(0),f.coordZ(0)-0.5*f.segLength.get(0)*f.uVecZ(0)};
+        double[] e2={f.coordX(n-1)+0.5*f.segLength.get(n-1)*f.uVecX(n-1),f.coordY(n-1)+0.5*f.segLength.get(n-1)*f.uVecY(n-1),f.coordZ(n-1)+0.5*f.segLength.get(n-1)*f.uVecZ(n-1)};
+        double[] d=sub(e2,e1); double r=Math.sqrt(dot(d,d)); return r>1e-12? scl(d,1.0/r) : new double[]{1,0,0}; }
+
+    /** Per-model gliding result aggregated over nSeed independent seeds. */
+    static final class GlideRes {
+        String id; double density,dt,matX,matY,Lfil,durS; int nSeed,nMot;
+        double velMean,velSd,netMean,avgBound,avgBoundSd,avgLB,fracLB,contMean,contSd;
+        double handoff,transWanderNm,angWanderDeg,atpPerUm,activePerStep,secPerSimS,reach,bindRate;
+        int stableSeeds; double pDirected;
+    }
+
+    /** The shared canonical gliding measurement (all three models). durS seconds, nSeed matched seeds. */
+    static GlideRes measureGlideModel(MotorModel m,double density,double dt,double durS,int nSeed,int seed0){
+        int steps=(int)Math.round(durS/dt);
+        java.util.List<Double> velL=new ArrayList<>(), netL=new ArrayList<>(), boundL=new ArrayList<>(), contL=new ArrayList<>();
+        double lbAccAll=0, boundAccAll=0; long totStepsAll=0;
+        long bindEventsAll=0, handoffEventsAll=0, atpAll=0;
+        double transSdAcc=0, angSdAcc=0; int wanderSeeds=0;
+        double netAbsAll=0; long candAccAll=0, candStepsAll=0; int reach=0, nMot=0, stable=0, directed=0;
+        long t0=System.nanoTime();
+        for(int s=0;s<nSeed;s++){
+            int seed=seed0+s;
+            Glide2D G=buildMatForModel(m,density,dt,seed); int N=G.N; nMot=N;
+            if(s==0) for(int mm=0;mm<N;mm++){ int sg=nearestSeg2D(G,mm); if(sg>=0){ double[] gm=gate2D(G,mm,sg); if(gm[0]<5.0) reach++; } }
+            int[] prevB=new int[Math.max(1,N)]; for(int mm=0;mm<N;mm++) prevB[mm]=G.mot.boundSeg.get(mm);
+            int[] prevNuc=new int[Math.max(1,N)]; for(int mm=0;mm<N;mm++) prevNuc[mm]=G.mot.nucleotideState.get(mm);
+            int recEvery=Math.max(1,steps/2000); double[] tt=new double[steps/recEvery+2], yy=new double[steps/recEvery+2]; int nr=0;
+            double b0=filComB(G), y0=filComY(G); double[] ax0=filAxis(G); double ang0=Math.atan2(ax0[1],ax0[0]);
+            double sumY=0,sumY2=0,sumA=0,sumA2=0; long wN=0;
+            long seedBound=0, seedLB=0, seedSteps=0, seedOcc0=0, seedAtp=0; int nbPrev=0; boolean unstable=false;
+            for(int t=0;t<steps;t++){
+                stepMatForModel(m,G,t,seed);
+                if(!Double.isFinite(G.fil.coordX(0))){ unstable=true; break; }
+                seedSteps++;
+                int nb=0, lb=0;
+                for(int mm=0;mm<N;mm++){ int bs=G.mot.boundSeg.get(mm);
+                    if(bs>=0 && prevB[mm]<0){ bindEventsAll++; if(nbPrev>=1) handoffEventsAll++; }
+                    prevB[mm]=bs;
+                    if(bs>=0){ nb++; if(matTaut(m,G,mm)) lb++; }
+                    int nc=G.mot.nucleotideState.get(mm);
+                    if(prevNuc[mm]==MotorStore.NUC_ADPPI && nc==MotorStore.NUC_ADP) seedAtp++;
+                    prevNuc[mm]=nc;
+                }
+                seedBound+=nb; seedLB+=lb; if(nb==0) seedOcc0++;
+                if(t%recEvery==0 && nr<tt.length){ tt[nr]=t*dt; yy[nr]=filComB(G)-b0; nr++; }
+                if(t%20==0){ double y=filComY(G)-y0; sumY+=y; sumY2+=y*y; double[] ax=filAxis(G); double a=Math.atan2(ax[1],ax[0])-ang0;
+                    while(a>Math.PI)a-=2*Math.PI; while(a<-Math.PI)a+=2*Math.PI; sumA+=a; sumA2+=a*a; wN++; }
+                nbPrev=nb;
+            }
+            candAccAll+=G.candAcc; candStepsAll+=G.candSteps;
+            if(unstable) continue;
+            double vel=nr>2? lsSlope(tt,yy,nr):0, netUm=filComB(G)-b0;
+            velL.add(vel); netL.add(netUm*1e3); boundL.add((double)seedBound/seedSteps); contL.add(1.0-(double)seedOcc0/seedSteps);
+            boundAccAll+=seedBound; lbAccAll+=seedLB; totStepsAll+=seedSteps; atpAll+=seedAtp; netAbsAll+=Math.abs(netUm);
+            stable++; if(vel<-0.2) directed++;
+            if(wN>1){ double vy=Math.max(0,sumY2/wN-(sumY/wN)*(sumY/wN)), va=Math.max(0,sumA2/wN-(sumA/wN)*(sumA/wN));
+                transSdAcc+=Math.sqrt(vy)*1e3; angSdAcc+=Math.toDegrees(Math.sqrt(va)); wanderSeeds++; }
+        }
+        long t1=System.nanoTime();
+        GlideRes R=new GlideRes(); R.id=m.id(); R.density=density; R.dt=dt; R.matX=G4_MX; R.matY=G4_MY;
+        R.Lfil=G4_NSEG_RUN*(G4_MONO+1)*Constants.actinMonoRadius; R.durS=durS; R.nSeed=nSeed; R.nMot=nMot; R.reach=reach; R.stableSeeds=stable;
+        R.velMean=mean(velL); R.velSd=sd(velL); R.netMean=mean(netL); R.avgBound=mean(boundL); R.avgBoundSd=sd(boundL);
+        R.contMean=mean(contL); R.contSd=sd(contL);
+        R.avgLB=totStepsAll>0? lbAccAll/(double)totStepsAll:0; R.fracLB=R.avgBound>0? R.avgLB/R.avgBound:0;
+        R.handoff=bindEventsAll>0? (double)handoffEventsAll/bindEventsAll:0;
+        R.transWanderNm=wanderSeeds>0? transSdAcc/wanderSeeds:0; R.angWanderDeg=wanderSeeds>0? angSdAcc/wanderSeeds:0;
+        R.atpPerUm=netAbsAll>1e-6? atpAll/netAbsAll:Double.NaN;
+        R.activePerStep=candStepsAll>0? (double)candAccAll/candStepsAll:0;
+        R.secPerSimS=(t1-t0)/1e9/Math.max(1e-9,nSeed*durS);
+        R.bindRate=(nMot>0&&durS>0)? (double)bindEventsAll/((double)nMot*nSeed)/durS:0;
+        R.pDirected=stable>0? (double)directed/stable:0;
+        return R;
+    }
+    static double mean(java.util.List<Double> v){ if(v.isEmpty())return Double.NaN; double s=0; for(double x:v)s+=x; return s/v.size(); }
+    static double sd(java.util.List<Double> v){ if(v.size()<2)return 0; double mu=mean(v),s=0; for(double x:v)s+=(x-mu)*(x-mu); return Math.sqrt(s/(v.size()-1)); }
+
+    // ============================================================================================
+    //  FORCE-BALANCE / PROPULSION diagnostics (amendment 2026-07-15). CALIBRATED-s2-l40 only. For every
+    //  bound motor at every sampled frame, project the F8 force TRANSMITTED TO ACTIN (seg-side bondData
+    //  [6..8]) onto the filament polarity axis, oriented to the observed glide direction (pointed-first ⇒
+    //  ĝ=−uSeg). PROPULSIVE: f_prop=−(F_seg·uSeg) > +thresh (pushes the filament the way it glides);
+    //  DRAGGING: f_prop < −thresh (opposes); NEUTRAL: |f_prop|≤thresh. Impulse/work integrated EVERY step
+    //  per bound motor and flushed on detach (one bound episode ≈ one productive motor cycle). Reuses the
+    //  validated calibrated build+step (stepGlideSup) UNCHANGED; instrumentation only.
+    // ============================================================================================
+    static final double FB_NEUTRAL_PN=0.05;      // preregistered neutral band on the axial glide-direction force (pN)
+    static final int    FB_SAMPLE_EVERY=20;      // per-frame classification cadence (steps)
+
+    static final class FBRes {
+        String id; double density,dt,durS,queryScale; int nSeed,nMot,stable;
+        double vel,velSd,netNm,avgBound,avgLB,avgProp,avgDrag,avgNeutral,propFrac,dragFrac,contMean;
+        double sumPropPn,sumDragPn,netAxialPn,meanFProp,meanFDrag;
+        double strainPropNm,strainDragNm,agePropMs,ageDragMs,distPropLeadUm,distDragLeadUm;
+        double nucPropADPPi,nucPropADP,nucDragADPPi,nucDragADP;
+        double switchPDperMotS,detachAfterDragFrac;
+        double posImpPerCyclePn,negImpPerCyclePn,netImpPerAtpPn,posWorkAj,negWorkAj,atpPerUm;
+        double activePerStep,secPerSimS;
+    }
+
+    /** Force-balance measurement for the calibrated model. queryScale enlarges the cull radius (control). */
+    static FBRes measureGlideForceBalance(double density,double dt,double durS,int nSeed,int seed0,double queryScale){
+        int steps=(int)Math.round(durS/dt);
+        java.util.List<Double> velL=new ArrayList<>(); double netAbsAll=0;
+        long fBound=0,fLB=0,fProp=0,fDrag=0,fNeut=0,frames=0;         // per-frame class counts
+        double sumProp=0,sumDrag=0,netAx=0;                            // N, accumulated over sampled frames
+        double strProp=0,strDrag=0,ageProp=0,ageDrag=0,dProp=0,dDrag=0;
+        long nProp=0,nDrag=0, nucPAdppi=0,nucPAdp=0,nucDAdppi=0,nucDAdp=0;
+        long switchPD=0; long boundMotSteps=0; long detachTot=0,detachAfterDrag=0;
+        double posImp=0,negImp=0,posWork=0,negWork=0; long cycles=0,atpAll=0;
+        long candAccAll=0,candStepsAll=0; int nMot=0,stable=0; long occ0=0,totSteps=0;
+        long t0=System.nanoTime();
+        for(int s=0;s<nSeed;s++){
+            int seed=seed0+s; Glide2D G;
+            { double[] sav={CAL_KAX,CAL_KTR,CAL_KFETR,CAL_RMAX,CAL_SMOOTHTR,CAL_KPOST,CAL_SBUCK,CAL_REF_L,CAL_BUCKCRIT}; boolean savOn=CAL_ON;
+              applyCalibratedFrozen(MotorModel.CALIBRATED_S2_L40.calibrated()); CAL_ON=true;
+              G=buildSupMat(density,dt,0,seed);
+              if(queryScale!=1.0){ G.queryR*=queryScale; initMatGrid(G); }
+              CAL_ON=savOn; CAL_KAX=sav[0];CAL_KTR=sav[1];CAL_KFETR=sav[2];CAL_RMAX=sav[3];CAL_SMOOTHTR=sav[4];CAL_KPOST=sav[5];CAL_SBUCK=sav[6];CAL_REF_L=sav[7];CAL_BUCKCRIT=sav[8]; }
+            int N=G.N; nMot=N;
+            // filament contour (for end distances)
+            double contour=0; for(int sg=0;sg<G.nSeg;sg++) contour+=G.fil.segLength.get(sg);
+            int[] prevB=new int[Math.max(1,N)]; for(int mm=0;mm<N;mm++) prevB[mm]=G.mot.boundSeg.get(mm);
+            int[] prevNuc=new int[Math.max(1,N)]; for(int mm=0;mm<N;mm++) prevNuc[mm]=G.mot.nucleotideState.get(mm);
+            int[] bindStep=new int[Math.max(1,N)]; java.util.Arrays.fill(bindStep,-1);
+            int[] lastCls=new int[Math.max(1,N)]; java.util.Arrays.fill(lastCls,-9);   // -9 unbound, 1 prop, -1 drag, 0 neutral (last SAMPLED class)
+            double[] pImp=new double[Math.max(1,N)], nImp=new double[Math.max(1,N)];
+            int recEvery=Math.max(1,steps/2000); double[] tt=new double[steps/recEvery+2], yy=new double[steps/recEvery+2]; int nr=0;
+            double b0=filComB(G), comPrev=b0; boolean unstable=false; long seedAtp=0;
+            for(int t=0;t<steps;t++){
+                stepGlideSup(G,t,seed,new Tol());
+                if(!Double.isFinite(G.fil.coordX(0))){ unstable=true; break; }
+                double comNow=filComB(G); double dGlide=-(comNow-comPrev);   // glide dir = −b̂ (pointed-first); +dGlide = forward
+                totSteps++; int nbStep=0;
+                // per-step per-bound-motor impulse/work + ATP + detach bookkeeping
+                for(int mm=0;mm<N;mm++){
+                    int bs=G.mot.boundSeg.get(mm);
+                    int nc=G.mot.nucleotideState.get(mm);
+                    if(prevNuc[mm]==MotorStore.NUC_ADPPI && nc==MotorStore.NUC_ADP){ seedAtp++; }
+                    prevNuc[mm]=nc;
+                    if(bs>=0){
+                        double[] u={G.fil.uVecX(bs),G.fil.uVecY(bs),G.fil.uVecZ(bs)}; int d=mm*STRIDE;
+                        double axOnFil=G.bondData.get(d+6)*u[0]+G.bondData.get(d+7)*u[1]+G.bondData.get(d+8)*u[2]; // N, along +barbed
+                        double fp=-axOnFil;   // N, along glide (−barbed)
+                        if(fp>0) pImp[mm]+=fp*dt; else nImp[mm]+=fp*dt;
+                        if(fp*dGlide>0) posWork+=fp*(dGlide*1e-6); else negWork+=fp*(dGlide*1e-6); // N·m
+                        boundMotSteps++;
+                        if(prevB[mm]<0){ bindStep[mm]=t; pImp[mm]=0; nImp[mm]=0; }  // fresh bound episode
+                        nbStep++;
+                    }
+                    if(bs<0 && prevB[mm]>=0){  // detach = flush the bound-episode integrals (≈ one cycle)
+                        posImp+=pImp[mm]; negImp+=nImp[mm]; cycles++; detachTot++;
+                        if(lastCls[mm]==-1) detachAfterDrag++;   // dragging at the last sample before detach (load-dependent release signature)
+                        pImp[mm]=0; nImp[mm]=0; lastCls[mm]=-9;
+                    }
+                    prevB[mm]=bs;
+                }
+                comPrev=comNow; if(nbStep==0) occ0++;
+                if(t%recEvery==0 && nr<tt.length){ tt[nr]=t*dt; yy[nr]=comNow-b0; nr++; }
+                // sampled-frame classification
+                if(t%FB_SAMPLE_EVERY==0){
+                    frames++;
+                    int nb=0,lb=0,pp=0,dd=0,nn=0;
+                    for(int mm=0;mm<N;mm++){ int bs=G.mot.boundSeg.get(mm); if(bs<0) continue; nb++;
+                        boolean taut=supForceM(G,mm)[3]*1e3>=SUP_LOADBEAR_KTAN; if(taut) lb++;
+                        double[] u={G.fil.uVecX(bs),G.fil.uVecY(bs),G.fil.uVecZ(bs)}; int d=mm*STRIDE;
+                        double axOnFil=G.bondData.get(d+6)*u[0]+G.bondData.get(d+7)*u[1]+G.bondData.get(d+8)*u[2];
+                        double fp=-axOnFil;                       // N along glide
+                        netAx+=fp;
+                        double qL=(G.A[mm][0]-G.supP0[mm][0])*G.bhat[0]+(G.A[mm][1]-G.supP0[mm][1])*G.bhat[1]+(G.A[mm][2]-G.supP0[mm][2])*G.bhat[2]; // tail axial strain (µm)
+                        double arcFromPointed=0; for(int sg=0;sg<bs;sg++) arcFromPointed+=G.fil.segLength.get(sg); arcFromPointed+=G.mot.bindArc.get(mm); // µm from pointed(leading) end
+                        double ageMs=(t-Math.max(0,bindStep[mm]))*dt*1e3;
+                        int nc2=G.mot.nucleotideState.get(mm);
+                        int cls;
+                        if(fp> FB_NEUTRAL_PN*1e-12){ cls=1; pp++; sumProp+=fp; nProp++; strProp+=Math.abs(qL)*1e3; ageProp+=ageMs; dProp+=arcFromPointed;
+                            if(nc2==MotorStore.NUC_ADPPI)nucPAdppi++; else if(nc2==MotorStore.NUC_ADP)nucPAdp++; }
+                        else if(fp< -FB_NEUTRAL_PN*1e-12){ cls=-1; dd++; sumDrag+= -fp; nDrag++; strDrag+=Math.abs(qL)*1e3; ageDrag+=ageMs; dDrag+=arcFromPointed;
+                            if(nc2==MotorStore.NUC_ADPPI)nucDAdppi++; else if(nc2==MotorStore.NUC_ADP)nucDAdp++; }
+                        else { cls=0; nn++; }
+                        if(lastCls[mm]==1 && cls==-1) switchPD++;   // propulsive→dragging transition
+                        lastCls[mm]=cls;
+                    }
+                    fBound+=nb; fLB+=lb; fProp+=pp; fDrag+=dd; fNeut+=nn;
+                }
+            }
+            candAccAll+=G.candAcc; candStepsAll+=G.candSteps; atpAll+=seedAtp;
+            if(unstable) continue;
+            velL.add(nr>2?lsSlope(tt,yy,nr):0); netAbsAll+=Math.abs(filComB(G)-b0); stable++;
+        }
+        long t1=System.nanoTime();
+        FBRes R=new FBRes(); R.id="calibrated-s2-l40"; R.density=density; R.dt=dt; R.durS=durS; R.nSeed=nSeed; R.queryScale=queryScale; R.nMot=nMot; R.stable=stable;
+        R.vel=mean(velL); R.velSd=sd(velL); R.netNm=R.vel*durS*1e3;
+        double fr=Math.max(1,frames);
+        R.avgBound=fBound/fr; R.avgLB=fLB/fr; R.avgProp=fProp/fr; R.avgDrag=fDrag/fr; R.avgNeutral=fNeut/fr;
+        R.propFrac=R.avgBound>0?R.avgProp/R.avgBound:0; R.dragFrac=R.avgBound>0?R.avgDrag/R.avgBound:0;
+        R.contMean=totSteps>0?1.0-(double)occ0/totSteps:0;
+        R.sumPropPn=sumProp/fr*1e12; R.sumDragPn=sumDrag/fr*1e12; R.netAxialPn=netAx/fr*1e12;
+        R.meanFProp=nProp>0?sumProp/nProp*1e12:0; R.meanFDrag=nDrag>0?sumDrag/nDrag*1e12:0;
+        R.strainPropNm=nProp>0?strProp/nProp:0; R.strainDragNm=nDrag>0?strDrag/nDrag:0;
+        R.agePropMs=nProp>0?ageProp/nProp:0; R.ageDragMs=nDrag>0?ageDrag/nDrag:0;
+        R.distPropLeadUm=nProp>0?dProp/nProp:0; R.distDragLeadUm=nDrag>0?dDrag/nDrag:0;
+        R.nucPropADPPi=nProp>0?(double)nucPAdppi/nProp:0; R.nucPropADP=nProp>0?(double)nucPAdp/nProp:0;
+        R.nucDragADPPi=nDrag>0?(double)nucDAdppi/nDrag:0; R.nucDragADP=nDrag>0?(double)nucDAdp/nDrag:0;
+        double sampledBoundMotSec=fBound*(FB_SAMPLE_EVERY*dt);   // sampled bound-motor-seconds (switchPD is counted at samples)
+        R.switchPDperMotS=sampledBoundMotSec>0?switchPD/sampledBoundMotSec:0; R.detachAfterDragFrac=detachTot>0?(double)detachAfterDrag/detachTot:0;
+        R.posImpPerCyclePn=cycles>0?posImp/cycles*1e12:0; R.negImpPerCyclePn=cycles>0?negImp/cycles*1e12:0;
+        R.netImpPerAtpPn=atpAll>0?(posImp+negImp)/atpAll*1e12:0;
+        R.posWorkAj=posWork*1e18; R.negWorkAj=negWork*1e18;   // J → aJ
+        R.atpPerUm=netAbsAll>1e-6?atpAll/netAbsAll:Double.NaN;
+        R.activePerStep=candStepsAll>0?(double)candAccAll/candStepsAll:0; R.secPerSimS=(t1-t0)/1e9/Math.max(1e-9,nSeed*durS);
+        return R;
+    }
+    static final String FB_CSV_HEADER="model,density,dt_s,dur_s,nSeed,queryScale,vel_umPerS,vel_sd,net_nm,continuity,avgBound,avgLoadBearing,avgProp,avgDrag,avgNeutral,propFrac,dragFrac,sumProp_pN,sumDrag_pN,netAxial_pN,meanFPerProp_pN,meanFPerDrag_pN,strainProp_nm,strainDrag_nm,ageProp_ms,ageDrag_ms,distPropFromLead_um,distDragFromLead_um,nucProp_ADPPi,nucProp_ADP,nucDrag_ADPPi,nucDrag_ADP,switchPD_perMotS,detachAfterDragFrac,posImpPerCycle_pNs,negImpPerCycle_pNs,netImpPerATP_pNs,posWork_aJ,negWork_aJ,atpPerUm,activePerStep,wall_sPerSimS";
+    static void emitFBRow(Csv c,FBRes R){
+        c.row(R.id,fmt(R.density),String.format(Locale.US,"%.2e",R.dt),fmt(R.durS),R.nSeed,fmt(R.queryScale),
+            String.format(Locale.US,"%.3f",R.vel),String.format(Locale.US,"%.3f",R.velSd),String.format(Locale.US,"%.1f",R.netNm),
+            String.format(Locale.US,"%.3f",R.contMean),
+            String.format(Locale.US,"%.3f",R.avgBound),String.format(Locale.US,"%.3f",R.avgLB),String.format(Locale.US,"%.3f",R.avgProp),String.format(Locale.US,"%.3f",R.avgDrag),String.format(Locale.US,"%.3f",R.avgNeutral),
+            String.format(Locale.US,"%.3f",R.propFrac),String.format(Locale.US,"%.3f",R.dragFrac),
+            String.format(Locale.US,"%.3f",R.sumPropPn),String.format(Locale.US,"%.3f",R.sumDragPn),String.format(Locale.US,"%.3f",R.netAxialPn),
+            String.format(Locale.US,"%.4f",R.meanFProp),String.format(Locale.US,"%.4f",R.meanFDrag),
+            String.format(Locale.US,"%.2f",R.strainPropNm),String.format(Locale.US,"%.2f",R.strainDragNm),
+            String.format(Locale.US,"%.3f",R.agePropMs),String.format(Locale.US,"%.3f",R.ageDragMs),
+            String.format(Locale.US,"%.3f",R.distPropLeadUm),String.format(Locale.US,"%.3f",R.distDragLeadUm),
+            String.format(Locale.US,"%.3f",R.nucPropADPPi),String.format(Locale.US,"%.3f",R.nucPropADP),String.format(Locale.US,"%.3f",R.nucDragADPPi),String.format(Locale.US,"%.3f",R.nucDragADP),
+            String.format(Locale.US,"%.2f",R.switchPDperMotS),String.format(Locale.US,"%.3f",R.detachAfterDragFrac),
+            String.format(Locale.US,"%.4f",R.posImpPerCyclePn),String.format(Locale.US,"%.4f",R.negImpPerCyclePn),String.format(Locale.US,"%.4f",R.netImpPerAtpPn),
+            String.format(Locale.US,"%.3f",R.posWorkAj),String.format(Locale.US,"%.3f",R.negWorkAj),fmt(R.atpPerUm),
+            String.format(Locale.US,"%.0f",R.activePerStep),String.format(Locale.US,"%.1f",R.secPerSimS));
+    }
+    /** `-motor calibrated-s2-l40 -glide -forcebalance`: high-density force-balance series + optional controls.
+     *  -density <n> single density; -densset runs {2000,2500,3000,4000}; -queryscale <f> control; -append to add to a CSV. */
+    static void runGlideForceBalance(MotorModel m,String[] args){
+        if(m!=MotorModel.CALIBRATED_S2_L40){ System.out.println("REFUSED: -forcebalance is calibrated-s2-l40 only (the production surrogate). "+m.id()+" not supported."); return; }
+        double dt=2.5e-6, matX=4.0, matY=1.0, durS=0.15, queryScale=1.0; int nSeed=4; boolean set=false; double single=-1; String tag="";
+        for(int i=0;i<args.length;i++){ switch(args[i]){
+            case "-dt"->dt=Double.parseDouble(args[++i]); case "-matx"->matX=Double.parseDouble(args[++i]); case "-maty"->matY=Double.parseDouble(args[++i]);
+            case "-dur"->durS=Double.parseDouble(args[++i]); case "-seeds"->nSeed=Integer.parseInt(args[++i]);
+            case "-queryscale"->queryScale=Double.parseDouble(args[++i]); case "-densset"->set=true; case "-density"->single=Double.parseDouble(args[++i]);
+            case "-tag"->tag=args[++i]; case "-out"->OUT_DIR=args[++i]; default->{} } }
+        double savMX=G4_MX,savMY=G4_MY; G4_MX=matX; G4_MY=matY;
+        System.out.println("=== SoftBox — CANONICAL GLIDING FORCE-BALANCE (calibrated-s2-l40; amendment) ===");
+        MotorModel.CALIBRATED_S2_L40.logResolved(System.out,"-motor calibrated-s2-l40 -glide -forcebalance",dt,Double.NaN);
+        System.out.printf(Locale.US,"# lawn %g×%g µm, dt=%.2e, dur=%.3f s, %d seeds, queryScale=%.2f, neutralBand=%.3f pN. propulsive=−(F_seg·uSeg)>band (glide=pointed-first). CPU=%s%n",
+            matX,matY,dt,durS,nSeed,queryScale,FB_NEUTRAL_PN,readLoadAvg());
+        double[] densities = set? new double[]{2000,2500,3000,4000} : new double[]{single>0?single:3000};
+        Csv c=new Csv(FB_CSV_HEADER);
+        for(double d:densities){
+            FBRes R=measureGlideForceBalance(d,dt,durS,nSeed,GLIDE_BASE_SEED,queryScale); emitFBRow(c,R);
+            System.out.printf(Locale.US,"#   d=%-5.0f vel=%+.3f bound=%.2f prop=%.2f(%.0f%%) drag=%.2f(%.0f%%) net=%+.2f pN sumProp=%.2f sumDrag=%.2f fProp=%.3f fDrag=%.3f pN | switchPD=%.1f/motS detAfterDrag=%.2f | posImp=%.3f negImp=%.3f pN·s netImp/ATP=%+.4f | ATP/µm=%.0f active=%.0f wall=%.0f%n",
+                d,R.vel,R.avgBound,R.avgProp,100*R.propFrac,R.avgDrag,100*R.dragFrac,R.netAxialPn,R.sumPropPn,R.sumDragPn,R.meanFProp,R.meanFDrag,R.switchPDperMotS,R.detachAfterDragFrac,R.posImpPerCyclePn,R.negImpPerCyclePn,R.netImpPerAtpPn,R.atpPerUm,R.activePerStep,R.secPerSimS);
+        }
+        G4_MX=savMX; G4_MY=savMY;
+        String fn="forcebalance"+(tag.isEmpty()?"":"_"+tag)+(set?"_densset":String.format(Locale.US,"_d%.0f",densities[0]))+String.format(Locale.US,"_q%.1f_t%.2f.csv",queryScale,durS);
+        c.write(fn); System.out.println("# wrote "+canonDir().resolve(fn));
+    }
+
+    static void emitGlideRow(Csv c,GlideRes R){
+        c.row(R.id,fmt(R.density),String.format(Locale.US,"%.2f",R.Lfil),String.format(Locale.US,"%.2e",R.dt),fmt(R.durS),R.nSeed,R.stableSeeds,R.nMot,
+            String.format(Locale.US,"%.3f",R.velMean),String.format(Locale.US,"%.3f",R.velSd),String.format(Locale.US,"%.1f",R.netMean),
+            String.format(Locale.US,"%.3f",R.avgBound),String.format(Locale.US,"%.3f",R.avgBoundSd),String.format(Locale.US,"%.3f",R.avgLB),String.format(Locale.US,"%.3f",R.fracLB),
+            String.format(Locale.US,"%.3f",R.contMean),String.format(Locale.US,"%.3f",R.handoff),String.format(Locale.US,"%.2f",R.pDirected),
+            String.format(Locale.US,"%.1f",R.transWanderNm),String.format(Locale.US,"%.2f",R.angWanderDeg),fmt(R.atpPerUm),
+            String.format(Locale.US,"%.3f",R.bindRate),String.format(Locale.US,"%.0f",R.activePerStep),String.format(Locale.US,"%.1f",R.secPerSimS));
+    }
+    static final String GLIDE_CSV_HEADER="model,density,Lfil_um,dt_s,dur_s,nSeed,stableSeeds,nMot,vel_umPerS,vel_sd,net_nm,avgBound,avgBound_sd,avgLoadBearing,fracLoadBearing,continuity,handoff,pDirected,transWander_nm,angWander_deg,atpPerUm,bindRate_perMotPerS,activePerStep,wall_sPerSimS";
+
+    /** `-motor <id> -glide`: the canonical gliding assay for the selected model. Geometry flags:
+     *  -density <n/µm²> -matx <µm> -maty <µm> -dur <s> -seeds <n> -nseg <segments> -dt <s>. */
+    static void runMotorGliding(MotorModel m,String source,String[] args){
+        for(String a:args) if(a.equals("-forcebalance")){ runGlideForceBalance(m,args); return; }
+        double density=1000, matX=12.0, matY=1.0, durS=2.0, dt=2.5e-6; int nSeed=3;
+        int nseg=G4_NSEG;
+        for(int i=0;i<args.length;i++){ switch(args[i]){
+            case "-density"->density=Double.parseDouble(args[++i]); case "-matx"->matX=Double.parseDouble(args[++i]);
+            case "-maty"->matY=Double.parseDouble(args[++i]); case "-dur"->durS=Double.parseDouble(args[++i]);
+            case "-seeds"->nSeed=Integer.parseInt(args[++i]); case "-dt"->dt=Double.parseDouble(args[++i]);
+            case "-nseg"->nseg=Integer.parseInt(args[++i]); case "-out"->OUT_DIR=args[++i]; default->{} } }
+        double savMX=G4_MX,savMY=G4_MY; int savNSeg=G4_NSEG_RUN; G4_MX=matX; G4_MY=matY; G4_NSEG_RUN=nseg;
+        System.out.println("=== SoftBox — CANONICAL GLIDING ASSAY (CPU-only; -motor "+m.id()+" -glide) ===");
+        m.logResolved(System.out,source,dt,Double.NaN);
+        assertFrozenParamsConsistent();
+        System.out.printf(Locale.US,"# assay: density=%g/µm², lawn %g×%g µm, filament %d seg (~%.2f µm), dt=%.2e, dur=%.3f s, %d matched seeds (base %d). velocity=LS slope of centroid·b̂ (µm/s; negative=pointed-first). CPU=%s%n",
+            density,matX,matY,nseg,nseg*(G4_MONO+1)*Constants.actinMonoRadius,dt,durS,nSeed,GLIDE_BASE_SEED,readLoadAvg());
+        GlideRes R=measureGlideModel(m,density,dt,durS,nSeed,GLIDE_BASE_SEED);
+        G4_MX=savMX; G4_MY=savMY; G4_NSEG_RUN=savNSeg;
+        System.out.printf(Locale.US,"#   %s: velocity %+.3f ± %.3f µm/s (%s), net %.1f nm, avgBound %.3f±%.3f, loadBearing %.3f (%.0f%% of bound), continuity %.3f, handoff %.3f, pDirected %.2f%n",
+            m.id(),R.velMean,R.velSd,R.velMean<0?"pointed-first ✓":(R.velMean>0?"BARBED-first(!)":"~0"),R.netMean,R.avgBound,R.avgBoundSd,R.avgLB,100*R.fracLB,R.contMean,R.handoff,R.pDirected);
+        System.out.printf(Locale.US,"#   transWander %.1f nm, angWander %.2f°, ATP/µm %.1f, bindRate %.3f/mot/s, activeMotors/step %.0f, wall %.1f s/sim-s, stable %d/%d seeds%n",
+            R.transWanderNm,R.angWanderDeg,R.atpPerUm,R.bindRate,R.activePerStep,R.secPerSimS,R.stableSeeds,R.nSeed);
+        Csv c=new Csv(GLIDE_CSV_HEADER); emitGlideRow(c,R);
+        String fn="glide_"+m.id()+String.format(Locale.US,"_d%.0f_L%.0f_t%.2f.csv",density,matX,durS);
+        c.write(fn); System.out.println("# wrote "+canonDir().resolve(fn));
     }
 
     /** REGRESSION: prove that registry selection reproduces the frozen 4G-L40 and calibrated-4F-L40 paths
