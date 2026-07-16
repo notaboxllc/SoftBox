@@ -53,11 +53,20 @@ public final class TwoBodyGpuKernels {
         return Math.sqrt(2 * Constants.kT * gamma / dt) * g;
     }
 
+    /** Reinterpret-free |x| for float (bit-identical to JDK Math.abs(float) for all finite/NaN inputs). JDK 21's
+     *  Math.abs(float) lowers to a float↔int bit-reinterpret the PTX backend cannot emit; this ternary does not. */
+    static float fabs(float x) { return (x <= 0.0f) ? 0.0f - x : x; }
+
+    /** PTX-lowerable compensated log1p (Kahan/Goldberg): ln(1+x) to ~1 ulp everywhere WITHOUT the fdlibm
+     *  bit-reinterpret that JDK Math.log1p lowers to (PTX has no LOG1P intrinsic). Uses Math.log (a PTX
+     *  intrinsic). Approved expression-form substitution for lowering; universally ~1 ulp (no small-x bias). */
+    static double log1pC(double x) { double u = 1.0 + x; return (u == 1.0) ? x : Math.log(u) * (x / (u - 1.0)); }
+
     // Softplus ramp — EXACT copies (used by the calibrated supForce law).
     static double softpos(double x, double s) {
-        if (s <= 0) return Math.max(0, x);
+        if (s <= 0) return (0.0 >= x ? 0.0 : x);   // == Math.max(0.0,x); reinterpret-free (JDK Math.max uses doubleToRawLongBits)
         double z = x / s; if (z > 30) return x; if (z < -30) return s * Math.exp(z);
-        return s * Math.log1p(Math.exp(z));
+        return s * log1pC(Math.exp(z));            // compensated log1p (device-lowerable; ~1 ulp, no reinterpret)
     }
     static double softpos_d(double x, double s) {
         if (s <= 0) return x > 0 ? 1 : 0;
@@ -179,16 +188,17 @@ public final class TwoBodyGpuKernels {
             float J03 = (Jphix * bx + Jphiy * by + Jphiz * bz) * 1e-6f, J04 = (Jpsix * bx + Jpsiy * by + Jpsiz * bz) * 1e-6f;
             float J13 = (Jphix * ex + Jphiy * ey + Jphiz * ez) * 1e-6f, J14 = (Jpsix * ex + Jpsiy * ey + Jpsiz * ez) * 1e-6f;
             float J23 = (Jphix * ux + Jphiy * uy + Jphiz * uz) * 1e-6f, J24 = (Jpsix * ux + Jpsiy * uy + Jpsiz * uz) * 1e-6f;
-            // J row layout: J[k][0..4], rows k=0(B),1(E),2(U); cols 0..2 identity, col3=Jphi·axis, col4=Jpsi·axis
-            float[][] J = {
-                {1, 0, 0, J03, J04},
-                {0, 1, 0, J13, J14},
-                {0, 0, 1, J23, J24}};
+            // K = kfSI · JᵀJ, J rows [1,0,0,J03,J04]/[0,1,0,J13,J14]/[0,0,1,J23,J24]. SCALARIZED (was float[5][5]):
+            // the identity columns make every mixed term an exact 1·x / 0·x float op ⇒ the reduced forms below are
+            // bit-identical to the original loop (K00=kfSI·1, K0j=kfSI·J0j, K33/K34/K44 = kfSI·(Σ products, same order)).
+            // The kc/kb converter/bind increments (K[3][3]+=kc, K[3][4]-=kc, K[4][3]-=kc, K[4][4]+=kc+kb) and the
+            // kAxTan/kTrTan tangent increments are folded into the augmented-matrix assembly below (disjoint entries).
             float kfSI = kF8Code * 1e6f;
-            float[][] K = new float[5][5];
-            for (int i = 0; i < 5; i++) for (int j = 0; j < 5; j++)
-                K[i][j] = kfSI * (J[0][i] * J[0][j] + J[1][i] * J[1][j] + J[2][i] * J[2][j]);
-            K[3][3] += kc; K[3][4] -= kc; K[4][3] -= kc; K[4][4] += kc + kb;
+            float K00 = kfSI, K11 = kfSI, K22 = kfSI;
+            float K03 = kfSI * J03, K04 = kfSI * J04, K13 = kfSI * J13, K14 = kfSI * J14, K23 = kfSI * J23, K24 = kfSI * J24;
+            float K33 = kfSI * (J03 * J03 + J13 * J13 + J23 * J23);
+            float K34 = kfSI * (J03 * J04 + J13 * J14 + J23 * J24);
+            float K44 = kfSI * (J04 * J04 + J14 * J14 + J24 * J24);
 
             // --- supForce (anisotropic softplus tail law): F(3), kAxTan, kTrTan, kFloorTan ---
             float sp0x = supGeom.get(m),        sp0y = supGeom.get(nM + m),      sp0z = supGeom.get(2 * nM + m);
@@ -213,7 +223,7 @@ public final class TwoBodyGpuKernels {
             else {
                 double a = -qm;
                 if (buckleCrit > 0) {
-                    double k0 = ksoft + ktaut, kpost = kcompPost, acrit = buckleCrit / Math.max(1e-30, k0), sB = smoothBuck;
+                    double k0 = ksoft + ktaut, kpost = kcompPost, acrit = buckleCrit / (1e-30 >= k0 ? 1e-30 : k0), sB = smoothBuck;
                     Frest = -(k0 * a - (k0 - kpost) * softpos(a - acrit, sB)); kAxTan = k0 - (k0 - kpost) * softpos_d(a - acrit, sB);
                 } else {
                     double kcc = compFrac; Frest = -(ksoft * kcc * a + ktaut * kcc * softpos(a - dm, smA));
@@ -231,33 +241,95 @@ public final class TwoBodyGpuKernels {
             double kFloorTan = 0;
             if (zoff < -floorZ) { double pen = (-floorZ - zoff) * 1e-6; Fsx += uT2x * (kfloor * pen); Fsy += uT2y * (kfloor * pen); Fsz += uT2z * (kfloor * pen); kFloorTan = kfloor; }
 
-            K[0][0] += kAxTan; K[1][1] += kTrTan; K[2][2] += kTrTan + kFloorTan;
+            // ---- assemble the augmented 5×6 system as 30 NAMED SCALARS (was float[5][6] Msys) ----
+            // Diagonal = K + anisotropic tangent (kAxTan/kTrTan/kFloorTan; float+=double compound-narrowing) + γ/dt.
+            // Off-diagonals include the kc/kb converter/bind couplings on the [3][4]/[4][3] pair. Bit-identical to the
+            // original build: each entry's own float op sequence is preserved; disjoint entries add in any order.
             float aP = gP / dt, aphi = gPhi / dt, apsi = gPsi / dt;
-            // M = K + diag(aP,aP,aP,aphi,apsi)
-            float[][] Msys = new float[5][6];   // TODO(GPU): per-thread scratch buffer, not a local heap array
-            for (int i = 0; i < 5; i++) for (int j = 0; j < 5; j++) Msys[i][j] = K[i][j];
-            Msys[0][0] += aP; Msys[1][1] += aP; Msys[2][2] += aP; Msys[3][3] += aphi; Msys[4][4] += apsi;
-
-            // RHS F
+            float a00 = (float) ((double) K00 + kAxTan) + aP;
+            float a01 = 0f, a02 = 0f, a03 = K03, a04 = K04;
+            float a10 = 0f, a11 = (float) ((double) K11 + kTrTan) + aP, a12 = 0f, a13 = K13, a14 = K14;
+            float a20 = 0f, a21 = 0f, a22 = (float) ((double) K22 + (kTrTan + kFloorTan)) + aP, a23 = K23, a24 = K24;
+            float a30 = K03, a31 = K13, a32 = K23, a33 = (K33 + kc) + aphi, a34 = K34 - kc;
+            float a40 = K04, a41 = K14, a42 = K24, a43 = K34 - kc, a44 = (K44 + (kc + kb)) + apsi;
+            // RHS (column 5)
             float th = psi - phi;
             float caF_x = cpy * f8z - cpz * f8y, caF_y = cpz * f8x - cpx * f8z, caF_z = cpx * f8y - cpy * f8x;
             float fcF_x = fcy * f8z - fcz * f8y, fcF_y = fcz * f8x - fcx * f8z, fcF_z = fcx * f8y - fcy * f8x;
             float QphiF8 = (ex * caF_x + ey * caF_y + ez * caF_z) * 1e-6f;
             float QpsiF8 = (ex * fcF_x + ey * fcF_y + ez * fcF_z) * 1e-6f;
-            Msys[0][5] = (f8x * bx + f8y * by + f8z * bz) + (float) (Fsx * bx + Fsy * by + Fsz * bz);
-            Msys[1][5] = (f8x * ex + f8y * ey + f8z * ez) + (float) (Fsx * ex + Fsy * ey + Fsz * ez);
-            Msys[2][5] = (f8x * ux + f8y * uy + f8z * uz) + (float) (Fsx * ux + Fsy * uy + Fsz * uz);
-            Msys[3][5] = QphiF8 + kc * (th - thetaS);
-            Msys[4][5] = QpsiF8 - kc * (th - thetaS) - kb * (psi - psiActin);
+            float a05 = (f8x * bx + f8y * by + f8z * bz) + (float) (Fsx * bx + Fsy * by + Fsz * bz);
+            float a15 = (f8x * ex + f8y * ey + f8z * ez) + (float) (Fsx * ex + Fsy * ey + Fsz * ez);
+            float a25 = (f8x * ux + f8y * uy + f8z * uz) + (float) (Fsx * ux + Fsy * uy + Fsz * uz);
+            float a35 = QphiF8 + kc * (th - thetaS);
+            float a45 = QpsiF8 - kc * (th - thetaS) - kb * (psi - psiActin);
             if (brown != 0) {
-                Msys[0][5] += (float) brownTorqueD(gP, dt, seed, tt, 0x4F1L);
-                Msys[1][5] += (float) brownTorqueD(gP, dt, seed, tt, 0x4F2L);
-                Msys[2][5] += (float) brownTorqueD(gP, dt, seed, tt, 0x4F3L);
-                Msys[3][5] += (float) brownTorqueD(gPhi, dt, seed, tt, 0x4F4L);
-                Msys[4][5] += (float) brownTorqueD(gPsi, dt, seed, tt, 0x4F5L);
+                a05 += (float) brownTorqueD(gP, dt, seed, tt, 0x4F1L);
+                a15 += (float) brownTorqueD(gP, dt, seed, tt, 0x4F2L);
+                a25 += (float) brownTorqueD(gP, dt, seed, tt, 0x4F3L);
+                a35 += (float) brownTorqueD(gPhi, dt, seed, tt, 0x4F4L);
+                a45 += (float) brownTorqueD(gPsi, dt, seed, tt, 0x4F5L);
             }
-            gaussJordan5(Msys);   // solve in place; solution in column 5
-            float dqB = Msys[0][5], dqE = Msys[1][5], dqU = Msys[2][5], dqPhi = Msys[3][5], dqPsi = Msys[4][5];
+
+            // ---- HAND-UNROLLED 5×5 Gauss–Jordan with partial pivoting (bit-faithful to gaussJordan5/solveLin):
+            //      same pivot rule (first strict-max |·|), same row swaps, same k=c..5 elimination order. ----
+            int p; float best, tv, piv, fac, s;
+            // column 0
+            p = 0; best = fabs(a00);
+            tv = fabs(a10); if (tv > best) { best = tv; p = 1; }
+            tv = fabs(a20); if (tv > best) { best = tv; p = 2; }
+            tv = fabs(a30); if (tv > best) { best = tv; p = 3; }
+            tv = fabs(a40); if (tv > best) { best = tv; p = 4; }
+            if (p == 1)      { s=a00;a00=a10;a10=s; s=a01;a01=a11;a11=s; s=a02;a02=a12;a12=s; s=a03;a03=a13;a13=s; s=a04;a04=a14;a14=s; s=a05;a05=a15;a15=s; }
+            else if (p == 2) { s=a00;a00=a20;a20=s; s=a01;a01=a21;a21=s; s=a02;a02=a22;a22=s; s=a03;a03=a23;a23=s; s=a04;a04=a24;a24=s; s=a05;a05=a25;a25=s; }
+            else if (p == 3) { s=a00;a00=a30;a30=s; s=a01;a01=a31;a31=s; s=a02;a02=a32;a32=s; s=a03;a03=a33;a33=s; s=a04;a04=a34;a34=s; s=a05;a05=a35;a35=s; }
+            else if (p == 4) { s=a00;a00=a40;a40=s; s=a01;a01=a41;a41=s; s=a02;a02=a42;a42=s; s=a03;a03=a43;a43=s; s=a04;a04=a44;a44=s; s=a05;a05=a45;a45=s; }
+            piv = a00;
+            fac = a10 / piv; a10 -= fac*a00; a11 -= fac*a01; a12 -= fac*a02; a13 -= fac*a03; a14 -= fac*a04; a15 -= fac*a05;
+            fac = a20 / piv; a20 -= fac*a00; a21 -= fac*a01; a22 -= fac*a02; a23 -= fac*a03; a24 -= fac*a04; a25 -= fac*a05;
+            fac = a30 / piv; a30 -= fac*a00; a31 -= fac*a01; a32 -= fac*a02; a33 -= fac*a03; a34 -= fac*a04; a35 -= fac*a05;
+            fac = a40 / piv; a40 -= fac*a00; a41 -= fac*a01; a42 -= fac*a02; a43 -= fac*a03; a44 -= fac*a04; a45 -= fac*a05;
+            // column 1
+            p = 1; best = fabs(a11);
+            tv = fabs(a21); if (tv > best) { best = tv; p = 2; }
+            tv = fabs(a31); if (tv > best) { best = tv; p = 3; }
+            tv = fabs(a41); if (tv > best) { best = tv; p = 4; }
+            if (p == 2)      { s=a10;a10=a20;a20=s; s=a11;a11=a21;a21=s; s=a12;a12=a22;a22=s; s=a13;a13=a23;a23=s; s=a14;a14=a24;a24=s; s=a15;a15=a25;a25=s; }
+            else if (p == 3) { s=a10;a10=a30;a30=s; s=a11;a11=a31;a31=s; s=a12;a12=a32;a32=s; s=a13;a13=a33;a33=s; s=a14;a14=a34;a34=s; s=a15;a15=a35;a35=s; }
+            else if (p == 4) { s=a10;a10=a40;a40=s; s=a11;a11=a41;a41=s; s=a12;a12=a42;a42=s; s=a13;a13=a43;a43=s; s=a14;a14=a44;a44=s; s=a15;a15=a45;a45=s; }
+            piv = a11;
+            fac = a01 / piv; a01 -= fac*a11; a02 -= fac*a12; a03 -= fac*a13; a04 -= fac*a14; a05 -= fac*a15;
+            fac = a21 / piv; a21 -= fac*a11; a22 -= fac*a12; a23 -= fac*a13; a24 -= fac*a14; a25 -= fac*a15;
+            fac = a31 / piv; a31 -= fac*a11; a32 -= fac*a12; a33 -= fac*a13; a34 -= fac*a14; a35 -= fac*a15;
+            fac = a41 / piv; a41 -= fac*a11; a42 -= fac*a12; a43 -= fac*a13; a44 -= fac*a14; a45 -= fac*a15;
+            // column 2
+            p = 2; best = fabs(a22);
+            tv = fabs(a32); if (tv > best) { best = tv; p = 3; }
+            tv = fabs(a42); if (tv > best) { best = tv; p = 4; }
+            if (p == 3)      { s=a20;a20=a30;a30=s; s=a21;a21=a31;a31=s; s=a22;a22=a32;a32=s; s=a23;a23=a33;a33=s; s=a24;a24=a34;a34=s; s=a25;a25=a35;a35=s; }
+            else if (p == 4) { s=a20;a20=a40;a40=s; s=a21;a21=a41;a41=s; s=a22;a22=a42;a42=s; s=a23;a23=a43;a43=s; s=a24;a24=a44;a44=s; s=a25;a25=a45;a45=s; }
+            piv = a22;
+            fac = a02 / piv; a02 -= fac*a22; a03 -= fac*a23; a04 -= fac*a24; a05 -= fac*a25;
+            fac = a12 / piv; a12 -= fac*a22; a13 -= fac*a23; a14 -= fac*a24; a15 -= fac*a25;
+            fac = a32 / piv; a32 -= fac*a22; a33 -= fac*a23; a34 -= fac*a24; a35 -= fac*a25;
+            fac = a42 / piv; a42 -= fac*a22; a43 -= fac*a23; a44 -= fac*a24; a45 -= fac*a25;
+            // column 3
+            p = 3; best = fabs(a33);
+            tv = fabs(a43); if (tv > best) { best = tv; p = 4; }
+            if (p == 4)      { s=a30;a30=a40;a40=s; s=a31;a31=a41;a41=s; s=a32;a32=a42;a42=s; s=a33;a33=a43;a43=s; s=a34;a34=a44;a44=s; s=a35;a35=a45;a45=s; }
+            piv = a33;
+            fac = a03 / piv; a03 -= fac*a33; a04 -= fac*a34; a05 -= fac*a35;
+            fac = a13 / piv; a13 -= fac*a33; a14 -= fac*a34; a15 -= fac*a35;
+            fac = a23 / piv; a23 -= fac*a33; a24 -= fac*a34; a25 -= fac*a35;
+            fac = a43 / piv; a43 -= fac*a33; a44 -= fac*a34; a45 -= fac*a35;
+            // column 4 (no pivot search / swap: only row 4 remains)
+            piv = a44;
+            fac = a04 / piv; a04 -= fac*a44; a05 -= fac*a45;
+            fac = a14 / piv; a14 -= fac*a44; a15 -= fac*a45;
+            fac = a24 / piv; a24 -= fac*a44; a25 -= fac*a45;
+            fac = a34 / piv; a34 -= fac*a44; a35 -= fac*a45;
+            // back-substitution: x[i] = M[i][5] / M[i][i]
+            float dqB = a05 / a00, dqE = a15 / a11, dqU = a25 / a22, dqPhi = a35 / a33, dqPsi = a45 / a44;
             // P += B*dqB*1e6 + E*dqE*1e6 + U*dqU*1e6 ; A = P
             Px += (bx * dqB + ex * dqE + ux * dqU) * 1e6f;
             Py += (by * dqB + ey * dqE + uy * dqU) * 1e6f;
@@ -293,24 +365,6 @@ public final class TwoBodyGpuKernels {
         outGeom.set(m, Cx); outGeom.set(nM + m, Cy); outGeom.set(2 * nM + m, Cz);
         outGeom.set(3 * nM + m, xHx); outGeom.set(4 * nM + m, xHy); outGeom.set(5 * nM + m, xHz);
         outGeom.set(6 * nM + m, xF8x); outGeom.set(7 * nM + m, xF8y); outGeom.set(8 * nM + m, xF8z);
-    }
-
-    /** In-place float32 Gauss–Jordan with partial pivoting on the augmented [5][6] system (replicates
-     *  TwoBodyConverterMotor.solveLin). Solution ends up in column 5 (Msys[i][5] = x[i]). */
-    private static void gaussJordan5(float[][] Msys) {
-        int n = 5;
-        for (int c = 0; c < n; c++) {
-            int p = c;
-            for (int r = c + 1; r < n; r++) if (Math.abs(Msys[r][c]) > Math.abs(Msys[p][c])) p = r;
-            float[] tmp = Msys[c]; Msys[c] = Msys[p]; Msys[p] = tmp;
-            float piv = Msys[c][c];
-            for (int r = 0; r < n; r++) {
-                if (r == c) continue;
-                float fac = Msys[r][c] / piv;
-                for (int k = c; k <= n; k++) Msys[r][k] -= fac * Msys[c][k];
-            }
-        }
-        for (int i = 0; i < n; i++) Msys[i][n] = Msys[i][n] / Msys[i][i];
     }
 
     // ===============================================================================================

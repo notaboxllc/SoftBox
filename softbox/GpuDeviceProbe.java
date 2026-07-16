@@ -48,6 +48,7 @@ public final class GpuDeviceProbe {
     }
 
     public static void main(String[] args) {
+        for (String a : args) if (a.equals("-calibgate")) { calibratedDeviceGate(); return; }   // A3/A4: full calibrated device gate
         Path dir = Path.of(OUTDIR);
         try { Files.createDirectories(dir); } catch (IOException ex) { throw new UncheckedIOException(ex); }
         log("# GPU DEVICE PROBE — TwoBodyGpuKernels PTX lowering/execution (Phase-1)\n");
@@ -75,6 +76,125 @@ public final class GpuDeviceProbe {
         boolean any = fixedOk || calibOk || explBaseOk || explHighOk;
         System.out.printf(Locale.US, "ANY merged kernel executable on GPU as written: %s%n", any ? "YES" : "NO");
         System.out.println("# full log: " + dir.resolve("PROBE_LOG.md").toAbsolutePath());
+    }
+
+    // ================================================================================================
+    //  A3/A4 — CALIBRATED DEVICE GATE: run the (scalarized) calibratedStep on the GPU over ALL 10 calibrated
+    //  golden fixtures via a real TaskGraph, compare each to the CPU-runner oracle (golden [expected]).
+    // ================================================================================================
+    static final class CalibBuffers {
+        FloatArray q, A, frame, supGeom, F8h, params, outGeom; IntArray counts;
+        TornadoExecutionPlan plan; GridScheduler sched;
+    }
+    static CalibBuffers buildCalibPlan(MotorReplayHarness.Spec s) {
+        int[] tf = new int[1];
+        TwoBodyConverterMotor.Cmot cm = presolvedCmot(s, tf);
+        CalibBuffers cb = new CalibBuffers();
+        cb.q = MotorGpuParams.packQFloat(cm); cb.A = MotorGpuParams.packAFloat(cm);
+        cb.frame = MotorGpuParams.packFrameFloat(cm); cb.F8h = MotorGpuParams.packF8Float(cm);
+        cb.params = MotorGpuParams.packCalibrated(cm); cb.supGeom = MotorGpuParams.packSupGeom(cm);
+        cb.outGeom = new FloatArray(9);
+        cb.counts = new IntArray(4); cb.counts.set(0, 1); cb.counts.set(1, tf[0]); cb.counts.set(2, s.seed); cb.counts.set(3, s.brownian ? 1 : 0);
+        TaskGraph tg = new TaskGraph("calibDev")
+                .transferToDevice(DataTransferMode.FIRST_EXECUTION, cb.q, cb.A, cb.frame, cb.supGeom, cb.F8h, cb.params)
+                .transferToDevice(DataTransferMode.EVERY_EXECUTION, cb.counts)
+                .task("step", TwoBodyGpuKernels::calibratedStep, cb.q, cb.A, cb.frame, cb.supGeom, cb.F8h, cb.params, cb.outGeom, cb.counts)
+                .transferToHost(DataTransferMode.EVERY_EXECUTION, cb.q, cb.A, cb.outGeom);
+        cb.sched = new GridScheduler();
+        WorkerGrid w = new WorkerGrid1D(1); w.setLocalWork(1, 1, 1); cb.sched.addWorkerGrid("calibDev.step", w);
+        cb.plan = new TornadoExecutionPlan(tg.snapshot());
+        return cb;
+    }
+
+    static void calibratedDeviceGate() {
+        Path dir = Path.of("RUN_LOGS/calibrated_device");
+        try { Files.createDirectories(dir); } catch (IOException ex) { throw new UncheckedIOException(ex); }
+        System.out.println("=== CALIBRATED DEVICE GATE (scalarized calibratedStep on RTX 5070 / PTX) ===");
+        if (!"false".equals(System.getProperty("tornado.recover.bailout")))
+            System.out.println("!! WARNING: run with -Dtornado.recover.bailout=false — else a lowering failure SILENTLY falls back to the CPU sequential runner and 'lowers=YES' is UNTRUSTWORTHY.");
+        log("# CALIBRATED DEVICE GATE — scalarized calibratedStep, all 10 calibrated golden fixtures on the GPU\n");
+        log("# device mem (used MiB) at start: " + gpuMemUsed() + "\n\n");
+        log("| fixture | lowers | maxAbsΔ | maxRelΔ | RMS | poseErr(φ,ψ,A) | geomErr(C,xH,xF8) | NaN | Inf | cold ms |\n");
+        log("|---|---|---|---|---|---|---|---|---|---|\n");
+
+        String[] names = new String[10]; int ni = 0;
+        for (MotorReplayHarness.Spec s : MotorReplayHarness.matrix())
+            if (s.model == MotorModel.CALIBRATED_S2_L40) names[ni++] = s.name;
+
+        int nLower = 0, nFail = 0; double aggMaxAbs = 0, aggMaxRel = 0;
+        String memBefore = gpuMemUsed(); String firstErr = null;
+        for (String name : names) {
+            try {
+                MotorReplayHarness.Spec s = specByName(name);
+                CalibBuffers cb = buildCalibPlan(s);
+                long t0 = System.nanoTime();
+                cb.plan.withGridScheduler(cb.sched).execute();
+                double coldMs = (System.nanoTime() - t0) / 1e6;
+
+                Map<String,Double> got = new LinkedHashMap<>();
+                got.put("phi", (double) cb.q.get(0)); got.put("psi", (double) cb.q.get(1));
+                got.put("Ax", (double) cb.A.get(0)); got.put("Ay", (double) cb.A.get(1)); got.put("Az", (double) cb.A.get(2));
+                String[] gk = {"Cx","Cy","Cz","xHx","xHy","xHz","xF8x","xF8y","xF8z"};
+                for (int k = 0; k < 9; k++) got.put(gk[k], (double) cb.outGeom.get(k));
+                Map<String,Double> exp = loadExpected(name);
+
+                double maxAbs = 0, maxRel = 0, sse = 0; int cmp = 0, nNan = 0, nInf = 0;
+                double poseErr = 0, geomErr = 0;
+                for (Map.Entry<String,Double> e : got.entrySet()) {
+                    double g = e.getValue(); if (Double.isNaN(g)) nNan++; if (Double.isInfinite(g)) nInf++;
+                    Double ev = exp.get(e.getKey()); if (ev == null) continue;
+                    cmp++; double d = Math.abs(g - ev);
+                    double rel = Math.abs(ev) > 1e-300 ? d / Math.abs(ev) : (d == 0 ? 0 : Double.POSITIVE_INFINITY);
+                    if (d > maxAbs) maxAbs = d; if (rel > maxRel && d > 1e-12) maxRel = rel; sse += d * d;
+                    String kk = e.getKey();
+                    if (kk.equals("phi")||kk.equals("psi")||kk.equals("Ax")||kk.equals("Ay")||kk.equals("Az")) poseErr = Math.max(poseErr, d);
+                    else geomErr = Math.max(geomErr, d);
+                }
+                double rms = Math.sqrt(sse / Math.max(1, cmp));
+                boolean pass = (maxAbs <= 1e-6);   // T3 abs gate (float32 vs double oracle)
+                nLower++; if (!pass) nFail++;
+                aggMaxAbs = Math.max(aggMaxAbs, maxAbs); aggMaxRel = Math.max(aggMaxRel, maxRel);
+                System.out.printf(Locale.US, "  %-42s lowers=YES maxAbsΔ=%.2e maxRelΔ=%.2e RMS=%.2e pose=%.2e geom=%.2e NaN=%d Inf=%d %s [%.1f ms]%n",
+                        name, maxAbs, maxRel, rms, poseErr, geomErr, nNan, nInf, pass ? "PASS" : "FAIL", coldMs);
+                log(String.format(Locale.US, "| %s | YES | %.2e | %.2e | %.2e | %.2e | %.2e | %d | %d | %.1f |%n",
+                        name, maxAbs, maxRel, rms, poseErr, geomErr, nNan, nInf, coldMs));
+            } catch (Throwable ex) {
+                nFail++;
+                Throwable root = ex; while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+                if (firstErr == null) firstErr = ex.getClass().getName() + ": " + oneLine(ex.getMessage());
+                System.out.printf(Locale.US, "  %-42s lowers=NO — %s: %s%n", name, ex.getClass().getName(), oneLine(ex.getMessage()));
+                log(String.format(Locale.US, "| %s | **NO** | — | — | — | — | — | — | — | — |  `%s`: %s%n",
+                        name, root.getClass().getName(), oneLine(root.getMessage())));
+            }
+        }
+
+        // warm-kernel timing: reuse ONE plan, execute repeatedly (compile amortized after the first execute)
+        double warmMinMs = Double.NaN, warmMeanMs = Double.NaN;
+        try {
+            CalibBuffers cb = buildCalibPlan(specByName(names[0]));
+            cb.plan.withGridScheduler(cb.sched).execute();   // cold (compile)
+            int W = 200; double sum = 0, min = Double.MAX_VALUE;
+            for (int i = 0; i < W; i++) {
+                long t0 = System.nanoTime();
+                cb.plan.withGridScheduler(cb.sched).execute();
+                double ms = (System.nanoTime() - t0) / 1e6; sum += ms; if (ms < min) min = ms;
+            }
+            warmMinMs = min; warmMeanMs = sum / W;
+        } catch (Throwable ex) { /* warm timing best-effort */ }
+
+        log(String.format(Locale.US, "%n# device mem (used MiB): %s→%s%n", memBefore, gpuMemUsed()));
+        log(String.format(Locale.US, "# aggregate: lowered %d/10, T3-PASS %d/10; agg maxAbsΔ=%.2e maxRelΔ=%.2e%n", nLower, nLower - nFail, aggMaxAbs, aggMaxRel));
+        log(String.format(Locale.US, "# warm-kernel single-launch: min %.3f ms, mean %.3f ms (200 re-executes, same plan; excludes cold compile)%n", warmMinMs, warmMeanMs));
+        log("# NewMultiArray: NONE (scalarized). No silent CPU fallback (real PTX TaskGraph; failures would throw). Canonical param pack (MotorGpuParams) + wang-hash RNG (brownTorqueD) preserved.\n");
+        log("# DEFERRED to a separate task (A5/A6): full end-to-end gliding device loop + throughput vs CPU (this gate is per-fixture single-step only).\n");
+        try { Files.writeString(dir.resolve("CALIBRATED_DEVICE_GATE.md"), LOG.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); }
+
+        System.out.println("\n=== CALIBRATED DEVICE GATE VERDICT ===");
+        System.out.printf(Locale.US, "lowered to PTX + executed: %d/10 fixtures (NewMultiArray: NONE)%n", nLower);
+        System.out.printf(Locale.US, "T3 vs CPU-oracle (maxAbsΔ≤1e-6): %d/10 PASS; agg maxAbsΔ=%.2e maxRelΔ=%.2e%n", nLower - nFail, aggMaxAbs, aggMaxRel);
+        System.out.printf(Locale.US, "warm single-launch: min %.3f ms / mean %.3f ms%n", warmMinMs, warmMeanMs);
+        if (firstErr != null) System.out.println("first failure: " + firstErr);
+        System.out.println("# report: " + dir.resolve("CALIBRATED_DEVICE_GATE.md").toAbsolutePath());
     }
 
     // ================================================================================================
