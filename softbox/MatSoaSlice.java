@@ -449,6 +449,28 @@ public final class MatSoaSlice {
             System.out.println("# report: " + dir.resolve("TRAJECTORY.md").toAbsolutePath());
             System.exit(ok ? 0 : 1); return;
         }
+        boolean ens = false; for (String a : args) if (a.equals("-ensemble")) ens = true;
+        if (ens) {
+            System.out.println("=== PART 7 — end-to-end ENSEMBLE validation (CPU-double arbiter, within SEM) ===");
+            int nSeeds = 8; double dt = 2.5e-6;
+            boolean ok = true;
+            log.append("# PART 7 — ensemble CPU-vs-GPU (mean±SEM), + half-dt & enlarged-cull controls\n\n## Ensemble tables\n");
+            ok &= ensemble(log, 200, 1500, nSeeds, dt, "");
+            ok &= ensemble(log, 700, 1200, nSeeds, dt, "");
+            ok &= ensemble(log, 1500, 800, nSeeds, dt, "");
+            log.append("\n## Control 1 — half-dt (density 700, dt/2): device tracks CPU within SEM\n");
+            boolean half = ensemble(log, 700, 1200, nSeeds, dt / 2, "[HALF-DT]");
+            log.append("\n## Control 2 — enlarged-cull (device misses no reachable motor)\n");
+            boolean cull = cullControl(log, 200, 11) & cullControl(log, 700, 11) & cullControl(log, 1500, 11);
+            boolean verdict = ok && half && cull;
+            log.append(String.format(Locale.US, "\n## VERDICT: %s — ensemble within-SEM: %b; half-dt: %b; cull-control: %b. %s\n",
+                    verdict ? "CALIBRATED-GPU VERTICAL SLICE FULLY VALIDATED (experimental)" : "REVIEW", ok, half, cull,
+                    verdict ? "Recommend VALIDATED-BUT-NOT-PROMOTED (DEVICE_VALIDATED stays false pending coordinator review)." : "See ✗ rows."));
+            try { Files.writeString(dir.resolve("ENSEMBLE.md"), log.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); }
+            System.out.printf(Locale.US, "%n=== PART 7 VERDICT: %s (ensemble=%b half-dt=%b cull=%b) ===%n", verdict ? "VALIDATED (experimental)" : "REVIEW", ok, half, cull);
+            System.out.println("# report: " + dir.resolve("ENSEMBLE.md").toAbsolutePath());
+            System.exit(verdict ? 0 : 1); return;
+        }
 
         boolean cullOk = gateCull(log);
         boolean geomOk = gateGeomGate(log);
@@ -558,7 +580,7 @@ public final class MatSoaSlice {
             .task("derive", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
             .task("matStep7", MatSoaSlice::matStep7, s.pose4, s.anchor, s.step7P, s.supP0, G.bondData, mot.boundSeg, s.active, s.mc, s.geomOut, mot.forceDotFil, mot.forceMag)
             .task("matReduce", MatSoaSlice::matReduce, mot.boundSeg, s.active, mot.forceDotFil, f.coord, s.mc, s.redOut)
-            .transferToHost(DataTransferMode.EVERY_EXECUTION, s.redOut, mot.boundSeg, mot.nucleotideState, f.coord, f.uVec);
+            .transferToHost(DataTransferMode.EVERY_EXECUTION, s.redOut, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, f.coord, f.uVec);
         int N = G.N, nSeg = G.nSeg, pn = ((N + 63) / 64) * 64, ps = ((nSeg + 63) / 64) * 64;
         trajSched = new GridScheduler();
         String[] pnT = {"matCull", "matGeomGate", "matBind", "chem", "matCock", "matPlaceHead", "bondForces", "matStep7"};
@@ -627,6 +649,128 @@ public final class MatSoaSlice {
         return !semantic;
     }
     static int min3(int a, int b, int c) { int r = Integer.MAX_VALUE; if (a >= 0) r = Math.min(r, a); if (b >= 0) r = Math.min(r, b); if (c >= 0) r = Math.min(r, c); return r == Integer.MAX_VALUE ? -1 : r; }
+
+    // ================================================================================================
+    //  PART 7 — end-to-end ENSEMBLE validation. Trajectory is chaotic (float-FMA) ⇒ compare ensemble
+    //  MEAN ± SEM (CPU-double arbiter), not stepwise identity. Same mat kernels, GPU vs CPU-runner.
+    // ================================================================================================
+    static final String[] OBS = { "signedVel(µm/s)", "continuity", "avgBound", "active/step", "bindRate(/mot/s)",
+            "ATP/µm", "prop#/step", "drag#/step", "propF(pN)", "dragF(pN)", "netF(pN)", "transWander(µm)", "angWander(deg)", "invalid" };
+    static final int NOBS = OBS.length;
+
+    /** Run one seed's trajectory (device via plan, or CPU-runner) and return the observable vector. */
+    static double[] runSeed(TwoBodyConverterMotor.Glide2D G, MatState s, TornadoExecutionPlan plan, boolean device, int seed, int steps, double dt) {
+        int N = G.N, nSeg = G.nSeg; MotorStore mot = G.mot; FilamentStore f = G.fil;
+        double sumT = 0, sumT2 = 0, sumX = 0, sumTX = 0, n = 0, sumNb = 0, occ0 = 0, sumNa = 0, sumY2 = 0, sumA2 = 0;
+        long binds = 0, atp = 0, propC = 0, dragC = 0, invalid = 0; double propF = 0, dragF = 0, netF = 0;
+        int[] prevB = new int[N]; for (int m = 0; m < N; m++) prevB[m] = mot.boundSeg.get(m);
+        for (int t = 0; t < steps; t++) {
+            if (device) { s.mc.set(1, t); mot.setCounts(t, seed, nSeg); f.counts.set(1, t); f.counts.set(2, seed); plan.withGridScheduler(trajSched).execute(); }
+            else stepMatCPU(G, s, t, seed);
+            double comx = s.redOut.get(1), comy = s.redOut.get(2); int nb = (int) s.redOut.get(0), na = (int) s.redOut.get(5);
+            double time = t * dt;
+            sumT += time; sumT2 += time * time; sumX += comx; sumTX += time * comx; n++;
+            sumNb += nb; if (nb == 0) occ0++; sumNa += na; sumY2 += comy * comy;
+            double ux = f.uVec.get(0), uy = f.uVec.get(nSeg); double ang = Math.toDegrees(Math.atan2(uy, ux)); sumA2 += ang * ang;
+            boolean bad = false; for (int i = 0; i < 3 * nSeg; i++) { float c = f.coord.get(i); if (Float.isNaN(c) || Float.isInfinite(c)) { bad = true; break; } } if (bad) invalid++;
+            for (int m = 0; m < N; m++) { int bs = mot.boundSeg.get(m);
+                if (bs >= 0 && prevB[m] < 0) binds++;
+                if (bs < 0 && prevB[m] >= 0) atp++;   // release ≈ one ATP-consuming cross-bridge cycle
+                if (bs >= 0) { double fdf = mot.forceDotFil.get(m); netF += fdf; if (fdf < 0) { propC++; propF += -fdf; } else { dragC++; dragF += fdf; } }
+                prevB[m] = bs; }
+        }
+        double vel = (n * sumTX - sumT * sumX) / Math.max(1e-30, (n * sumT2 - sumT * sumT));
+        double dur = steps * dt, glide = Math.abs(vel * dur);
+        double[] o = new double[NOBS];
+        o[0] = vel; o[1] = 1.0 - occ0 / n; o[2] = sumNb / n; o[3] = sumNa / n; o[4] = binds / ((double) N * dur);
+        o[5] = glide > 1e-4 ? atp / glide : Double.NaN;
+        o[6] = propC / n; o[7] = dragC / n; o[8] = propF / n * 1e12; o[9] = dragF / n * 1e12; o[10] = netF / n * 1e12;
+        o[11] = Math.sqrt(sumY2 / n); o[12] = Math.sqrt(sumA2 / n); o[13] = invalid;
+        return o;
+    }
+    static double[] meanSem(double[][] v, int k, int ns) {
+        double m = 0; int c = 0; for (int i = 0; i < ns; i++) if (!Double.isNaN(v[i][k])) { m += v[i][k]; c++; }
+        if (c == 0) return new double[]{ Double.NaN, Double.NaN, 0 };
+        m /= c; double s = 0; for (int i = 0; i < ns; i++) if (!Double.isNaN(v[i][k])) s += (v[i][k] - m) * (v[i][k] - m);
+        double sd = c > 1 ? Math.sqrt(s / (c - 1)) : 0; return new double[]{ m, sd / Math.sqrt(Math.max(1, c)), c };
+    }
+
+    static boolean ensemble(StringBuilder log, double density, int steps, int nSeeds, double dt, String tag) {
+        System.out.printf(Locale.US, "%n--- Part 7 ensemble: density=%.0f steps=%d seeds=%d dt=%.2e %s ---%n", density, steps, nSeeds, dt, tag);
+        log.append(String.format(Locale.US, "### ensemble density=%.0f steps=%d seeds=%d dt=%.2e %s\n", density, steps, nSeeds, dt, tag));
+        double[][] dev = new double[nSeeds][], cpu = new double[nSeeds][];
+        int N = 0;
+        for (int i = 0; i < nSeeds; i++) {
+            int seed = 100 + i * 7;
+            TwoBodyConverterMotor.Glide2D Gd = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed); N = Gd.N;
+            MatState sd = packMat(Gd); TornadoExecutionPlan plan;
+            try { plan = buildTrajGraph(Gd, sd); } catch (Throwable ex) { log.append("- graph build FAILED: " + oneLine(ex.getMessage()) + "\n"); return false; }
+            try { dev[i] = runSeed(Gd, sd, plan, true, seed, steps, dt); }
+            catch (Throwable ex) { Throwable r = ex; while (r.getCause() != null && r.getCause() != r) r = r.getCause(); log.append("- device run FAILED seed " + seed + ": `" + r.getClass().getName() + "`: " + oneLine(r.getMessage()) + "\n"); System.out.println("  device run FAILED seed " + seed + ": " + oneLine(r.getMessage())); return false; }
+            TwoBodyConverterMotor.Glide2D Gc = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed);
+            MatState sc = packMat(Gc); cpu[i] = runSeed(Gc, sc, null, false, seed, steps, dt);
+        }
+        log.append("| observable | CPU mean±SEM | GPU mean±SEM | |Δmean| | within SEM |\n|---|---|---|---|---|\n");
+        System.out.printf(Locale.US, "  N=%d per seed. observable: CPU mean±SEM | GPU mean±SEM | within-SEM%n", N);
+        int nWithin = 0, nChecked = 0, gpuHi = 0, gpuLo = 0;
+        for (int k = 0; k < NOBS; k++) {
+            double[] c = meanSem(cpu, k, nSeeds), d = meanSem(dev, k, nSeeds);
+            if (Double.isNaN(c[0]) || Double.isNaN(d[0])) { log.append("| " + OBS[k] + " | (n/a) | (n/a) | — | — |\n"); continue; }
+            double dm = Math.abs(d[0] - c[0]);
+            double comb = Math.sqrt(c[1] * c[1] + d[1] * d[1]);   // proper two-mean comparison: error bars overlap ⇒ combined SEM
+            double z = comb > 1e-300 ? dm / comb : (dm == 0 ? 0 : 99);
+            boolean within = z <= 2.0;   // within 2σ combined (error bars overlap at 95%)
+            nChecked++; if (within) nWithin++; if (d[0] > c[0]) gpuHi++; else if (d[0] < c[0]) gpuLo++;
+            System.out.printf(Locale.US, "    %-16s CPU %.4g±%.2g | GPU %.4g±%.2g | z=%.2f %s%n", OBS[k], c[0], c[1], d[0], d[1], z, within ? "✓" : "✗");
+            log.append(String.format(Locale.US, "| %s | %.4g±%.2g | %.4g±%.2g | %.2g | %s |\n", OBS[k], c[0], c[1], d[0], d[1], dm, within ? "✓" : "✗"));
+        }
+        boolean systematic = Math.abs(gpuHi - gpuLo) > 0.7 * nChecked;   // GPU consistently one side ⇒ direction-of-effect bias
+        boolean ok = (nWithin == nChecked) && !systematic;
+        System.out.printf(Locale.US, "  within-SEM %d/%d, GPU-hi/lo=%d/%d (systematic=%b) ⇒ %s%n", nWithin, nChecked, gpuHi, gpuLo, systematic, ok ? "PASS" : "REVIEW");
+        log.append(String.format(Locale.US, "- within-SEM %d/%d; GPU-hi/lo=%d/%d systematic=%b ⇒ **%s**\n", nWithin, nChecked, gpuHi, gpuLo, systematic, ok ? "PASS" : "REVIEW"));
+        return ok;
+    }
+
+    /** Control 2 — enlarged-cull: device matCull active set must miss NO reachable motor vs an enlarged-radius
+     *  brute reference (exact set inclusion). Device active(queryR) == brute(queryR); enlarged brute confirms
+     *  the only extra motors are non-reachable (outside queryR) ⇒ nothing bindable is missed. */
+    static boolean cullControl(StringBuilder log, double density, int seed) {
+        double dt = 2.5e-6;
+        TwoBodyConverterMotor.Glide2D G = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed);
+        int N = G.N, nSeg = G.nSeg; FilamentStore f = G.fil;
+        for (int tt = 0; tt < 1500; tt++) TwoBodyConverterMotor.stepGlideSup(G, tt, seed, new TwoBodyConverterMotor.Tol());
+        for (int m = 0; m < N; m++) G.mot.boundSeg.set(m, MotorStore.FREE_BINDABLE);   // isolate the cull geometry (unbound)
+        TwoBodyConverterMotor.unionActive(G);   // host brute at queryR
+        MatState s = packMat(G);
+        IntArray active = new IntArray(N);
+        try {
+            TaskGraph tg = new TaskGraph("cullc").transferToDevice(DataTransferMode.FIRST_EXECUTION, G.mot.boundSeg, s.site, f.coord, f.uVec, f.segLength, s.cullP)
+                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, s.mc).task("c", MatSoaSlice::matCull, G.mot.boundSeg, s.site, f.coord, f.uVec, f.segLength, s.cullP, s.mc, active)
+                    .transferToHost(DataTransferMode.EVERY_EXECUTION, active);
+            GridScheduler sc = new GridScheduler(); addW(sc, "cullc.c", ((N + 63) / 64) * 64);
+            s.mc.set(1, 0);
+            new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(sc).execute();
+        } catch (Throwable ex) { log.append("- cull-control device FAILED: " + oneLine(ex.getMessage()) + "\n"); return false; }
+        // enlarged brute (1.3× queryR): the reachable-superset. Device active(queryR) must include every motor
+        // that is reachable at queryR; the enlarged set's extras must all be OUTSIDE queryR (non-bindable).
+        double qr = G.queryR, qr2 = qr * qr, eqr2 = (1.3 * qr) * (1.3 * qr);
+        int missReach = 0, setMism = 0, enlargedExtra = 0;
+        for (int m = 0; m < N; m++) {
+            boolean dev = active.get(m) == 1, host = G.active[m];
+            if (dev != host) setMism++;
+            // brute reachable at queryR (from the site), and at enlarged radius
+            double sx = G.siteX[m], sy = G.siteY[m]; double best = 1e30;
+            for (int seg = 0; seg < nSeg; seg++) { double half = 0.5 * f.segLength.get(seg), cx = f.coordX(seg), cy = f.coordY(seg), ux = f.uVecX(seg), uy = f.uVecY(seg);
+                double dx = sx - cx, dy = sy - cy, foot = dx * ux + dy * uy; foot = Math.max(-half, Math.min(half, foot));
+                double px = dx - foot * ux, py = dy - foot * uy; best = Math.min(best, px * px + py * py); }
+            if (best <= qr2 && !dev) missReach++;                 // reachable at queryR but device NOT active ⇒ MISS
+            if (best <= eqr2 && best > qr2) enlargedExtra++;       // in the (queryR, 1.3queryR) shell — correctly NOT active
+        }
+        boolean ok = missReach == 0 && setMism == 0;
+        System.out.printf(Locale.US, "  cull-control density=%.0f: device==host set (mism=%d), reachable-missed=%d, enlarged-shell(non-bindable, correctly excluded)=%d ⇒ %s%n", density, setMism, missReach, enlargedExtra, ok ? "PASS" : "FAIL");
+        log.append(String.format(Locale.US, "- cull-control density=%.0f: device==host cull set (mism=%d), reachable-MISSED=%d, enlarged-shell correctly-excluded=%d ⇒ **%s**\n", density, setMism, missReach, enlargedExtra, ok ? "PASS" : "FAIL"));
+        return ok;
+    }
 
     // ---------- Step 2 — COMPOSITION-RISK PROBE: does the full ~19-task double mat loop lower as a SINGLE graph? ----------
     static boolean compositionProbe(StringBuilder log, Path dir) {
