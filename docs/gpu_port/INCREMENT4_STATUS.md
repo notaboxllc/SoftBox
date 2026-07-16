@@ -7,15 +7,31 @@ No motor physics/chemistry/binding/params/model-ID changed. GPU gate closed (`DE
 ## Status block
 - `EXPLICIT CPU DEFAULT: ANALYTIC` — **PROMOTED, on `main` (`caffc19`)**; FD retained as the permanent
   oracle (`-explicitsolver fd`). ~6.9× faster explicit gliding.
-- `MAT-SOA VERTICAL SLICE:` **4 new-physics kernels (Stages 1/2/3/7) implemented + isolated-gated PASS**
-  (branch `motor-mat-gpu-soa`); composition (Part 6) is next.
-- `CALIBRATED GPU TRAJECTORY:` not yet — Part-6 composition pending.
-- `DEVICE RESIDENCY:` **PROVEN** — motor SoA uploaded FIRST_EXECUTION, only `counts`+compact state per step,
-  compact outputs read back; **no full per-step mat transfer**.
-- `NEXT BLOCKER:` compose Part 6 — the `matPlaceHead` bridge kernel + `matZConfine`/`matReduce` + wire the
-  existing validated device kernels (`cycleLymnTaylor`, `bondForces`, `csr*`/`segGather`, `chainForces`,
-  `brownianForce`, `integrate`, `derive`) into one chained residency-correct graph, then the stepwise
-  CPU-vs-GPU trajectory + first-divergence classification, then multi-density validation + throughput.
+- `MAT-SOA VERTICAL SLICE:` **8 kernels implemented + gated** (Stages 1/2/3/7 + `matCock` + 3 bridges),
+  composed into a **single 20-task device graph** (branch `motor-mat-gpu-soa`).
+- `CALIBRATED GPU TRAJECTORY:` **DONE + CLEAN** — device-resident single-graph per-step loop; CPU-runner vs
+  GPU **t=0 IDENTICAL** (no bridge/salt/order/binding bug); the only divergence is a single boundary motor
+  flipping its bind gate after float-scale pose drift (1 of 600 @ t=16; 1 of 2100 @ t=1) = **float-FMA
+  chaotic decorrelation, not semantic** (hard-stop condition NOT hit).
+- `DEVICE RESIDENCY:` **PROVEN through the full 20-task loop** — GPU mem flat (205→205 MiB), SoA uploaded
+  FIRST_EXECUTION, only counters up + a small reduction down per step; **no full per-step mat transfer**.
+- `THROUGHPUT (Part 8):` double is **FP64-limited** — 0.54× (device slower) at N=600, **1.15× (device
+  faster) at N=2100** as parallelism starts to win. The double `matStep7` 5-DOF solve is FP64-bound ⇒ a
+  future **float `matStep7`** is the throughput lever (the quantified motivating data).
+- `NEXT BLOCKER:` **Part 7 ensemble validation** — the trajectory is chaotic (correctly float-decorrelates),
+  so emergent observables (velocity/continuity/avgBound/handoff/ATP-per-µm/wander/net force) need an
+  **ensemble-mean-within-SEM** CPU-vs-GPU check over multiple seeds (CPU-double arbiter) + half-dt + cull
+  controls. Then the float `matStep7` for a real GPU throughput win at scale.
+
+## UPDATE — the device-resident calibrated GPU trajectory is validated (Parts 6 + 8 done)
+The first device-resident two-body gliding mat trajectory runs as a single TaskGraph and is validated clean
+(t=0 identical → semantically faithful; only expected float-FMA chaotic decorrelation). A missing stage
+`matCock` (rest-angle switch `thetaS=thetaS4a(nuc)`) was found + added. Deliverable #9 (first complete
+calibrated GPU trajectory, no full round-trip) ACHIEVED. Part 7 (ensemble) is the remaining validation
+layer before a calibrated-GPU promotion gate; `DEVICE_VALIDATED` stays false. Branch `motor-mat-gpu-soa`
+`0a4e6d3`; report `docs/matsoa/SLICE_STATUS.md`, `RUN_LOGS/matsoa/TRAJECTORY.md`.
+
+## Original status (pre-trajectory, for history)
 
 ## Part 1 — analytic explicit solver PROMOTED (on `main`)
 `ExplicitSolver{FD,ANALYTIC}` selector; ANALYTIC swaps **only the beam tangent** in `s2Solve`/`s2SolveM`
