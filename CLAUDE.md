@@ -371,6 +371,30 @@ RTX 5070), measured in `docs/PROFILE_FULLDEMO_FINDINGS.md`:
   throughput numbers in `SCALE_SWEEP_FINDINGS`/`V1_MAXIMAL_BENCHMARK §3` predate this default (measured
   CSR-host-OFF); see their re-baseline banners.**
 
+## Canonical two-body motor models (2026-07-15; the stable selection interface)
+The two-body optical-trap motor arc (`-exp3*/-exp4*`, CPU-only, `run_lasertrap.sh`) now has a **stable,
+documented, directly-selectable** motor interface: `softbox/MotorModel.java` (the registry — the single
+source of truth for the frozen parameters) + `-motor <id>`. Three canonical models, each an **immutable
+descriptor** (frozen params + provenance + solver/cost metadata + CPU/GPU paths + serialization id + viewer
+representation + known limitations): **`fixed-anchor`** (`FIXED_ANCHOR`, rigid strongly-supported assay
+fixture — tweezers/regression baseline), **`explicit-s2-l40`** (`EXPLICIT_S2_L40`, the mechanistic
+reference — explicit MD-informed S2 beam, L=40 nm, EA/EI from AMK 2008, CPU-only, ~58 µs/step; source 4G),
+**`calibrated-s2-l40`** (`CALIBRATED_S2_L40`, the **production surrogate** — analytic movable-pivot law fit
+to the beam, ~1.34 µs/step, GPU-friendly; source 4I). This is a **descriptor + registry layer**: the
+validated head/converter/F8/binding/Lymn–Taylor core is SHARED and unchanged — the models differ ONLY in
+the tail fixture branch in `Cmot` (a full `MotorFixture` OOP extraction is DEFERRED). `buildBoundMotor` is
+the one centralized model→`Cmot` builder (dispatches to the existing validated builders; rejects
+incompatible combos). **Policy: no historical default changed; old runs byte-identical; new configs declare
+`-motor`; templates may default to `calibrated-s2-l40`; `-gpu` for the CPU-only explicit model is refused,
+never silently swapped.** Regression `-motor-regression` (Gates A–F PASS: common-core identity `max|Δ|=0`;
+registry ≡ frozen 4G/4F-L40 builders bit-identical; serialize/restart identity). Docs:
+`docs/MOTOR_MODELS.md` (+ `_EXPLICIT_S2_L40`/`_CALIBRATED_S2_L40`/`_SELECTION`/`_VALIDATION_MATRIX`),
+`docs/TWOBODY_CANONICAL_MODELS.md` (report); outputs `RUN_LOGS/twobody_canonicalization/`.
+```
+./scripts/run_lasertrap.sh -motor calibrated-s2-l40   # production selection (logs resolved model + full config)
+./scripts/run_lasertrap.sh -motor-regression          # Gates A–F  |  -motor-compare → cross-model table
+```
+
 ## Documentation conventions
 Same as v1: `CLAUDE.md` = cross-session context (this file); `JOURNAL.md` = terse, newest-first,
 what-was-done / what-was-learned / what's-open. Do not archive JOURNAL entries autonomously.

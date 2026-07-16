@@ -7780,4 +7780,230 @@ public final class TwoBodyConverterMotor {
     }
     static void h4CollectFiles(java.io.File d,java.util.List<java.io.File> out){ java.io.File[] fs=d.listFiles(); if(fs==null) return;
         java.util.Arrays.sort(fs); for(java.io.File f:fs){ if(f.isDirectory()) h4CollectFiles(f,out); else out.add(f); } }
+
+    // ================================================================================================
+    //  CANONICAL MOTOR-MODEL registry glue (2026-07-15). The DESCRIPTOR + REGISTRY layer over the
+    //  validated two-body core. NO physics is moved or forked here: the three models dispatch to the
+    //  SAME validated builders (buildBoundSup / buildBoundS2 / buildSup(...,false)); only the tail-support
+    //  fixture differs. The frozen parameters live in {@link MotorModel} (single source of truth).
+    //  See docs/MOTOR_MODELS.md and docs/TWOBODY_CANONICAL_MODELS.md.
+    // ================================================================================================
+
+    /** Set the static CAL_* overlay to the FROZEN calibrated descriptor (the documented 4I fit outputs,
+     *  NOT the stale line-7127 seed). Used only by the canonical selection path; run4i's live fit is
+     *  unaffected (it overwrites CAL_* itself before it measures). */
+    static void applyCalibratedFrozen(MotorModel.CalibratedS2Params p){
+        CAL_KAX=p.kAxTensionPnNm(); CAL_KTR=p.kTrPnNm(); CAL_KFETR=p.kFeTrPnNm(); CAL_RMAX=p.rMaxOnsetNm();
+        CAL_SMOOTHTR=p.smoothTrNm(); CAL_KPOST=p.kAxCompressionPnNm(); CAL_SBUCK=p.smoothBuckNm(); CAL_REF_L=p.refFreeLenNm();
+        CAL_BUCKCRIT=1e4;   // symmetric-stiff at L40 (Euler buckling disabled in-range; F_crit is an L60 feature)
+    }
+
+    /** THE one centralized model→Cmot builder. Returns a BOUND, settled motor configured for {@code m},
+     *  dispatching to the validated builders unchanged. Rejects incompatible combinations. */
+    static Cmot buildBoundMotor(MotorModel m,double dt){
+        int settle=settleSteps(dt);
+        switch(m){
+            case FIXED_ANCHOR -> {
+                Cmot cm=buildSup(0,false,dt,0.05,0.05);   // supOn=false ≡ the rigid fixed anchor (pivot never integrated)
+                // pin the (static) pivot bookkeeping to the anchor so the shared measurement helpers read it; supOn=false
+                // ⇒ stepSup delegates to stepC, so these are inert for the physics (the pivot never moves).
+                cm.P=cm.A.clone(); cm.supP0=cm.A.clone();
+                cm.supUL=cm.bhat.clone(); cm.supUT1=cm.econv.clone(); cm.supUT2=cm.eup.clone();
+                cm.supLs2=SUP_LS2_NM*1e-3;
+                settleSup(cm,settle,0,false); return cm;
+            }
+            case EXPLICIT_S2_L40 -> {
+                return buildBoundS2(m.provenance().freeLenNm(),dt,settle);   // explicit 4G beam at L=40
+            }
+            case CALIBRATED_S2_L40 -> {
+                double[] sav={CAL_KAX,CAL_KTR,CAL_KFETR,CAL_RMAX,CAL_SMOOTHTR,CAL_KPOST,CAL_SBUCK,CAL_REF_L,CAL_BUCKCRIT};
+                boolean savOn=CAL_ON;
+                applyCalibratedFrozen(m.calibrated()); CAL_ON=true;
+                Cmot cm=buildBoundSup(0,dt,0.05,0.05,settle);
+                CAL_ON=savOn; CAL_KAX=sav[0];CAL_KTR=sav[1];CAL_KFETR=sav[2];CAL_RMAX=sav[3];CAL_SMOOTHTR=sav[4];
+                CAL_KPOST=sav[5];CAL_SBUCK=sav[6];CAL_REF_L=sav[7];CAL_BUCKCRIT=sav[8];
+                return cm;
+            }
+            default -> throw new IllegalArgumentException("unhandled motor model "+m);
+        }
+    }
+
+    /** The shared validated-core constant signature of a built motor: {kF8, kconv, kbind, lb, gammaPhi,
+     *  gammaPsi, psiActin}. Equal across all three models ⇒ the head/converter/F8/binding/kinetics core is
+     *  common (only the tail fixture differs). */
+    static double[] coreSignature(Cmot cm){
+        return new double[]{ cm.kF8Code, cm.kconvCode, cm.kbindCode, cm.lb, cm.gammaPhi, cm.gammaPsi, cm.psiActin };
+    }
+
+    /** Cross-check the MotorModel frozen descriptors against the live code constants (bit-for-bit where the
+     *  value is exactly derivable; documented-value equality otherwise). Throws on any mismatch. */
+    static void assertFrozenParamsConsistent(){
+        MotorModel.ExplicitS2Params e=MotorModel.EXPLICIT_S2_L40.explicit();
+        double kAxL40=EXP4G_EA_SI/(40.0*1e-9)*1e3;   // EA/L (N/m) → pN/nm  (=105 at L40)
+        req(e.eaSI()==EXP4G_EA_SI,"EXPLICIT EA "+e.eaSI()+" vs code "+EXP4G_EA_SI);
+        req(e.eiSI()==EXP4G_EI_SI,"EXPLICIT EI "+e.eiSI()+" vs code "+EXP4G_EI_SI);
+        req(e.nSegments()==(int)Math.round(40.0/EXP4G_L0_NM),"EXPLICIT M");
+        req(e.segLenNm()==EXP4G_L0_NM,"EXPLICIT l0");
+        req(e.nodeDragRadiusNm()==EXP4G_RNODE_NM,"EXPLICIT rNode");
+        req(Math.abs(e.kAxPerLpNnm()-kAxL40)<1e-9,"EXPLICIT kAx=EA/L "+e.kAxPerLpNnm()+" vs "+kAxL40);
+        MotorModel.CalibratedS2Params c=MotorModel.CALIBRATED_S2_L40.calibrated();
+        req(Math.abs(c.kAxTensionPnNm()-kAxL40)<1e-6,"CALIBRATED kAx "+c.kAxTensionPnNm()+" vs EA/L "+kAxL40);
+        req(c.kAxCompressionPnNm()==c.kAxTensionPnNm(),"CALIBRATED symmetric-stiff k_ax");
+        req(c.refFreeLenNm()==40.0,"CALIBRATED refFreeLen");
+        // the calibrated k_ax must equal the explicit reference k_ax (the surrogate reproduces the beam's axial mechanics)
+        req(Math.abs(c.kAxTensionPnNm()-e.kAxPerLpNnm())<1e-6,"CALIBRATED k_ax must match EXPLICIT EA/L");
+    }
+    static void req(boolean ok,String msg){ if(!ok) throw new IllegalStateException("FROZEN-PARAM MISMATCH: "+msg); }
+
+    static Path canonDir(){ Path d=Path.of(OUT_DIR!=null?OUT_DIR:"RUN_LOGS/twobody_canonicalization"); try{ Files.createDirectories(d);}catch(IOException ex){throw new UncheckedIOException(ex);} return d; }
+    static void writeCanon(String rel,String content){ try{ Path p=canonDir().resolve(rel); Files.createDirectories(p.getParent()); Files.writeString(p,content);}catch(IOException ex){throw new UncheckedIOException(ex);} }
+
+    /** PRODUCTION single-motor entry for a selected model: log the resolved model + full fixture config,
+     *  build via the centralized builder, run the standard single-motor characterization, print with a
+     *  provenance header. This is what `-motor <id>` runs. */
+    static void runMotorModel(MotorModel m,String source,String[] args){
+        boolean gpu=false; for(String a:args) if(a.equals("-gpu")) gpu=true;
+        double dt=(m==MotorModel.EXPLICIT_S2_L40)? 2.5e-6 : 2.5e-6;
+        for(int i=0;i<args.length;i++) if(args[i].equals("-dt")) dt=Double.parseDouble(args[i+1]);
+        // reject incompatible combinations clearly (never silently swap the model)
+        if(gpu && !m.gpuSupported()){
+            System.out.printf(Locale.US,"REFUSED: -gpu requested for %s, which has no GPU implementation (CPU-only). "
+                +"Re-run on CPU (drop -gpu), or select -motor calibrated-s2-l40 for the GPU-friendly surrogate. "
+                +"The motor model is NEVER silently changed.%n",m.id());
+            return;
+        }
+        int settle=settleSteps(dt);
+        m.logResolved(System.out,source,dt,0.05);
+        assertFrozenParamsConsistent();
+        Cmot cm=buildBoundMotor(m,dt);
+        double[] stroke=(m==MotorModel.EXPLICIT_S2_L40)? s2Stroke(cm,settle) : supStroke(cm,settle);
+        double strokeNm=Math.abs(stroke[0]), recoilNm=stroke[4], f8axPn=stroke[5];   // [4]=axial pivot recoil (doc convention)
+        StringBuilder sb=new StringBuilder();
+        sb.append(m.provenanceHeader());
+        sb.append(String.format(Locale.US,"# characterization (single bound motor, dt=%.2e, settle=%d)%n",dt,settle));
+        sb.append("observable,value,unit\n");
+        sb.append(String.format(Locale.US,"unloaded_stroke,%.3f,nm%n",strokeNm));
+        sb.append(String.format(Locale.US,"pivot_recoil,%.3f,nm%n",recoilNm));
+        sb.append(String.format(Locale.US,"f8ForceOnActin_axial,%.3f,pN%n",f8axPn));
+        System.out.print(sb);
+        writeCanon("motor_"+m.id()+"_characterization.csv",sb.toString());
+        System.out.printf(Locale.US,"# %s: unloaded stroke %.2f nm, pivot recoil %.3f nm, F8 axial %.2f pN%n",m.id(),strokeNm,recoilNm,f8axPn);
+        System.out.println("# wrote "+canonDir().resolve("motor_"+m.id()+"_characterization.csv"));
+    }
+
+    /** REGRESSION: prove that registry selection reproduces the frozen 4G-L40 and calibrated-4F-L40 paths
+     *  without changing the shared motor core. Cheap (single-motor builds + a stroke each). */
+    static void runMotorRegression(String[] args){
+        double dt=2.5e-6; for(int i=0;i<args.length;i++) if(args[i].equals("-dt")) dt=Double.parseDouble(args[i+1]);
+        int settle=settleSteps(dt);
+        System.out.println("=== SoftBox — CANONICAL MOTOR-MODEL REGRESSION (registry reproduces the frozen paths; core unchanged) ===");
+        StringBuilder log=new StringBuilder("# "+MotorModel.CALIBRATED_S2_L40.serialize()+" (canonicalization regression)\n");
+        boolean allPass=true;
+
+        // Gate A — frozen-parameter consistency (descriptor vs live code constants)
+        try{ assertFrozenParamsConsistent(); log.append("GateA frozen-param consistency: PASS\n"); System.out.println("# GateA frozen-param consistency: PASS"); }
+        catch(Throwable t){ allPass=false; log.append("GateA: FAIL "+t.getMessage()+"\n"); System.out.println("# GateA: FAIL "+t.getMessage()); }
+
+        // Gate B — common-core identity: all three models share the SAME validated-core constant signature
+        Cmot cf=buildBoundMotor(MotorModel.FIXED_ANCHOR,dt);
+        Cmot ce=buildBoundMotor(MotorModel.EXPLICIT_S2_L40,dt);
+        Cmot cc=buildBoundMotor(MotorModel.CALIBRATED_S2_L40,dt);
+        double[] sf=coreSignature(cf), se=coreSignature(ce), sc=coreSignature(cc);
+        double coreMax=0; for(int i=0;i<sf.length;i++){ coreMax=Math.max(coreMax,Math.abs(sf[i]-se[i])); coreMax=Math.max(coreMax,Math.abs(sf[i]-sc[i])); }
+        boolean coreOk=coreMax==0.0; allPass&=coreOk;
+        log.append(String.format(Locale.US,"GateB common-core identity (kF8,kconv,kbind,lb,gPhi,gPsi,psiActin): max|Δ|=%.2e ⇒ %s%n",coreMax,coreOk?"PASS":"FAIL"));
+        System.out.printf(Locale.US,"# GateB common-core identity: max|Δ|=%.2e ⇒ %s%n",coreMax,coreOk?"PASS (shared core)":"FAIL");
+
+        // Gate C — registry reproduces the FROZEN EXPLICIT 4G-L40 path bit-identically (registry vs direct builder)
+        Cmot ceDirect=buildBoundS2(40.0,dt,settle);
+        double dE=poseMaxDiff(ce,ceDirect); boolean eOk=dE==0.0; allPass&=eOk;
+        log.append(String.format(Locale.US,"GateC EXPLICIT_S2_L40 registry≡frozen-4G-L40 builder: max|Δpose|=%.2e ⇒ %s%n",dE,eOk?"PASS":"FAIL"));
+        System.out.printf(Locale.US,"# GateC EXPLICIT registry≡frozen builder: max|Δpose|=%.2e ⇒ %s%n",dE,eOk?"PASS (bit-identical)":"FAIL");
+
+        // Gate D — registry reproduces the FROZEN CALIBRATED 4F-L40 path bit-identically (registry vs direct+frozen CAL)
+        double[] sav={CAL_KAX,CAL_KTR,CAL_KFETR,CAL_RMAX,CAL_SMOOTHTR,CAL_KPOST,CAL_SBUCK,CAL_REF_L,CAL_BUCKCRIT}; boolean savOn=CAL_ON;
+        applyCalibratedFrozen(MotorModel.CALIBRATED_S2_L40.calibrated()); CAL_ON=true;
+        Cmot ccDirect=buildBoundSup(0,dt,0.05,0.05,settle);
+        CAL_ON=savOn; CAL_KAX=sav[0];CAL_KTR=sav[1];CAL_KFETR=sav[2];CAL_RMAX=sav[3];CAL_SMOOTHTR=sav[4];CAL_KPOST=sav[5];CAL_SBUCK=sav[6];CAL_REF_L=sav[7];CAL_BUCKCRIT=sav[8];
+        double dC=poseMaxDiff(cc,ccDirect); boolean cOk=dC==0.0; allPass&=cOk;
+        log.append(String.format(Locale.US,"GateD CALIBRATED_S2_L40 registry≡frozen-4F-L40 builder: max|Δpose|=%.2e ⇒ %s%n",dC,cOk?"PASS":"FAIL"));
+        System.out.printf(Locale.US,"# GateD CALIBRATED registry≡frozen builder: max|Δpose|=%.2e ⇒ %s%n",dC,cOk?"PASS (bit-identical)":"FAIL");
+
+        // Gate E — live headline stroke per model reproduces the documented values (explicit 7.27 / calibrated 6.90 nm)
+        double stE=Math.abs(s2Stroke(ce,settle)[0]), stC=Math.abs(supStroke(cc,settle)[0]);
+        boolean strokeOk=Math.abs(stE-7.27)<0.6 && Math.abs(stC-6.90)<0.6; allPass&=strokeOk;
+        log.append(String.format(Locale.US,"GateE live stroke: explicit=%.2f nm (doc 7.27), calibrated=%.2f nm (doc 6.90) ⇒ %s%n",stE,stC,strokeOk?"PASS":"FAIL"));
+        System.out.printf(Locale.US,"# GateE live stroke: explicit=%.2f (7.27), calibrated=%.2f (6.90) ⇒ %s%n",stE,stC,strokeOk?"PASS":"CHECK");
+
+        // Gate F — serialization / restart identity round-trips + rejects an incompatible restart
+        boolean serOk=true;
+        for(MotorModel m:MotorModel.values()){
+            String tok=m.serialize(); MotorModel back=MotorModel.parseSerialized(tok);
+            serOk &= (back==m) && m.isRestartCompatible(m);
+            log.append("GateF serialize '"+tok+"' → "+back.id()+" ; viewerMeta="+m.viewerMetaJson()+"\n");
+        }
+        boolean rejectsMismatch = !MotorModel.EXPLICIT_S2_L40.isRestartCompatible(MotorModel.CALIBRATED_S2_L40);
+        serOk &= rejectsMismatch; allPass&=serOk;
+        log.append(String.format(Locale.US,"GateF serialization round-trip + restart-identity (explicit↮calibrated rejected=%b): %s%n",rejectsMismatch,serOk?"PASS":"FAIL"));
+        System.out.printf(Locale.US,"# GateF serialize/restart identity: %s%n",serOk?"PASS":"FAIL");
+
+        log.append("\nVERDICT: "+(allPass?"PASS — registry selection reproduces the frozen paths; shared core unchanged.":"FAIL — see gates above.")+"\n");
+        System.out.println("# VERDICT: "+(allPass?"PASS":"FAIL"));
+        writeCanon("motor_model_regression.txt",MotorModel.CALIBRATED_S2_L40.provenanceHeader()+log);
+        System.out.println("# wrote "+canonDir().resolve("motor_model_regression.txt"));
+    }
+
+    /** Max |Δ| over the filament plus-end coord + pivot P + (φ,ψ) — a pose fingerprint for bit-identity. */
+    static double poseMaxDiff(Cmot a,Cmot b){
+        double d=0;
+        d=Math.max(d,Math.abs(a.fil.coordX(0)-b.fil.coordX(0)));
+        d=Math.max(d,Math.abs(a.fil.coordY(0)-b.fil.coordY(0)));
+        d=Math.max(d,Math.abs(a.fil.coordZ(0)-b.fil.coordZ(0)));
+        for(int k=0;k<3;k++) d=Math.max(d,Math.abs(a.P[k]-b.P[k]));
+        d=Math.max(d,Math.abs(a.phi-b.phi)); d=Math.max(d,Math.abs(a.psi-b.psi));
+        return d;
+    }
+
+    /** CROSS-MODEL comparison report (Markdown). Mechanical rows are computed live where cheap; ensemble
+     *  rows (search RMS, capture area, reduced-mat) are the FROZEN documented Experiment 4I values (this is
+     *  a canonicalization pass, NOT a new calibration study). */
+    static void runMotorCompare(String[] args){
+        double dt=2.5e-6; for(int i=0;i<args.length;i++) if(args[i].equals("-dt")) dt=Double.parseDouble(args[i+1]);
+        int settle=settleSteps(dt);
+        System.out.println("=== SoftBox — CROSS-MODEL COMPARISON (fixed-anchor / explicit-s2-l40 / calibrated-s2-l40) ===");
+        assertFrozenParamsConsistent();
+        // one stroke measurement per model (supStroke/s2Stroke mutate the Cmot, so read [0] stroke + [4] axial recoil from the SAME call)
+        double[] skF=supStroke(buildBoundMotor(MotorModel.FIXED_ANCHOR,dt),settle);
+        double[] skE=s2Stroke(buildBoundMotor(MotorModel.EXPLICIT_S2_L40,dt),settle);
+        double[] skC=supStroke(buildBoundMotor(MotorModel.CALIBRATED_S2_L40,dt),settle);
+        double stF=Math.abs(skF[0]), stE=Math.abs(skE[0]), stC=Math.abs(skC[0]);
+        double reF=skF[4], reE=skE[4], reC=skC[4];
+        MotorModel.ExplicitS2Params ep=MotorModel.EXPLICIT_S2_L40.explicit();
+        MotorModel.CalibratedS2Params cp=MotorModel.CALIBRATED_S2_L40.calibrated();
+        StringBuilder md=new StringBuilder();
+        md.append("# Cross-model comparison — canonical two-body motor models\n\n");
+        md.append("Source: canonicalization pass 2026-07-15. Mechanical rows (stroke, recoil) computed LIVE; ensemble\n");
+        md.append("rows (search RMS, capture area, reduced-mat) are the frozen Experiment 4I documented values\n");
+        md.append("(docs/TWOBODY_4G_TO_4F_CALIBRATION.md). Units: k in pN/nm, F_crit pN, lengths nm, area nm², cost µs/step.\n\n");
+        md.append("| observable | fixed-anchor | explicit-s2-l40 | calibrated-s2-l40 |\n");
+        md.append("|---|---:|---:|---:|\n");
+        md.append(String.format(Locale.US,"| search RMS (nm) | 0 (rigid) | %.1f | %.1f |%n",10.8,7.6));
+        md.append(String.format(Locale.US,"| capture area (nm²) | ~small | %.0f | %.0f |%n",576.0,357.0));
+        md.append(String.format(Locale.US,"| axial pivot tangent / k_ax (pN/nm) | ∞ (rigid) | %.1f | %.1f |%n",ep.kAxPerLpNnm(),cp.kAxTensionPnNm()));
+        md.append(String.format(Locale.US,"| free-tip bending stiffness k_tr (pN/nm) | ∞ (rigid) | %.3f | %.3f |%n",0.026,cp.kTrPnNm()));
+        md.append(String.format(Locale.US,"| external crossbridge stiffness k_ext (pN/nm) | ~skeletal | %.2f | %.2f |%n",0.99,0.64));
+        md.append(String.format(Locale.US,"| unloaded stroke (nm) | %.2f | %.2f | %.2f |%n",stF,stE,stC));
+        md.append(String.format(Locale.US,"| pivot recoil (nm) | %.3f | %.3f | %.3f |%n",reF,reE,reC));
+        md.append(String.format(Locale.US,"| force at +5 pN load (nm) | — | %.1f | %.1f |%n",4.6,6.3));
+        md.append(String.format(Locale.US,"| reduced-mat avg bound | 0.30 | 1.53 | 1.73 |%n"));
+        md.append(String.format(Locale.US,"| reduced-mat load-bearing | 0.30 | 1.03 | 1.73 |%n"));
+        md.append(String.format(Locale.US,"| continuity | 0.25 | 0.80 | 0.82 |%n"));
+        md.append(String.format(Locale.US,"| cost per active motor-step (µs) | %.2f | %.1f | %.2f |%n",
+            MotorModel.FIXED_ANCHOR.cost().usPerMotorStep(),ep!=null?MotorModel.EXPLICIT_S2_L40.cost().usPerMotorStep():0,cp!=null?MotorModel.CALIBRATED_S2_L40.cost().usPerMotorStep():0));
+        md.append(String.format(Locale.US,"| memory per motor (nodes) | %d | %d | %d |%n",
+            MotorModel.FIXED_ANCHOR.cost().nodesPerMotor(),MotorModel.EXPLICIT_S2_L40.cost().nodesPerMotor(),MotorModel.CALIBRATED_S2_L40.cost().nodesPerMotor()));
+        System.out.print(md);
+        writeCanon("cross_model_comparison.md",md.toString());
+        System.out.println("# wrote "+canonDir().resolve("cross_model_comparison.md"));
+    }
 }

@@ -256,16 +256,20 @@ public final class LaserTrapHarness {
                 case "-exp3g", "-twobody-tweezers" -> { TwoBodyConverterMotor.run3g(args); return; }   // Experiment 3G: blinded dual-trap dumbbell tweezers GENERATOR (does not analyze)
                 case "-exp3ga", "-twobody-tweezers2" -> { TwoBodyConverterMotor.run3ga(args); return; }   // Experiment 3G-A: fuller sealed blinded tweezers dataset GENERATOR (does not analyze)
                 case "-exp3gb", "-twobody-tweezers-holdout" -> { TwoBodyConverterMotor.run3gb(args); return; }   // Experiment 3G-B: REALISTIC-ONLY sealed holdout GENERATOR (improved perturbation; does not analyze)
+                // ---- CANONICAL motor-model selection (stable interface; production runs use these, not -exp4X) ----
+                case "-motor" -> { MotorModel m = MotorModel.fromId(args[++i]); TwoBodyConverterMotor.runMotorModel(m, "-motor " + m.id(), args); return; }
+                case "-motor-regression" -> { TwoBodyConverterMotor.runMotorRegression(args); return; }   // registry reproduces the frozen 4G/4F-L40 paths; core unchanged
+                case "-motor-compare" -> { TwoBodyConverterMotor.runMotorCompare(args); return; }         // cross-model comparison report
                 case "-exp4a", "-twobody-cycle" -> { TwoBodyConverterMotor.run4a(args); return; }   // Experiment 4A: canonical nucleotide cycle (cycleLymnTaylor) ported onto the two-body motor
                 case "-exp4b", "-twobody-sparse-multimotor" -> { TwoBodyConverterMotor.run4b(args); return; }   // Experiment 4B: sparse multi-motor (N=1..4) composition of the 4A cycle on one shared filament
                 case "-exp4c", "-twobody-lowdensity-gliding" -> { TwoBodyConverterMotor.run4c(args); return; }   // Experiment 4C: first low-density free-filament gliding of the cycling two-body motor
                 case "-exp4d", "-twobody-flexible-mat-gliding" -> { TwoBodyConverterMotor.run4d(args); return; }   // Experiment 4D: flexible filament gliding over a dense 2D myosin mat
                 case "-exp4d2", "-twobody-fullcoverage-mat" -> { TwoBodyConverterMotor.run4d2(args); return; }   // Experiment 4D-ii: full-length active-motor coverage on the dense 2D mat (audit + correction)
                 case "-exp4e", "-twobody-tail-recruitment" -> { TwoBodyConverterMotor.run4e(args); return; }   // Experiment 4E: passive myosin-tail geometry as a recruitment mechanism
-                case "-exp4f", "-twobody-supported-s2-tail" -> { TwoBodyConverterMotor.run4f(args); return; }   // Experiment 4F: supported two-region tail (search-mobile, load-bearing)
-                case "-exp4g", "-twobody-explicit-s2" -> { TwoBodyConverterMotor.run4g(args); return; }   // Experiment 4G: MD-informed EXPLICIT fixed-contour S2 geometry
-                case "-exp4h", "-twobody-tweezers-blinded" -> { TwoBodyConverterMotor.run4h(args); return; }   // Experiment 4H: blinded single-motor laser-tweezers validation (PRODUCER)
-                case "-exp4i", "-twobody-s2-surrogate-calibration" -> { TwoBodyConverterMotor.run4i(args); return; }   // Experiment 4I: calibrate the 4F pivot surrogate directly to the 4G explicit-S2 beam
+                case "-exp4f", "-twobody-supported-s2-tail" -> { System.out.println(MotorModel.CALIBRATED_S2_L40.resolvedBanner(args[i] + " (historical reproduction alias — surrogate base)")); TwoBodyConverterMotor.run4f(args); return; }   // Experiment 4F: supported two-region tail (search-mobile, load-bearing)
+                case "-exp4g", "-twobody-explicit-s2" -> { System.out.println(MotorModel.EXPLICIT_S2_L40.resolvedBanner(args[i] + " (historical reproduction alias)")); TwoBodyConverterMotor.run4g(args); return; }   // Experiment 4G: MD-informed EXPLICIT fixed-contour S2 geometry
+                case "-exp4h", "-twobody-tweezers-blinded" -> { System.out.println(MotorModel.FIXED_ANCHOR.resolvedBanner(args[i] + " (historical reproduction alias)")); TwoBodyConverterMotor.run4h(args); return; }   // Experiment 4H: blinded single-motor laser-tweezers validation (PRODUCER)
+                case "-exp4i", "-twobody-s2-surrogate-calibration" -> { System.out.println(MotorModel.CALIBRATED_S2_L40.resolvedBanner(args[i] + " (historical reproduction alias — calibration)")); TwoBodyConverterMotor.run4i(args); return; }   // Experiment 4I: calibrate the 4F pivot surrogate directly to the 4G explicit-S2 beam
                 case "-target" -> EXP2A_TARGET = Integer.parseInt(args[++i]);   // snapshots/stage for Exp-2A
                 case "-fast" -> EXP2A_FAST = true;                  // Exp-2A: reduced snapshot counts (quick smoke)
                 case "-viz", "-3js" -> { runViz = true; if (i + 1 < args.length && !args[i + 1].startsWith("-")) JS_DIR = args[++i]; }
