@@ -581,13 +581,16 @@ public final class MatSoaSlice {
         try { plan = buildTrajGraph(Gd, sd); } catch (Throwable ex) { log.append("- graph build FAILED: " + oneLine(ex.getMessage()) + "\n"); System.out.println("  graph build FAILED"); return false; }
         int firstBoundDiv = -1, firstNucDiv = -1, firstNbDiv = -1; double maxComD = 0, maxFilD = 0;
         int t0BoundMis = -1, t0NucMis = -1, bMisAtFirst = 0; double filDbeforeFirst = 0, filDsoFar = 0;
-        long tCold = 0;
+        long tCold = 0, devWarmNs = 0, cpuWarmNs = 0; int nWarm = 0;
         for (int t = 0; t < steps; t++) {
             sd.mc.set(1, t); Gd.mot.setCounts(t, seed, nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, seed);
             long t0 = System.nanoTime();
             try { plan.withGridScheduler(trajSched).execute(); } catch (Throwable ex) { Throwable r = ex; while (r.getCause() != null && r.getCause() != r) r = r.getCause(); log.append("- device execute FAILED @t=" + t + ": `" + r.getClass().getName() + "`: " + oneLine(r.getMessage()) + "\n"); System.out.println("  device execute FAILED @t=" + t + ": " + oneLine(r.getMessage())); return false; }
-            if (t == 0) tCold = System.nanoTime() - t0;
+            long dev = System.nanoTime() - t0;
+            if (t == 0) tCold = dev; else { devWarmNs += dev; nWarm++; }
+            long c0 = System.nanoTime();
             stepMatCPU(Gc, sc, t, seed);
+            if (t > 0) cpuWarmNs += System.nanoTime() - c0;
             int nbD = (int) sd.redOut.get(0), nbC = (int) sc.redOut.get(0);
             if (nbD != nbC && firstNbDiv < 0) firstNbDiv = t;
             int boundMis = 0, nucMis = 0;
@@ -613,6 +616,14 @@ public final class MatSoaSlice {
         log.append(String.format(Locale.US, "- t=0 identical=%b; first div boundSeg@%d nuc@%d nBound@%d (boundMis@first=%d/%d, filDrift-before=%.1e µm); maxComΔ=%.2e maxFilΔ=%.2e; **%s**; cold %.0f ms\n",
                 t0Identical, firstBoundDiv, firstNucDiv, firstNbDiv, bMisAtFirst, N, filDbeforeFirst, maxComD, maxFilD, cls, tCold / 1e6));
         log.append("- residency: FIRST_EXECUTION uploads once; per step only mc/counts up + redOut/boundSeg/nuc/coord DOWN (validation reads; production keeps only redOut). No full-mat UPLOAD/step.\n");
+        // --- Part 8 throughput (DOUBLE — FP64-limited, the data motivating a future FLOAT matStep7) ---
+        double devMs = nWarm > 0 ? devWarmNs / 1e6 / nWarm : 0, cpuMs = nWarm > 0 ? cpuWarmNs / 1e6 / nWarm : 0;
+        double devSPerSim = devMs / 1e3 / dt, cpuSPerSim = cpuMs / 1e3 / dt;
+        System.out.printf(Locale.US, "  throughput(double): warm device %.3f ms/step (%.0f s/sim-s) | CPU-runner %.3f ms/step (%.0f s/sim-s) | device/CPU=%.2f× | cold %.0f ms%n",
+                devMs, devSPerSim, cpuMs, cpuSPerSim, cpuMs / Math.max(1e-9, devMs), tCold / 1e6);
+        log.append(String.format(Locale.US, "- throughput (DOUBLE, FP64-limited): warm device %.3f ms/step (%.0f s/sim-s), CPU-runner %.3f ms/step (%.0f s/sim-s), device/CPU=%.2f×, cold compile %.0f ms. ",
+                devMs, devSPerSim, cpuMs, cpuSPerSim, cpuMs / Math.max(1e-9, devMs), tCold / 1e6));
+        log.append("Device time here INCLUDES the validation reads (boundSeg/nuc/coord DOWN); production (redOut only) is faster. matStep7 is the double 5-DOF solve ⇒ FP64-bound — a future FLOAT matStep7 is the throughput lever (this is that motivating data).\n");
         return !semantic;
     }
     static int min3(int a, int b, int c) { int r = Integer.MAX_VALUE; if (a >= 0) r = Math.min(r, a); if (b >= 0) r = Math.min(r, b); if (c >= 0) r = Math.min(r, c); return r == Integer.MAX_VALUE ? -1 : r; }
