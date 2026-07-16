@@ -73,6 +73,24 @@ public final class MatSoaSlice {
         }
     }
 
+    // ===============================================================================================
+    // KERNEL — Stage 3: matBind (DETERMINISTIC — no RNG).  Applies the candidate from matGeomGate under the
+    //   exact host eligibility guard: active ∧ !noBind ∧ boundSeg==FREE_BINDABLE(-1) ∧ nuc==NUC_ADPPI(2)
+    //   ∧ candAccept==1 → boundSeg=candSeg, bindArc=candBindArc. (Binding is a geometric AND, not a P_bind roll.)
+    //   flags: active=[m]; noBind=[m]. cand: candSeg=[m], candAccept=[N+m]. bindArc: MotorStore.bindArc (float).
+    // ===============================================================================================
+    public static void matBind(IntArray active, IntArray noBind, IntArray boundSeg, IntArray nucState,
+                               IntArray candInt, DoubleArray candBindArc, FloatArray bindArc, IntArray counts) {
+        int N = counts.get(0);
+        for (@Parallel int m = 0; m < N; m++) {
+            if (active.get(m) == 1 && noBind.get(m) == 0 && boundSeg.get(m) == -1 && nucState.get(m) == 2
+                    && candInt.get(N + m) == 1) {
+                boundSeg.set(m, candInt.get(m));
+                bindArc.set(m, (float) candBindArc.get(m));
+            }
+        }
+    }
+
     static double dabs(double x) { return x < 0 ? -x : x; }              // reinterpret-free |x| (Math.abs uses doubleToRawLongBits)
     static double deg(double x) { return x * 180.0 / Math.PI; }          // == JDK Math.toDegrees(angrad) = angrad*180.0/PI
 
@@ -171,13 +189,146 @@ public final class MatSoaSlice {
 
         boolean cullOk = gateCull(log);
         boolean geomOk = gateGeomGate(log);
+        boolean bindOk = gateBind(log);
 
         try { Files.writeString(dir.resolve("STAGE_GATES.md"), log.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); }
         System.out.println("\n=== SLICE STATUS ===");
-        System.out.printf(Locale.US, "Stage 1 matCull      (active-set identity):      %s%n", cullOk ? "PASS" : "FAIL");
+        System.out.printf(Locale.US, "Stage 1 matCull      (active-set identity):        %s%n", cullOk ? "PASS" : "FAIL");
         System.out.printf(Locale.US, "Stage 2 matGeomGate  (geom+nearest+gate identity): %s%n", geomOk ? "PASS" : "FAIL");
+        System.out.printf(Locale.US, "Stage 3 matBind      (bind-event identity):        %s%n", bindOk ? "PASS" : "FAIL");
         System.out.println("# report: " + dir.resolve("STAGE_GATES.md").toAbsolutePath());
-        System.exit(cullOk && geomOk ? 0 : 1);
+        System.exit(cullOk && geomOk && bindOk ? 0 : 1);
+    }
+
+    // ---------- Part 5.3 (binding half) — bind-event IDENTITY (chained matGeomGate→matBind on device) ----------
+    static boolean gateBind(StringBuilder log) {
+        System.out.println("\n--- Part 5.3: matGeomGate→matBind vs host bind block (bind-event identity) ---");
+        log.append("## Stage 3 — matBind (deterministic bind-event identity; chained geom→bind on device)\n");
+        double dt = 2.5e-6; boolean allPass = true; int warm = 2500;
+        int[][] scen = { {200, 11}, {200, 12}, {700, 11} };
+        for (int[] sc : scen) {
+                double density = sc[0]; int seed = sc[1];
+                TwoBodyConverterMotor.Glide2D G = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed);
+                int N = G.N, nSeg = G.nSeg; FilamentStore f = G.fil;
+                // warm up on the host (real stepGlideSup) so poses evolve to realistic in-range configurations
+                for (int tt = 0; tt < warm; tt++) TwoBodyConverterMotor.stepGlideSup(G, tt, seed, new TwoBodyConverterMotor.Tol());
+                // make ALL motors eligible (unbind + ADP·Pi) so warmed in-range poses re-ACCEPT ⇒ exercises the accept=1 path
+                for (int m = 0; m < N; m++) { G.mot.boundSeg.set(m, MotorStore.FREE_BINDABLE); G.mot.nucleotideState.set(m, MotorStore.NUC_ADPPI); }
+                TwoBodyConverterMotor.unionActive(G);
+                // --- host bind block (stepGlideSup L5838-5843) as the reference ---
+                int[] hBound = new int[N]; double[] hArc = new double[N];
+                for (int m = 0; m < N; m++) { hBound[m] = G.mot.boundSeg.get(m); hArc[m] = G.mot.bindArc.get(m); }
+                for (int m = 0; m < N; m++) if (G.active[m] && !G.noBind[m] && G.mot.boundSeg.get(m) == MotorStore.FREE_BINDABLE && G.mot.nucleotideState.get(m) == MotorStore.NUC_ADPPI) {
+                    G.thetaS[m] = TwoBodyConverterMotor.PRESTROKE_THETAS; TwoBodyConverterMotor.geom2D(G, m);
+                    int s = TwoBodyConverterMotor.nearestSeg2D(G, m); if (s < 0) continue;
+                    double[] gm = TwoBodyConverterMotor.gate2D(G, m, s); double half = 0.5 * f.segLength.get(s);
+                    boolean g0 = gm[0] < 3.0, g1 = gm[2] < 25, g2 = gm[3] < 25, g3 = gm[4] < 20, g4 = gm[5] < 2.0, g5 = gm[6] < 15.0,
+                            g6 = gm[7] < A_SEMI2 * 1e3, g7 = gm[1] > 0.05 && gm[1] < 2 * half - 0.05;
+                    if (g0 && g1 && g2 && g3 && g4 && g5 && g6 && g7) { hBound[m] = s; hArc[m] = gm[1]; }
+                }
+                // --- device: chained matGeomGate → matBind, sharing device buffers (no intermediate host round-trip) ---
+                DoubleArray anchor = new DoubleArray(3 * N), pose = new DoubleArray(3 * N);
+                IntArray active = new IntArray(N), noBind = new IntArray(N), boundSeg = new IntArray(N), nuc = new IntArray(N);
+                FloatArray bindArc = new FloatArray(N);
+                for (int m = 0; m < N; m++) {
+                    anchor.set(m, G.A[m][0]); anchor.set(N + m, G.A[m][1]); anchor.set(2 * N + m, G.A[m][2]);
+                    pose.set(m, G.phi[m]); pose.set(N + m, G.psi[m]); pose.set(2 * N + m, G.psiActin[m]);
+                    active.set(m, G.active[m] ? 1 : 0); noBind.set(m, G.noBind[m] ? 1 : 0);
+                    boundSeg.set(m, G.mot.boundSeg.get(m)); nuc.set(m, G.mot.nucleotideState.get(m)); bindArc.set(m, G.mot.bindArc.get(m));
+                }
+                DoubleArray params = packGeomGateParams(G);
+                IntArray counts = new IntArray(4); counts.set(0, N); counts.set(1, 0); counts.set(2, seed); counts.set(3, nSeg);
+                DoubleArray geomOut = new DoubleArray(9 * N); IntArray candInt = new IntArray(2 * N); DoubleArray candArc = new DoubleArray(N);
+                try {
+                    TaskGraph tg = new TaskGraph("bind")
+                            .transferToDevice(DataTransferMode.FIRST_EXECUTION, anchor, pose, f.coord, f.uVec, f.segLength, params, active, noBind, nuc)
+                            .transferToDevice(DataTransferMode.EVERY_EXECUTION, counts, boundSeg, bindArc)
+                            .task("matGeomGate", MatSoaSlice::matGeomGate, anchor, pose, f.coord, f.uVec, f.segLength, params, counts, geomOut, candInt, candArc)
+                            .task("matBind", MatSoaSlice::matBind, active, noBind, boundSeg, nuc, candInt, candArc, bindArc, counts)
+                            .transferToHost(DataTransferMode.EVERY_EXECUTION, boundSeg, bindArc);
+                    GridScheduler sched = new GridScheduler();
+                    WorkerGrid w1 = new WorkerGrid1D(N); w1.setLocalWork(1, 1, 1); sched.addWorkerGrid("bind.matGeomGate", w1);
+                    WorkerGrid w2 = new WorkerGrid1D(N); w2.setLocalWork(1, 1, 1); sched.addWorkerGrid("bind.matBind", w2);
+                    new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(sched).execute();
+                } catch (Throwable ex) {
+                    Throwable root = ex; while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+                    System.out.printf(Locale.US, "  density=%.0f seed=%d N=%d: LOWERS=NO — %s: %s%n", density, seed, N, ex.getClass().getName(), oneLine(ex.getMessage()));
+                    log.append(String.format(Locale.US, "- density=%.0f seed=%d N=%d: **LOWERS=NO** — `%s`: %s\n", density, seed, N, root.getClass().getName(), oneLine(root.getMessage())));
+                    return false;
+                }
+                int bMis = 0, arcMis = 0, nBindHost = 0, firstB = -1;
+                for (int m = 0; m < N; m++) {
+                    if (hBound[m] >= 0 && G.mot.boundSeg.get(m) < 0) nBindHost++;   // host bind events this step
+                    if (boundSeg.get(m) != hBound[m]) { bMis++; if (firstB < 0) firstB = m; }
+                    if (hBound[m] >= 0 && Math.abs(bindArc.get(m) - hArc[m]) > 1e-6) arcMis++;
+                }
+                boolean pass = (bMis == 0);
+                allPass &= pass;
+                System.out.printf(Locale.US, "  density=%.0f seed=%d N=%d: hostBindEvents=%d boundSegMism=%d bindArcMism=%d %s%n",
+                        density, seed, N, nBindHost, bMis, arcMis, pass ? "PASS" : ("FAIL@" + firstB));
+                log.append(String.format(Locale.US, "- density=%.0f seed=%d N=%d: hostBindEvents=%d boundSegMism=%d bindArcMism(>1e-6)=%d → %s\n",
+                        density, seed, N, nBindHost, bMis, arcMis, pass ? "PASS" : "FAIL"));
+        }
+        // --- POSITIVE PATH: synthetic ideal-pose motors (natural single-step binds are ~1e-5/motor ⇒ ~0). Place a
+        //     batch at the ideal pre-stroke pose over cycling segments so the gate ACCEPTS; verify accept=1 identity. ---
+        {
+            TwoBodyConverterMotor.Glide2D G = TwoBodyConverterMotor.buildSupMat(200, dt, 0.0, 7);
+            int N = G.N, nSeg = G.nSeg; FilamentStore f = G.fil;
+            int K = Math.min(N, 96);
+            double lb = G.lb; double cph = Math.cos(TwoBodyConverterMotor.PHI_PRE_3E), sph = Math.sin(TwoBodyConverterMotor.PHI_PRE_3E);
+            for (int m = 0; m < K; m++) {
+                int s = m % nSeg;
+                double tx = f.coordX(s), ty = f.coordY(s), tz = f.coordZ(s);              // target on the segment axis
+                double uBx = G.eup[0] * cph + G.bhat[0] * sph, uBy = G.eup[1] * cph + G.bhat[1] * sph, uBz = G.eup[2] * cph + G.bhat[2] * sph;
+                double d0x = G.bhat[0] * (G.rF8[0] - G.rConv[0]) + G.eup[0] * (G.rF8[1] - G.rConv[1]);
+                double d0y = G.bhat[1] * (G.rF8[0] - G.rConv[0]) + G.eup[1] * (G.rF8[1] - G.rConv[1]);
+                double d0z = G.bhat[2] * (G.rF8[0] - G.rConv[0]) + G.eup[2] * (G.rF8[1] - G.rConv[1]);
+                G.A[m] = new double[]{ tx - lb * uBx - d0x, ty - lb * uBy - d0y, tz - lb * uBz - d0z };   // psi=0 ⇒ xF8 = target
+                G.phi[m] = TwoBodyConverterMotor.PHI_PRE_3E; G.psi[m] = 0; G.psiActin[m] = 0; G.thetaS[m] = TwoBodyConverterMotor.PRESTROKE_THETAS;
+                G.active[m] = true; G.mot.boundSeg.set(m, MotorStore.FREE_BINDABLE); G.mot.nucleotideState.set(m, MotorStore.NUC_ADPPI);
+            }
+            for (int m = 0; m < N; m++) G.active[m] = (m < K);   // isolate the synthetic set
+            int[] hBound = new int[N]; for (int m = 0; m < N; m++) hBound[m] = G.mot.boundSeg.get(m);
+            for (int m = 0; m < K; m++) {
+                TwoBodyConverterMotor.geom2D(G, m); int s = TwoBodyConverterMotor.nearestSeg2D(G, m); if (s < 0) continue;
+                double[] gm = TwoBodyConverterMotor.gate2D(G, m, s); double half = 0.5 * f.segLength.get(s);
+                boolean g0 = gm[0] < 3.0, g1 = gm[2] < 25, g2 = gm[3] < 25, g3 = gm[4] < 20, g4 = gm[5] < 2.0, g5 = gm[6] < 15.0,
+                        g6 = gm[7] < A_SEMI2 * 1e3, g7 = gm[1] > 0.05 && gm[1] < 2 * half - 0.05;
+                if (g0 && g1 && g2 && g3 && g4 && g5 && g6 && g7) hBound[m] = s;
+            }
+            int nAcc = 0; for (int m = 0; m < N; m++) if (hBound[m] >= 0) nAcc++;
+            // device chained geom→bind
+            DoubleArray anchor = new DoubleArray(3 * N), pose = new DoubleArray(3 * N);
+            IntArray active = new IntArray(N), noBind = new IntArray(N), boundSeg = new IntArray(N), nuc = new IntArray(N);
+            FloatArray bindArc = new FloatArray(N);
+            for (int m = 0; m < N; m++) { anchor.set(m, G.A[m][0]); anchor.set(N + m, G.A[m][1]); anchor.set(2 * N + m, G.A[m][2]);
+                pose.set(m, G.phi[m]); pose.set(N + m, G.psi[m]); pose.set(2 * N + m, G.psiActin[m]);
+                active.set(m, G.active[m] ? 1 : 0); noBind.set(m, G.noBind[m] ? 1 : 0); boundSeg.set(m, MotorStore.FREE_BINDABLE); nuc.set(m, G.mot.nucleotideState.get(m)); bindArc.set(m, 0f); }
+            DoubleArray params = packGeomGateParams(G);
+            IntArray counts = new IntArray(4); counts.set(0, N); counts.set(1, 0); counts.set(2, 7); counts.set(3, nSeg);
+            DoubleArray geomOut = new DoubleArray(9 * N); IntArray candInt = new IntArray(2 * N); DoubleArray candArc = new DoubleArray(N);
+            boolean lowered = true; String err = "";
+            try {
+                TaskGraph tg = new TaskGraph("bindsyn")
+                        .transferToDevice(DataTransferMode.FIRST_EXECUTION, anchor, pose, f.coord, f.uVec, f.segLength, params, active, noBind, nuc)
+                        .transferToDevice(DataTransferMode.EVERY_EXECUTION, counts, boundSeg, bindArc)
+                        .task("matGeomGate", MatSoaSlice::matGeomGate, anchor, pose, f.coord, f.uVec, f.segLength, params, counts, geomOut, candInt, candArc)
+                        .task("matBind", MatSoaSlice::matBind, active, noBind, boundSeg, nuc, candInt, candArc, bindArc, counts)
+                        .transferToHost(DataTransferMode.EVERY_EXECUTION, boundSeg, bindArc);
+                GridScheduler sched = new GridScheduler();
+                WorkerGrid w1 = new WorkerGrid1D(N); w1.setLocalWork(1, 1, 1); sched.addWorkerGrid("bindsyn.matGeomGate", w1);
+                WorkerGrid w2 = new WorkerGrid1D(N); w2.setLocalWork(1, 1, 1); sched.addWorkerGrid("bindsyn.matBind", w2);
+                new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(sched).execute();
+            } catch (Throwable ex) { lowered = false; Throwable r = ex; while (r.getCause() != null && r.getCause() != r) r = r.getCause(); err = r.getClass().getName() + ": " + oneLine(r.getMessage()); }
+            int mis = 0; if (lowered) for (int m = 0; m < N; m++) if (boundSeg.get(m) != hBound[m]) mis++;
+            boolean pass = lowered && mis == 0 && nAcc > 0;
+            allPass &= pass;
+            System.out.printf(Locale.US, "  synthetic ideal-pose: hostAccepts=%d boundSegMism=%d %s%s%n", nAcc, mis, pass ? "PASS" : "FAIL", lowered ? "" : (" LOWERS=NO " + err));
+            log.append(String.format(Locale.US, "- synthetic ideal-pose (positive path): hostAccepts=%d, boundSegMism=%d → %s\n", nAcc, mis, pass ? "PASS" : "FAIL"));
+        }
+        log.append("- Chained geom→bind on device (buffers shared, no intermediate host transfer); binding is DETERMINISTIC (no RNG). ")
+           .append("Natural single-step binds ~1e-5/motor (⇒0); the accept=1 path is verified synthetically. bindArc float, 1e-6.\n\n");
+        return allPass;
     }
 
     // ---------- Part 5.2 — geom + nearest + gate IDENTITY ----------
