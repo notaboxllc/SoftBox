@@ -264,6 +264,8 @@ public final class LaserTrapHarness {
                 case "-exp4e", "-twobody-tail-recruitment" -> { TwoBodyConverterMotor.run4e(args); return; }   // Experiment 4E: passive myosin-tail geometry as a recruitment mechanism
                 case "-exp4f", "-twobody-supported-s2-tail" -> { TwoBodyConverterMotor.run4f(args); return; }   // Experiment 4F: supported two-region tail (search-mobile, load-bearing)
                 case "-exp4g", "-twobody-explicit-s2" -> { TwoBodyConverterMotor.run4g(args); return; }   // Experiment 4G: MD-informed EXPLICIT fixed-contour S2 geometry
+                case "-exp4h", "-twobody-tweezers-blinded" -> { TwoBodyConverterMotor.run4h(args); return; }   // Experiment 4H: blinded single-motor laser-tweezers validation (PRODUCER)
+                case "-exp4i", "-twobody-s2-surrogate-calibration" -> { TwoBodyConverterMotor.run4i(args); return; }   // Experiment 4I: calibrate the 4F pivot surrogate directly to the 4G explicit-S2 beam
                 case "-target" -> EXP2A_TARGET = Integer.parseInt(args[++i]);   // snapshots/stage for Exp-2A
                 case "-fast" -> EXP2A_FAST = true;                  // Exp-2A: reduced snapshot counts (quick smoke)
                 case "-viz", "-3js" -> { runViz = true; if (i + 1 < args.length && !args[i + 1].startsWith("-")) JS_DIR = args[++i]; }
