@@ -370,6 +370,54 @@ public final class MatSoaSlice {
     }
 
     // ===============================================================================================
+    // KERNEL — Stage 5 bridge: matPlaceHead. Mirrors placeHead2D (L4512): head center = xH, uVec =
+    //   normalize(xF8-xH), yVec = perp3(uVec). Reads mat geomOut (DOUBLE) → writes MotorStore.body (FLOAT)
+    //   at h=3m+2 (nB=3N) so the existing float bondForces consumes it. Active-guarded.
+    // ===============================================================================================
+    public static void matPlaceHead(DoubleArray geomOut, IntArray active, DoubleArray eupP, IntArray counts,
+                                    FloatArray motCoord, FloatArray motUVec, FloatArray motYVec) {
+        int N = counts.get(0), nB = 3 * N;
+        double eupx = eupP.get(0), eupy = eupP.get(1), eupz = eupP.get(2);
+        for (@Parallel int m = 0; m < N; m++) {
+            if (active.get(m) != 1) continue;
+            int h = 3 * m + 2;
+            double xHx = geomOut.get(6 * N + m), xHy = geomOut.get(7 * N + m), xHz = geomOut.get(8 * N + m);
+            double dx = geomOut.get(3 * N + m) - xHx, dy = geomOut.get(4 * N + m) - xHy, dz = geomOut.get(5 * N + m) - xHz;
+            double L = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            double uvx, uvy, uvz;
+            if (L > 1e-12) { uvx = dx / L; uvy = dy / L; uvz = dz / L; } else { uvx = eupx; uvy = eupy; uvz = eupz; }
+            double ax = dabs(uvx) < 0.9 ? 1 : 0, ay = dabs(uvx) < 0.9 ? 0 : 1, az = 0;
+            double dd = ax * uvx + ay * uvy + az * uvz;
+            double yx = ax - dd * uvx, yy = ay - dd * uvy, yz = az - dd * uvz;
+            double yl = Math.sqrt(yx * yx + yy * yy + yz * yz);
+            yx /= yl; yy /= yl; yz /= yl;
+            motCoord.set(h, (float) xHx); motCoord.set(nB + h, (float) xHy); motCoord.set(2 * nB + h, (float) xHz);
+            motUVec.set(h, (float) uvx); motUVec.set(nB + h, (float) uvy); motUVec.set(2 * nB + h, (float) uvz);
+            motYVec.set(h, (float) yx); motYVec.set(nB + h, (float) yy); motYVec.set(2 * nB + h, (float) yz);
+        }
+    }
+
+    // KERNEL — Stage 8 bridge: matZConfine. forceSum[2·nSeg+s] -= kzCode·coordZ(s) (stepGlideSup L5855). zP[0]=kzCode.
+    public static void matZConfine(FloatArray filCoord, FloatArray filForceSum, FloatArray zP, IntArray counts) {
+        int nSeg = counts.get(3);
+        float kz = zP.get(0);
+        for (@Parallel int s = 0; s < nSeg; s++) { int iz = 2 * nSeg + s; filForceSum.set(iz, filForceSum.get(iz) - kz * filCoord.get(iz)); }
+    }
+
+    // KERNEL — Stage 9: matReduce. Single-thread reduced measurements: [0]=nBound [1..3]=COM [4]=Σ forceDotFil [5]=nActive.
+    public static void matReduce(IntArray boundSeg, IntArray active, FloatArray forceDotFil, FloatArray filCoord,
+                                 IntArray counts, DoubleArray redOut) {
+        int N = counts.get(0), nSeg = counts.get(3);
+        for (@Parallel int r = 0; r < 1; r++) {
+            int nb = 0, na = 0; double load = 0;
+            for (int m = 0; m < N; m++) { if (boundSeg.get(m) >= 0) { nb++; load += forceDotFil.get(m); } if (active.get(m) == 1) na++; }
+            double cx = 0, cy = 0, cz = 0;
+            for (int s = 0; s < nSeg; s++) { cx += filCoord.get(s); cy += filCoord.get(nSeg + s); cz += filCoord.get(2 * nSeg + s); }
+            redOut.set(0, nb); redOut.set(1, cx / nSeg); redOut.set(2, cy / nSeg); redOut.set(3, cz / nSeg); redOut.set(4, load); redOut.set(5, na);
+        }
+    }
+
+    // ===============================================================================================
     public static void main(String[] args) {
         Path dir = Path.of(OUTDIR);
         try { Files.createDirectories(dir); } catch (IOException ex) { throw new UncheckedIOException(ex); }
@@ -380,10 +428,14 @@ public final class MatSoaSlice {
         log.append("# MAT-SOA VERTICAL SLICE — isolated stage gates (calibrated, RTX 5070 / PTX)\n");
         log.append("# bailout disabled: ").append(bailoutOff).append("  | device mem start ").append(gpuMemUsed()).append(" MiB\n\n");
 
+        boolean compose = false; for (String a : args) if (a.equals("-compose")) compose = true;
+        if (compose) { boolean ok = compositionProbe(log, dir); try { Files.writeString(dir.resolve("COMPOSITION_PROBE.md"), log.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); } System.exit(ok ? 0 : 1); return; }
+
         boolean cullOk = gateCull(log);
         boolean geomOk = gateGeomGate(log);
         boolean bindOk = gateBind(log);
         boolean step7Ok = gateStep7(log);
+        boolean bridgeOk = gateBridges(log);
 
         try { Files.writeString(dir.resolve("STAGE_GATES.md"), log.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); }
         System.out.println("\n=== SLICE STATUS ===");
@@ -391,8 +443,178 @@ public final class MatSoaSlice {
         System.out.printf(Locale.US, "Stage 2 matGeomGate  (geom+nearest+gate identity): %s%n", geomOk ? "PASS" : "FAIL");
         System.out.printf(Locale.US, "Stage 3 matBind      (bind-event identity):        %s%n", bindOk ? "PASS" : "FAIL");
         System.out.printf(Locale.US, "Stage 7 matStep7     (5-DOF solve vs supSolveM):   %s%n", step7Ok ? "PASS" : "FAIL");
+        System.out.printf(Locale.US, "Bridges placeHead/zConfine/reduce:                 %s%n", bridgeOk ? "PASS" : "FAIL");
         System.out.println("# report: " + dir.resolve("STAGE_GATES.md").toAbsolutePath());
-        System.exit(cullOk && geomOk && bindOk && step7Ok ? 0 : 1);
+        System.exit(cullOk && geomOk && bindOk && step7Ok && bridgeOk ? 0 : 1);
+    }
+
+    // ---------- Step 2 — COMPOSITION-RISK PROBE: does the full ~19-task double mat loop lower as a SINGLE graph? ----------
+    static boolean compositionProbe(StringBuilder log, Path dir) {
+        System.out.println("=== COMPOSITION-RISK PROBE — full calibrated mat loop as a SINGLE TaskGraph (bailout=false) ===");
+        log.append("# COMPOSITION-RISK PROBE — full per-step calibrated mat loop, single TaskGraph\n\n");
+        double dt = 2.5e-6; int seed = 11;
+        TwoBodyConverterMotor.Glide2D G = TwoBodyConverterMotor.buildSupMat(200, dt, 0.0, seed);   // small: 1 filament, N=600
+        int N = G.N, nSeg = G.nSeg; MotorStore mot = G.mot; FilamentStore f = G.fil; RigidRodBody b = mot.body;
+        // warm a little so state is realistic (host)
+        for (int tt = 0; tt < 200; tt++) TwoBodyConverterMotor.stepGlideSup(G, tt, seed, new TwoBodyConverterMotor.Tol());
+        for (int m = 0; m < N; m++) TwoBodyConverterMotor.geom2D(G, m);
+        // mat SoA (NOTE: probe tests LOWERING — pose3 for matGeomGate + pose4 for matStep7 are separate here;
+        // a correct trajectory unifies phi/psi into one buffer + routes matStep7→mot.forceDotFil. See report.)
+        DoubleArray site = new DoubleArray(2 * N), pose3 = new DoubleArray(3 * N), pose4 = new DoubleArray(4 * N),
+                anchor = new DoubleArray(3 * N), supP0 = new DoubleArray(3 * N), geomOut = new DoubleArray(9 * N),
+                candArc = new DoubleArray(N), forceOut = new DoubleArray(2 * N), redOut = new DoubleArray(6),
+                eupP = DoubleArray.fromElements(G.eup[0], G.eup[1], G.eup[2]);
+        IntArray active = new IntArray(N), noBind = new IntArray(N), candInt = new IntArray(2 * N);
+        for (int m = 0; m < N; m++) {
+            site.set(m, G.siteX[m]); site.set(N + m, G.siteY[m]);
+            pose3.set(m, G.phi[m]); pose3.set(N + m, G.psi[m]); pose3.set(2 * N + m, G.psiActin[m]);
+            pose4.set(m, G.phi[m]); pose4.set(N + m, G.psi[m]); pose4.set(2 * N + m, G.thetaS[m]); pose4.set(3 * N + m, G.psiActin[m]);
+            anchor.set(m, G.A[m][0]); anchor.set(N + m, G.A[m][1]); anchor.set(2 * N + m, G.A[m][2]);
+            supP0.set(m, G.supP0[m][0]); supP0.set(N + m, G.supP0[m][1]); supP0.set(2 * N + m, G.supP0[m][2]);
+            noBind.set(m, G.noBind[m] ? 1 : 0);
+        }
+        DoubleArray cullP = DoubleArray.fromElements(G.queryR * G.queryR);
+        DoubleArray gateP = packGeomGateParams(G), step7P = packStep7Params(G);
+        FloatArray zP = FloatArray.fromElements((float) G.kzCode);
+        IntArray mc = new IntArray(4); mc.set(0, N); mc.set(1, 200); mc.set(2, seed); mc.set(3, nSeg);
+        mot.setCounts(200, seed, nSeg); f.counts.set(1, 200); f.counts.set(2, seed);
+        log.append("Tasks (19): matCull, matGeomGate, matBind, cycleLymnTaylor, matPlaceHead, bondForces, zeroAccumulators, ")
+           .append("csrHistogram, csrScan, csrScatter, segGather, chainForces, matZConfine, brownianForce, integrate, ")
+           .append("orthogonalizeY, derive, matStep7, matReduce. N=").append(N).append(" nSeg=").append(nSeg).append("\n\n");
+        String memB = gpuMemUsed();
+        try {
+            TaskGraph tg = new TaskGraph("matloop")
+                .transferToDevice(DataTransferMode.FIRST_EXECUTION,
+                    site, pose3, pose4, anchor, supP0, geomOut, candArc, forceOut, redOut, eupP, active, noBind, candInt,
+                    cullP, gateP, step7P, zP,
+                    b.coord, b.uVec, b.yVec, b.bRotGam,
+                    f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.forceSum, f.torqueSum,
+                    f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.chainParams,
+                    f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
+                    mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown,
+                    mot.stats, mot.nucParams, mot.kinParams, G.bondData, G.xbParams, G.segCount, G.segOff, G.segMyo)
+                .transferToDevice(DataTransferMode.EVERY_EXECUTION, mc, mot.counts, f.counts)
+                .task("matCull", MatSoaSlice::matCull, mot.boundSeg, site, f.coord, f.uVec, f.segLength, cullP, mc, active)
+                .task("matGeomGate", MatSoaSlice::matGeomGate, anchor, pose3, f.coord, f.uVec, f.segLength, gateP, mc, geomOut, candInt, candArc)
+                .task("matBind", MatSoaSlice::matBind, active, noBind, mot.boundSeg, mot.nucleotideState, candInt, candArc, mot.bindArc, mc)
+                .task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts)
+                .task("matPlaceHead", MatSoaSlice::matPlaceHead, geomOut, active, eupP, mc, b.coord, b.uVec, b.yVec)
+                .task("bondForces", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams)
+                .task("zeroAcc", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
+                .task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, G.segCount)
+                .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, G.segCount, G.segOff)
+                .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, G.segOff, G.segCount, G.segMyo)
+                .task("segGather", CrossBridgeSystem::segGather, G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts)
+                .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
+                .task("zconf", MatSoaSlice::matZConfine, f.coord, f.forceSum, zP, mc)
+                .task("brown", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
+                .task("integ", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
+                .task("orthoY", DerivedGeometrySystem::orthogonalizeY, f.uVec, f.yVec, f.counts)
+                .task("derive", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
+                .task("matStep7", MatSoaSlice::matStep7, pose4, anchor, step7P, supP0, G.bondData, mot.boundSeg, active, mc, geomOut, forceOut)
+                .task("matReduce", MatSoaSlice::matReduce, mot.boundSeg, active, mot.forceDotFil, f.coord, mc, redOut)
+                .transferToHost(DataTransferMode.EVERY_EXECUTION, redOut);
+            GridScheduler sc = new GridScheduler();
+            int pn = ((N + 63) / 64) * 64, ps = ((nSeg + 63) / 64) * 64;
+            addW(sc, "matloop.matCull", pn); addW(sc, "matloop.matGeomGate", pn); addW(sc, "matloop.matBind", pn);
+            addW(sc, "matloop.chem", pn); addW(sc, "matloop.matPlaceHead", pn); addW(sc, "matloop.bondForces", pn);
+            addW(sc, "matloop.zeroAcc", ps); addW(sc, "matloop.csrHist", 64); addW(sc, "matloop.csrScan", 64);
+            addW(sc, "matloop.csrScatter", 64); addW(sc, "matloop.segGather", ps); addW(sc, "matloop.chain", ps);
+            addW(sc, "matloop.zconf", ps); addW(sc, "matloop.brown", ps); addW(sc, "matloop.integ", ps);
+            addW(sc, "matloop.orthoY", ps); addW(sc, "matloop.derive", ps); addW(sc, "matloop.matStep7", pn); addW(sc, "matloop.matReduce", 64);
+            TornadoExecutionPlan plan = new TornadoExecutionPlan(tg.snapshot());
+            long t0 = System.nanoTime();
+            plan.withGridScheduler(sc).execute();
+            double ms = (System.nanoTime() - t0) / 1e6;
+            System.out.printf(Locale.US, "SINGLE-GRAPH: LOWERS+RUNS ✓ [%.0f ms cold, 19 tasks, N=%d]  redOut nBound=%.0f nActive=%.0f%n", ms, N, redOut.get(0), redOut.get(5));
+            log.append(String.format(Locale.US, "**RESULT: the 19-task double mat loop LOWERS + RUNS as a SINGLE TaskGraph** [%.0f ms cold]. No Graph-resize. ", ms));
+            log.append("Residency: all motor/filament SoA uploaded FIRST_EXECUTION; only mc/mot.counts/f.counts (small) EVERY_EXECUTION; only redOut (6 doubles) read back — NO full mat transfer/step. mem ").append(memB).append("→").append(gpuMemUsed()).append(" MiB.\n");
+            return true;
+        } catch (Throwable ex) {
+            Throwable root = ex; while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+            boolean resize = String.valueOf(root.getMessage()).contains("resize") || String.valueOf(ex.getMessage()).contains("resize");
+            System.out.printf(Locale.US, "SINGLE-GRAPH: %s — %s: %s%n", resize ? "GRAPH-RESIZE (needs chaining)" : "FAILED", root.getClass().getName(), oneLine(root.getMessage()));
+            log.append(String.format(Locale.US, "**RESULT: single graph %s** — `%s`: %s\n", resize ? "hit Graph-resize (must split into chained TaskGraphs)" : "failed", root.getClass().getName(), oneLine(root.getMessage())));
+            return false;
+        }
+    }
+    static void addW(GridScheduler sc, String name, int global) { WorkerGrid w = new WorkerGrid1D(Math.max(1, global)); w.setLocalWork(64, 1, 1); sc.addWorkerGrid(name, w); }
+
+    // ---------- Step 1 — bridge-kernel isolated gates (placeHead / zConfine / reduce) ----------
+    static boolean gateBridges(StringBuilder log) {
+        System.out.println("\n--- Bridge kernels: matPlaceHead / matZConfine / matReduce (CPU-vs-GPU) ---");
+        log.append("## Bridge kernels (matPlaceHead, matZConfine, matReduce)\n");
+        double dt = 2.5e-6; int seed = 11, warm = 1500;
+        TwoBodyConverterMotor.Glide2D G = TwoBodyConverterMotor.buildSupMat(200, dt, 0.0, seed);
+        int N = G.N, nSeg = G.nSeg; MotorStore mot = G.mot; FilamentStore f = G.fil;
+        for (int tt = 0; tt < warm; tt++) TwoBodyConverterMotor.stepGlideSup(G, tt, seed, new TwoBodyConverterMotor.Tol());
+        for (int m = 0; m < N; m++) TwoBodyConverterMotor.geom2D(G, m);
+        TwoBodyConverterMotor.unionActive(G);
+        int nB = 3 * N;
+        // pack geomOut (from current C_/xF8_/xH_) + active
+        DoubleArray geomOut = new DoubleArray(9 * N); IntArray active = new IntArray(N);
+        for (int m = 0; m < N; m++) {
+            geomOut.set(m, G.C_[m][0]); geomOut.set(N + m, G.C_[m][1]); geomOut.set(2 * N + m, G.C_[m][2]);
+            geomOut.set(3 * N + m, G.xF8_[m][0]); geomOut.set(4 * N + m, G.xF8_[m][1]); geomOut.set(5 * N + m, G.xF8_[m][2]);
+            geomOut.set(6 * N + m, G.xH_[m][0]); geomOut.set(7 * N + m, G.xH_[m][1]); geomOut.set(8 * N + m, G.xH_[m][2]);
+            active.set(m, G.active[m] ? 1 : 0);
+        }
+        DoubleArray eupP = DoubleArray.fromElements(G.eup[0], G.eup[1], G.eup[2]);
+        IntArray counts = new IntArray(4); counts.set(0, N); counts.set(1, warm); counts.set(2, seed); counts.set(3, nSeg);
+        // --- host placeHead2D reference (into MotorStore.body clones) ---
+        for (int m = 0; m < N; m++) if (G.active[m]) { TwoBodyConverterMotor.geom2D(G, m); TwoBodyConverterMotor.placeHead2D(G, m); }
+        float[] hC = new float[3 * nB], hU = new float[3 * nB], hY = new float[3 * nB];
+        for (int i = 0; i < 3 * nB; i++) { hC[i] = mot.body.coord.get(i); hU[i] = mot.body.uVec.get(i); hY[i] = mot.body.yVec.get(i); }
+        // --- device placeHead into FRESH body arrays ---
+        FloatArray dC = new FloatArray(3 * nB), dU = new FloatArray(3 * nB), dY = new FloatArray(3 * nB);
+        for (int i = 0; i < 3 * nB; i++) { dC.set(i, mot.body.coord.get(i)); dU.set(i, mot.body.uVec.get(i)); dY.set(i, mot.body.yVec.get(i)); }
+        boolean placeOk = true, zOk = true, redOk = true;
+        try {
+            TaskGraph tg = new TaskGraph("place").transferToDevice(DataTransferMode.FIRST_EXECUTION, geomOut, active, eupP)
+                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, counts)
+                    .task("ph", MatSoaSlice::matPlaceHead, geomOut, active, eupP, counts, dC, dU, dY)
+                    .transferToHost(DataTransferMode.EVERY_EXECUTION, dC, dU, dY);
+            GridScheduler sc = new GridScheduler(); WorkerGrid w = new WorkerGrid1D(N); w.setLocalWork(1, 1, 1); sc.addWorkerGrid("place.ph", w);
+            new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(sc).execute();
+        } catch (Throwable ex) { placeOk = false; log.append("- matPlaceHead LOWERS=NO: " + oneLine(ex.getMessage()) + "\n"); }
+        float phMax = 0;
+        if (placeOk) for (int m = 0; m < N; m++) if (G.active[m]) { int h = 3 * m + 2;
+            phMax = Math.max(phMax, Math.abs(dC.get(h) - hC[h])); phMax = Math.max(phMax, Math.abs(dU.get(h) - hU[h])); phMax = Math.max(phMax, Math.abs(dY.get(h) - hY[h])); }
+        placeOk = placeOk && phMax < 1e-5;
+        System.out.printf(Locale.US, "  matPlaceHead: maxΔ(float head pose)=%.2e %s%n", phMax, placeOk ? "PASS" : "FAIL");
+        log.append(String.format(Locale.US, "- matPlaceHead: double geom → float MotorStore.body; maxΔ=%.2e → %s\n", phMax, placeOk ? "PASS" : "FAIL"));
+        // --- matZConfine ---
+        FloatArray fs = new FloatArray(3 * nSeg); for (int i = 0; i < 3 * nSeg; i++) fs.set(i, (float) (0.01 * (i + 1)));
+        float[] hFs = new float[3 * nSeg]; for (int i = 0; i < 3 * nSeg; i++) hFs[i] = fs.get(i);
+        for (int s = 0; s < nSeg; s++) { int iz = 2 * nSeg + s; hFs[iz] = (float) (hFs[iz] - G.kzCode * f.coordZ(s)); }
+        FloatArray zP = FloatArray.fromElements((float) G.kzCode);
+        try {
+            TaskGraph tg = new TaskGraph("zc").transferToDevice(DataTransferMode.FIRST_EXECUTION, f.coord, zP)
+                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, fs, counts).task("zc", MatSoaSlice::matZConfine, f.coord, fs, zP, counts)
+                    .transferToHost(DataTransferMode.EVERY_EXECUTION, fs);
+            GridScheduler sc = new GridScheduler(); WorkerGrid w = new WorkerGrid1D(nSeg); w.setLocalWork(1, 1, 1); sc.addWorkerGrid("zc.zc", w);
+            new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(sc).execute();
+        } catch (Throwable ex) { zOk = false; log.append("- matZConfine LOWERS=NO: " + oneLine(ex.getMessage()) + "\n"); }
+        float zMax = 0; if (zOk) for (int i = 0; i < 3 * nSeg; i++) zMax = Math.max(zMax, Math.abs(fs.get(i) - hFs[i]));
+        zOk = zOk && zMax < 1e-6;
+        System.out.printf(Locale.US, "  matZConfine: maxΔ=%.2e %s%n", zMax, zOk ? "PASS" : "FAIL");
+        log.append(String.format(Locale.US, "- matZConfine: maxΔ=%.2e → %s\n", zMax, zOk ? "PASS" : "FAIL"));
+        // --- matReduce ---
+        int hNb = 0, hNa = 0; double hLoad = 0, hcx = 0, hcy = 0, hcz = 0;
+        for (int m = 0; m < N; m++) { if (mot.boundSeg.get(m) >= 0) { hNb++; hLoad += mot.forceDotFil.get(m); } if (G.active[m]) hNa++; }
+        for (int s = 0; s < nSeg; s++) { hcx += f.coordX(s); hcy += f.coordY(s); hcz += f.coordZ(s); }
+        DoubleArray redOut = new DoubleArray(6);
+        try {
+            TaskGraph tg = new TaskGraph("red").transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.boundSeg, active, mot.forceDotFil, f.coord)
+                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, counts).task("red", MatSoaSlice::matReduce, mot.boundSeg, active, mot.forceDotFil, f.coord, counts, redOut)
+                    .transferToHost(DataTransferMode.EVERY_EXECUTION, redOut);
+            GridScheduler sc = new GridScheduler(); WorkerGrid w = new WorkerGrid1D(1); w.setLocalWork(1, 1, 1); sc.addWorkerGrid("red.red", w);
+            new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(sc).execute();
+        } catch (Throwable ex) { redOk = false; log.append("- matReduce LOWERS=NO: " + oneLine(ex.getMessage()) + "\n"); }
+        redOk = redOk && (int) redOut.get(0) == hNb && (int) redOut.get(5) == hNa && Math.abs(redOut.get(1) - hcx / nSeg) < 1e-6;
+        System.out.printf(Locale.US, "  matReduce: nBound %d==%d nActive %d==%d COMxΔ=%.2e %s%n", (int) redOut.get(0), hNb, (int) redOut.get(5), hNa, Math.abs(redOut.get(1) - hcx / nSeg), redOk ? "PASS" : "FAIL");
+        log.append(String.format(Locale.US, "- matReduce: nBound=%d(host %d) nActive=%d(host %d) → %s\n", (int) redOut.get(0), hNb, (int) redOut.get(5), hNa, redOk ? "PASS" : "FAIL"));
+        return placeOk && zOk && redOk;
     }
 
     static DoubleArray packStep7Params(TwoBodyConverterMotor.Glide2D G) {
