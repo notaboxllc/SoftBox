@@ -7864,16 +7864,13 @@ public final class TwoBodyConverterMotor {
      *  provenance header. This is what `-motor <id>` runs. */
     static void runMotorModel(MotorModel m,String source,String[] args){
         boolean gpu=false; for(String a:args) if(a.equals("-gpu")) gpu=true;
+        // ANY -gpu request is refused clearly through the single closed gate — refuse ALL three models
+        // (calibrated is GPU-CAPABLE but NOT device-validated), no silent CPU fallback, no silent swap.
+        // Placed BEFORE the -glide dispatch so `-glide -gpu` cannot slip through to the CPU gliding assay.
+        if(gpu){ MotorGpuParams.refuseGpu(m,System.out); return; }
         for(String a:args) if(a.equals("-glide")){ runMotorGliding(m,source,args); return; }   // canonical gliding assay
         double dt=(m==MotorModel.EXPLICIT_S2_L40)? 2.5e-6 : 2.5e-6;
         for(int i=0;i<args.length;i++) if(args[i].equals("-dt")) dt=Double.parseDouble(args[i+1]);
-        // reject incompatible combinations clearly (never silently swap the model)
-        if(gpu && !m.gpuSupported()){
-            System.out.printf(Locale.US,"REFUSED: -gpu requested for %s, which has no GPU implementation (CPU-only). "
-                +"Re-run on CPU (drop -gpu), or select -motor calibrated-s2-l40 for the GPU-friendly surrogate. "
-                +"The motor model is NEVER silently changed.%n",m.id());
-            return;
-        }
         int settle=settleSteps(dt);
         m.logResolved(System.out,source,dt,0.05);
         assertFrozenParamsConsistent();

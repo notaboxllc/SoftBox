@@ -236,7 +236,12 @@ public final class LaserTrapHarness {
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-cpu" -> {}                         // CPU is the only runner; accepted no-op
-                case "-gpu" -> { System.out.println("REFUSED: -gpu — the GPU is reserved for the fine-dt gliding sweep. CPU only."); return; }
+                case "-gpu" -> {   // the two-body optical-trap arc is CPU-only; name the model if one was selected
+                    MotorModel.Resolution res = MotorModel.scan(args);
+                    if (res != null) MotorGpuParams.refuseGpu(res.model(), System.out);
+                    else System.out.println("REFUSED: the two-body optical-trap arc is CPU-only; -gpu is not available.");
+                    return;
+                }
                 case "-A" -> runA = true;
                 case "-B" -> runB = true;
                 case "-C" -> runC = true;
