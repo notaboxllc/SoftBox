@@ -6,6 +6,40 @@
 -Dtornado.recover.bailout=false -Dtornado.tvm.maxbytecodesize=16384 -cp "$TDIR/tornado-api.jar:."
 softbox.MatSoaSlice`. Report: `RUN_LOGS/matsoa/STAGE_GATES.md`.
 
+## UPDATE — serial GPU bottlenecks REMOVED (Parts A–E) + explicit device status (2026-07-17)
+- **SHARED SERIAL BOTTLENECKS ELIMINATED (Priority 1: DONE + validated).** Part A froze the baseline and
+  confirmed the target breakdown at N=9000 EXACTLY: `matReduce` 43.7 % / `csrScatter` 22.4 % / `csrHist`
+  22.4 % (88.5 % of device-kernel in three single-thread-over-N kernels). Part B: the CSR (`boundSeg`→seg,
+  nSeg=12 const) is slowly-changing (82–98 % no-change steps) ⇒ **C2 parallel device rebuild** chosen
+  (host-cache would break residency). Part C wired the validated atomic-free counting-sort `csrChunk*`
+  (`-parcsr`); C3 gate: parallel CSR ≡ serial EXACTLY on every topology (empty/full/one-per-bin/endpoints/
+  random/N=9000-6368-bound/60 rapidly-changing) — exact offsets/membership, no drop/dup, bit-identical
+  gather. Part D added the hierarchical block-partial+final `matReduceBlocks`/`matReduceFinal` (`-parreduce`);
+  D4 gate: integer totals EXACT, COM bit-identical, Σload bit-identical (incl. cancellation-dominated,
+  NaN-in-unbound). **Part E throughput (paropt = both): device-kernel N=9000 1.931→0.313 ms (6.2×; csrGroup
+  13×, reduceGroup 21×); wall +20.8 / +32.4 / +49.3 % at N=2100/4500/9000 (−6.9 % at N=600 = launch floor of
+  +3 tasks below the target regime).** No observable regression: CPU serial ≡ CPU paropt **BIT-IDENTICAL**
+  (redOut/boundSeg/coord Δ=0, 500 steps); GPU-paropt vs CPU-paropt **t=0 IDENTICAL** (only the same float-FMA
+  decorrelation as serial). Report: `docs/matsoa/SERIAL_BOTTLENECK_REMOVAL_FINDINGS.md`. Only `MatSoaSlice.java`
+  changed; parallel paths are opt-in flags (`-parcsr`/`-parreduce`/`-paropt`); serial default byte-identical;
+  no physics/param/RNG/binding change; `DEVICE_VALIDATED` stays false.
+- **EXPLICIT-S2-L40 DEVICE STATUS (Priority 2: gating risk resolved; gliding integration = next increment).**
+  The isolated analytic explicit beam GPU kernel (`TwoBodyBeamAnalyticGpu.beamRelaxAnalytic`) is re-confirmed
+  in the current tree: LOWERS + executes (GPU vs CPU-mirror Δ=0.0), C3 device fixture gate GPU-vs-CPU-analytic
+  2.5e-9 µm / vs-FD 9.1e-9 µm, 0 failures, ≈70× CPU-analytic at batch (`-Dtornado.enable.fma=false` required).
+  This satisfies the crux of F4/G1/G3 (single-head bound relaxation). REMAINING (bounded next increment):
+  F1–F3 persistent explicit SoA + init + build-time dispatch into the mat, the `matS2Solve` gliding-coupling
+  Stage-10 port (re-probe its lowering in isolation FIRST — fallback = calibrated GPU + explicit-Step-10 CPU),
+  G2 dynamic single-head, and H end-to-end explicit gliding. Status/promotion:
+  `docs/matsoa/EXPLICIT_DEVICE_STATUS.md`.
+- **PROMOTION (Part J):** `CALIBRATED DOUBLE GPU VALIDATED BUT NOT PROMOTED` (validated + bottlenecks removed;
+  flip awaits coordinator + broader scene + float `matStep7`); `EXPLICIT GPU VALIDATED FOR SINGLE-HEAD TRAP
+  ONLY` (beam solve device-validated; gliding not yet integrated; CPU FD stays the permanent oracle).
+- **LARGE-SCALE STUDIES: NOT READY** — calibrated serial stages no longer dominate + calibrated stays
+  validated, but explicit does not yet run end-to-end on the persistent device architecture (blocks the
+  "explicit runs end-to-end" readiness criterion). **NEXT BOTTLENECK:** `matStep7` (the FP64 5-DOF solve —
+  now the top device kernel) + the ~20-launch wall floor.
+
 ## STATUS
 - **MAT-SOA VERTICAL SLICE:** 7 kernels IMPLEMENTED + isolated CPU-vs-GPU gates PASS (RTX 5070,
   bailout=false): Stages 1/2/3/7 (`matCull`/`matGeomGate`/`matBind`/`matStep7`) + 3 bridges

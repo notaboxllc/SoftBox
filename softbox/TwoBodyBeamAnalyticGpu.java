@@ -290,4 +290,54 @@ public final class TwoBodyBeamAnalyticGpu {
             status.set(m, st); iters.set(m, itDone);
         }
     }
+
+    // ================================================================= reduced OBSERVABLES (device)
+    /**
+     * Reduced beam observables from the RESIDENT node array — so the beam state never leaves the device
+     * (only these scalars cross). EXACT flat replica of {@link ExplicitBeamAnalytic}'s stretch/bend/floor
+     * energy (same formulas, same units) using the device-safe {@code dacos}. NO solve, NO state mutation.
+     *
+     * <p>{@code obs} stride 5 per motor (comp·nM+m): [0]=stretchE(J) [1]=bendE(J) [2]=floorE(J)
+     * [3]=totalE(J) [4]=contour(µm). frame/params share the beamRelaxAnalytic layout (eup=frame 6..8,
+     * g4Tan=frame 12..14; ks=params 11, l0µm=params 12, kb=params 13, floorZ=params 14, kfloor=params 15).
+     */
+    public static void beamObserve(DoubleArray nodes, DoubleArray frame, DoubleArray params,
+                                   IntArray counts, DoubleArray obs) {
+        int nM = counts.get(0), M = counts.get(2);
+        for (@Parallel int m = 0; m < nM; m++) {
+            double ux = frame.get(6*nM+m), uy = frame.get(7*nM+m), uz = frame.get(8*nM+m);       // eup (floor normal)
+            double gTx = frame.get(12*nM+m), gTy = frame.get(13*nM+m), gTz = frame.get(14*nM+m); // g4Tan (clamp0 tangent)
+            double ks = params.get(11*nM+m), l0um = params.get(12*nM+m), kb = params.get(13*nM+m);
+            double floorZ = params.get(14*nM+m), kfloor = params.get(15*nM+m);
+            double l0m = l0um * 1e-6;
+            double stretchE = 0, bendE = 0, floorE = 0, contour = 0;
+            // stretch + contour over segments 0..M-1
+            for (int i = 0; i < M; i++) {
+                double ax = nodes.get((3*(i+1))*nM+m) - nodes.get((3*i)*nM+m);
+                double ay = nodes.get((3*(i+1)+1)*nM+m) - nodes.get((3*i+1)*nM+m);
+                double az = nodes.get((3*(i+1)+2)*nM+m) - nodes.get((3*i+2)*nM+m);
+                double len = Math.sqrt(ax*ax+ay*ay+az*az); contour += len;
+                if (len >= 1e-15) { double d = len*1e-6 - l0m; stretchE += 0.5*ks*d*d; }
+            }
+            // bend clamped joint 0 (g4Tan vs b0=node1-node0)
+            {
+                double b0x = nodes.get(3*nM+m)-nodes.get(m), b0y = nodes.get(4*nM+m)-nodes.get(nM+m), b0z = nodes.get(5*nM+m)-nodes.get(2*nM+m);
+                double lbb = Math.sqrt(b0x*b0x+b0y*b0y+b0z*b0z);
+                if (lbb > 1e-12) { double c = (gTx*b0x+gTy*b0y+gTz*b0z)/lbb; if(c>1)c=1; if(c<-1)c=-1; double th = dacos(c); bendE += 0.5*kb*th*th; }
+            }
+            // bend interior joints 1..M-1
+            for (int j = 1; j < M; j++) {
+                double ax = nodes.get((3*j)*nM+m)-nodes.get((3*(j-1))*nM+m), ay = nodes.get((3*j+1)*nM+m)-nodes.get((3*(j-1)+1)*nM+m), az = nodes.get((3*j+2)*nM+m)-nodes.get((3*(j-1)+2)*nM+m);
+                double bx = nodes.get((3*(j+1))*nM+m)-nodes.get((3*j)*nM+m), by = nodes.get((3*(j+1)+1)*nM+m)-nodes.get((3*j+1)*nM+m), bz = nodes.get((3*(j+1)+2)*nM+m)-nodes.get((3*j+2)*nM+m);
+                double la = Math.sqrt(ax*ax+ay*ay+az*az), lb = Math.sqrt(bx*bx+by*by+bz*bz);
+                if (la >= 1e-12 && lb >= 1e-12) { double c = (ax*bx+ay*by+az*bz)/(la*lb); if(c>1)c=1; if(c<-1)c=-1; double th = dacos(c); bendE += 0.5*kb*th*th; }
+            }
+            // floor penalty over nodes 0..M
+            for (int j = 0; j <= M; j++) {
+                double z = nodes.get((3*j)*nM+m)*ux + nodes.get((3*j+1)*nM+m)*uy + nodes.get((3*j+2)*nM+m)*uz;
+                if (z < floorZ) { double pen = (floorZ - z)*1e-6; floorE += 0.5*kfloor*pen*pen; }
+            }
+            obs.set(m, stretchE); obs.set(nM+m, bendE); obs.set(2*nM+m, floorE); obs.set(3*nM+m, stretchE+bendE+floorE); obs.set(4*nM+m, contour);
+        }
+    }
 }

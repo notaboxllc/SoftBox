@@ -1,5 +1,69 @@
 # Soft Box Project Journal
 
+### 2026-07-17 — EXPLICIT single-head device-resident vertical slice — BUILT + VALIDATED (persistent beam SoA + dynamic trajectory on GPU)
+
+The smallest complete explicit device-resident slice: persistent explicit beam SoA + build-time explicit
+Step-7 dispatch + one validated dynamic single-head trajectory that stays on the GPU across 400 timesteps.
+Reuses the VALIDATED analytic beam kernel `TwoBodyBeamAnalyticGpu.beamRelaxAnalytic` (NO second solver) with
+**maxIt=1 per timestep = one production `s2Solve` implicit Newton step** (the beam relaxes over many steps ⇒
+faithful drag-limited dynamics), + a NEW device reduction `beamObserve` (exact flat replica of
+`ExplicitBeamAnalytic.{stretch,bend,floor}Energy` via device `dacos`) so the beam state NEVER leaves the
+device to produce energy/contour observables. Trajectory = relax → stroke (θ_s −30°→+30°, the canonical
+converter swing) → hold → detach (couple→0) → recoil, with the cross-bridge as a spring to a FIXED actin site
+(imposed filament geometry; `F8h = couple·kF8·(xActin−xF8)` = the same F8h `bondForces` feeds `s2Solve`).
+No beam energy/topology/params/F8-converter/convergence change; `DEVICE_VALIDATED` false; no silent fallback
+(`-Dtornado.recover.bailout=false -Dtornado.enable.fma=false`). New files only (`ExplicitSingleHeadHarness`,
+`beamObserve`, `scripts/run_explicit_singlehead.sh`); MatSoaSlice/production untouched; `BoA-v1ref` byte-clean.
+
+**All §1–§10 gates PASS:** §2 SoA 2232 B/motor (flat, no double[][], no per-step alloc; N=1/600/2100/4500 =
+2.2 KB/1.28/4.47/9.58 MiB); §3 CPU→device init EXACT on the 6 ICs (prestroke_adppi/poststroke_adp/high_axial/
+bend/taut/mixed — nodes/q/frame/F8h Δ=0); §4 dispatch (explicit graph = relax+observe only, never calibrated,
+unsupported request fails clearly); §5 lowering probe LOWERS (GPU vs CPU-mirror Δnode=1.1e-11 µm); §6
+relaxation gate GPU-vs-FD **9.1e-9 µm**, 0 class changes, 0 new failures (shares the CPU-FD basin); §7/§8
+unloaded trajectory **−7.70 nm working stroke, 7.92 pN peak force**, GPU-vs-CPU-analytic continuous 2.3e-6
+(head disp/force), totalE bit-identical (1e-22 J), **solver-status mismatches=0** (the 2 bendDom-flag flips
+are classification-boundary noise at stroke onset where both energies ~0 and the head disp agrees to 1e-6 nm);
+§9 loaded (4 pN resist) effective stiffness ≈1.00 pN/nm, 0 failures; §10 residency CONFIRMED — nodes/sys
+FIRST_EXECUTION never downloaded, **320 B in / 232 B out per step**, no host per-motor loop, no fallback.
+Report `docs/matsoa/EXPLICIT_SINGLEHEAD_FINDINGS.md`; status `docs/matsoa/EXPLICIT_DEVICE_STATUS.md`.
+**NEXT:** explicit GLIDING = the `matS2Solve` coupled Stage-10 mat port into `MatSoaSlice` (re-probe lowering
+in isolation first; fallback = calibrated-GPU + explicit-Step-10-CPU).
+
+### 2026-07-17 — MAT-SOA GPU: shared serial bottlenecks REMOVED (parallel CSR + parallel reduction), bit-identical, +49 % wall @N=9000; explicit beam kernel device-status re-confirmed
+
+Priority 1 (remove the shared serial GPU bottlenecks) DONE + validated on the device-resident calibrated
+mat-SoA path. Parts A–E in `MatSoaSlice` (only file changed; parallel paths opt-in via `-parcsr`/`-parreduce`/
+`-paropt`; serial default byte-identical; no physics/param/RNG/chemistry/binding change; `DEVICE_VALIDATED`
+stays false). **A (`-baseline`):** froze the double-device baseline; confirmed the target at N=9000 EXACTLY —
+`matReduce` 43.7 % / `csrScatter` 22.4 % / `csrHist` 22.4 % (88.5 % in three single-thread-over-N kernels; box
+3.0 µm² ⇒ N=600/2100/4500/9000, nSeg=12 const). Structural: wall ≫ device-kernel (20-launch floor) ⇒ the win
+grows with N. **B (`-csranalyze`):** SURPRISE — the CSR (`boundSeg`→segment, nSeg=12) is *slowly changing*
+(82–98 % no-change steps; ~0.2 assignments/step at N=9000); the serial cost is the loop-over-all-N, not the
+change rate ⇒ **C2 (parallel device rebuild)** chosen (a host-cache would need a per-step boundSeg round-trip,
+breaking residency). **C (`-parcsr`, C3 `-csrgate`):** wired the validated atomic-free counting-sort
+`csrChunk*`; parallel CSR ≡ serial EXACTLY on every topology (empty/full/one-per-bin/endpoints/random/
+N=9000-6368-bound/60 rapidly-changing) — exact offsets/membership, no drop/dup, bit-identical `segGather`.
+**D (`-parreduce`, D4 `-redgate`):** hierarchical `matReduceBlocks`/`matReduceFinal` (block-partial + cheap
+final over ~N/128 partials + nSeg-only COM); integer totals EXACT, COM bit-identical, Σload bit-identical
+(incl. cancellation-dominated, NaN-in-unbound-excluded). **E (`-partE`) throughput:** paropt device-kernel
+N=9000 **1.931→0.313 ms (6.2×; csrGroup 13×, reduceGroup 21×)**; wall **+20.8 / +32.4 / +49.3 %** at
+N=2100/4500/9000 (−6.9 % at N=600 = +3-task launch floor, below the target regime). No observable regression:
+CPU serial ≡ CPU paropt **BIT-IDENTICAL** (redOut/boundSeg/coord Δ=0, 500 steps); GPU-paropt vs CPU-paropt
+**t=0 IDENTICAL** (only the same float-FMA decorrelation as serial). Report:
+`docs/matsoa/SERIAL_BOTTLENECK_REMOVAL_FINDINGS.md`; CSVs in `RUN_LOGS/matsoa/`.
+
+Priority 2 (integrate explicit into the persistent device path): the gating risk is RESOLVED. The isolated
+analytic explicit beam GPU kernel (`TwoBodyBeamAnalyticGpu.beamRelaxAnalytic`) re-confirmed lowering +
+validation in the current tree (GPU vs CPU-mirror Δ=0.0; C3 gate GPU-vs-CPU-analytic 2.5e-9 µm / vs-FD
+9.1e-9 µm; 0 failures; ≈70× CPU-analytic; `-Dtornado.enable.fma=false` required) — satisfies the crux of
+F4/G1/G3 (single-head bound relaxation). REMAINING (bounded next increment): F1–F3 explicit SoA + init +
+build-time dispatch into the mat, the `matS2Solve` gliding-coupling Stage-10 port (re-probe lowering in
+isolation FIRST; fallback = calibrated GPU + explicit-Step-10 CPU), G2 dynamic single-head, H explicit
+gliding. Status/promotion: `docs/matsoa/EXPLICIT_DEVICE_STATUS.md`. **Part J:** `CALIBRATED DOUBLE GPU
+VALIDATED BUT NOT PROMOTED`; `EXPLICIT GPU VALIDATED FOR SINGLE-HEAD TRAP ONLY`; **LARGE-SCALE STUDIES: NOT
+READY** (explicit not yet end-to-end on device). NEXT BOTTLENECK: `matStep7` (FP64 5-DOF solve, now the top
+device kernel) + the ~20-launch wall floor.
+
 ### 2026-07-16 — EXPLICIT CPU ANALYTIC SOLVER PROMOTED: wired into production gliding behind explicitSolver=fd|analytic, FD≡analytic validated, analytic made default (~7× CPU)
 
 Wires the validated analytic explicit-S2 beam solver into the PRODUCTION CPU explicit steppers, validates FD-vs-analytic equivalence IN the gliding loop, and (all gates passing) makes analytic the CPU default with FD retained as the permanent oracle. Branch `explicit-analytic-production`. NO change to model ID / beam energy / residual / constraints / chemistry / binding / parameters. Report: `docs/explprod/EXPLICIT_ANALYTIC_PRODUCTION_FINDINGS.md`; logs `RUN_LOGS/explprod/`.
