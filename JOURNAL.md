@@ -1,5 +1,65 @@
 # Soft Box Project Journal
 
+### 2026-07-17 — viewer (cosmetic): separate motor-beam radius from Actin radius + optional helical-monomer actin rendering
+
+Two `-3js` viewer additions (`sim_viewer_boa.html`; view-only, no physics/export change). **(1) Motor-beam
+radius decoupled from Actin radius.** The two-body explicit/calibrated motor models emit their S2 beam / tail /
+anchor / neck-lever through `TwoBodyConverterMotor`'s three `sg()` helpers into the **`segments` channel**, so
+the "Actin radius" slider was scaling them (and any other `sg`-emitted cylinder). Each `sg()` segment is now
+tagged `"motorSeg":true` (actin is emitted directly → untagged); the viewer picks `motorSegScale` vs
+`actinScale` per segment and exposes a new **"Motor beam"** slider. Verified end-to-end (`-exp4g`): actin id 0
+`motorSeg:false`, beam ids 1–7 `motorSeg:true`. **LEGACY frames** (written before the tag) are handled by a
+viewer radius fallback (`isMotorSegment`): actin is always emitted at `Constants.radius`=0.0035 µm (incl. aged/
+gliding), motor beam uses other radii ⇒ untagged segments with r≠0.0035 classify as motor-beam. So existing
+frame sets separate correctly on reload without regeneration; the explicit tag wins when present. GlideFrame/GlideFrame2D already used the `myosins` channel
+(rod/lever/motor scales) — unaffected. **(2) Helical actin monomer rendering** (`chkHelix` toggle + "Monomer
+radius" / "Helix spread" sliders). When on, actin segments (not motor-beam) draw as a two-start helix of monomer
+beads instead of a cylinder, faithful to the actin 13/6 genetic helix (v1 Env: 2.75 nm axial rise, π/0.036 rad·
+µm⁻¹ pitch, 36 nm crossover, two strands π apart). Per-segment start phase reads an **optional** frame field
+`helixPhase` (radians — the pointed-end φ₀ / "initial helical angle" from the azimuthal-binding bookmark,
+`docs/AZIMUTHAL_BINDING_READINESS.md`), **default 0** since φ₀ is not yet emitted into frames. Close-up/video
+only (120k-bead cap). Only harness change: the `motorSeg` tag on `sg()` (all three writers, byte-identical);
+build ok, viewer JS syntax-checked.
+
+### 2026-07-17 — EXPLICIT complete-mat prerequisites: device head-placement + bondForces coupling VALIDATED (§5/§6)
+
+Toward wiring `matS2SolveStep` into the complete persistent mat: the two new device stages the full explicit
+graph needs are built + validated (the sanctioned "must pass before composing the full graph" prerequisites).
+`TwoBodyBeamAnalyticGpu.matBeamGeom` (device `geom2D` — beam-derived C/xH/xF8) + `matPlaceHeadExplicit` (device
+`placeHead2D` — head sub-body at xH, uVec=normalize(xF8−xH), yVec=perp3) LOWER to PTX; CPU-mirror reproduces
+production geom2D/placeHead2D **exactly (0.0 µm)**; GPU vs CPU-mirror 1.9e-7 (float body pose). **Key gotcha:**
+the explicit `outGeom` layout ([3N]=xH,[6N]=xF8) is OPPOSITE the calibrated `matPlaceHead` ([3N]=xF8,[6N]=xH) ⇒
+a distinct explicit kernel is required. §6: the device head pose fed into the SHARED byte-unchanged `bondForces`
+gives bit-identical `bondData` (max|Δ| **2.6e-18**) — the F8h `matS2SolveStep` consumes matches production, no
+dropped/duplicated force. Harness `ExplicitCompleteMatHarness`; report `docs/matsoa/EXPLICIT_COMPLETEMAT_FINDINGS.md`.
+No physics/salt/chemistry/solver change; DEVICE_VALIDATED false; new files only.
+**NEXT (§7–§11, unblocked):** compose the full explicit graph (calibrated `buildTrajGraph` with 3 stages swapped
++ matBeamGeom) over the explicit SoA + MotorStore body + FilamentStore → one-step CPU-vs-GPU vs `stepGlideS2`
+(pre-bound) → multi-step quiet trajectory → stroke/detach/recoil → residency + N=1 timing.
+
+### 2026-07-17 — EXPLICIT coupled gliding Stage-10 `matS2SolveStep` LOWERS + one-step-validated (the flagged risk RESOLVED)
+
+The production gliding-coupled explicit Step-7 is ported to a device kernel that LOWERS to PTX — the central
+uncertainty ("matS2Solve may not lower even flattened") is resolved. `TwoBodyBeamAnalyticGpu.matS2SolveStep` =
+the validated `beamRelaxAnalytic` assembly (canonical `ExplicitBeamAnalytic` residual+Hessian — NO second
+derivative impl) for ONE implicit Newton step, PLUS the mat Brownian forcing at salts 0x4811/0x4841/0x4842+m·7919
+(via `brownTorqueD`, the 64-bit long wang-hash already proven to lower inside `matStep7`), PLUS the
+`forceDotFil`/`forceMag` reaction writeback — a faithful port of `TwoBodyConverterMotor.s2SolveM`. F8h comes from
+the shared `bondData` when `boundSeg≥0`. No beam energy/topology/params/converter/chemistry/binding/convergence/
+salt change; DEVICE_VALIDATED false; no silent fallback (bailout=false, enable.fma=false). New files only
+(`ExplicitMatSolveHarness`, `matS2SolveStep`+`brownTorqueD`); MatSoaSlice/production untouched.
+
+**§1–§6 PASS** (harness `ExplicitMatSolveHarness`, on the REAL `buildS2Mat` gliding mat): §1 contract frozen
+(`docs/matsoa/EXPLICIT_MATS2SOLVE_CONTRACT.md`); §2/§3 kernel + flat explicit mat SoA (no double[][], no
+per-step alloc); §5 isolated lowering probe LOWERS + EXECUTES on 5 states (relaxed/high-axial/bend/taut/
+post-stroke), 0 NaN/Inf; §6 one-step gate — CPU-mirror vs production `s2SolveM` = **1.1e-9 µm** (FP op-order,
+Brownian ON ⇒ the mat-salt RNG stream matches to fp), GPU vs CPU-mirror = **9.3e-10 µm** (bit-faithful), Δphi/
+Δpsi ~1e-15, forceDotFil/forceMag exact, 0 solver failures. A harness bug (perturbation moved the pivot node M,
+breaking `nd[M]=A[m]`) surfaced + fixed — not a kernel issue. Report `docs/matsoa/EXPLICIT_MATS2SOLVE_FINDINGS.md`.
+**NEXT (§7–§13, unblocked):** wire `matS2SolveStep` into `MatSoaSlice` (build-time dispatch calibrated vs
+explicit) + the explicit mat SoA + a device `placeHead2D` (head body pose from the beam geom for `bondForces`) →
+pre-bound single motor in the complete mat → stroke/recoil → short low-density gliding → smoke/throughput.
+
 ### 2026-07-17 — EXPLICIT single-head device-resident vertical slice — BUILT + VALIDATED (persistent beam SoA + dynamic trajectory on GPU)
 
 The smallest complete explicit device-resident slice: persistent explicit beam SoA + build-time explicit

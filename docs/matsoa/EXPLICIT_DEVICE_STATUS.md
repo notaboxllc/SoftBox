@@ -1,5 +1,17 @@
 # Explicit-S2-L40 device-resident integration — status against Parts F–J
 
+> **UPDATE (2026-07-17b): the coupled explicit gliding Stage-10 `matS2SolveStep` LOWERS + one-step-validated
+> — the flagged central risk is RESOLVED.** The mat port of production `s2SolveM` (= the validated
+> `beamRelaxAnalytic` assembly for one implicit Newton step + mat Brownian at salts 0x4811/0x4841/0x4842+m·7919
+> via the already-lowering `brownTorqueD` + reaction writeback) lowers to PTX and reproduces `s2SolveM` on the
+> REAL `buildS2Mat` gliding mat to **1.1e-9 µm** (Brownian on), bit-faithful GPU↔CPU (9.3e-10 µm), 0 failures,
+> across relaxed/high-axial/bend/taut/post-stroke states. This UPGRADES the "matS2Solve not yet built / lowering
+> uncertain" line below. REMAINING for full explicit gliding: wire it into `MatSoaSlice` (build-time dispatch,
+> explicit mat SoA, a device `placeHead2D` so `bondForces` sees the beam-derived head) → pre-bound single motor
+> in the complete mat (§7) → stroke/recoil (§8) → short gliding (§9) → smoke/throughput (§10–12). Report:
+> `docs/matsoa/EXPLICIT_MATS2SOLVE_FINDINGS.md`; contract `docs/matsoa/EXPLICIT_MATS2SOLVE_CONTRACT.md`.
+
+
 > **UPDATE (2026-07-17): the explicit SINGLE-HEAD device-resident vertical slice is BUILT + VALIDATED.**
 > Persistent explicit beam SoA + build-time explicit Step-7 dispatch + one dynamic single-head trajectory
 > (relax→stroke→force→detach→recoil, unloaded + 4 pN loaded) that stays on the GPU across 400 timesteps —
