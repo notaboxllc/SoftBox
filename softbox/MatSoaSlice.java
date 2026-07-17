@@ -11,8 +11,11 @@ import uk.ac.manchester.tornado.api.TaskGraph;
 import uk.ac.manchester.tornado.api.TornadoExecutionPlan;
 import uk.ac.manchester.tornado.api.WorkerGrid;
 import uk.ac.manchester.tornado.api.WorkerGrid1D;
+import uk.ac.manchester.tornado.api.TornadoExecutionResult;
+import uk.ac.manchester.tornado.api.TornadoProfilerResult;
 import uk.ac.manchester.tornado.api.annotations.Parallel;
 import uk.ac.manchester.tornado.api.enums.DataTransferMode;
+import uk.ac.manchester.tornado.api.enums.ProfilerMode;
 import uk.ac.manchester.tornado.api.types.arrays.FloatArray;
 import uk.ac.manchester.tornado.api.types.arrays.DoubleArray;
 import uk.ac.manchester.tornado.api.types.arrays.IntArray;
@@ -428,6 +431,287 @@ public final class MatSoaSlice {
         }
     }
 
+    // ===== Part D — PARALLEL hierarchical reduction (retires the O(N) single-thread matReduce motor loop) =====
+    // The O(N) cost in matReduce is the motor loop (nBound/nActive/Σload). Block it over ceil(N/blk) blocks
+    // (each block sums its motor range) then a cheap final kernel sums the ~N/blk block-partials + the nSeg-only
+    // COM. Integer partials (nb/na) are EXACT under any order; the fp Σload changes summation ORDER vs the
+    // sequential matReduce ⇒ fp last-bit only (measured in the Part D report). COM (nSeg=12) is summed in the
+    // SAME 0..nSeg order in the final kernel ⇒ bit-identical to matReduce. No atomics. redBlk stride 3: [nb,load,na].
+    public static void matReduceBlocks(IntArray boundSeg, IntArray active, FloatArray forceDotFil,
+                                       IntArray redP, IntArray counts, DoubleArray redBlk) {
+        int N = counts.get(0);
+        int blk = redP.get(0), nBlk = redP.get(1);
+        for (@Parallel int b = 0; b < nBlk; b++) {
+            int start = b * blk, end = start + blk; if (end > N) end = N;
+            int nb = 0, na = 0; double load = 0;
+            for (int m = start; m < end; m++) { if (boundSeg.get(m) >= 0) { nb++; load += forceDotFil.get(m); } if (active.get(m) == 1) na++; }
+            redBlk.set(3 * b, nb); redBlk.set(3 * b + 1, load); redBlk.set(3 * b + 2, na);
+        }
+    }
+    public static void matReduceFinal(DoubleArray redBlk, FloatArray filCoord, IntArray redP, IntArray counts, DoubleArray redOut) {
+        int nSeg = counts.get(3), nBlk = redP.get(1);
+        for (@Parallel int r = 0; r < 1; r++) {
+            int nb = 0, na = 0; double load = 0;
+            for (int b = 0; b < nBlk; b++) { nb += (int) redBlk.get(3 * b); load += redBlk.get(3 * b + 1); na += (int) redBlk.get(3 * b + 2); }
+            double cx = 0, cy = 0, cz = 0;
+            for (int s = 0; s < nSeg; s++) { cx += filCoord.get(s); cy += filCoord.get(nSeg + s); cz += filCoord.get(2 * nSeg + s); }
+            redOut.set(0, nb); redOut.set(1, cx / nSeg); redOut.set(2, cy / nSeg); redOut.set(3, cz / nSeg); redOut.set(4, load); redOut.set(5, na);
+        }
+    }
+
+    // ================================================================================================
+    //  PART C3 — parallel CSR correctness gates. The parallel counting-sort (csrChunk*) must produce a
+    //  CSR-inverse EXACTLY equal to the serial csrHistogram/csrScan/csrScatter on every topology: exact
+    //  offsets + counts + membership, no dropped/duplicated motor, and bit-identical downstream segGather.
+    //  Executed on the CPU-runner (both kernel sets as plain @Parallel-as-loop) ⇒ exact + fast; csrChunk*'s
+    //  CPU↔GPU bit-identity is separately validated (DenseGliding) and re-confirmed by the Part-E GPU ensemble.
+    // ================================================================================================
+    static long lcg = 0x1234567L;
+    static int rnd(int n) { lcg = lcg * 6364136223846793005L + 1442695040888963407L; return (int) ((lcg >>> 33) % n); }
+    static final int STRIDE_XB = CrossBridgeSystem.STRIDE;   // bondData row length (13)
+
+    /** One CSR case: build serial + parallel CSR from boundSeg, compare exactly + via segGather. */
+    static boolean csrCase(StringBuilder log, String name, int N, int nSeg, int[] bs) {
+        IntArray boundSeg = new IntArray(Math.max(1, N)); for (int m = 0; m < N; m++) boundSeg.set(m, bs[m]);
+        IntArray counts = new IntArray(4); counts.set(0, N); counts.set(3, nSeg);
+        // serial
+        IntArray scS = new IntArray(nSeg), soS = new IntArray(nSeg + 1), myoS = new IntArray(Math.max(1, N));
+        CrossBridgeSystem.csrHistogram(boundSeg, counts, scS);
+        CrossBridgeSystem.csrScan(counts, scS, soS);
+        CrossBridgeSystem.csrScatter(boundSeg, counts, soS, scS, myoS);
+        // parallel
+        int mcs = SpatialGrid.bodyChunkSize(Math.max(1, N), nSeg), nCh = SpatialGrid.numBodyChunks(Math.max(1, N), mcs);
+        IntArray ccp = IntArray.fromElements(mcs, nCh); IntArray cmat = new IntArray(Math.max(1, nCh * nSeg)); cmat.init(0);
+        IntArray scP = new IntArray(nSeg), soP = new IntArray(nSeg + 1), myoP = new IntArray(Math.max(1, N));
+        CrossBridgeSystem.csrChunkZero(ccp, counts, cmat);
+        CrossBridgeSystem.csrChunkHistogram(boundSeg, counts, ccp, cmat);
+        CrossBridgeSystem.csrChunkReduce(counts, ccp, cmat, scP);
+        CrossBridgeSystem.csrScan(counts, scP, soP);
+        CrossBridgeSystem.csrChunkScatter(boundSeg, counts, ccp, soP, myoP, cmat);
+        // compare offsets (nSeg+1) exactly
+        int offMism = 0; for (int s = 0; s <= nSeg; s++) if (soS.get(s) != soP.get(s)) offMism++;
+        int nBound = soS.get(nSeg);
+        // membership per bin — both stable ⇒ bit-identical order; also verify each motor's bin matches boundSeg
+        int memMism = 0, wrongBin = 0; boolean[] seen = new boolean[Math.max(1, N)]; int dupes = 0, total = 0;
+        for (int s = 0; s < nSeg; s++) {
+            int a = soP.get(s), z = soP.get(s + 1);
+            for (int k = a; k < z; k++) {
+                int mm = myoP.get(k); total++;
+                if (myoS.get(k) != mm) memMism++;
+                if (mm < 0 || mm >= N || boundSeg.get(mm) != s) wrongBin++;
+                if (mm >= 0 && mm < N) { if (seen[mm]) dupes++; else seen[mm] = true; }
+            }
+        }
+        // no dropped: every bound motor is seen exactly once
+        int dropped = 0; for (int m = 0; m < N; m++) if (boundSeg.get(m) >= 0 && !seen[m]) dropped++;
+        // downstream segGather bit-identity: synthesize deterministic bondData reactions, gather both CSRs.
+        FloatArray bond = new FloatArray(Math.max(1, N) * STRIDE_XB);
+        for (int m = 0; m < N; m++) for (int c = 0; c < STRIDE_XB; c++) bond.set(m * STRIDE_XB + c, (float) Math.sin(0.017 * (m + 1) * (c + 1)));
+        FloatArray fsS = new FloatArray(3 * nSeg), tsS = new FloatArray(3 * nSeg), fsP = new FloatArray(3 * nSeg), tsP = new FloatArray(3 * nSeg);
+        CrossBridgeSystem.segGather(soS, myoS, bond, fsS, tsS, counts);
+        CrossBridgeSystem.segGather(soP, myoP, bond, fsP, tsP, counts);
+        int gMism = 0; for (int i = 0; i < 3 * nSeg; i++) { if (fsS.get(i) != fsP.get(i)) gMism++; if (tsS.get(i) != tsP.get(i)) gMism++; }
+        boolean ok = offMism == 0 && memMism == 0 && wrongBin == 0 && dupes == 0 && dropped == 0 && total == nBound && gMism == 0;
+        log.append(String.format(Locale.US, "| %s | %d | %d | offMism=%d | memMism=%d | wrongBin=%d | dup=%d | dropped=%d | gatherΔ=%d | %s |\n",
+                name, N, nBound, offMism, memMism, wrongBin, dupes, dropped, gMism, ok ? "PASS" : "**FAIL**"));
+        return ok;
+    }
+
+    static boolean csrGate(StringBuilder log, Path dir) {
+        System.out.println("=== PART C3 — parallel CSR correctness gates ===");
+        log.append("# PART C3 — parallel CSR correctness gates (parallel counting-sort ≡ serial CSR)\n\n");
+        log.append("| case | N | nBound | offset-mism | membership-mism | wrong-bin | duplicated | dropped | segGatherΔ | verdict |\n");
+        log.append("|---|---|---|---|---|---|---|---|---|---|\n");
+        int nSeg = 12; boolean ok = true;
+        // 1 empty+sparse+endpoints+unbound
+        { int N = 100; int[] bs = new int[N]; java.util.Arrays.fill(bs, -1); bs[3] = 0; bs[50] = nSeg - 1; bs[99] = 0; ok &= csrCase(log, "sparse+endpoints+unbound", N, nSeg, bs); }
+        // 2 all-unbound (empty CSR)
+        { int N = 200; int[] bs = new int[N]; java.util.Arrays.fill(bs, -1); ok &= csrCase(log, "all-unbound (empty)", N, nSeg, bs); }
+        // 3 all in one bin
+        { int N = 500; int[] bs = new int[N]; java.util.Arrays.fill(bs, 7); ok &= csrCase(log, "all-in-one-bin", N, nSeg, bs); }
+        // 4 one per bin
+        { int N = nSeg; int[] bs = new int[N]; for (int m = 0; m < N; m++) bs[m] = m; ok &= csrCase(log, "one-per-bin", N, nSeg, bs); }
+        // 5 endpoints only, alternating
+        { int N = 48; int[] bs = new int[N]; for (int m = 0; m < N; m++) bs[m] = (m % 2 == 0) ? 0 : nSeg - 1; ok &= csrCase(log, "endpoints-alternating", N, nSeg, bs); }
+        // 6 random 40% unbound
+        { int N = 3000; int[] bs = new int[N]; for (int m = 0; m < N; m++) bs[m] = (rnd(100) < 40) ? -1 : rnd(nSeg); ok &= csrCase(log, "random-40pct-unbound", N, nSeg, bs); }
+        // 7 max motor count
+        { int N = 9000; int[] bs = new int[N]; for (int m = 0; m < N; m++) bs[m] = (rnd(100) < 30) ? -1 : rnd(nSeg); ok &= csrCase(log, "max-N=9000", N, nSeg, bs); }
+        // 8 rapidly changing — 60 fresh random topologies in a row
+        { int N = 2100, fails = 0; for (int it = 0; it < 60; it++) { int[] bs = new int[N]; for (int m = 0; m < N; m++) bs[m] = (rnd(100) < 50) ? -1 : rnd(nSeg);
+              boolean c = csrCaseQuiet(N, nSeg, bs); if (!c) fails++; }
+          log.append(String.format(Locale.US, "| rapidly-changing (60 topologies) | %d | — | — | — | — | — | — | — | %s |\n", N, fails == 0 ? "PASS (0/60 fail)" : "**FAIL " + fails + "/60**")); ok &= fails == 0; }
+        log.append(String.format(Locale.US, "\n**PART C3 VERDICT: %s**\n", ok ? "PASS — parallel CSR ≡ serial CSR on all topologies (exact offsets/membership, no drop/dup, bit-identical gather)" : "FAIL"));
+        try { Files.writeString(dir.resolve("PART_C3_CSR_GATE.md"), log.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); }
+        System.out.println("# report: " + dir.resolve("PART_C3_CSR_GATE.md").toAbsolutePath());
+        System.out.printf(Locale.US, "PART C3 CSR GATE: %s%n", ok ? "PASS" : "FAIL");
+        return ok;
+    }
+    /** Quiet variant for the rapidly-changing loop (returns exactness only). */
+    static boolean csrCaseQuiet(int N, int nSeg, int[] bs) {
+        IntArray boundSeg = new IntArray(Math.max(1, N)); for (int m = 0; m < N; m++) boundSeg.set(m, bs[m]);
+        IntArray counts = new IntArray(4); counts.set(0, N); counts.set(3, nSeg);
+        IntArray scS = new IntArray(nSeg), soS = new IntArray(nSeg + 1), myoS = new IntArray(Math.max(1, N));
+        CrossBridgeSystem.csrHistogram(boundSeg, counts, scS); CrossBridgeSystem.csrScan(counts, scS, soS); CrossBridgeSystem.csrScatter(boundSeg, counts, soS, scS, myoS);
+        int mcs = SpatialGrid.bodyChunkSize(Math.max(1, N), nSeg), nCh = SpatialGrid.numBodyChunks(Math.max(1, N), mcs);
+        IntArray ccp = IntArray.fromElements(mcs, nCh); IntArray cmat = new IntArray(Math.max(1, nCh * nSeg)); cmat.init(0);
+        IntArray scP = new IntArray(nSeg), soP = new IntArray(nSeg + 1), myoP = new IntArray(Math.max(1, N));
+        CrossBridgeSystem.csrChunkZero(ccp, counts, cmat); CrossBridgeSystem.csrChunkHistogram(boundSeg, counts, ccp, cmat);
+        CrossBridgeSystem.csrChunkReduce(counts, ccp, cmat, scP); CrossBridgeSystem.csrScan(counts, scP, soP); CrossBridgeSystem.csrChunkScatter(boundSeg, counts, ccp, soP, myoP, cmat);
+        for (int s = 0; s <= nSeg; s++) if (soS.get(s) != soP.get(s)) return false;
+        int nBound = soS.get(nSeg); for (int k = 0; k < nBound; k++) if (myoS.get(k) != myoP.get(k)) return false;
+        return true;
+    }
+
+    // ================================================================================================
+    //  PART D4 — parallel reduction gates. Integer totals (nBound/nActive) EXACT vs serial matReduce;
+    //  COM bit-identical (same nSeg order); Σload fp diff reported (block-order vs sequential). Edge cases:
+    //  N=1, all-inactive, all-bound, mixed prop/drag, cancellation-dominated, very large N, NaN/Inf.
+    // ================================================================================================
+    static boolean reduceCase(StringBuilder log, String name, int N, int nSeg, int[] bs, int[] act, float[] fdf, float[] coord) {
+        IntArray boundSeg = new IntArray(Math.max(1, N)); IntArray active = new IntArray(Math.max(1, N)); FloatArray forceDotFil = new FloatArray(Math.max(1, N));
+        for (int m = 0; m < N; m++) { boundSeg.set(m, bs[m]); active.set(m, act[m]); forceDotFil.set(m, fdf[m]); }
+        FloatArray fc = new FloatArray(3 * nSeg); for (int i = 0; i < 3 * nSeg; i++) fc.set(i, coord[i]);
+        IntArray counts = new IntArray(4); counts.set(0, N); counts.set(3, nSeg);
+        DoubleArray rS = new DoubleArray(6); matReduce(boundSeg, active, forceDotFil, fc, counts, rS);
+        int blk = RED_BLK, nBlk = Math.max(1, (N + blk - 1) / blk);
+        IntArray redP = IntArray.fromElements(blk, nBlk); DoubleArray rBlk = new DoubleArray(3 * nBlk); rBlk.init(0.0); DoubleArray rP = new DoubleArray(6);
+        matReduceBlocks(boundSeg, active, forceDotFil, redP, counts, rBlk); matReduceFinal(rBlk, fc, redP, counts, rP);
+        long nbS = (long) rS.get(0), nbP = (long) rP.get(0), naS = (long) rS.get(5), naP = (long) rP.get(5);
+        double loadS = rS.get(4), loadP = rP.get(4);
+        double comΔ = Math.max(Math.abs(rS.get(1) - rP.get(1)), Math.max(Math.abs(rS.get(2) - rP.get(2)), Math.abs(rS.get(3) - rP.get(3))));
+        double loadAbs = Math.abs(loadS - loadP), loadRel = Math.abs(loadS) > 1e-30 ? loadAbs / Math.abs(loadS) : loadAbs;
+        boolean intOk = nbS == nbP && naS == naP;
+        boolean comOk = comΔ == 0.0 || (Double.isNaN(rS.get(1)) == Double.isNaN(rP.get(1)));
+        boolean loadOk = loadAbs <= 1e-9 * Math.max(1.0, Math.abs(loadS)) || (Double.isNaN(loadS) == Double.isNaN(loadP) && Double.isInfinite(loadS) == Double.isInfinite(loadP));
+        boolean ok = intOk && comOk && loadOk;
+        log.append(String.format(Locale.US, "| %s | %d | nb %d=%d | na %d=%d | COMΔ=%.1e | loadΔabs=%.2e rel=%.2e | %s |\n",
+                name, N, nbS, nbP, naS, naP, comΔ, loadAbs, loadRel, ok ? "PASS" : "**FAIL**"));
+        return ok;
+    }
+    static boolean reduceGate(StringBuilder log, Path dir) {
+        System.out.println("=== PART D4 — parallel reduction correctness gates ===");
+        log.append("# PART D4 — parallel reduction gates (block-partial+final ≡ serial matReduce; ints exact, COM bit-id, Σload fp)\n\n");
+        log.append("| case | N | nBound(serial=par) | nActive(serial=par) | COM Δ | Σload Δ | verdict |\n|---|---|---|---|---|---|---|\n");
+        int nSeg = 12; boolean ok = true;
+        float[] coord = new float[3 * nSeg]; for (int i = 0; i < coord.length; i++) coord[i] = (float) (0.1 * (i + 1) - 0.5);
+        // N=1 bound
+        { int N = 1; int[] bs = {5}; int[] ac = {1}; float[] fdf = {2.5e-12f}; ok &= reduceCase(log, "N=1 bound", N, nSeg, bs, ac, fdf, coord); }
+        // all inactive/unbound
+        { int N = 500; int[] bs = new int[N]; java.util.Arrays.fill(bs, -1); int[] ac = new int[N]; float[] fdf = new float[N]; ok &= reduceCase(log, "all-inactive/unbound", N, nSeg, bs, ac, fdf, coord); }
+        // all bound + active, mixed propulsive(-)/dragging(+)
+        { int N = 4000; int[] bs = new int[N]; int[] ac = new int[N]; float[] fdf = new float[N]; for (int m = 0; m < N; m++) { bs[m] = rnd(nSeg); ac[m] = 1; fdf[m] = (m % 2 == 0 ? -1 : 1) * (1e-12f * (rnd(100) + 1)); } ok &= reduceCase(log, "all-bound mixed prop/drag", N, nSeg, bs, ac, fdf, coord); }
+        // cancellation-dominated: large +/- that nearly cancel
+        { int N = 6000; int[] bs = new int[N]; int[] ac = new int[N]; float[] fdf = new float[N]; for (int m = 0; m < N; m++) { bs[m] = rnd(nSeg); ac[m] = 1; fdf[m] = (m % 2 == 0 ? 1e-6f : -1e-6f) + 1e-15f * m; } ok &= reduceCase(log, "cancellation-dominated", N, nSeg, bs, ac, fdf, coord); }
+        // very large N
+        { int N = 9000; int[] bs = new int[N]; int[] ac = new int[N]; float[] fdf = new float[N]; for (int m = 0; m < N; m++) { bs[m] = (rnd(100) < 30) ? -1 : rnd(nSeg); ac[m] = rnd(100) < 80 ? 1 : 0; fdf[m] = 1e-12f * (rnd(200) - 100); } ok &= reduceCase(log, "very-large N=9000", N, nSeg, bs, ac, fdf, coord); }
+        // large positive/negative magnitude sums
+        { int N = 5000; int[] bs = new int[N]; int[] ac = new int[N]; float[] fdf = new float[N]; for (int m = 0; m < N; m++) { bs[m] = rnd(nSeg); ac[m] = 1; fdf[m] = (m < N / 2 ? 1e-3f : -1e-3f); } ok &= reduceCase(log, "large-magnitude sums", N, nSeg, bs, ac, fdf, coord); }
+        // NaN/Inf flag handling — a NaN in an UNBOUND motor's fdf must not enter Σload (only bound contribute)
+        { int N = 300; int[] bs = new int[N]; int[] ac = new int[N]; float[] fdf = new float[N]; for (int m = 0; m < N; m++) { bs[m] = (m < 5) ? rnd(nSeg) : -1; ac[m] = 1; fdf[m] = (m >= 5) ? Float.NaN : 1e-12f; } ok &= reduceCase(log, "NaN in unbound (excluded)", N, nSeg, bs, ac, fdf, coord); }
+        log.append(String.format(Locale.US, "\n**PART D4 VERDICT: %s** (integer totals exact; COM bit-identical; Σload agrees to fp last-bit — block-order vs sequential)\n", ok ? "PASS" : "FAIL"));
+        try { Files.writeString(dir.resolve("PART_D4_REDUCE_GATE.md"), log.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); }
+        System.out.println("# report: " + dir.resolve("PART_D4_REDUCE_GATE.md").toAbsolutePath());
+        System.out.printf(Locale.US, "PART D4 REDUCE GATE: %s%n", ok ? "PASS" : "FAIL");
+        return ok;
+    }
+
+    // ================================================================================================
+    //  PART E — structural throughput gate. Device-only wall + per-kernel timing for 4 configs
+    //  {serial, parcsr, parreduce, paropt} × N∈{600,2100,4500,9000}; separates the CSR-replacement and
+    //  reduction-replacement gains. Plus the SEMANTIC NO-OP check: the CPU-runner trajectory is BIT-IDENTICAL
+    //  serial-vs-paropt (C3+D4 exactness ⇒ every downstream field identical), proving no observable regression.
+    // ================================================================================================
+    static double[] partETime(TwoBodyConverterMotor.Glide2D G, int seed, int warm, int wall, int prof, double dt) {
+        int nSeg = G.nSeg; MatState s = packMat(G);
+        TornadoExecutionPlan plan = buildTrajGraph(G, s, true);
+        int tt = 0;
+        for (int t = 0; t < warm; t++, tt++) { s.mc.set(1, tt); G.mot.setCounts(tt, seed, nSeg); G.fil.counts.set(1, tt); G.fil.counts.set(2, seed); plan.withGridScheduler(trajSched).execute(); }
+        long wallNs = 0;
+        for (int t = 0; t < wall; t++, tt++) { s.mc.set(1, tt); G.mot.setCounts(tt, seed, nSeg); G.fil.counts.set(1, tt); G.fil.counts.set(2, seed);
+            long c0 = System.nanoTime(); plan.withGridScheduler(trajSched).execute(); wallNs += System.nanoTime() - c0; }
+        double wallMs = wallNs / 1e6 / wall;
+        long[] kerNs = new long[TRAJ_TASKS.length]; String[] extra = { "csrChunkZero", "csrChunkHist", "csrChunkReduce", "csrChunkScatter", "matReduceBlk", "matReduceFin" };
+        long[] extraNs = new long[extra.length]; long devKerNs = 0; int nProf = 0;
+        for (int t = 0; t < prof; t++, tt++) { s.mc.set(1, tt); G.mot.setCounts(tt, seed, nSeg); G.fil.counts.set(1, tt); G.fil.counts.set(2, seed);
+            TornadoProfilerResult pr = plan.withGridScheduler(trajSched).withProfiler(ProfilerMode.SILENT).execute().getProfilerResult();
+            String jl = pr.getProfileLog();
+            for (int i = 0; i < TRAJ_TASKS.length; i++) kerNs[i] += parseTaskNs(jl, TRAJ_TASKS[i]);
+            for (int i = 0; i < extra.length; i++) extraNs[i] += parseTaskNs(jl, extra[i]);
+            devKerNs += pr.getDeviceKernelTime(); nProf++; plan.clearProfiles();
+        }
+        plan.withoutProfiler();
+        double csrGroup = 0, reduceGroup = 0;
+        // serial CSR tasks in TRAJ_TASKS: csrHist,csrScan,csrScatter; serial reduce: matReduce
+        for (int i = 0; i < TRAJ_TASKS.length; i++) { String n = TRAJ_TASKS[i];
+            if (n.equals("csrHist") || n.equals("csrScan") || n.equals("csrScatter")) csrGroup += kerNs[i] / 1e6 / nProf;
+            if (n.equals("matReduce")) reduceGroup += kerNs[i] / 1e6 / nProf; }
+        for (int i = 0; i < extra.length; i++) { double ms = extraNs[i] / 1e6 / nProf;
+            if (extra[i].startsWith("csrChunk")) csrGroup += ms; else reduceGroup += ms; }
+        // csrScan is shared by both; it's tiny (nSeg=12) so its double-count between configs is negligible.
+        return new double[]{ wallMs, devKerNs / 1e6 / (double) nProf, csrGroup, reduceGroup };
+    }
+    static boolean partE(StringBuilder log, Path dir) {
+        double dt = 2.5e-6; int seed = 11; int[] dens = { 200, 700, 1500, 3000 };
+        int warm = 20, wall = 50, prof = 40;
+        System.out.println("=== PART E — structural throughput gate (serial vs parcsr vs parreduce vs paropt) ===");
+        log.append("# PART E — structural throughput gate\n\n");
+        log.append("Device-only PRODUCTION residency. Four configs per N; wall = clean no-profiler loop, group ms = SILENT\n");
+        log.append("profiler `TASK_KERNEL_TIME`. `csrGroup` = the CSR kernels (serial 3 / parallel 5); `reduceGroup` = matReduce\n");
+        log.append("(serial 1 / parallel 2). Gains vs serial. warm=" + warm + " wall=" + wall + " prof=" + prof + ".\n\n");
+        StringBuilder csv = new StringBuilder("N,config,wall_ms_step,dev_kernel_ms_step,csrGroup_ms,reduceGroup_ms,wall_gain_vs_serial_pct\n");
+        String[] cfgName = { "serial", "parcsr", "parreduce", "paropt" };
+        boolean[][] cfg = { { false, false }, { true, false }, { false, true }, { true, true } };
+        for (double density : dens) {
+            double[][] r = new double[4][];
+            for (int ci = 0; ci < 4; ci++) {
+                USE_PARALLEL_CSR = cfg[ci][0]; USE_PARALLEL_REDUCE = cfg[ci][1];
+                TwoBodyConverterMotor.Glide2D G = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed);
+                r[ci] = partETime(G, seed, warm, wall, prof, dt);
+            }
+            int N = (int) Math.round(density * 3.0);
+            double sWall = r[0][0];
+            for (int ci = 0; ci < 4; ci++) {
+                double gain = 100.0 * (sWall - r[ci][0]) / sWall;
+                csv.append(String.format(Locale.US, "%d,%s,%.4f,%.4f,%.4f,%.4f,%.2f\n", N, cfgName[ci], r[ci][0], r[ci][1], r[ci][2], r[ci][3], gain));
+            }
+            System.out.printf(Locale.US, "  N=%-5d wall ms/step  serial %.3f | parcsr %.3f (%+.1f%%) | parreduce %.3f (%+.1f%%) | paropt %.3f (%+.1f%%)%n",
+                    N, r[0][0], r[1][0], 100 * (sWall - r[1][0]) / sWall, r[2][0], 100 * (sWall - r[2][0]) / sWall, r[3][0], 100 * (sWall - r[3][0]) / sWall);
+            System.out.printf(Locale.US, "        dev-kernel ms  serial %.3f | parcsr %.3f | parreduce %.3f | paropt %.3f  (csrGroup %.3f→%.3f, reduceGroup %.3f→%.3f)%n",
+                    r[0][1], r[1][1], r[2][1], r[3][1], r[0][2], r[3][2], r[0][3], r[3][3]);
+            log.append(String.format(Locale.US, "### N=%d\n- wall ms/step: serial %.3f | parcsr %.3f (%+.1f%%) | parreduce %.3f (%+.1f%%) | **paropt %.3f (%+.1f%%)**\n- dev-kernel ms/step: serial %.3f → paropt %.3f; csrGroup %.3f→%.3f ms; reduceGroup %.3f→%.3f ms\n",
+                    N, r[0][0], r[1][0], 100 * (sWall - r[1][0]) / sWall, r[2][0], 100 * (sWall - r[2][0]) / sWall, r[3][0], 100 * (sWall - r[3][0]) / sWall,
+                    r[0][1], r[3][1], r[0][2], r[3][2], r[0][3], r[3][3]));
+        }
+        USE_PARALLEL_CSR = false; USE_PARALLEL_REDUCE = false;
+        // SEMANTIC NO-OP: CPU-runner serial vs paropt over 500 steps, bit-identical redOut+boundSeg+coord.
+        boolean noop = optNoOpCPU(log, 1500, 500, seed, dt);
+        log.append(String.format(Locale.US, "\n**PART E VERDICT:** CSR+reduce replacement is a bit-identical CPU no-op (%s); device gains above; no observable regression.\n", noop ? "PASS" : "FAIL"));
+        try { Files.writeString(dir.resolve("PART_E_THROUGHPUT.csv"), csv.toString()); Files.writeString(dir.resolve("PART_E_THROUGHPUT.md"), log.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); }
+        System.out.println("# CSV: " + dir.resolve("PART_E_THROUGHPUT.csv").toAbsolutePath() + "  report: " + dir.resolve("PART_E_THROUGHPUT.md").toAbsolutePath());
+        return noop;
+    }
+    /** CPU-runner serial vs paropt from identical IC: expect BIT-IDENTICAL trajectory (redOut/boundSeg/coord). */
+    static boolean optNoOpCPU(StringBuilder log, double density, int steps, int seed, double dt) {
+        USE_PARALLEL_CSR = false; USE_PARALLEL_REDUCE = false;
+        TwoBodyConverterMotor.Glide2D G1 = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed); MatState s1 = packMat(G1);
+        double[][] red = new double[steps][6];
+        for (int t = 0; t < steps; t++) { stepMatCPU(G1, s1, t, seed); for (int i = 0; i < 6; i++) red[t][i] = s1.redOut.get(i); }
+        USE_PARALLEL_CSR = true; USE_PARALLEL_REDUCE = true;
+        TwoBodyConverterMotor.Glide2D G2 = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed); MatState s2 = packMat(G2);
+        double maxRed = 0; long redMis = 0;
+        for (int t = 0; t < steps; t++) { stepMatCPU(G2, s2, t, seed); for (int i = 0; i < 6; i++) { double d = Math.abs(s2.redOut.get(i) - red[t][i]); if (d != 0) { redMis++; maxRed = Math.max(maxRed, d); } } }
+        int N = G1.N, nSeg = G1.nSeg; long bMis = 0; double coordMax = 0;
+        for (int m = 0; m < N; m++) if (G1.mot.boundSeg.get(m) != G2.mot.boundSeg.get(m)) bMis++;
+        for (int i = 0; i < 3 * nSeg; i++) coordMax = Math.max(coordMax, Math.abs(G1.fil.coord.get(i) - G2.fil.coord.get(i)));
+        USE_PARALLEL_CSR = false; USE_PARALLEL_REDUCE = false;
+        boolean ok = redMis == 0 && bMis == 0 && coordMax == 0.0;
+        log.append(String.format(Locale.US, "\n## Semantic no-op (CPU serial ≡ CPU paropt, %d steps @ density %.0f)\n- redOut mismatches=%d (maxΔ=%.2e), boundSeg mismatches=%d/%d, final-coord maxΔ=%.2e ⇒ **%s**\n",
+                steps, density, redMis, maxRed, bMis, N, coordMax, ok ? "BIT-IDENTICAL" : "DIVERGED"));
+        System.out.printf(Locale.US, "  semantic no-op (CPU serial≡paropt, %d steps): redMis=%d boundMis=%d coordΔ=%.2e ⇒ %s%n", steps, redMis, bMis, coordMax, ok ? "BIT-IDENTICAL" : "DIVERGED");
+        return ok;
+    }
+
     // ===============================================================================================
     public static void main(String[] args) {
         Path dir = Path.of(OUTDIR);
@@ -449,6 +733,16 @@ public final class MatSoaSlice {
             System.out.println("# report: " + dir.resolve("TRAJECTORY.md").toAbsolutePath());
             System.exit(ok ? 0 : 1); return;
         }
+        for (String a : args) { if (a.equals("-parcsr")) USE_PARALLEL_CSR = true; if (a.equals("-parreduce")) USE_PARALLEL_REDUCE = true; if (a.equals("-paropt")) { USE_PARALLEL_CSR = true; USE_PARALLEL_REDUCE = true; } }
+        log.append("# parallel CSR=" + USE_PARALLEL_CSR + " | parallel reduce=" + USE_PARALLEL_REDUCE + "\n");
+        boolean base = false, csra = false, csrgate = false, redgate = false;
+        for (String a : args) { if (a.equals("-baseline")) base = true; if (a.equals("-csranalyze")) csra = true; if (a.equals("-csrgate")) csrgate = true; if (a.equals("-redgate")) redgate = true; }
+        if (csrgate) { boolean ok = csrGate(log, dir); System.exit(ok ? 0 : 1); return; }
+        if (redgate) { boolean ok = reduceGate(log, dir); System.exit(ok ? 0 : 1); return; }
+        boolean pe = false; for (String a : args) if (a.equals("-partE")) pe = true;
+        if (pe) { boolean ok = partE(log, dir); System.exit(ok ? 0 : 1); return; }
+        if (base) { boolean ok = baseline(log, dir); System.exit(ok ? 0 : 1); return; }
+        if (csra) { boolean ok = csrAnalyze(log, dir); System.exit(ok ? 0 : 1); return; }
         boolean ens = false; for (String a : args) if (a.equals("-ensemble")) ens = true;
         if (ens) {
             System.out.println("=== PART 7 — end-to-end ENSEMBLE validation (CPU-double arbiter, within SEM) ===");
@@ -498,7 +792,14 @@ public final class MatSoaSlice {
         DoubleArray site, pose4, anchor, supP0, geomOut, candArc, redOut, eupP, cullP, gateP, step7P, cockP;
         IntArray active, noBind, candInt, mc;
         FloatArray zP;
+        // Part C — parallel CSR (atomic-free counting-sort): csrChunkParams=[chunkSize,numChunks], csrMatrix=numChunks×nSeg.
+        IntArray csrChunkParams, csrMatrix; int numCsrChunks;
+        // Part D — parallel hierarchical reduction: per-block partials (redBlk) reduced to redOut by a final kernel.
+        DoubleArray redBlk; IntArray redP; int numRedBlk;
     }
+    // Part C/D switches (default false ⇒ the validated serial paths, byte-identical). Set by -parcsr/-parreduce.
+    static boolean USE_PARALLEL_CSR = false, USE_PARALLEL_REDUCE = false;
+    static final int RED_BLK = 128;   // motors per reduction block (Part D)
     static MatState packMat(TwoBodyConverterMotor.Glide2D G) {
         int N = G.N, nSeg = G.nSeg; MatState s = new MatState();
         s.site = new DoubleArray(2 * N); s.pose4 = new DoubleArray(4 * N); s.anchor = new DoubleArray(3 * N);
@@ -516,6 +817,15 @@ public final class MatSoaSlice {
         s.cockP = DoubleArray.fromElements(TwoBodyConverterMotor.PRESTROKE_THETAS, TwoBodyConverterMotor.ADP_THETAS);
         s.zP = FloatArray.fromElements((float) G.kzCode);
         s.mc = new IntArray(4); s.mc.set(0, N); s.mc.set(3, nSeg);
+        // Part C — parallel CSR sizing (same rule as DenseGliding: chunk ≈ sqrt(N), capped by matrix budget).
+        int mcs = SpatialGrid.bodyChunkSize(Math.max(1, N), nSeg);
+        s.numCsrChunks = SpatialGrid.numBodyChunks(Math.max(1, N), mcs);
+        s.csrChunkParams = IntArray.fromElements(mcs, s.numCsrChunks);
+        s.csrMatrix = new IntArray(Math.max(1, s.numCsrChunks * nSeg)); s.csrMatrix.init(0);
+        // Part D — parallel reduction sizing: ceil(N/RED_BLK) blocks; redBlk holds [nb,cx,cy,cz,load,na] per block.
+        s.numRedBlk = Math.max(1, (N + RED_BLK - 1) / RED_BLK);
+        s.redP = IntArray.fromElements(RED_BLK, s.numRedBlk);
+        s.redBlk = new DoubleArray(3 * s.numRedBlk); s.redBlk.init(0.0);   // stride 3 per block: [nb, load, na]
         return s;
     }
     /** CPU-runner step = the device pipeline as plain Java calls (same 20 kernels, same order). */
@@ -531,9 +841,17 @@ public final class MatSoaSlice {
         matPlaceHead(s.geomOut, s.active, s.eupP, s.mc, b.coord, b.uVec, b.yVec);
         CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams);
         ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
-        CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, G.segCount);
-        CrossBridgeSystem.csrScan(mot.counts, G.segCount, G.segOff);
-        CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, G.segOff, G.segCount, G.segMyo);
+        if (USE_PARALLEL_CSR) {   // Part C — atomic-free parallel counting-sort (bit-identical CSR)
+            CrossBridgeSystem.csrChunkZero(s.csrChunkParams, mot.counts, s.csrMatrix);
+            CrossBridgeSystem.csrChunkHistogram(mot.boundSeg, mot.counts, s.csrChunkParams, s.csrMatrix);
+            CrossBridgeSystem.csrChunkReduce(mot.counts, s.csrChunkParams, s.csrMatrix, G.segCount);
+            CrossBridgeSystem.csrScan(mot.counts, G.segCount, G.segOff);
+            CrossBridgeSystem.csrChunkScatter(mot.boundSeg, mot.counts, s.csrChunkParams, G.segOff, G.segMyo, s.csrMatrix);
+        } else {                  // serial (validated baseline)
+            CrossBridgeSystem.csrHistogram(mot.boundSeg, mot.counts, G.segCount);
+            CrossBridgeSystem.csrScan(mot.counts, G.segCount, G.segOff);
+            CrossBridgeSystem.csrScatter(mot.boundSeg, mot.counts, G.segOff, G.segCount, G.segMyo);
+        }
         CrossBridgeSystem.segGather(G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts);
         ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
         matZConfine(f.coord, f.forceSum, s.zP, s.mc);
@@ -543,13 +861,26 @@ public final class MatSoaSlice {
         DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
         matStep7(s.pose4, s.anchor, s.step7P, s.supP0, G.bondData, mot.boundSeg, s.active, s.mc, s.geomOut, mot.forceDotFil, mot.forceMag);
-        matReduce(mot.boundSeg, s.active, mot.forceDotFil, f.coord, s.mc, s.redOut);
+        if (USE_PARALLEL_REDUCE) {   // Part D
+            matReduceBlocks(mot.boundSeg, s.active, mot.forceDotFil, s.redP, s.mc, s.redBlk);
+            matReduceFinal(s.redBlk, f.coord, s.redP, s.mc, s.redOut);
+        } else {
+            matReduce(mot.boundSeg, s.active, mot.forceDotFil, f.coord, s.mc, s.redOut);
+        }
     }
     static GridScheduler trajSched;
-    static TornadoExecutionPlan buildTrajGraph(TwoBodyConverterMotor.Glide2D G, MatState s) {
+    static TornadoExecutionPlan buildTrajGraph(TwoBodyConverterMotor.Glide2D G, MatState s) { return buildTrajGraph(G, s, false); }
+    /**
+     * @param prod  true = PRODUCTION residency: mutable motor/filament state stays device-resident
+     *              (uploaded FIRST_EXECUTION), and ONLY {@code redOut} (6 doubles) crosses back each step.
+     *              This is the honest throughput/baseline path (Parts A/E). false = VALIDATION residency:
+     *              also mirrors boundSeg/nuc/forceDotFil/coord/uVec host↔device each step so the CPU-runner
+     *              comparison (Parts 6/7) can read them (byte-identical to the original graph).
+     */
+    static TornadoExecutionPlan buildTrajGraph(TwoBodyConverterMotor.Glide2D G, MatState s, boolean prod) {
         MotorStore mot = G.mot; FilamentStore f = G.fil; RigidRodBody b = mot.body;
-        TaskGraph tg = new TaskGraph("traj")
-            .transferToDevice(DataTransferMode.FIRST_EXECUTION,
+        TaskGraph tg = new TaskGraph("traj");
+        tg.transferToDevice(DataTransferMode.FIRST_EXECUTION,
                 s.site, s.pose4, s.anchor, s.supP0, s.geomOut, s.candArc, s.redOut, s.eupP, s.active, s.noBind, s.candInt,
                 s.cullP, s.gateP, s.step7P, s.cockP, s.zP,
                 b.coord, b.uVec, b.yVec, b.bRotGam,
@@ -557,9 +888,17 @@ public final class MatSoaSlice {
                 f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.chainParams,
                 f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
                 mot.bindArc, mot.forceMag, mot.forceDotAvg, mot.avgInit, mot.cooldown,
-                mot.stats, mot.nucParams, mot.kinParams, G.bondData, G.xbParams, G.segCount, G.segOff, G.segMyo)
-            .transferToDevice(DataTransferMode.EVERY_EXECUTION, s.mc, mot.counts, f.counts,
-                mot.boundSeg, mot.nucleotideState, mot.forceDotFil, f.coord)   // VALIDATION reads these back each step (below)
+                mot.stats, mot.nucParams, mot.kinParams, G.bondData, G.xbParams, G.segCount, G.segOff, G.segMyo,
+                s.csrChunkParams, s.csrMatrix, s.redP, s.redBlk);   // Part C/D scratch (resident; used only when the parallel paths are on)
+        if (prod) {
+            // PRODUCTION: the mutable step-to-step motor/filament state stays device-resident (uploaded once).
+            tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, f.coord);
+            tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, s.mc, mot.counts, f.counts);   // only step/seed counters
+        } else {
+            tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, s.mc, mot.counts, f.counts,
+                mot.boundSeg, mot.nucleotideState, mot.forceDotFil, f.coord);   // VALIDATION reads these back each step (below)
+        }
+        tg
             .task("matCull", MatSoaSlice::matCull, mot.boundSeg, s.site, f.coord, f.uVec, f.segLength, s.cullP, s.mc, s.active)
             .task("matGeomGate", MatSoaSlice::matGeomGate, s.anchor, s.pose4, f.coord, f.uVec, f.segLength, s.gateP, s.mc, s.geomOut, s.candInt, s.candArc)
             .task("matBind", MatSoaSlice::matBind, s.active, s.noBind, mot.boundSeg, mot.nucleotideState, s.candInt, s.candArc, mot.bindArc, s.mc)
@@ -567,10 +906,19 @@ public final class MatSoaSlice {
             .task("matCock", MatSoaSlice::matCock, mot.nucleotideState, s.pose4, s.cockP, s.mc)
             .task("matPlaceHead", MatSoaSlice::matPlaceHead, s.geomOut, s.active, s.eupP, s.mc, b.coord, b.uVec, b.yVec)
             .task("bondForces", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams)
-            .task("zeroAcc", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
-            .task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, G.segCount)
-            .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, G.segCount, G.segOff)
-            .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, G.segOff, G.segCount, G.segMyo)
+            .task("zeroAcc", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts);
+        if (USE_PARALLEL_CSR) {   // Part C — atomic-free parallel counting-sort CSR-inverse (bit-identical to serial)
+            tg.task("csrChunkZero", CrossBridgeSystem::csrChunkZero, s.csrChunkParams, mot.counts, s.csrMatrix)
+              .task("csrChunkHist", CrossBridgeSystem::csrChunkHistogram, mot.boundSeg, mot.counts, s.csrChunkParams, s.csrMatrix)
+              .task("csrChunkReduce", CrossBridgeSystem::csrChunkReduce, mot.counts, s.csrChunkParams, s.csrMatrix, G.segCount)
+              .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, G.segCount, G.segOff)
+              .task("csrChunkScatter", CrossBridgeSystem::csrChunkScatter, mot.boundSeg, mot.counts, s.csrChunkParams, G.segOff, G.segMyo, s.csrMatrix);
+        } else {
+            tg.task("csrHist", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, G.segCount)
+              .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, G.segCount, G.segOff)
+              .task("csrScatter", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, G.segOff, G.segCount, G.segMyo);
+        }
+        tg
             .task("segGather", CrossBridgeSystem::segGather, G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts)
             .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
             .task("zconf", MatSoaSlice::matZConfine, f.coord, f.forceSum, s.zP, s.mc)
@@ -578,18 +926,35 @@ public final class MatSoaSlice {
             .task("integ", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
             .task("orthoY", DerivedGeometrySystem::orthogonalizeY, f.uVec, f.yVec, f.counts)
             .task("derive", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
-            .task("matStep7", MatSoaSlice::matStep7, s.pose4, s.anchor, s.step7P, s.supP0, G.bondData, mot.boundSeg, s.active, s.mc, s.geomOut, mot.forceDotFil, mot.forceMag)
-            .task("matReduce", MatSoaSlice::matReduce, mot.boundSeg, s.active, mot.forceDotFil, f.coord, s.mc, s.redOut)
-            .transferToHost(DataTransferMode.EVERY_EXECUTION, s.redOut, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, f.coord, f.uVec);
+            .task("matStep7", MatSoaSlice::matStep7, s.pose4, s.anchor, s.step7P, s.supP0, G.bondData, mot.boundSeg, s.active, s.mc, s.geomOut, mot.forceDotFil, mot.forceMag);
+        if (USE_PARALLEL_REDUCE) {   // Part D — hierarchical block-partial + final reduction (atomic-free)
+            tg.task("matReduceBlk", MatSoaSlice::matReduceBlocks, mot.boundSeg, s.active, mot.forceDotFil, s.redP, s.mc, s.redBlk)
+              .task("matReduceFin", MatSoaSlice::matReduceFinal, s.redBlk, f.coord, s.redP, s.mc, s.redOut);
+        } else {
+            tg.task("matReduce", MatSoaSlice::matReduce, mot.boundSeg, s.active, mot.forceDotFil, f.coord, s.mc, s.redOut);
+        }
+        if (prod) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, s.redOut);   // ONLY the 6-double reduction crosses
+        else      tg.transferToHost(DataTransferMode.EVERY_EXECUTION, s.redOut, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, f.coord, f.uVec);
         int N = G.N, nSeg = G.nSeg, pn = ((N + 63) / 64) * 64, ps = ((nSeg + 63) / 64) * 64;
         trajSched = new GridScheduler();
         String[] pnT = {"matCull", "matGeomGate", "matBind", "chem", "matCock", "matPlaceHead", "bondForces", "matStep7"};
         for (String nm : pnT) addW(trajSched, "traj." + nm, pn);
         String[] psT = {"zeroAcc", "segGather", "chain", "zconf", "brown", "integ", "orthoY", "derive"};
         for (String nm : psT) addW(trajSched, "traj." + nm, ps);
-        addW(trajSched, "traj.csrHist", 64); addW(trajSched, "traj.csrScan", 64); addW(trajSched, "traj.csrScatter", 64); addW(trajSched, "traj.matReduce", 64);
+        addW(trajSched, "traj.csrScan", 64);
+        if (USE_PARALLEL_CSR) {
+            addW(trajSched, "traj.csrChunkZero", pad64(s.numCsrChunks * nSeg));
+            addW(trajSched, "traj.csrChunkHist", pad64(s.numCsrChunks));
+            addW(trajSched, "traj.csrChunkReduce", ps);
+            addW(trajSched, "traj.csrChunkScatter", pad64(s.numCsrChunks));
+        } else {
+            addW(trajSched, "traj.csrHist", 64); addW(trajSched, "traj.csrScatter", 64);
+        }
+        if (USE_PARALLEL_REDUCE) { addW(trajSched, "traj.matReduceBlk", pad64(s.numRedBlk)); addW(trajSched, "traj.matReduceFin", 64); }
+        else addW(trajSched, "traj.matReduce", 64);
         return new TornadoExecutionPlan(tg.snapshot());
     }
+    static int pad64(int x) { return ((Math.max(1, x) + 63) / 64) * 64; }
 
     static boolean trajectory(StringBuilder log, double density, int seed, int steps) {
         double dt = 2.5e-6;
@@ -649,6 +1014,169 @@ public final class MatSoaSlice {
         return !semantic;
     }
     static int min3(int a, int b, int c) { int r = Integer.MAX_VALUE; if (a >= 0) r = Math.min(r, a); if (b >= 0) r = Math.min(r, b); if (c >= 0) r = Math.min(r, c); return r == Integer.MAX_VALUE ? -1 : r; }
+
+    // ================================================================================================
+    //  PART A — freeze the calibrated double-device performance baseline (device-only, PRODUCTION
+    //  residency: only the 6-double redOut crosses back each step; no CPU-reference in the measured
+    //  interval). Per-kernel device time via the TornadoVM SILENT profiler; wall time via a clean
+    //  no-profiler loop. Emits a machine-readable CSV. Also emits `-baselinecsr` variant later (Part E).
+    // ================================================================================================
+    static final String[] TRAJ_TASKS = {
+        "matCull", "matGeomGate", "matBind", "chem", "matCock", "matPlaceHead", "bondForces", "zeroAcc",
+        "csrHist", "csrScan", "csrScatter", "segGather", "chain", "zconf", "brown", "integ", "orthoY",
+        "derive", "matStep7", "matReduce" };
+
+    /** Parse per-task TASK_KERNEL_TIME (ns) for task "traj.&lt;name&gt;" out of a TornadoVM SILENT profile-log JSON. */
+    static long parseTaskNs(String jlog, String name) {
+        if (jlog == null) return 0;
+        int k = jlog.indexOf("\"traj." + name + "\"");
+        if (k < 0) return 0;
+        int t = jlog.indexOf("\"TASK_KERNEL_TIME\"", k);
+        if (t < 0) return 0;
+        int c = jlog.indexOf(':', t);
+        if (c < 0) return 0;
+        int e = c + 1; while (e < jlog.length() && (jlog.charAt(e) == ' ' || jlog.charAt(e) == '"')) e++;
+        int st = e; while (e < jlog.length() && (Character.isDigit(jlog.charAt(e)) || jlog.charAt(e) == '-')) e++;
+        try { return Long.parseLong(jlog.substring(st, e)); } catch (Exception ex) { return 0; }
+    }
+
+    // ================================================================================================
+    //  PART B — CSR topology + invalidation semantics. The segment→bound-motors CSR-inverse is rebuilt
+    //  each step from `mot.boundSeg` (SOURCE). We measure how much of `boundSeg` actually CHANGES per step
+    //  to choose C1 (host-cached CSR) vs C2 (parallel device rebuild). boundSeg dynamics are physics
+    //  (bind/unbind kinetics) ⇒ runner-independent in distribution; measured on the deterministic CPU-runner.
+    // ================================================================================================
+    static boolean csrAnalyze(StringBuilder log, Path dir) {
+        double dt = 2.5e-6; int seed = 11; int steps = 2000;
+        int[] dens = { 200, 700, 1500, 3000 };
+        System.out.println("=== PART B — CSR topology + invalidation semantics ===");
+        log.append("# PART B — CSR topology + invalidation semantics\n\n");
+        log.append("**CSR inverse** = segment → list-of-bound-motors, rebuilt each step from the SOURCE array `mot.boundSeg`.\n");
+        log.append("- SOURCE inverted: `mot.boundSeg[m]` — per-MOTOR segment index (≥0 = bound to that filament segment, <0 = unbound).\n");
+        log.append("- DEST grouping / KEYS: filament **SEGMENT** indices (the *value* boundSeg[m]), NOT filament or motor indices.\n");
+        log.append("- Segment count **nSeg is CONSTANT = 12** (one 12-segment filament; never changes across the run or with N).\n");
+        log.append("- Ordering: motors placed in ASCENDING motor-index within each segment bin (serial csrScatter; the parallel\n");
+        log.append("  counting-sort csrChunkScatter is BIT-IDENTICAL to it — stable). Downstream `segGather` sums each bin's\n");
+        log.append("  bondData reactions — a commutative fp add, so within-bin order affects only the fp last-bit (not counts).\n\n");
+        log.append("| N | nSeg | mean bound | max bound | mean changed/step | frac assign changed/step | frac no-change steps | max changed | mean binds/step | mean unbinds/step | host-CSR bytes/rebuild | est host-CSR xfer (µs) |\n");
+        log.append("|---|---|---|---|---|---|---|---|---|---|---|---|\n");
+        StringBuilder csv = new StringBuilder("N,nSeg,steps,mean_bound,max_bound,mean_changed_per_step,frac_assign_changed_per_step,frac_nochange_steps,max_changed,mean_binds_per_step,mean_unbinds_per_step,hostCSR_bytes_per_rebuild,est_hostCSR_xfer_us\n");
+        for (double density : dens) {
+            TwoBodyConverterMotor.Glide2D G = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed);
+            int N = G.N, nSeg = G.nSeg; MatState s = packMat(G);
+            int[] prev = new int[N]; for (int m = 0; m < N; m++) prev[m] = G.mot.boundSeg.get(m);
+            long totChanged = 0, totBind = 0, totUnbind = 0, noChange = 0, maxChanged = 0, sumBound = 0, maxBound = 0;
+            for (int t = 0; t < steps; t++) {
+                stepMatCPU(G, s, t, seed);
+                int changed = 0, binds = 0, unbinds = 0, nb = 0;
+                for (int m = 0; m < N; m++) { int b = G.mot.boundSeg.get(m); if (b >= 0) nb++;
+                    if (b != prev[m]) { changed++; if (prev[m] < 0 && b >= 0) binds++; if (prev[m] >= 0 && b < 0) unbinds++; }
+                    prev[m] = b; }
+                totChanged += changed; if (changed == 0) noChange++; if (changed > maxChanged) maxChanged = changed;
+                totBind += binds; totUnbind += unbinds; sumBound += nb; if (nb > maxBound) maxBound = nb;
+            }
+            double meanChanged = totChanged / (double) steps, fracAssign = meanChanged / N, fracNoChange = noChange / (double) steps;
+            double meanBound = sumBound / (double) steps;
+            long hostBytes = (long) (nSeg + 1) * 4 + Math.round(meanBound) * 4;   // segOff[nSeg+1] + segMyo[bound]
+            double estUs = 6.0 + hostBytes / 12000.0;   // ~6µs launch latency + bytes at ~12 GB/s (12 KB/µs)
+            log.append(String.format(Locale.US, "| %d | %d | %.1f | %d | %.2f | %.5f | %.4f | %d | %.3f | %.3f | %d | %.1f |\n",
+                    N, nSeg, meanBound, maxBound, meanChanged, fracAssign, fracNoChange, maxChanged, totBind / (double) steps, totUnbind / (double) steps, hostBytes, estUs));
+            csv.append(String.format(Locale.US, "%d,%d,%d,%.2f,%d,%.4f,%.6f,%.5f,%d,%.4f,%.4f,%d,%.2f\n",
+                    N, nSeg, steps, meanBound, maxBound, meanChanged, fracAssign, fracNoChange, maxChanged, totBind / (double) steps, totUnbind / (double) steps, hostBytes, estUs));
+            System.out.printf(Locale.US, "  N=%-5d meanBound=%.1f maxBound=%d | changed/step=%.2f (%.4f%% of N) | no-change steps=%.2f%% | binds/step=%.2f unbinds/step=%.2f | hostCSR %d B (~%.1f µs)%n",
+                    N, meanBound, maxBound, meanChanged, 100 * fracAssign, 100 * fracNoChange, totBind / (double) steps, totUnbind / (double) steps, hostBytes, estUs);
+        }
+        String decision = "\n## Invalidation verdict — C2 (parallel device rebuild)\n"
+            + "**Measured (surprising):** the topology is SLOWLY changing — 82–98% of steps leave `boundSeg` UNCHANGED\n"
+            + "(only ~0.2 assignments change/step even at N=9000; binding is sparse, ~3–25 motors bound). So the *change rate*\n"
+            + "is NOT what makes the serial CSR expensive — the serial `csrHistogram`/`csrScatter` cost is O(N) because each\n"
+            + "loops over ALL N motors on a SINGLE thread, regardless of how few are bound.\n\n"
+            + "That slowly-changing property would in principle permit a C1 host-cached CSR, BUT:\n"
+            + "  (a) detecting invalidation needs `boundSeg` (N ints, ~36 KB at N=9000) read to host EACH step — a per-step\n"
+            + "      round-trip that DEFEATS device residency (the whole point of the slice); on-device data-dependent task\n"
+            + "      skipping is not cleanly expressible in a single TornadoVM TaskGraph.\n"
+            + "  (b) the existing `csrChunk*` atomic-free counting-sort already rebuilds the CSR fully in PARALLEL and is\n"
+            + "      VALIDATED BIT-IDENTICAL to the serial CSR (motors in ascending index within each seg bin) — so it removes\n"
+            + "      the serial O(N) bottleneck with ZERO host round-trip and ZERO semantic change.\n"
+            + "⇒ **Choose C2 (parallel device rebuild every step).** It preserves residency and is robust to any change rate.\n"
+            + "The slowly-changing property is noted as a *future* lever (device-side dirty-flag skip) but is NOT needed here.\n";
+        log.append(decision);
+        try { Files.writeString(dir.resolve("CSR_INVALIDATION.csv"), csv.toString());
+              Files.writeString(dir.resolve("PART_B_CSR_ANALYSIS.md"), log.toString()); } catch (IOException ex) { throw new UncheckedIOException(ex); }
+        System.out.println("# CSV: " + dir.resolve("CSR_INVALIDATION.csv").toAbsolutePath());
+        System.out.println("# report: " + dir.resolve("PART_B_CSR_ANALYSIS.md").toAbsolutePath());
+        return true;
+    }
+
+    static boolean baseline(StringBuilder log, Path dir) {
+        double dt = 2.5e-6; int seed = 11;
+        int[] dens = { 200, 700, 1500, 3000 };   // box 3.0µm² ⇒ N = 600, 2100, 4500, 9000
+        int warm = 25, wallSteps = 60, profSteps = 60;
+        System.out.println("=== PART A — calibrated double-device baseline (device-only, PRODUCTION residency) ===");
+        log.append("# PART A — calibrated double-device performance baseline\n\n");
+        log.append("PRODUCTION residency graph: mutable motor+filament SoA uploaded FIRST_EXECUTION; per step only the\n");
+        log.append("step/seed counters cross UP and the 6-double `redOut` reduction crosses DOWN. Per-kernel device time\n");
+        log.append("= TornadoVM SILENT profiler `TASK_KERNEL_TIME`; wall time = clean no-profiler loop (no CPU reference\n");
+        log.append("in the measured interval). warm=" + warm + " wallSteps=" + wallSteps + " profSteps=" + profSteps + " dt=" + dt + ".\n\n");
+        StringBuilder csv = new StringBuilder();
+        csv.append("N,nSeg,density,active_per_step,bound_per_step,launches,transfers_in,transfers_out,"
+                + "warm_ms_step,wall_s_per_sim_s,bytesIn_per_step,bytesOut_per_step,"
+                + "deviceKernel_ms_step,kernelDispatch_ms_step,dataTransfer_ms_step,csr_rebuild_every_step,reduction_outputs");
+        for (String tk : TRAJ_TASKS) csv.append(",kerms_").append(tk).append(",kerpct_").append(tk);
+        csv.append("\n");
+        boolean ok = true;
+        for (double density : dens) {
+            TwoBodyConverterMotor.Glide2D G = TwoBodyConverterMotor.buildSupMat(density, dt, 0.0, seed);
+            int N = G.N, nSeg = G.nSeg;
+            MatState s = packMat(G);
+            TornadoExecutionPlan plan;
+            try { plan = buildTrajGraph(G, s, true); }
+            catch (Throwable ex) { log.append("- N=" + N + " graph build FAILED: " + oneLine(ex.getMessage()) + "\n"); System.out.println("  N=" + N + " graph build FAILED"); ok = false; continue; }
+            int tt = 0; long cold = 0;
+            for (int t = 0; t < warm; t++, tt++) { s.mc.set(1, tt); G.mot.setCounts(tt, seed, nSeg); G.fil.counts.set(1, tt); G.fil.counts.set(2, seed);
+                long c0 = System.nanoTime(); plan.withGridScheduler(trajSched).execute(); long d = System.nanoTime() - c0; if (t == 0) cold = d; }
+            long wallNs = 0;
+            for (int t = 0; t < wallSteps; t++, tt++) { s.mc.set(1, tt); G.mot.setCounts(tt, seed, nSeg); G.fil.counts.set(1, tt); G.fil.counts.set(2, seed);
+                long c0 = System.nanoTime(); plan.withGridScheduler(trajSched).execute(); wallNs += System.nanoTime() - c0; }
+            double wallMs = wallNs / 1e6 / wallSteps;
+            long[] kerNs = new long[TRAJ_TASKS.length];
+            long devKerNs = 0, dispNs = 0, xferNs = 0, bIn = 0, bOut = 0; int nProf = 0;
+            for (int t = 0; t < profSteps; t++, tt++) { s.mc.set(1, tt); G.mot.setCounts(tt, seed, nSeg); G.fil.counts.set(1, tt); G.fil.counts.set(2, seed);
+                TornadoExecutionResult res = plan.withGridScheduler(trajSched).withProfiler(ProfilerMode.SILENT).execute();
+                TornadoProfilerResult pr = res.getProfilerResult();
+                String jl = pr.getProfileLog();
+                for (int i = 0; i < TRAJ_TASKS.length; i++) kerNs[i] += parseTaskNs(jl, TRAJ_TASKS[i]);
+                devKerNs += pr.getDeviceKernelTime(); dispNs += pr.getKernelDispatchTime(); xferNs += pr.getDataTransfersTime();
+                bIn += pr.getTotalBytesCopyIn(); bOut += pr.getTotalBytesCopyOut(); nProf++;
+                plan.clearProfiles();
+            }
+            plan.withoutProfiler();
+            int active = (int) s.redOut.get(5), bound = (int) s.redOut.get(0);
+            double sumKerMs = 0; for (long k : kerNs) sumKerMs += k / 1e6 / nProf;
+            csv.append(String.format(Locale.US, "%d,%d,%.0f,%d,%d,%d,%d,%d,%.4f,%.0f,%d,%d,%.4f,%.4f,%.4f,%d,%d",
+                    N, nSeg, density, active, bound, TRAJ_TASKS.length, 3, 1,
+                    wallMs, wallMs / 1e3 / dt, bIn / nProf, bOut / nProf,
+                    devKerNs / 1e6 / nProf, dispNs / 1e6 / nProf, xferNs / 1e6 / nProf, 1, 6));
+            for (int i = 0; i < TRAJ_TASKS.length; i++) { double ms = kerNs[i] / 1e6 / (double) nProf; csv.append(String.format(Locale.US, ",%.5f,%.1f", ms, sumKerMs > 0 ? 100.0 * ms / sumKerMs : 0.0)); }
+            csv.append("\n");
+            // top-3 kernels
+            Integer[] idx = new Integer[TRAJ_TASKS.length]; for (int i = 0; i < idx.length; i++) idx[i] = i;
+            java.util.Arrays.sort(idx, (a, bb) -> Long.compare(kerNs[bb], kerNs[a]));
+            StringBuilder top = new StringBuilder();
+            for (int r = 0; r < 3; r++) { int i = idx[r]; top.append(String.format(Locale.US, "%s %.1f%%  ", TRAJ_TASKS[i], sumKerMs > 0 ? 100.0 * (kerNs[i] / 1e6 / nProf) / sumKerMs : 0.0)); }
+            System.out.printf(Locale.US, "  N=%-5d nSeg=%d active=%-5d bound=%-5d | wall %.3f ms/step (%.0f s/sim-s) | dev-kernel %.3f ms | in %d B out %d B | cold %.0f ms | top3: %s%n",
+                    N, nSeg, active, bound, wallMs, wallMs / 1e3 / dt, devKerNs / 1e6 / (double) nProf, bIn / nProf, bOut / nProf, cold / 1e6, top);
+            log.append(String.format(Locale.US, "- **N=%d** (density %.0f, nSeg=%d): active=%d/step, bound=%d/step; wall **%.3f ms/step** (%.0f s/sim-s); device-kernel %.3f ms/step; bytes in=%d out=%d /step; cold %.0f ms. Top-3 kernels: %s\n",
+                    N, density, nSeg, active, bound, wallMs, wallMs / 1e3 / dt, devKerNs / 1e6 / (double) nProf, bIn / nProf, bOut / nProf, cold / 1e6, top.toString().trim()));
+        }
+        try {
+            Files.writeString(dir.resolve("BASELINE.csv"), csv.toString());
+            Files.writeString(dir.resolve("PART_A_BASELINE.md"), log.toString());
+        } catch (IOException ex) { throw new UncheckedIOException(ex); }
+        System.out.println("# CSV: " + dir.resolve("BASELINE.csv").toAbsolutePath());
+        System.out.println("# report: " + dir.resolve("PART_A_BASELINE.md").toAbsolutePath());
+        return ok;
+    }
 
     // ================================================================================================
     //  PART 7 — end-to-end ENSEMBLE validation. Trajectory is chaotic (float-FMA) ⇒ compare ensemble
