@@ -396,6 +396,72 @@ public final class TwoBodyBeamAnalyticGpu {
         }
     }
 
+    // ============================================================ explicit FREE BINDING (deterministic 8-gate)
+    /**
+     * Device port of the production explicit bind gate ({@code stepGlideS2} L6806–6810, over the beam geometry).
+     * For every ACTIVE, unbound (boundSeg=FREE_BINDABLE=−1), ADP·Pi (nuc=2), bindable (noBind=0) motor: find the
+     * nearest filament segment ({@code nearestSeg2D}) and evaluate the 8 DETERMINISTIC gates ({@code gate2D});
+     * bind (boundSeg=s, bindArc) iff all pass. NO stochastic draw — binding is deterministic ⇒ no RNG, no RNG
+     * stream shift in chemistry/Brownian. Geometry (C/xH/xF8 in {@code outGeom}) comes from {@code matBeamGeom}
+     * (C/xF8/xH depend only on phi/psi, NOT thetaS ⇒ the same geom serves the gate and the mechanics). Race-free
+     * (each motor writes only its own boundSeg/bindArc; several may bind the same segment — the CSR handles it).
+     *
+     * <p>{@code bindP}: [dBindNm, psiDeg, phiDeg, thetaDeg, preloadPn, energyKt, FIL_R, PHI_PRE_3E, aSemiZ, kT,
+     * margin, orientOn]. {@code eupP}: the shared up-axis (headSide). counts=[N,_,_,nSeg].
+     */
+    public static void matBindExplicit(IntArray active, IntArray noBind, IntArray boundSeg, IntArray nuc,
+                                       DoubleArray outGeom, DoubleArray q, FloatArray filCoord, FloatArray filUVec,
+                                       FloatArray filSegLength, DoubleArray params, DoubleArray bindP, DoubleArray eupP,
+                                       FloatArray bindArc, IntArray counts) {
+        int N = counts.get(0), nSeg = counts.get(3);
+        double dBindNm = bindP.get(0), psiDeg = bindP.get(1), phiDeg = bindP.get(2), thetaDeg = bindP.get(3);
+        double preloadPn = bindP.get(4), energyKt = bindP.get(5), FIL_R = bindP.get(6), PHI_PRE = bindP.get(7);
+        double aSemiZ = bindP.get(8), kT = bindP.get(9), margin = bindP.get(10); int orientOn = (int) bindP.get(11);
+        double eupx = eupP.get(0), eupy = eupP.get(1), eupz = eupP.get(2), DEG = 180.0 / Math.PI;
+        for (@Parallel int m = 0; m < N; m++) {
+            if (active.get(m) != 1 || noBind.get(m) == 1 || boundSeg.get(m) != -1 || nuc.get(m) != 2) continue;
+            double xF8x = outGeom.get(6*N+m), xF8y = outGeom.get(7*N+m), xF8z = outGeom.get(8*N+m);
+            double xHx = outGeom.get(3*N+m), xHy = outGeom.get(4*N+m), xHz = outGeom.get(5*N+m);
+            // nearest segment (perp distance, foot within half+0.02)
+            int best = -1; double bd = 1e9;
+            for (int s = 0; s < nSeg; s++) {
+                double half = 0.5 * filSegLength.get(s);
+                double cx = filCoord.get(s), cy = filCoord.get(nSeg+s), cz = filCoord.get(2*nSeg+s);
+                double ux = filUVec.get(s), uy = filUVec.get(nSeg+s), uz = filUVec.get(2*nSeg+s);
+                double dx = xF8x-cx, dy = xF8y-cy, dz = xF8z-cz; double foot = dx*ux+dy*uy+dz*uz;
+                if (foot > half+0.02 || foot < -(half+0.02)) continue;
+                double px = dx-foot*ux, py = dy-foot*uy, pz = dz-foot*uz; double d2 = px*px+py*py+pz*pz;
+                if (d2 < bd) { bd = d2; best = s; }
+            }
+            if (best < 0) continue;
+            int s = best; double half = 0.5 * filSegLength.get(s);
+            double cx = filCoord.get(s), cy = filCoord.get(nSeg+s), cz = filCoord.get(2*nSeg+s);
+            double ux = filUVec.get(s), uy = filUVec.get(nSeg+s), uz = filUVec.get(2*nSeg+s);
+            double e1x = cx-half*ux, e1y = cy-half*uy, e1z = cz-half*uz;
+            double dx = xF8x-cx, dy = xF8y-cy, dz = xF8z-cz; double foot = dx*ux+dy*uy+dz*uz;
+            double axx = cx+foot*ux, axy = cy+foot*uy, axz = cz+foot*uz;
+            double conDist = Math.sqrt((xF8x-axx)*(xF8x-axx)+(xF8y-axy)*(xF8y-axy)+(xF8z-axz)*(xF8z-axz));
+            double bindArcV = (xF8x-e1x)*ux+(xF8y-e1y)*uy+(xF8z-e1z)*uz;
+            double surf = (conDist - FIL_R) * 1e3;
+            double phi = q.get(m), psi = q.get(N+m), thetaS = q.get(2*N+m), psiActin = q.get(3*N+m);
+            double psiErr = Math.abs(psi-psiActin)*DEG, phiErr = Math.abs(phi-PHI_PRE)*DEG, thetaErr = Math.abs((psi-phi)-thetaS)*DEG;
+            double kF8 = params.get(5*N+m), kconv = params.get(6*N+m), kbind = params.get(7*N+m);
+            double preload = kF8 * conDist * 1e12;
+            double dth = (psi-phi)-thetaS, dpa = psi-psiActin;
+            double eKt = (0.5*kconv*dth*dth + 0.5*kbind*dpa*dpa) / kT;
+            double headSide = ((xHx-cx)*eupx+(xHy-cy)*eupy+(xHz-cz)*eupz)*1e3;
+            boolean g0 = surf < dBindNm;
+            boolean g1 = orientOn == 0 || psiErr < psiDeg;
+            boolean g2 = orientOn == 0 || phiErr < phiDeg;
+            boolean g3 = orientOn == 0 || thetaErr < thetaDeg;
+            boolean g4 = preload < preloadPn;
+            boolean g5 = orientOn == 0 || eKt < energyKt;
+            boolean g6 = headSide < aSemiZ * 1e3;
+            boolean g7 = bindArcV > margin && bindArcV < 2*half - margin;
+            if (g0 && g1 && g2 && g3 && g4 && g5 && g6 && g7) { boundSeg.set(m, s); bindArc.set(m, (float) bindArcV); }
+        }
+    }
+
     // ============================================================ MAT gliding Stage-10: matS2SolveStep
     /** brownTorque — EXACT 64-bit long wang-hash copy (TwoBodyConverterMotor.brownTorque L2174; the same one
      *  that already lowers on PTX inside MatStep7). Returns the FDT force sqrt(2 kT γ/dt)·g (N). */

@@ -1767,7 +1767,7 @@ public final class TwoBodyConverterMotor {
         void dvec(StringBuilder sb,int[] id,String type,double[] from,double[] d,String label){
             if(id[0]>0)sb.append(','); sb.append(String.format(Locale.US,"{\"kind\":\"diagnostic_vector\",\"type\":\"%s\",\"from\":[%.5g,%.5g,%.5g],\"to\":[%.5g,%.5g,%.5g],\"label\":\"%s\"}",type,from[0],from[1],from[2],from[0]+d[0],from[1]+d[1],from[2]+d[2],label)); id[0]++; }
         void sg(StringBuilder sb,int[] id,double[] a,double[] b,double r,double col){ if(id[0]>0)sb.append(',');
-            sb.append(String.format(Locale.US,"{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":%.3g,\"cofilinCount\":0}",id[0],a[0],a[1],a[2],b[0],b[1],b[2],r,col)); id[0]++; }
+            sb.append(String.format(Locale.US,"{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":%.3g,\"cofilinCount\":0,\"motorSeg\":true}",id[0],a[0],a[1],a[2],b[0],b[1],b[2],r,col)); id[0]++; }
         void arw(StringBuilder sb,int[] id,double[] from,double[] d,double r,double col){ sg(sb,id,from,new double[]{from[0]+d[0],from[1]+d[1],from[2]+d[2]},r,col); }
     }
 
@@ -6118,7 +6118,7 @@ public final class TwoBodyConverterMotor {
             try{Files.writeString(Path.of(outDir,String.format(Locale.US,"frame_%06d.json",frame)),sb.toString());}catch(IOException e){throw new UncheckedIOException(e);}
             frame++; }
         void sg(StringBuilder sb,int[] id,double[] a,double[] b,double r,double col){ if(id[0]>0)sb.append(',');
-            sb.append(String.format(Locale.US,"{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":%.3g,\"cofilinCount\":0}",id[0],a[0],a[1],a[2],b[0],b[1],b[2],r,col)); id[0]++; }
+            sb.append(String.format(Locale.US,"{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":%.3g,\"cofilinCount\":0,\"motorSeg\":true}",id[0],a[0],a[1],a[2],b[0],b[1],b[2],r,col)); id[0]++; }
     }
 
     /** Deterministic filament-flexibility probe: clamp seg0, apply a fixed transverse tip load, measure the steady
@@ -7025,7 +7025,7 @@ public final class TwoBodyConverterMotor {
             try{Files.writeString(Path.of(outDir,String.format(Locale.US,"frame_%06d.json",frame)),sb.toString());}catch(IOException e){throw new UncheckedIOException(e);}
             frame++; }
         void sg(StringBuilder sb,int[] id,double[] a,double[] b,double r,double col){ if(id[0]>0)sb.append(',');
-            sb.append(String.format(Locale.US,"{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":%.3g,\"cofilinCount\":0}",id[0],a[0],a[1],a[2],b[0],b[1],b[2],r,col)); id[0]++; }
+            sb.append(String.format(Locale.US,"{\"id\":%d,\"end1\":[%.5g,%.5g,%.5g],\"end2\":[%.5g,%.5g,%.5g],\"r\":%.5g,\"notADPRatio\":%.3g,\"cofilinCount\":0,\"motorSeg\":true}",id[0],a[0],a[1],a[2],b[0],b[1],b[2],r,col)); id[0]++; }
     }
 
     // ============================================================================================

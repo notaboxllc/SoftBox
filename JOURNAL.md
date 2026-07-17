@@ -1,5 +1,51 @@
 # Soft Box Project Journal
 
+### 2026-07-17 — Explicit motor campaign: free-binding throughput + explicit-vs-calibrated cost + density-saturation sweep
+
+Three-phase GPU campaign on the persistent mat (`ExplicitCompleteMatHarness` new modes `-throughput`/`-throughputcal`/
+`-sweep`). No physics change; `DEVICE_VALIDATED` stays false; bailout=false/fma=false; **0 invalid across ~90 GPU runs.**
+Report: `docs/matsoa/EXPLICIT_CAMPAIGN_FINDINGS.md` (+ per-phase `EXPLICIT_{FREEBINDING_THROUGHPUT,VS_CALIBRATED_COST,
+DENSITY_SWEEP}` docs, plots `docs/matsoa/plots/`).
+- **A. Genuine free-binding no-cull throughput (GATE PASS):** all motors start unbound (device `matBindExplicit` each
+  step), all N solved by `matS2SolveStep`, production residency, timing separated from science. GPU flat 1.87–2.19
+  ms/step (launch-floor 1.82 + 0.040/1k; `matS2SolveStep` the sole N-scaling stage 0.51→0.86 ms), CPU linear ⇒
+  **speedup 7.6× → 96.6×** (N=600→9000). All assertions hold (`processedMotorCount=N`, no full-state download, no fallback).
+- **B. Explicit vs calibrated cost:** CPU **~21×** (flat across N); GPU **1.41×→0.80×** full-graph, **1.15×** Step-10-solve
+  only at N=9000 ⇒ **GPU parallelism collapses the explicit penalty from ~21× to ≈1×**. Memory 2160 vs 184 B/motor.
+  GPU crossover: explicit N≈600, calibrated N≈2100. (Calibrated default uses serial CSR — the fair comparison is
+  solve-only; `-parcsr` closes the full-graph gap.)
+- **C. Density-saturation sweep (both models, GPU, matched geometry):** velocity = LS slope of resident centroid·b̂
+  (negative = pointed-first). ρ=100–3000 ×3 seeds, +explicit **3500 extension** (jba request; N=10500, no OOM).
+  **Explicit plateau ≈ 4.0–4.2 µm/s at ρ≈3000–3500** (−4.205@3000, −4.013@3500, slight turnover; avgBound still climbing
+  11→13); **calibrated plateau ≈ 2.9 µm/s by ρ≈2000**; **explicit/calibrated ≈ 1.42×** (Outcome C reproduced — explicit
+  binds FEWER motors yet glides faster ⇒ higher per-motor propulsion). GPU d200/700/1500 reproduces the CPU explicit
+  subset. **Force-balance decomposition (propulsive/dragging, ATP/µm) scoped as a follow-on** (per-motor port needed).
+- **D. Controls:** half-dt (explicit) velocity **dt-robust** (Δ −0.1% @1500, −3.3% @3000; d200 −34.9% is low-occupancy
+  sampling noise); **culling a bit-exact semantic no-op** (default vs `-nocull` Δ +0.0%, avgBound identical).
+- **Recommendation:** explicit device path READY for throughput/exploration (fast, stable, dt-robust, culling-invariant,
+  CPU≡GPU bind-exact); keep `DEVICE_VALIDATED=false` pending (a) a CPU-arbiter velocity cross-check at a plateau density
+  (basin-arbiter rule) and (b) the explicit force-balance port. Working tree uncommitted.
+
+### 2026-07-17 — binding "snap" QUANTIFIED (CPU-only side investigation) — NOT a bug
+
+Quantified the viewer-observed filament translation at myosin binding (memory `binding-snap-observation`).
+**CPU-only, no GPU/TaskGraph, did not disturb the running explicit density sweep** (`softbox/*.class` never
+recompiled — harness built to a scratch classes dir; source archived `RUN_LOGS/binding_snap_cpu/BindingSnapHarness.java.txt`).
+**Verdict: `SMALL CONVERGENT PASSIVE ATTACHMENT RELAXATION` — physical, not a coordinate/timestep artifact.**
+The discrete bind (`stepGlideS2` L6810 / `matBindExplicit` L461) writes ONLY `boundSeg`+`bindArc` ⇒ **coordinate
+discontinuity EXACTLY 0** (fil/beam/head/φ/ψ, both explicit & calibrated); the motion is the finite overdamped
+onset of the F8 cross-bridge force relaxing over ~1 ms. **first-step ∝ dt, intercept ≈ 0 (5.6e-17 nm, R²=1.0)**
+(the decisive test — a dt-independent jump would show a non-zero intercept); cumulative converges as dt→0
+(explicit ~+2.3 nm, ≈0.48× the −5 nm stroke, sign + / backward, robust across a φ±20° orientation sweep 9/9 and
+3 natural fixtures). **Onset |F8| ~6–10 pN is NOT bounded by the 2 pN converter-preload gate** (the F8 myoSpring
+is stiffer). **Explicit vs calibrated (matched frame):** bind contract + onset + first-step + stroke identical;
+the calibrated movable-pivot surrogate's *unloaded-attachment* transient is ~15× larger and geometry-sensitive
+(pivot drifts under load) — a fidelity gap (its fit target was LOADED mechanics). In a Brownian run the explicit
+~2 nm relaxation sits BELOW the ~16 nm/1 ms thermal wander ⇒ not a dramatic visible event. Method: drove the real
+production system methods in real `stepGlideS2` order with bind/chemistry/stroke controlled externally; the one
+re-implemented method is a verbatim `s2SolveM`/`supSolveM` copy with the beam-Brownian terms gated (throwaway
+diagnostic, identical arithmetic). Report: `docs/matsoa/EXPLICIT_BINDING_SNAP_FINDINGS.md`; CSVs `RUN_LOGS/binding_snap_cpu/`.
+
 ### 2026-07-17 — viewer (cosmetic): separate motor-beam radius from Actin radius + optional helical-monomer actin rendering
 
 Two `-3js` viewer additions (`sim_viewer_boa.html`; view-only, no physics/export change). **(1) Motor-beam
@@ -20,6 +66,25 @@ beads instead of a cylinder, faithful to the actin 13/6 genetic helix (v1 Env: 2
 `docs/AZIMUTHAL_BINDING_READINESS.md`), **default 0** since φ₀ is not yet emitted into frames. Close-up/video
 only (120k-bead cap). Only harness change: the `motorSeg` tag on `sg()` (all three writers, byte-identical);
 build ok, viewer JS syntax-checked.
+
+### 2026-07-17 — EXPLICIT FREE BINDING ported to the GPU mat — first genuine explicit gliding on device
+
+**Explicit motors now recruit, bind, stroke, and detach entirely on the persistent GPU mat — the first genuine
+free-binding explicit gliding trajectory.** Contract finding (§1): explicit binding is DETERMINISTIC (8-gate
+AND, no stochastic draw ⇒ no binding RNG, no RNG-stream shift); the "highest-risk" beam-init-at-binding is a
+NO-OP (production binds from the current unbound beam state, only boundSeg+bindArc set). New device kernel
+`TwoBodyBeamAnalyticGpu.matBindExplicit` (nearest-seg + gate2D + 8-gate over the beam geometry; `@Parallel`,
+race-free); chemistry (`cycleLymnTaylor`) + cocking (`matCock`) reused on device. geom2D C/xH/xF8 depend only
+on phi/psi (not thetaS) ⇒ one `matBeamGeom` serves both the bind gate and the mechanics. **§8 one-step replay:
+device matBindExplicit ≡ production geom2D+nearestSeg2D+gate2D+8-gate EXACTLY (0/600 mismatches).** **§10
+low-density gliding (N=600, density 200, 2000 steps): 9 binds / 8 detaches / 0 invalid; CPU-runner vs GPU
+bit-close 178 steps then chaotic float-FMA (Lyapunov) decorrelation** — the CLAUDE.md gliding standard
+(aggregate, not stepwise; no t=0 semantic divergence). 23-task device graph (matBeamGeom → matBindExplicit →
+chem → cock → placeHead → mechanics); `mot.boundSeg` single source; device-resident; no host bind loop; no
+silent fallback. No physics/salt/chemistry/solver change; DEVICE_VALIDATED false. Harness
+`ExplicitCompleteMatHarness -gliding`; report `docs/matsoa/EXPLICIT_FREEBINDING_FINDINGS.md`. **NEXT:**
+multi-seed three-density smoke + ensemble promotion gate (+ optional binding-snap diagnostics + production
+culling via the validated matCull).
 
 ### 2026-07-17 — EXPLICIT complete-mat: stroke/detach/recoil + NO-CULL throughput — GPU up to 61× CPU-analytic
 
