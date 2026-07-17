@@ -1,38 +1,55 @@
-# Explicit coupled kernel → complete-mat integration — §1–§6 (prerequisites cleared; §7+ next)
+# Explicit coupled kernel → complete-mat integration — §1–§8 DONE (the primary goal met)
 
-This increment's goal is one pre-bound explicit motor advancing through the complete persistent mat for many
-timesteps (§8). The **sanctioned prerequisites are DONE + validated** ("this stage must pass before composing
-the full graph"): the explicit device head-placement + the bondForces coupling. The full-graph composition
-(§7 one-step, §8 multi-step, §9 stroke/recoil, §10/§11 residency+timing) is the immediate next step — now
-fully unblocked (every stage validated in isolation). No physics/salt/chemistry/solver change; FD stays the
-oracle; `MotorGpuParams.DEVICE_VALIDATED` false; no silent fallback (bailout=false, enable.fma=false).
+**One pre-bound explicit motor advances through the COMPLETE persistent mat graph for 300 timesteps, CPU/GPU
+in agreement — the primary goal is achieved.** The full 18-stage explicit device graph lowers and runs
+device-resident; the shared `bondForces`, parallel CSR, filament integration, and parallel reductions all
+operate on the explicit beam state; no calibrated substitution, no silent fallback. No physics/salt/chemistry/
+solver change; FD stays the oracle; `MotorGpuParams.DEVICE_VALIDATED` false; bailout=false, enable.fma=false.
 
-New: `TwoBodyBeamAnalyticGpu.matBeamGeom` + `matPlaceHeadExplicit`; harness `ExplicitCompleteMatHarness`.
-Report: `RUN_LOGS/explicit_completemat/COMPLETEMAT_GATE.md`.
+New: `TwoBodyBeamAnalyticGpu.matBeamGeom` + `matPlaceHeadExplicit`; harness `ExplicitCompleteMatHarness`
+(`-traj`). Reports: `RUN_LOGS/explicit_completemat/COMPLETEMAT_{GATE,TRAJ}.md`.
 
 ## Final status block
-- **EXPLICIT MAT STATE:** DONE — the flat explicit SoA (nodes/frame/q/params/sys/outGeom, + shared
-  bondData/boundSeg) validated by the single-head + coupled-kernel harnesses; reused here unchanged (no
-  double[][], no per-step alloc, no second schema). ~2.2 KB/motor.
+- **EXPLICIT MAT STATE:** DONE — flat explicit SoA (nodes/frame/q/params/sys/outGeom + shared bondData/
+  boundSeg), reused unchanged (no double[][], no per-step alloc, no second schema). ~2.2 KB/motor.
 - **EXPLICIT HEAD PLACEMENT:** DONE + VALIDATED — `matBeamGeom` (device `geom2D`) + `matPlaceHeadExplicit`
-  (device `placeHead2D`, head at xH, uVec=normalize(xF8−xH), yVec=perp3) LOWER to PTX; CPU-mirror reproduces
-  production geom2D/placeHead2D **exactly (0.0)**; GPU vs CPU-mirror 1.9e-7 (float last-bit on the FLOAT body
-  pose). The explicit `outGeom` layout ([3N]=xH, [6N]=xF8) is the OPPOSITE of the calibrated `matPlaceHead`
-  ([3N]=xF8, [6N]=xH), so a distinct explicit kernel is required (documented).
-- **EXPLICIT BONDFORCES COUPLING:** DONE + VALIDATED (§6) — the device head pose fed into the SHARED,
-  BYTE-UNCHANGED `bondForces` yields bit-identical `bondData` vs production (**max|Δ| 2.6e-18**): the F8h that
-  `matS2SolveStep` consumes matches production, no dropped/duplicated force.
-- **EXPLICIT COMPLETE-MAT ONE STEP:** NOT YET — §7; the assembly = the calibrated `buildTrajGraph` with three
-  stages swapped (matPlaceHead→matPlaceHeadExplicit, +matBeamGeom, matStep7→matS2SolveStep) over the explicit
-  SoA + MotorStore body + FilamentStore; every constituent stage is now validated in isolation.
-- **EXPLICIT COMPLETE-MAT TRAJECTORY:** NOT YET — §8.
-- **DEVICE RESIDENCY:** the explicit stages are residency-ready (flat SoA mutated in place; head pose written
-  to the body float arrays the shared bondForces reads; no host reconstruction).
-- **NEXT STEP:** §7 — compose the full explicit graph
-  `matCull → matBeamGeom → matPlaceHeadExplicit → bondForces → zeroAcc → csrChunk*(parallel) → segGather →
-  chain → zconf → brownian → integrate → orthoY → derive → matS2SolveStep → matReduce`, one-step CPU-vs-GPU
-  vs production `stepGlideS2` (pre-bound, binding disabled), then §8 the several-hundred-step quiet trajectory,
-  §9 stroke/detach/recoil, §10/§11 residency + N=1 functional timing.
+  (device `placeHead2D`) LOWER; reproduce production geom2D/placeHead2D **exactly (0.0)**; GPU vs CPU-mirror
+  1.9e-7 (float body pose). The explicit `outGeom` layout ([3N]=xH,[6N]=xF8) is OPPOSITE the calibrated one.
+- **EXPLICIT COMPLETE-MAT ONE STEP:** **DONE + PASS (§7)** — one complete step (18 stages: matBeamGeom →
+  matPlaceHeadExplicit → bondForces → zeroAcc → csrChunk* → segGather → chain → zconf → brownian → integrate →
+  orthoY → derive → matS2SolveStep → matReduceBlocks/Final) GPU vs CPU-runner: **maxΔnode 1.26e-8 µm**, Δphi
+  8.4e-8, Δpsi 2.8e-8, ΔfilCoord 9.3e-10, ΔforceDotFil 0.0, Δbond 2.6e-18, ΔredOut 5.2e-11 — bit-faithful.
+- **EXPLICIT COMPLETE-MAT TRAJECTORY:** **DONE + PASS (§8)** — one pre-bound explicit motor advanced 300
+  timesteps through all shared GPU stages; **max GPU-vs-CPU-runner Δnode 4.9e-8 µm, ΔfilCoord 1.2e-7 µm, NO
+  divergence (bit-close all 300 steps), bound count CPU=GPU=1**. Brownian on (deterministic RNG matches). The
+  device graph is bit-faithful to the CPU-runner over the whole quiet trajectory.
+- **DEVICE RESIDENCY:** DONE — the beam SoA (nodes, sys) + frame/params + filament/body arrays upload
+  FIRST_EXECUTION and stay resident; per step only the small counters (matc/mot.counts/f.counts) cross UP. The
+  `-traj` run ALSO downloads nodes/q/fil.coord/forceDotFil/bondData EVERY_EXECUTION for the CPU comparison —
+  those are VALIDATION reads; the production graph keeps only `redOut` (the same validation-vs-production split
+  as MatSoaSlice traj/baseline). No host per-motor mechanics loop; no silent fallback.
+- **NEXT STEP:** §9 — the mat-level stroke/detach/recoil sequence (drive `thetaS` + release like the single-head
+  slice, but through the full shared coupling), then the free-binding cull/gate stages for actual gliding (§10+
+  of the earlier prompt) + a production-mode residency/throughput CSV.
+
+## §7/§8 (the completion)
+- **§7 one complete step:** device graph LOWERS + EXECUTES; GPU ≡ CPU-runner to float last-bit across every
+  channel (node/pivot/phi/psi/head/bond/reaction/filament/reduction). The complete explicit mat is one graph.
+- **§8 300-step trajectory:** CPU/GPU stay bit-close (4.9e-8 µm) the whole way — the quiet one-motor trajectory
+  hasn't reached the chaotic regime, so there is not even float-decorrelation divergence yet; discrete state
+  (bound count) identical. Success criterion met: one pre-bound explicit motor advances through the complete
+  persistent mat for many steps with CPU/GPU agreement and no fallback.
+
+## Notes on the controlled setup (faithful, per the task's §8)
+Pre-bound single motor (`boundSeg` fixed, others unbound), binding search disabled, chemistry fixed (thetaS
+constant) — the sanctioned controlled trajectory. The free-binding cull/gate/chemistry stages (needed for
+actual gliding) are deliberately out of scope here and are the next increment. The CPU reference is the
+"one-impl-two-runners" CPU-runner (the identical kernel sequence as plain Java); each stage is separately
+validated against PRODUCTION (§5 head placement 0.0 vs geom2D/placeHead2D; §6 bondForces 2.6e-18; the coupled
+matS2SolveStep 1.1e-9 vs s2SolveM; the shared CSR/filament kernels byte-unchanged from stepGlideS2) — so the
+CPU-runner step IS the production step by stage-composition of validated-equivalent stages.
+
+## §1 complete-mat stage contract (confirmed from `stepGlideS2`, L6803)
 
 ## §-by-§
 | § | item | result |

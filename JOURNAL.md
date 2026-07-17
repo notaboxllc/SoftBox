@@ -21,10 +21,41 @@ beads instead of a cylinder, faithful to the actin 13/6 genetic helix (v1 Env: 2
 only (120k-bead cap). Only harness change: the `motorSeg` tag on `sg()` (all three writers, byte-identical);
 build ok, viewer JS syntax-checked.
 
-### 2026-07-17 — EXPLICIT complete-mat prerequisites: device head-placement + bondForces coupling VALIDATED (§5/§6)
+### 2026-07-17 — EXPLICIT complete-mat: stroke/detach/recoil + NO-CULL throughput — GPU up to 61× CPU-analytic
 
-Toward wiring `matS2SolveStep` into the complete persistent mat: the two new device stages the full explicit
-graph needs are built + validated (the sanctioned "must pass before composing the full graph" prerequisites).
+Two goals of the "free-binding gliding + throughput" increment delivered; the free-binding device port
+(remaining) is scoped next. **Stroke/detach/recoil (§2):** the canonical relax→stroke(θ_s −30→+30)→hold→detach
+→recoil sequence driven through the FULL shared coupling (real cross-bridge to a filament segment); CPU-runner
+vs GPU agree (**maxΔnode 2.8e-8 µm**); stroke −0.9 nm / 11.5 pN peak on a reachable bound motor (smaller than
+the isolated −7.7 nm because the filament absorbs the stroke — gate is CPU/GPU agreement, met). **No-cull
+throughput (§8–§12):** culling disabled (all N processed by matS2SolveStep every step; CPU==GPU processed=N;
+binding GATES unchanged — only the active-set shortcut removed), production-residency GPU graph (548 B up /
+64 B down; no validation downloads in the timed interval), warm 150 + 300×3 reps median. **GPU is nearly flat
+(~1.6–1.75 ms/step) while CPU scales linearly ⇒ speedup grows: 7.3× (N=600) / 30.3× (N=2100) / 61.4× (N=4500),
+0 invalid.** matS2SolveStep (14-DOF beam solve) dominates the device kernel (0.51→0.61 ms of ~0.66–0.80 ms).
+§12: ≥10× ⇒ routine explicit validation studies; GPU 0.15 s gliding @ N=4500 ≈ 1.8 min (CPU ≈ 1.9 h). New:
+`ExplicitCompleteMatHarness -stroke`/`-bench` + production-residency graph flag. Report
+`docs/matsoa/EXPLICIT_THROUGHPUT_FINDINGS.md`, `RUN_LOGS/explicit_completemat/COMPLETEMAT_BENCH.{md,csv}`.
+No physics/salt/chemistry/solver change; DEVICE_VALIDATED false (promotion deferred). **NEXT:** port the
+free-binding device stages (geom/nearest/gate/stochastic-bind over the beam geometry) → free-binding replay
+gate → low-density gliding → three-density smoke → ensemble promotion gate.
+
+### 2026-07-17 — EXPLICIT complete-mat: full graph composed, one pre-bound motor advances 300 steps GPU≡CPU (§5–§8, primary goal met)
+
+**The complete explicit mat graph runs device-resident and one pre-bound explicit motor advances through ALL
+shared GPU stages for 300 timesteps with CPU/GPU agreement — the increment's primary goal.** §7 one complete
+step (18 stages: matBeamGeom → matPlaceHeadExplicit → bondForces → parallel CSR → segGather → chain → zconf →
+brownian → integrate → orthoY → derive → matS2SolveStep → parallel reduce), GPU vs CPU-runner **maxΔnode
+1.26e-8 µm** (Δbond 2.6e-18, ΔforceDotFil 0.0, ΔfilCoord 9.3e-10, ΔredOut 5.2e-11) — bit-faithful. §8 300-step
+quiet trajectory: **max Δnode 4.9e-8 µm, NO divergence (bit-close throughout), bound count CPU=GPU=1**. Brownian
+on (RNG matches). Device residency: beam SoA (nodes/sys) + frame/params + filament/body FIRST_EXECUTION resident;
+per step only small counters up (the `-traj` run also downloads state for the CPU compare = validation reads;
+production keeps redOut only). No calibrated substitution, no host per-motor mechanics loop, no silent fallback.
+Controlled setup per the task: pre-bound single motor, binding disabled, chemistry fixed. The free-binding
+cull/gate/chemistry stages (for actual gliding) are the next increment. Harness `ExplicitCompleteMatHarness -traj`;
+reports `docs/matsoa/EXPLICIT_COMPLETEMAT_FINDINGS.md`, `RUN_LOGS/explicit_completemat/COMPLETEMAT_TRAJ.md`.
+
+Prerequisites (§5/§6, same increment): the two new device stages the full graph needs, built + validated first.
 `TwoBodyBeamAnalyticGpu.matBeamGeom` (device `geom2D` — beam-derived C/xH/xF8) + `matPlaceHeadExplicit` (device
 `placeHead2D` — head sub-body at xH, uVec=normalize(xF8−xH), yVec=perp3) LOWER to PTX; CPU-mirror reproduces
 production geom2D/placeHead2D **exactly (0.0 µm)**; GPU vs CPU-mirror 1.9e-7 (float body pose). **Key gotcha:**
