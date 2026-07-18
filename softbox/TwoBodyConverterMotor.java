@@ -2219,7 +2219,7 @@ public final class TwoBodyConverterMotor {
         return new double[]{ surf,bindArc,psiErr,phiErr,thetaErr,preload,eKt,headSide,foot*1e3,conDist*1e3 };
     }
     static boolean[] gatePasses(double[] m,Cmot cm,Tol tol){
-        double half=0.5*cm.fil.segLength.get(0), margin=0.05;
+        double half=0.5*cm.fil.segLength.get(0), margin=bindMargin();
         boolean g0=m[0]<tol.dBindNm;                       // distance to surface
         boolean g1=!tol.orientOn || m[2]<tol.psiDeg;        // binding-face orientation
         boolean g2=!tol.orientOn || m[3]<tol.phiDeg;        // neck-lever angle vs +30°
@@ -3812,7 +3812,7 @@ public final class TwoBodyConverterMotor {
         return new double[]{ surf,bindArc,psiErr,phiErr,thetaErr,preload,eKt,headSide,foot*1e3,conDist*1e3 };
     }
     static boolean[] gatePassesM(double[] mm,Multi M,Tol tol){
-        double half=0.5*M.fil.segLength.get(0), margin=0.05;
+        double half=0.5*M.fil.segLength.get(0), margin=bindMargin();
         boolean g0=mm[0]<tol.dBindNm, g1=!tol.orientOn||mm[2]<tol.psiDeg, g2=!tol.orientOn||mm[3]<tol.phiDeg;
         boolean g3=!tol.orientOn||mm[4]<tol.thetaDeg, g4=mm[5]<tol.preloadPn, g5=!tol.orientOn||mm[6]<tol.energyKt;
         boolean g6=mm[7]<A_SEMI[2]*1e3, g7=mm[1]>margin && mm[1]<2*half-margin;
@@ -4517,13 +4517,33 @@ public final class TwoBodyConverterMotor {
         double[] yv=perp3(uv); b.yVec.set(h,(float)yv[0]); b.yVec.set(nB+h,(float)yv[1]); b.yVec.set(2*nB+h,(float)yv[2]);
     }
     /** Nearest chain segment to motor m's F8 point (min perpendicular distance to the segment axis, foot interior). Returns seg or -1. */
+    // ============================================================ CANONICAL FILAMENT-SEGMENT OWNERSHIP (2026-07-18)
+    // A continuous actin filament is represented by discrete segments. Each material point is owned by EXACTLY ONE
+    // segment via deterministic half-open ownership (foot∈[−half,half); the final segment includes its tip), and the
+    // nearest segment is chosen by distance to the CLAMPED closest point (footC=clamp(foot,−half,half)). The accepted
+    // bindArc=footC+half lies in [0,segLength]. There is NO finite physical end-exclusion — only a machine-scale ε.
+    // This corrects a discretization/ownership defect (the legacy first-min + `half+0.02` overlap could retain
+    // ownership past a joint ⇒ bindArc>segLength), NOT a myosin-affinity/rate change. LEGACY_OWNERSHIP=true restores
+    // the deprecated pre-rollout behaviour (first-min + `half+0.02` overlap + the 50 nm `margin`) for REGRESSION ONLY.
+    static boolean LEGACY_OWNERSHIP = Boolean.getBoolean("softbox.legacyOwnership");
+    static final double BIND_EPS = 1e-6;            // machine-scale arc tolerance (µm)
+    static final double LEGACY_MARGIN = 0.05;       // DEPRECATED 50 nm segment-end exclusion (regression only)
+    /** The g7 in-segment arc margin: machine-ε (canonical) or the deprecated 50 nm (legacy). */
+    static double bindMargin(){ return LEGACY_OWNERSHIP ? LEGACY_MARGIN : BIND_EPS; }
+
     static int nearestSeg2D(Glide2D G,int m){
-        FilamentStore f=G.fil; int best=-1; double bd=1e9;
+        FilamentStore f=G.fil; int best=-1; double bd=1e9; boolean legacy=LEGACY_OWNERSHIP;
         for(int s=0;s<G.nSeg;s++){ double half=0.5*f.segLength.get(s);
             double cx=f.coordX(s),cy=f.coordY(s),cz=f.coordZ(s), ux=f.uVecX(s),uy=f.uVecY(s),uz=f.uVecZ(s);
             double dx=G.xF8_[m][0]-cx, dy=G.xF8_[m][1]-cy, dz=G.xF8_[m][2]-cz; double foot=dx*ux+dy*uy+dz*uz;
-            if(Math.abs(foot)>half+0.02) continue;   // beyond the segment (+ small margin)
-            double px=dx-foot*ux, py=dy-foot*uy, pz=dz-foot*uz; double d2=px*px+py*py+pz*pz;
+            double d2;
+            if(legacy){
+                if(Math.abs(foot)>half+0.02) continue;   // beyond the segment (+ 20 nm overlap) — DEPRECATED
+                double px=dx-foot*ux, py=dy-foot*uy, pz=dz-foot*uz; d2=px*px+py*py+pz*pz;
+            } else {
+                double footC=foot<-half?-half:(foot>half?half:foot);   // CANONICAL: distance to clamped closest point
+                double qx=dx-footC*ux, qy=dy-footC*uy, qz=dz-footC*uz; d2=qx*qx+qy*qy+qz*qz;
+            }
             if(d2<bd){ bd=d2; best=s; } }
         return best;
     }
@@ -4532,9 +4552,11 @@ public final class TwoBodyConverterMotor {
         FilamentStore f=G.fil; double half=0.5*f.segLength.get(s);
         double[] c={f.coordX(s),f.coordY(s),f.coordZ(s)}, u={f.uVecX(s),f.uVecY(s),f.uVecZ(s)};
         double[] e1=sub(c,scl(u,half));
-        double foot=dot(sub(G.xF8_[m],c),u); double[] axPt=add(c,scl(u,foot));
+        double foot=dot(sub(G.xF8_[m],c),u);
+        double footC=LEGACY_OWNERSHIP?foot:(foot<-half?-half:(foot>half?half:foot));   // CANONICAL: clamp to segment
+        double[] axPt=add(c,scl(u,footC));
         double conDist=Math.sqrt(dot(sub(G.xF8_[m],axPt),sub(G.xF8_[m],axPt)));
-        double bindArc=dot(sub(G.xF8_[m],e1),u);
+        double bindArc=LEGACY_OWNERSHIP?dot(sub(G.xF8_[m],e1),u):(footC+half);   // in [0,segLength] canonically
         double surf=(conDist-FIL_R)*1e3;
         double psiErr=Math.toDegrees(Math.abs(G.psi[m]-G.psiActin[m]));
         double phiErr=Math.toDegrees(Math.abs(G.phi[m]-PHI_PRE_3E));
@@ -4566,7 +4588,7 @@ public final class TwoBodyConverterMotor {
         // 1. BIND — active, unbound, ADP·Pi, gate passes against the nearest segment (local tangent)
         for(int m=0;m<N;m++) if(G.active[m] && !G.noBind[m] && mot.boundSeg.get(m)==MotorStore.FREE_BINDABLE && mot.nucleotideState.get(m)==MotorStore.NUC_ADPPI){
             G.thetaS[m]=PRESTROKE_THETAS; geom2D(G,m); int s=nearestSeg2D(G,m); if(s<0) continue;
-            double[] gm=gate2D(G,m,s); double half=0.5*f.segLength.get(s), margin=0.05;
+            double[] gm=gate2D(G,m,s); double half=0.5*f.segLength.get(s), margin=bindMargin();
             boolean g0=gm[0]<tol.dBindNm, g1=gm[2]<tol.psiDeg, g2=gm[3]<tol.phiDeg, g3=gm[4]<tol.thetaDeg, g4=gm[5]<tol.preloadPn, g5=gm[6]<tol.energyKt, g6=gm[7]<A_SEMI[2]*1e3, g7=gm[1]>margin&&gm[1]<2*half-margin;
             if(g0&&g1&&g2&&g3&&g4&&g5&&g6&&g7){ mot.boundSeg.set(m,s); mot.bindArc.set(m,(float)gm[1]); }
         }
@@ -4805,7 +4827,7 @@ public final class TwoBodyConverterMotor {
             if(t%sample==0){ nSamp++;
                 for(int s=0;s<nSeg;s++){ int nq=0,ng=0,nf=0,nb=0; double nearest=1e9;
                     for(int m=0;m<G.N;m++){ double d2=siteSegDist2(G,m,s); if(d2>R2) continue; nq++; double d=Math.sqrt(d2)*1e3; if(d<nearest) nearest=d;
-                        geom2D(G,m); double[] gm=gate2D(G,m,s); double half=0.5*G.fil.segLength.get(s),margin=0.05;
+                        geom2D(G,m); double[] gm=gate2D(G,m,s); double half=0.5*G.fil.segLength.get(s),margin=bindMargin();
                         boolean g0=gm[0]<new Tol().dBindNm, gi=gm[1]>margin&&gm[1]<2*half-margin;
                         if(g0&&gi) ng++;
                         boolean full=g0&&gm[2]<25&&gm[3]<25&&gm[4]<20&&gm[5]<2.0&&gm[6]<15&&gm[7]<A_SEMI[2]*1e3&&gi; if(full) nf++;
@@ -5293,7 +5315,7 @@ public final class TwoBodyConverterMotor {
         for(int m=0;m<N;m++) G.active[m]=true;
         for(int m=0;m<N;m++) if(!G.noBind[m] && mot.boundSeg.get(m)==MotorStore.FREE_BINDABLE && mot.nucleotideState.get(m)==MotorStore.NUC_ADPPI){
             G.thetaS[m]=PRESTROKE_THETAS; geom2D(G,m); int s=nearestSeg2D(G,m); if(s<0) continue;
-            double[] gm=gate2D(G,m,s); double half=0.5*f.segLength.get(s), margin=0.05;
+            double[] gm=gate2D(G,m,s); double half=0.5*f.segLength.get(s), margin=bindMargin();
             boolean g0=gm[0]<tol.dBindNm, g1=gm[2]<tol.psiDeg, g2=gm[3]<tol.phiDeg, g3=gm[4]<tol.thetaDeg, g4=gm[5]<tol.preloadPn, g5=gm[6]<tol.energyKt, g6=gm[7]<A_SEMI[2]*1e3, g7=gm[1]>margin&&gm[1]<2*half-margin;
             if(g0&&g1&&g2&&g3&&g4&&g5&&g6&&g7){ mot.boundSeg.set(m,s); mot.bindArc.set(m,(float)gm[1]); }
         }
@@ -5837,7 +5859,7 @@ public final class TwoBodyConverterMotor {
         unionActive(G); long cand=0; for(int m=0;m<N;m++) if(G.active[m]) cand++; G.candAcc+=cand; G.candSteps++;
         for(int m=0;m<N;m++) if(G.active[m] && !G.noBind[m] && mot.boundSeg.get(m)==MotorStore.FREE_BINDABLE && mot.nucleotideState.get(m)==MotorStore.NUC_ADPPI){
             G.thetaS[m]=PRESTROKE_THETAS; geom2D(G,m); int s=nearestSeg2D(G,m); if(s<0) continue;
-            double[] gm=gate2D(G,m,s); double half=0.5*f.segLength.get(s), margin=0.05;
+            double[] gm=gate2D(G,m,s); double half=0.5*f.segLength.get(s), margin=bindMargin();
             boolean g0=gm[0]<tol.dBindNm,g1=gm[2]<tol.psiDeg,g2=gm[3]<tol.phiDeg,g3=gm[4]<tol.thetaDeg,g4=gm[5]<tol.preloadPn,g5=gm[6]<tol.energyKt,g6=gm[7]<A_SEMI[2]*1e3,g7=gm[1]>margin&&gm[1]<2*half-margin;
             if(g0&&g1&&g2&&g3&&g4&&g5&&g6&&g7){ mot.boundSeg.set(m,s); mot.bindArc.set(m,(float)gm[1]); }
         }
@@ -6805,7 +6827,7 @@ public final class TwoBodyConverterMotor {
         unionActive(G); long cand=0; for(int m=0;m<N;m++) if(G.active[m]) cand++; G.candAcc+=cand; G.candSteps++;
         for(int m=0;m<N;m++) if(G.active[m] && !G.noBind[m] && mot.boundSeg.get(m)==MotorStore.FREE_BINDABLE && mot.nucleotideState.get(m)==MotorStore.NUC_ADPPI){
             G.thetaS[m]=PRESTROKE_THETAS; geom2D(G,m); int s=nearestSeg2D(G,m); if(s<0) continue;
-            double[] gm=gate2D(G,m,s); double half=0.5*f.segLength.get(s), margin=0.05;
+            double[] gm=gate2D(G,m,s); double half=0.5*f.segLength.get(s), margin=bindMargin();
             boolean g0=gm[0]<tol.dBindNm,g1=gm[2]<tol.psiDeg,g2=gm[3]<tol.phiDeg,g3=gm[4]<tol.thetaDeg,g4=gm[5]<tol.preloadPn,g5=gm[6]<tol.energyKt,g6=gm[7]<A_SEMI[2]*1e3,g7=gm[1]>margin&&gm[1]<2*half-margin;
             if(g0&&g1&&g2&&g3&&g4&&g5&&g6&&g7){ mot.boundSeg.set(m,s); mot.bindArc.set(m,(float)gm[1]); }
         }

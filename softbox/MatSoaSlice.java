@@ -324,6 +324,7 @@ public final class MatSoaSlice {
         double PHI_PRE = params.get(19), kT = params.get(20), pth = params.get(21);
         double dBind = params.get(22), psiDeg = params.get(23), phiDeg = params.get(24), thetaDeg = params.get(25);
         double preloadPn = params.get(26), energyKt = params.get(27), margin = params.get(28), nearMargin = params.get(29);
+        boolean legacyOwn = params.get(30) > 0.5;   // ownership mode: 0=canonical half-open+clamped, 1=legacy
         for (@Parallel int m = 0; m < N; m++) {
             double phi = pose.get(m), psi = pose.get(N + m), psiAct = pose.get(3 * N + m);   // pose4 layout: φ[m] ψ[N+m] θs[2N+m] ψa[3N+m]
             double Ax = anchor.get(m), Ay = anchor.get(N + m), Az = anchor.get(2 * N + m);
@@ -351,9 +352,14 @@ public final class MatSoaSlice {
                 double su = filUVec.get(s), sv = filUVec.get(nSeg + s), sw = filUVec.get(2 * nSeg + s);
                 double dx = xF8x - cx, dy = xF8y - cy, dz = xF8z - cz;
                 double foot = dx * su + dy * sv + dz * sw;
-                if (dabs(foot) > half + 0.02) continue;
-                double px = dx - foot * su, py = dy - foot * sv, pz = dz - foot * sw;
-                double d2 = px * px + py * py + pz * pz;
+                double d2;
+                if (legacyOwn) {
+                    if (dabs(foot) > half + 0.02) continue;
+                    double px = dx - foot * su, py = dy - foot * sv, pz = dz - foot * sw; d2 = px * px + py * py + pz * pz;
+                } else {
+                    double footC = foot < -half ? -half : (foot > half ? half : foot);   // CANONICAL clamped closest point
+                    double qx = dx - footC * su, qy = dy - footC * sv, qz = dz - footC * sw; d2 = qx * qx + qy * qy + qz * qz;
+                }
                 if (d2 < bd) { bd = d2; best = s; }
             }
             int accept = 0; double bindArc = 0;
@@ -364,9 +370,10 @@ public final class MatSoaSlice {
                 double su = filUVec.get(best), sv = filUVec.get(nSeg + best), sw = filUVec.get(2 * nSeg + best);
                 double e1x = cx - half * su, e1y = cy - half * sv, e1z = cz - half * sw;
                 double foot = (xF8x - cx) * su + (xF8y - cy) * sv + (xF8z - cz) * sw;
-                double axx = cx + foot * su, axy = cy + foot * sv, axz = cz + foot * sw;
+                double footC = legacyOwn ? foot : (foot < -half ? -half : (foot > half ? half : foot));   // CANONICAL clamp
+                double axx = cx + footC * su, axy = cy + footC * sv, axz = cz + footC * sw;
                 double conDist = Math.sqrt((xF8x - axx) * (xF8x - axx) + (xF8y - axy) * (xF8y - axy) + (xF8z - axz) * (xF8z - axz));
-                bindArc = (xF8x - e1x) * su + (xF8y - e1y) * sv + (xF8z - e1z) * sw;
+                bindArc = legacyOwn ? ((xF8x - e1x) * su + (xF8y - e1y) * sv + (xF8z - e1z) * sw) : (footC + half);
                 double surf = (conDist - FIL_R) * 1e3;
                 double psiErr = deg(dabs(psi - psiAct));
                 double phiErr = deg(dabs(phi - PHI_PRE));
@@ -1777,14 +1784,16 @@ public final class MatSoaSlice {
     static final double A_SEMI2 = 0.00225;   // A_SEMI[2] µm (steric gate g6)
 
     static DoubleArray packGeomGateParams(TwoBodyConverterMotor.Glide2D G) {
-        DoubleArray p = new DoubleArray(30);
+        DoubleArray p = new DoubleArray(31);
         p.set(0, G.bhat[0]); p.set(1, G.bhat[1]); p.set(2, G.bhat[2]);
         p.set(3, G.econv[0]); p.set(4, G.econv[1]); p.set(5, G.econv[2]);
         p.set(6, G.eup[0]); p.set(7, G.eup[1]); p.set(8, G.eup[2]);
         p.set(9, G.lb); p.set(10, G.rF8[0]); p.set(11, G.rF8[1]); p.set(12, G.rConv[0]); p.set(13, G.rConv[1]);
         p.set(14, Constants.radius); p.set(15, A_SEMI2); p.set(16, G.kF8Code); p.set(17, G.kconvCode); p.set(18, G.kbindCode);
         p.set(19, TwoBodyConverterMotor.PHI_PRE_3E); p.set(20, Constants.kT); p.set(21, TwoBodyConverterMotor.PRESTROKE_THETAS);
-        p.set(22, 3.0); p.set(23, 25); p.set(24, 25); p.set(25, 20); p.set(26, 2.0); p.set(27, 15.0); p.set(28, 0.05); p.set(29, 0.02);
+        p.set(22, 3.0); p.set(23, 25); p.set(24, 25); p.set(25, 20); p.set(26, 2.0); p.set(27, 15.0);
+        p.set(28, TwoBodyConverterMotor.bindMargin()); p.set(29, 0.02);   // [28]=canonical ε (or 50nm legacy) in-seg margin
+        p.set(30, TwoBodyConverterMotor.LEGACY_OWNERSHIP ? 1.0 : 0.0);    // [30]=ownership mode (0=canonical half-open)
         return p;
     }
 

@@ -1,5 +1,112 @@
 # Soft Box Project Journal
 
+### 2026-07-18 — CANONICAL ROLLOUT: half-open filament-segment ownership + 50 nm margin removed + quick density sweep
+
+Rolled the validated half-open ownership fix through ALL two-body binding paths, removed the finite 50 nm exclusion,
+kept a byte-identical legacy regression mode, and ran a short GPU density sweep. Base commit 5a74e86; `BoA-v1ref`
+byte-clean. Report: `docs/matsoa/EXPLICIT_SEGMENT_MARGIN_ROLLOUT_FINDINGS.md`; plot `docs/matsoa/plots/rollout_density_sweep.png`.
+- **CENTRALIZED behind one toggle `TwoBodyConverterMotor.LEGACY_OWNERSHIP`** (default false=canonical; `-Dsoftbox.legacyOwnership=true`
+  or harness `-legacy`). Canonical = clamped-closest-point nearest-seg (`footC=clamp(foot,−half,half)`) + half-open
+  `foot∈[−half,half)` + `bindArc=footC+half∈[0,segLength]` + machine-ε g7 (`BIND_EPS=1e-6`). Rolled into `nearestSeg2D`,
+  `gate2D`, 7 g7 sites (`TwoBodyConverterMotor`), `matBindExplicit` (now `bindP[12]` mode, sentinel retired), `MatSoaSlice.matGeomGate`
+  (+`packGeomGateParams`), `packExMat`. Interior points BYTE-IDENTICAL; only beyond-end/joint points change.
+- **50 nm FINITE MARGIN REMOVED** (canonical ε=1e-6; 50 nm only in deprecated legacy). Framed as a discretization/ownership
+  correction (restores continuous filament accessibility), NOT affinity/rate/fit/added-sites.
+- **VALIDATION:** (§6.1) LEGACY byte-identical — `-traj` §7 1.3e-8/§8 4.9e-8, `-gliding` §8 mism=0 + §10 binds=9/firstDiv=178
+  (exact pre-change). (§6.2/§5.3) CANONICAL — `-gliding` §8 **mism=0** (CPU≡GPU), invalid=0, recruitment↑ (binds 9→11).
+  (§5.1) `JointMarginProbe` clean seg→seg handoff (g7ε PASS both sides, F8 continuous, no dead-zone, bends 0–30°).
+- **§7 GPU DENSITY SWEEP (legacy vs canonical, ρ100–3000, 2 seeds, 23 min, 0 invalid):** recruitment 1.7–1.9× higher
+  ρ200–1500 (meanBound 5.0 vs 2.9 @ρ700, 10.2 vs 5.4 @ρ1500); continuity ≥; **LEFT-SHIFT** (speed ρ400 2.18 vs 1.78);
+  **ρ3000 plateau PRESERVED within ~4%** (3.96 vs 4.14 µm/s, occupancy 19.9 vs 11.1 ⇒ left not up). §10 dt: canonical NOT
+  worse (bindRate dt→dt/2 +7.7% ≲ legacy +12%, onset F8 p99 flat 7.1, 0 invalid).
+- **VERDICT: APPROVE canonical default** (all §11 conditions pass). Legacy kept for regression only; 50 nm deprecated.
+
+### 2026-07-18 — Segment-end binding-margin: provenance + safe removal (`explicit-s2-l40`)
+
+Provenance + zero-margin-safety study. New instrument `JointMarginProbe` (deterministic Brownian-off geometric +
+bond-force sweep across one internal actin joint); canonical defaults UNCHANGED; `BoA-v1ref` byte-clean; production
+untouched. Report: `docs/matsoa/EXPLICIT_SEGMENT_MARGIN_PROVENANCE_FINDINGS.md`; `RUN_LOGS/binddiag/JOINT_MARGIN_PROBE*.md`.
+- **§A PROVENANCE:** the 50 nm exclusion = `g7 bindArc∈(margin,2·half−margin)`, `margin=0.05` a HARD-CODED LOCAL literal
+  (not Constants/Tol), introduced in commit **e17b5a4** (2026-07-14, two-body-arc squash) already at 0.05, sole rationale
+  the comment "interior material coordinate". **Unique to the two-body arc** — v1 `MyoMotor.checkFilSegCollision`
+  (`alpha∈[0,1]`, binds anywhere on [0,L]) and inc-4a `BindingDetectionSystem` have NO such margin. Value 0.05 is an
+  underived round buffer (28% of the half-segment). ORIGIN FOUND; rationale intent DIRECT, value UNKNOWN.
+- **THE KEY FINDING — the margin MASKS an ownership-handoff gap:** `nearestSeg2D` (min-perp + `|foot|≤half+0.02`,
+  first-min tie) keeps a segment owning world points PAST its joint (collinear ⇒ 0 switches over ±20 nm), so
+  `bindArc>segLength` there ⇒ **even margin=0 fails g7 at/past the joint**. The 50 nm margin hid this by excluding the
+  whole near-joint region. Half-open ownership (`foot∈[−half,half)`) hands off cleanly at the joint.
+- **CONTINUITY/DEDUP:** world binding point + global material coord CONTINUOUS across the joint (only segment index
+  switches); **F8 force CONTINUOUS across the joint** (world-site based; 4.0012 pN just-left=just-right, bends 0–30°);
+  2 foot-interior candidates at the exact joint but argmin picks 1 ⇒ NO double-binding; deterministic ⇒ CPU/GPU identical.
+- **§E SEGMENTATION-INVARIANCE (decisive):** ONLY margin=0 is invariant (100% bindable at 1×/2×/4×); **0.05 µm is
+  catastrophic (0%/IMPOSSIBLE at ≥2×, since 2·margin>segLength)**; 0.0125 still shrinks with refinement. Zero-margin
+  recruitment ∝ filament LENGTH not #joints (one owner per point). Criterion FAVOURS removal.
+- **RECOMMENDATION: replace the margin with deterministic half-open ownership + machine-ε (~1e-6 µm), NOT a finite
+  buffer.** Minimal patch = tighten `nearestSeg2D` foot test to half-open (the load-bearing fix) + set g7 margin→ε at
+  ALL sites (CPU+GPU+mat). **CANONICAL DEFAULT CHANGE: NEEDS MORE WORK** — land the ownership fix first; do NOT zero
+  `bindP[10]` alone (leaves the un-handed-off joint dead-zone). Pending approval; defaults unchanged.
+- **FIX IMPLEMENTED + RE-VALIDATED (opt-in, default byte-identical):** `matBindExplicit` gains a **negative-margin
+  sentinel** (`bindP[10]<0` ⇒ half-open + clamped-closest-point nearest-seg + `bindArc=footC+half` + ε margin; `≥0` ⇒
+  exact legacy). Mirrored in `evalGates` + `-halfopen` + `JointMarginProbe`. **Validated:** (a) LEGACY byte-identical —
+  `-traj` §7 Δnode 1.3e-8/§8 4.9e-8 PASS, `-gliding` §8 bind-identity mism=0 + §10 exact pre-change numbers; (b) HANDOFF
+  clean — probe shows seg5→6 exactly at the joint, g7ε PASS both sides, no dead-zone; (c) **CPU≡GPU bit-identical**
+  (half-open glide d400: v=−2.0328, mB=2.141, binds=39 on both); (d) RECRUITMENT default 2.46→margin0 3.89→**half-open
+  4.13** bindRate (joint dead-zone closes, loo_inseg 1454→1198), onset F8 p99 flat 7.12, **invalid=0**. `nearestSeg2D`/
+  `gate2D`/`MatSoaSlice` NOT yet changed (full rollout = separate step). Adoption (flip default) pending jba go.
+
+### 2026-07-18 — Reach/preload/in-segment binding sensitivity (`explicit-s2-l40`) — the in-segment margin is the clean lever
+
+Follow-on to the resolution study (which found reach + in-segment the recruitment limiters). Diagnostic/calibration
+(canonical defaults UNCHANGED). Extended `ExplicitBindDiagHarness`: 3 params `-rbind/-preload/-segmargin` override
+`bindP[0]/[4]/[10]` (no duplicated binding logic); `-mode contract` dumps the frozen contract; enriched recruit
+(funnel/LOO/onset-torque/XB-extension/propulsive-dragging/continuity/rebind) + a GPU device-resident `-gpu` glide path
+for the high-density plateau (bindP uploaded FIRST_EXECUTION — verified). Drivers `binddiag_run_{reach,combo,glide8,dtcheck}.sh`
++ `binddiag_reach_aggregate.py`. `BoA-v1ref` byte-clean; production untouched; **0 invalid / 0 solver-fail across all runs.**
+Report: `docs/matsoa/EXPLICIT_BINDING_REACH_SENSITIVITY_FINDINGS.md`; contract `RUN_LOGS/binddiag/CONTRACT.md`.
+- **§1 contract:** preload gate `kF8·conDist<2pN ⇔ conDist<2.0nm`; distance gate `conDist<6.5nm` (LOOSER ⇒ redundant).
+  Gate `preload` (pre-bind conDist) ≠ realized onset F8 = `myoSpring·(tip−site)` post-cock (~6.3pN); SAME spring
+  const (1e-9), different geometry. 12-pN break cap OFF in gliding.
+- **DISTANCE = NO-OP** (byte-identical recruitment 2→5nm, both densities; preload always subsumes it).
+- **PRELOAD = not a clean lever** (USEFUL-BUT-CHANGES-MECHANICS): loosening gives ≤+13% recruitment (ρ700) / none-or-
+  negative (ρ200) BUT every step raises onset F8 (p99 7.1→8.3) + admits worse-geometry binds; tightening cuts recruitment.
+- **IN-SEGMENT MARGIN = THE lever** (USEFUL, LOW MECHANICAL COST): 0.05→0.0125µm ⇒ **+57–79% recruitment** (meanBound
+  0.77→1.24 ρ200 / 2.85→4.48 ρ700) with **onset F8 p99 UNCHANGED (7.16→7.11)**, continuity ↑, 0 invalid. Recovers
+  physically-valid mid-filament sites the discretization end-margin excluded (window 43%→~86% of segment). Sweet spot
+  ~0.0125 (margin=0 marginally less stable at ρ200: cont 0.70 vs 0.81 — joint-binding). §7 combos: margin-alone (c1)
+  captures the full gain at zero onset-force cost; +preload only adds onset-force cost; distance byte-identical control.
+- **§8 density panel (CPU 100-700 + GPU 1500-3000):** candidate **LEFT-SHIFTS** the density-velocity curve (faster +
+  higher occupancy + better continuity ρ100-1500; ρ400 −1.94 vs −1.27 µm/s) with the **ρ3000 plateau PRESERVED** (~−4
+  µm/s; candidate mB 18.3 vs def 11.6 ⇒ shifts left NOT up — Vmax-limited). **§11 dt:** candidate does NOT worsen
+  dt-dependence (bindRate dt→dt/2 −0.4% vs default +12%). dragFrac unchanged.
+- **RECOMMENDATION: reduce ONLY the in-segment margin 0.05→~0.0125µm** (single, mechanistically-motivated change; safe
+  + beneficial); keep preload/distance. Adoption a separate sanctioned decision; defaults unchanged here.
+
+### 2026-07-17 — Binding-search timestep-resolution + angular-gate sensitivity DIAGNOSTIC (`explicit-s2-l40`)
+
+Diagnostic/calibration study (canonical defaults UNCHANGED). New file only `ExplicitBindDiagHarness` +
+`scripts/run_binddiag.sh` + 3 fan-out drivers + `binddiag_aggregate.py`; deterministic CPU runner, byte-faithful to
+`stepGlidingCPU` (the UNMODIFIED `matBindExplicit` decision; angular panel only re-parameterizes the existing `bindP`
+phi/psi/theta thresholds). density{200,700}×seed{101,202,303}×dt÷{1,2,4} (abc) + 15-setting angular panel (recruit) +
+reduced velocity panel (glide). `BoA-v1ref` byte-clean; production untouched; 0 invalid states.
+Report: `docs/matsoa/EXPLICIT_BINDING_RESOLUTION_FINDINGS.md`; raw `RUN_LOGS/binddiag/`.
+- **HEADLINE — angular gates are NON-binding for recruitment.** Over 2.6e7 eligible motor-steps @ ρ700 the
+  leave-one-out sole-failure count is **phi=0, psi=1, theta=4** vs **preload 4679, in-segment 5464**. The limiter is
+  **cross-bridge REACH (`preload<2 pN`) + IN-SEGMENT placement** (distance-coupled geometry), NOT orientation. Distance
+  gate passes only 0.22 % of eligible steps; preload cuts the survivors ~10× (P=9.9 %); in-segment ~36× (P=2.7 %).
+- **Part D1/E — angular panel 0.6×–2.0× (both densities):** bindRate within **±7 % (chaotic noise, non-monotonic)**;
+  loosening admits ≈0 new binds (**phi/psi-only byte-identical to default**; theta the only marginally-active gate,
+  +2 %). Onset F8 flat **6.2–6.6 pN**, p99 ≤7.2, **0 immediate-detach / 0 solver-fail / 0 invalid at every setting** ⇒
+  loosening admits NO mechanically-poor attachments. **Keep phi/psi/theta = 25/25/20.**
+- **Part A — typical head step @ production dt ≈ 1.6 nm med / 1.9 rms = 0.63× the 3 nm gate** (p99 ~4 nm); fastest
+  coordinate vs its gate = **theta (p99 0.91× of 20°)**. Clamp node ≈0 (sanity ✓). Increments shrink with dt.
+- **Part B/F — production dt MINOR-to-MATERIAL undersampling of BIND FLUX (not the search):** reliable measure = actual
+  ρ700 bind flux **+12 % dt→dt/2, occupancy +8 %, CONVERGED by dt/2** (dt/4 adds nothing). Substep-interpolation
+  missedFraction ~6 % but **dt-invariant** ⇒ partly a linear-path artifact; the substep-only misses are
+  preload/in-segment-gated, never angular. Deterministic binding ⇒ every all-pass endpoint binds in 1 step (no
+  multi-step near-gate dwell being stepped over). ⇒ **keep production dt for the search;** the ~12 % flux effect belongs
+  to the standing **cross-bridge-substep** family (dt/2-resolved), not the geometric gate. **No angular recalibration
+  campaign justified** — if recruitment is to rise, target reach/in-segment, not orientation.
+
 ### 2026-07-17 — Explicit motor campaign: free-binding throughput + explicit-vs-calibrated cost + density-saturation sweep
 
 Three-phase GPU campaign on the persistent mat (`ExplicitCompleteMatHarness` new modes `-throughput`/`-throughputcal`/

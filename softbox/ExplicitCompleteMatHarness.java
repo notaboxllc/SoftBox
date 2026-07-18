@@ -72,9 +72,12 @@ public final class ExplicitCompleteMatHarness {
         e.matc = IntArray.fromElements(0, 0, brownOn);
         e.eupP = DoubleArray.fromElements(G.eup[0], G.eup[1], G.eup[2]);
         e.noBind = new IntArray(N); for (int m = 0; m < N; m++) e.noBind.set(m, G.noBind[m] ? 1 : 0);
-        // bind gate thresholds (Tol defaults) + constants — the DETERMINISTIC 8-gate contract
+        // bind gate thresholds (Tol defaults) + constants — the DETERMINISTIC 8-gate contract.
+        // bindP[10]=in-segment arc margin (CANONICAL machine-ε / legacy 50 nm); bindP[12]=ownership mode (0=canonical
+        // half-open, 1=legacy) — both from the shared TwoBodyConverterMotor.LEGACY_OWNERSHIP toggle (default canonical).
         e.bindP = DoubleArray.fromElements(3.0, 25, 25, 20, 2.0, 15.0, Constants.radius,
-                TwoBodyConverterMotor.PHI_PRE_3E, TwoBodyConverterMotor.A_SEMI[2], Constants.kT, 0.05, 1);
+                TwoBodyConverterMotor.PHI_PRE_3E, TwoBodyConverterMotor.A_SEMI[2], Constants.kT,
+                TwoBodyConverterMotor.bindMargin(), 1, TwoBodyConverterMotor.LEGACY_OWNERSHIP ? 1.0 : 0.0);
         e.cockP = DoubleArray.fromElements(TwoBodyConverterMotor.PRESTROKE_THETAS, TwoBodyConverterMotor.ADP_THETAS);
         e.zP = FloatArray.fromElements((float) G.kzCode);
         int mcs = SpatialGrid.bodyChunkSize(N, nSeg), nCh = SpatialGrid.numBodyChunks(N, mcs);

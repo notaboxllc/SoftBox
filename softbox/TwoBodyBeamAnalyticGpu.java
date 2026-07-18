@@ -417,20 +417,32 @@ public final class TwoBodyBeamAnalyticGpu {
         double dBindNm = bindP.get(0), psiDeg = bindP.get(1), phiDeg = bindP.get(2), thetaDeg = bindP.get(3);
         double preloadPn = bindP.get(4), energyKt = bindP.get(5), FIL_R = bindP.get(6), PHI_PRE = bindP.get(7);
         double aSemiZ = bindP.get(8), kT = bindP.get(9), margin = bindP.get(10); int orientOn = (int) bindP.get(11);
+        // CANONICAL FILAMENT-SEGMENT OWNERSHIP (bindP[12]: 0=canonical half-open, 1=legacy — regression only).
+        // Canonical = clamped-closest-point nearest-seg + bindArc=footC+half∈[0,segLength] + machine-ε margin (bindP[10]).
+        // Fixes the ownership-handoff gap (legacy first-min + half+0.02 overlap could own points past a joint ⇒
+        // bindArc>segLength). Interior points BYTE-IDENTICAL to legacy (footC=foot); differs only for beyond-end/joint
+        // points (clamped ⇒ correct handoff to the interior neighbour).
+        boolean halfOpen = bindP.get(12) < 0.5; double eps = margin;
         double eupx = eupP.get(0), eupy = eupP.get(1), eupz = eupP.get(2), DEG = 180.0 / Math.PI;
         for (@Parallel int m = 0; m < N; m++) {
             if (active.get(m) != 1 || noBind.get(m) == 1 || boundSeg.get(m) != -1 || nuc.get(m) != 2) continue;
             double xF8x = outGeom.get(6*N+m), xF8y = outGeom.get(7*N+m), xF8z = outGeom.get(8*N+m);
             double xHx = outGeom.get(3*N+m), xHy = outGeom.get(4*N+m), xHz = outGeom.get(5*N+m);
-            // nearest segment (perp distance, foot within half+0.02)
+            // nearest segment: legacy = perp distance, foot within half+0.02; half-open = distance to CLAMPED closest point.
             int best = -1; double bd = 1e9;
             for (int s = 0; s < nSeg; s++) {
                 double half = 0.5 * filSegLength.get(s);
                 double cx = filCoord.get(s), cy = filCoord.get(nSeg+s), cz = filCoord.get(2*nSeg+s);
                 double ux = filUVec.get(s), uy = filUVec.get(nSeg+s), uz = filUVec.get(2*nSeg+s);
                 double dx = xF8x-cx, dy = xF8y-cy, dz = xF8z-cz; double foot = dx*ux+dy*uy+dz*uz;
-                if (foot > half+0.02 || foot < -(half+0.02)) continue;
-                double px = dx-foot*ux, py = dy-foot*uy, pz = dz-foot*uz; double d2 = px*px+py*py+pz*pz;
+                double d2;
+                if (halfOpen) {
+                    double footC = foot < -half ? -half : (foot > half ? half : foot);   // clamp to segment
+                    double qx = dx-footC*ux, qy = dy-footC*uy, qz = dz-footC*uz; d2 = qx*qx+qy*qy+qz*qz;
+                } else {
+                    if (foot > half+0.02 || foot < -(half+0.02)) continue;
+                    double px = dx-foot*ux, py = dy-foot*uy, pz = dz-foot*uz; d2 = px*px+py*py+pz*pz;
+                }
                 if (d2 < bd) { bd = d2; best = s; }
             }
             if (best < 0) continue;
@@ -439,9 +451,10 @@ public final class TwoBodyBeamAnalyticGpu {
             double ux = filUVec.get(s), uy = filUVec.get(nSeg+s), uz = filUVec.get(2*nSeg+s);
             double e1x = cx-half*ux, e1y = cy-half*uy, e1z = cz-half*uz;
             double dx = xF8x-cx, dy = xF8y-cy, dz = xF8z-cz; double foot = dx*ux+dy*uy+dz*uz;
-            double axx = cx+foot*ux, axy = cy+foot*uy, axz = cz+foot*uz;
+            double footC = halfOpen ? (foot < -half ? -half : (foot > half ? half : foot)) : foot;
+            double axx = cx+footC*ux, axy = cy+footC*uy, axz = cz+footC*uz;
             double conDist = Math.sqrt((xF8x-axx)*(xF8x-axx)+(xF8y-axy)*(xF8y-axy)+(xF8z-axz)*(xF8z-axz));
-            double bindArcV = (xF8x-e1x)*ux+(xF8y-e1y)*uy+(xF8z-e1z)*uz;
+            double bindArcV = halfOpen ? (footC+half) : ((xF8x-e1x)*ux+(xF8y-e1y)*uy+(xF8z-e1z)*uz);
             double surf = (conDist - FIL_R) * 1e3;
             double phi = q.get(m), psi = q.get(N+m), thetaS = q.get(2*N+m), psiActin = q.get(3*N+m);
             double psiErr = Math.abs(psi-psiActin)*DEG, phiErr = Math.abs(phi-PHI_PRE)*DEG, thetaErr = Math.abs((psi-phi)-thetaS)*DEG;
@@ -457,7 +470,7 @@ public final class TwoBodyBeamAnalyticGpu {
             boolean g4 = preload < preloadPn;
             boolean g5 = orientOn == 0 || eKt < energyKt;
             boolean g6 = headSide < aSemiZ * 1e3;
-            boolean g7 = bindArcV > margin && bindArcV < 2*half - margin;
+            boolean g7 = bindArcV > eps && bindArcV < 2*half - eps;
             if (g0 && g1 && g2 && g3 && g4 && g5 && g6 && g7) { boundSeg.set(m, s); bindArc.set(m, (float) bindArcV); }
         }
     }
