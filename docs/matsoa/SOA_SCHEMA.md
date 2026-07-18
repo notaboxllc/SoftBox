@@ -123,7 +123,10 @@ device-resident (the invariant). Velocity = host LS slope of `comSample·b̂` vs
  │        │            (bounded loop over nSeg; writes candSeg, candDist/orient)             │
  │        ▼                                                                                  │
  │ [4] matBind ── boundSeg,bindArc  ←  8-gate AND (deterministic), guard active∧bindable∧ADP │  no RNG
- │        │                                                                                  │
+ │        │       [3]/[4] use CANONICAL half-open ownership by default (clamped-closest-pt,  │
+ │        │        bindArc=footC+half∈[0,segLength], ε margin — 50nm exclusion removed;       │
+ │        │        LEGACY_OWNERSHIP=true for byte-identical legacy). See HOST_SEMANTICS banner.│
+ │        ▼                                                                                  │
  │        ▼                                                                                  │
  │ [5] chemistry (cycleLymnTaylor) ── nucState,boundSeg,cooldown,stats ← forceDotFil, params │  wangHash 0x4E55/0x4D54/0x52465241
  │        │            (over ALL N; sets thetaS-driver via nucState)                         │

@@ -390,6 +390,19 @@ never silently swapped.** Regression `-motor-regression` (Gates A–F PASS: comm
 registry ≡ frozen 4G/4F-L40 builders bit-identical; serialize/restart identity). Docs:
 `docs/MOTOR_MODELS.md` (+ `_EXPLICIT_S2_L40`/`_CALIBRATED_S2_L40`/`_SELECTION`/`_VALIDATION_MATRIX`),
 `docs/TWOBODY_CANONICAL_MODELS.md` (report); outputs `RUN_LOGS/twobody_canonicalization/`.
+
+**Canonical filament-segment binding ownership is DEFAULT (2026-07-18; shared by all three models).** Each material
+point on the discretized actin maps to exactly one segment via clamped-closest-point + half-open ownership
+(`footC=clamp(foot,−half,half)`, `foot∈[−half,half)`, `bindArc=footC+half∈[0,segLength]`, **machine-ε** in-segment
+tolerance) — the former 50 nm segment-end exclusion (an underived legacy literal that masked a nearest-segment
+handoff gap) is REMOVED. **This is a discretization/ownership correction, NOT an affinity/rate/fit change**, but it
+DOES change explicit-model recruitment/gliding numbers vs pre-2026-07-18 baselines (which were legacy-margin). Toggle
+`TwoBodyConverterMotor.LEGACY_OWNERSHIP` (default `false`=canonical); `-legacy` / `-Dsoftbox.legacyOwnership=true`
+reproduces the deprecated 50 nm behaviour byte-identically (regression only). Validated: legacy byte-identical,
+canonical CPU≡GPU (mism=0), clean joint handoff, GPU density sweep left-shifts the curve with the ρ3000 plateau
+preserved (~4 %), 0 invalid. Rolled through `nearestSeg2D`/`gate2D`/g7 sites, `matBindExplicit` (bindP[12] mode),
+`MatSoaSlice.matGeomGate`, `packExMat`. Docs: `docs/matsoa/EXPLICIT_SEGMENT_MARGIN_{PROVENANCE,ROLLOUT}_FINDINGS.md`
+(+ `EXPLICIT_BINDING_{RESOLUTION,REACH_SENSITIVITY}_FINDINGS.md`).
 ```
 ./scripts/run_lasertrap.sh -motor calibrated-s2-l40   # production selection (logs resolved model + full config)
 ./scripts/run_lasertrap.sh -motor-regression          # Gates A–F  |  -motor-compare → cross-model table

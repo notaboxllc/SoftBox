@@ -4,6 +4,16 @@ The device-resident motor-mat SoA implementation MUST reproduce this contract **
 branch/gate/state-transition identical; float arithmetic within the CPU≡GPU standard). All line references
 are `softbox/TwoBodyConverterMotor.java` on `motor-mat-gpu-soa` (off main `5b0fb59`) unless noted.
 
+> **⚠ CANONICAL FILAMENT-SEGMENT OWNERSHIP is now the DEFAULT (2026-07-18, `TwoBodyConverterMotor.LEGACY_OWNERSHIP=false`).**
+> The nearest-segment + in-segment steps below (§3, §5 g7) are the DEPRECATED legacy semantics, retained ONLY for
+> byte-identical regression (`-Dsoftbox.legacyOwnership=true` / `-legacy`). The canonical default is: nearest segment by
+> **distance to the clamped closest point** (`footC=clamp(foot,−half,half)`); half-open ownership `foot∈[−half,half)`
+> (one deterministic owner per material point); `bindArc=footC+half ∈ [0,segLength]`; g7 margin = **machine-ε (1e-6 µm)**,
+> i.e. the 50 nm end-exclusion is REMOVED. Interior points are byte-identical to legacy; only beyond-end/joint points
+> differ (correct handoff). This is a discretization/ownership correction, not an affinity/rate change — see
+> `EXPLICIT_SEGMENT_MARGIN_{PROVENANCE,ROLLOUT}_FINDINGS.md`. Rolled through `nearestSeg2D`/`gate2D`/g7 sites,
+> `matBindExplicit` (bindP[12] mode), `MatSoaSlice.matGeomGate`, `packExMat`.
+
 ## 0. Two step drivers, one shared skeleton
 
 - **Calibrated:** `stepGlideSup(Glide2D G,int t,int seed,Tol tol)` — L5835–5863.
@@ -67,13 +77,17 @@ Guarded by `active[m] && !noBind[m] && boundSeg[m]==FREE_BINDABLE(−1) && nuc[m
 2. `geom2D(G,m)` (L4504) — recompute `C_[m], xF8_[m], xH_[m]` from `A[m], phi[m], psi[m]` (the frame is
    lab-fixed: `bhat=+x, eup=+z, econv=+y`; `C=A+L_B·û_B`, `û_B=eup·cosφ+bhat·sinφ`; `xF8=C+R(ψ)(r_F8−r_conv)`;
    `xH=C−R(ψ)·r_conv`; `R(ψ)` = `rotConv` about `econv`).
-3. `s = nearestSeg2D(G,m)` (L4520) — nearest chain segment to `xF8_[m]` by min perpendicular distance with
-   foot interior (`|foot| ≤ half+0.02`); returns −1 if none. **Data-dependent loop over nSeg** (flag).
+3. `s = nearestSeg2D(G,m)` (L4520) — nearest chain segment to `xF8_[m]`. **Legacy:** min perpendicular distance
+   with foot interior (`|foot| ≤ half+0.02`). **Canonical (default):** min distance to the CLAMPED closest point
+   (`footC=clamp(foot,−half,half)`) ⇒ deterministic half-open ownership. Returns −1 if none. **Data-dependent loop
+   over nSeg** (flag).
 4. `gm = gate2D(G,m,s)` (L4531) → `{surf,bindArc,psiErr,phiErr,thetaErr,preload,eKt,headSide,foot·1e3,conDist·1e3}`.
 5. **8-gate acceptance (deterministic AND):**
    `g0 surf<dBindNm(3.0) ; g1 psiErr<psiDeg(25) ; g2 phiErr<phiDeg(25) ; g3 thetaErr<thetaDeg(20) ;
    g4 preload<preloadPn(2.0) ; g5 eKt<energyKt(15.0) ; g6 headSide<A_SEMI[2]·1e3 (steric, 4.5 nm) ;
-   g7 bindArc∈(margin, 2·half−margin), margin=0.05`. Tolerances = `new Tol()` defaults (L2167).
+   g7 bindArc∈(margin, 2·half−margin)`. **margin = machine-ε (1e-6 µm) canonically** (`bindMargin()`); the legacy
+   50 nm value (0.05) applies only under `-legacy`. Canonical `bindArc=footC+half∈[0,segLength]`. Tolerances =
+   `new Tol()` defaults (L2167).
 6. On all-8-true: `boundSeg[m]=s ; bindArc[m]=gm[1]`.
 - **RNG:** none — **binding is DETERMINISTIC geometric acceptance** (no P_bind roll). **Failure:** `s<0` ⇒
   `continue` (no bind). **State written:** `boundSeg[m]`, `bindArc[m]`, and `C_/xF8_/xH_[m]` (via geom2D).

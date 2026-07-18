@@ -47,6 +47,15 @@ beam / calibrated pivot), which is a branch inside the `Cmot` representation in
 gate shows the `{kF8, kconv, kbind, lb, γφ, γψ, ψ_actin}` signature is bit-identical across all three
 (`max|Δ| = 0`).
 
+**Filament-segment binding ownership is CANONICAL half-open by default (2026-07-18)** — shared by all three
+models. Each material point on the discretized actin is assigned to exactly one segment via
+`footC=clamp(foot,−half,half)` + half-open `foot∈[−half,half)`, with `bindArc=footC+half∈[0,segLength]` and a
+**machine-ε** in-segment tolerance (the former 50 nm segment-end exclusion is REMOVED — a discretization/ownership
+correction, not an affinity/rate change). Toggle `TwoBodyConverterMotor.LEGACY_OWNERSHIP` (default `false`);
+`-legacy` / `-Dsoftbox.legacyOwnership=true` restores the deprecated 50 nm behaviour byte-identically for regression.
+This changes explicit-model recruitment numbers vs pre-2026-07-18 baselines (which were legacy-margin). See
+`docs/matsoa/EXPLICIT_SEGMENT_MARGIN_{PROVENANCE,ROLLOUT}_FINDINGS.md`.
+
 ## Canonicalization scope
 
 Canonical status applies to the **exact frozen L40 configurations only**, NOT the whole experimental code
