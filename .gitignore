@@ -12,3 +12,5 @@ threejs_*/
 .last_run_status
 hs_err_pid*.log
 scratch_*/
+threejs_hmm_dimer*/
+threejs_hmm_dimer_*/

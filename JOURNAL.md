@@ -1,5 +1,203 @@
 # Soft Box Project Journal
 
+### 2026-07-19 — EXPLICIT HMM DIMER: directional-mechanism SURVEY (M1–M6 conformational steering) — NO conformational mechanism resolves the forward bias
+
+Tested whether a polarity-aware, state-dependent conformational rearrangement can steer the free head barbed-ward for
+a resolved forward second-head bias WITHOUT a hard veto. **Answer: NO.** Report
+`docs/matsoa/EXPLICIT_HMM_DIMER_DIRECTIONAL_MECHANISM_SURVEY.md`. All mechanisms default OFF; single-head model /
+`TwoBodyConverterMotor` / `MotorModel` / shared-S2 material / shared viewer UNCHANGED; gates + exclusion fixtures
+re-pass byte-identically.
+- **Root cause (from the accessibility study):** the symmetric fork splays the heads TRANSVERSELY (Z) ⇒ both pivots
+  sit at the SAME x ⇒ both heads project to ~the same material coordinate. A directional mechanism must move the free
+  tip to a different (barbed) x.
+- **Deterministic survey** (`-survey`, Brownian-off, free-head B forward shift, sign-robust): **M1/M2/M4 fork/branch
+  skew ≲0.05 nm** (ineffective — canting a 10 nm branch barely moves the pivot's x) AND dynamically UNSTABLE at useful
+  amp (M1b 15° → gap 129 nm, peak 40 pN, invalid 4); **M3 free-converter cant** = only real shift but tops out **+1.66
+  nm at an extreme 30°** cant that BREAKS the bind-orientation gate; **M5 shared-S2 bend ~0** (intact S2 rigid —
+  correctly preserved, no leverage); **M6 combined ≲0.2 nm** (no synergy). Intrinsic stroke 8.00 nm / head-anchor 7.60
+  nm preserved by all; S2 deform <0.01 nm.
+- **Dynamic comparison** (`-compare`, 24 seeds × 16000): C0 baseline fwdFrac **0.652** [0.35,0.79]; **M3 DEGRADES it**
+  (10° → 0.524, 20° → 0.292 — the canted head rotates into the BACKWARD-site orientation); only phenomenological rules
+  resolve it — **C4 graded penalty γ≤0.25 → 0.842 [0.54,1.00] (excludes 0.5)**, C3 hard veto → 1.0. Second-head binding
+  preserved (16 fwd binds in every C4/C3 config).
+- **Verdict: CONFORMATIONAL MECHANISM RESOLVES FORWARD BIAS = NO; GRADED PENALTY γ0.25 = the least-artificial resolved
+  option; HARD VETO not required.** READY TO PROMOTE DIRECTIONAL MODEL: **NO** (keep C0 default). NEXT: a fork/head
+  geometry that AXIALLY OFFSETS the two pivots (lead-lag stagger), not a local cant — or adopt C4 γ0.25.
+- **Infra:** `ExplicitHmmDimer` directional layer (forkCant/rotToward branch cant, converter cant, shared bend; all
+  `dirMech`/`dirAct`-gated, default byte-identical); 3js `-mech*/-rearveto/-rearpen` + activation ramp + C3/C4 bind-gate;
+  `ExplicitHmmDimerForwardHarness -survey/-compare`. Movies: `_dir_ctrl` (C0), `_dir_M3` (M3), `_dir_M1` (M1 unstable,
+  rejected), `_dir_veto` (C3).
+
+### 2026-07-18 — EXPLICIT HMM DIMER: emergent FORWARD-vs-BACKWARD second-head accessibility (diagnostic; forward bias UNRESOLVED — mechanism needed)
+
+With the 5.4 nm occupancy exclusion enforced, measured whether the CURRENT mechanics (shared tail + fork + stroke +
+actin polarity) makes a barbed-ward site more accessible to the free head after the partner binds+strokes. **No forward
+gate / preferred sign / processivity / inter-head coordination added** — purely diagnostic. Report
+`docs/matsoa/EXPLICIT_HMM_DIMER_FORWARD_ACCESSIBILITY_FINDINGS.md`. Single-head model / `TwoBodyConverterMotor` /
+`MotorModel` / shared viewer UNCHANGED; new logging + `-nostroke` + `solve(decoupleFork)` all default-off ⇒ prior paths
+byte-unchanged.
+- **VERDICT: UNRESOLVED (weak tendency, negligible clean mechanism).** Structural point: occupancy is the ONLY gate
+  after geometry ⇒ eligible⟹accepted (acceptance prob ≈1), so any bias lives in the free-head SEARCH distribution, not
+  acceptance ⇒ the decisive analyses are event-independent (deterministic maps + continuous search), not rare binds.
+- **Deterministic (Brownian-off) accessibility maps:** the partner stroke shifts the free head's equilibrium by only
+  **+0.020 nm (coupled)** vs **−0.025 nm (fork-DECOUPLED, pin the fork node)** — the shared tail transmits ~0 directional
+  drive; Δsurf over ±5.4/10.8/16.2 nm offsets is symmetric (~−0.04…−0.18 nm), not a forward opening.
+- **Dynamic (40 seeds × 16000, 246 ms one-bound exposure, 33 accepted binds/25 seeds):** accepted **forward fraction
+  0.667, seed-clustered 95% CI [0.413, 0.780]** (straddles 0.5 ⇒ not resolved); fwd/bwd rate ratio 2× (0.089 vs
+  0.045 /ms); continuous free-head search shifts **+1.66 nm** barbed after stroke but the barbed-ward-occupancy fraction
+  moves only 0.107→0.129. Target ≥50–100 accepted binds NOT reached (geometry rarely co-binds ≥5.4 nm; gates NOT
+  loosened) ⇒ accepted stats underpowered; conclusion rests on the event-independent analyses.
+- **Sign + validation:** barbed-end sign convention PASS; polarity-reversal (sign flips with material coord), y-spatial-
+  mirror (shift preserved), A/B-relabel (both offsets small) all PASS. Intrinsic converter stroke 8.00 nm preserved
+  (head-vs-anchor / head-vs-actin 7.60 nm; occupancy-independent) — the small dynamic assay strokes are filament+tail
+  take-up, not a changed motor stroke.
+- **Conditions:** normal / stroke-suppressed (`-nostroke`, mechanical stroke off) / controlled-stroke (deterministic) /
+  decoupled (fork-pin). READY FOR MECHANISM CHANGE: **YES** — a mixed-nucleotide leading/trailing lever asymmetry that
+  re-aims the free head barbed-ward is the candidate (NOT a shorter branch, already ruled out), or extend sampling to
+  resolve the 0.67 tendency first.
+- **New:** `ExplicitHmmDimerForwardHarness` + `scripts/run_hmm_dimer_forward.sh` (`-maps`/`-natural`). Movies:
+  `threejs_hmm_dimer_fwd` (fwd, seed 19), `_bwd` (bwd, seed 2), `_nostroke` (stroke-suppressed control, seed 13).
+
+### 2026-07-18 — EXPLICIT HMM DIMER: same-filament BOUND-SITE OCCUPANCY EXCLUSION (5.4 nm; prerequisite for the forward-bias study)
+
+Added the dimer-specific rule that once one head is bound, the partner may not bind < 5.4 nm (≈ one actin monomer)
+away along the SAME filament — symmetric (no barbed/pointed preference; forward bias must EMERGE), a pure VETO after
+the geometric gates and before commit (never moves a head). Report
+`docs/matsoa/EXPLICIT_HMM_DIMER_SITE_EXCLUSION_FINDINGS.md`. Single-head model / `TwoBodyConverterMotor` / `MotorModel`
+/ `ExplicitHmmDimer` / shared viewer UNCHANGED; **default OFF ⇒ every prior harness path byte-unchanged** (OFF
+reproduces prior Movie-B: STROKE 6.17/6.92, maxGap 1.954, invalid 0).
+- **Continuous MATERIAL coordinate** (`filMatCoordUm`): walks the chain from the pointed terminal via `end2NbrSlot`,
+  accumulating segment rest lengths + `bindArc` from e1 (increasing toward barbed) ⇒ correct same-seg / neighbour /
+  **across a segment boundary** / anywhere. Veto = same-filament AND `|sCand−sPartner| < 5.4 − 1e-3 nm` (boundary
+  INCLUSIVE-allow at 5.4). Different filaments never exclude.
+- **8 deterministic fixtures ALL PASS** (same-site/inside REJECT; ±5.4 ALLOW; ±5.5 ALLOW; cross-boundary continuous
+  sep = 3.000/6.000 nm; different-filament ALLOW; A/B-swap symmetric; simultaneous conflict → exactly one accepted,
+  lower-index tie-break, A/B-swap mirrors, 6 nm apart → both accepted).
+- **Control(OFF) vs Test(5.4nm), 5 seeds × 8000:** min two-head site sep **0.116 → 5.405 nm**; **near-site
+  double-binds 0** (invariant holds); same-site double binding 0; mean |2nd-bind offset| 2.06 → 5.82 nm. Second-head
+  binding preserved-but-reduced (dblFrac 0.037 → 0.015; the α=10°/Lb=10 fork holds heads close so ~94% of proposals
+  fall < 5.4 nm and are correctly rejected). Both directions observed (seed 13: fwd +6.48 AND bwd −5.63 nm). Stroke/
+  force preserved, 0 invalid, 0 solver failures. **READY FOR FORWARD-BIAS STUDY: YES** (needs more sampling / a
+  head-spreading geometry for statistics — accepted ≥5.4 nm binds are rare, n=4).
+- **Diagnostics:** per-proposal log (`dimer_bind_proposals.csv`: time, head, partner state, cand/partner filament +
+  material coord, signed offset +barbed, abs offset, accept/reject + reason, both nucleotide states, partner
+  power-stroked) + 5 new event-CSV columns (`siteSep_nm, signedSecondBindOffset_nm, secondBindDirection,
+  occupancyRejectCount, occupancyRejectThisFrame`). Representative `-3js`: `threejs_hmm_dimer_excl/` (seed 13).
+- **New:** `ExplicitHmmDimerSiteExclusionHarness` + `scripts/run_hmm_dimer_exclusion.sh`; `-excl <nm>`/`-noexcl` on
+  the 3js harness. `-3js ... -excl 5.4` enables it in a movie.
+
+### 2026-07-18 — EXPLICIT HMM DIMER: SHORT-BRANCH study (variable proximal branch length; shorter branch does NOT improve geometry — 10 nm reference stands)
+
+Generalized the forked dimer beam to a **variable proximal branch length** (3/5/6/8/10 nm, shared S2 = 40 − Lb) via
+clean **per-segment rest lengths**, and tested whether a shorter, more biologically plausible proximal compliant
+region improves the emergent doubly-bound ADP axial geometry toward the ~5.5 nm structural scale. Report
+`docs/matsoa/EXPLICIT_HMM_DIMER_SHORT_BRANCH_FINDINGS.md`. Core motor files (`TwoBodyConverterMotor`/`MotorModel`) +
+the single-head model + the shared viewer UNMODIFIED. **Reduces byte-identically to the reference at Lb=10** (5 gates
++ dynamic seed-3 bit-for-bit).
+- **HEADLINE (honest negative):** a shorter branch does **NOT** improve the geometry. Head-center separation is
+  geometrically `≈ Lb × sin α` (pivots at the branch tips) ⇒ shortening shrinks separation ⇒ **lowers** the 3–8 nm
+  offset population. **frac(3–8 nm) is highest at Lb=10** (42–54%); **no branch length reaches a mean ADP axial offset
+  near 5.5 nm** (all ~1.6–2.6 nm). Stroke preserved (7.58–7.67 nm), preload@5.5 flat (~2.5 pN, branch-independent),
+  coupling tightens as branch shortens (0.36→0.65, still moderate). READY TO PROMOTE SHORT-BRANCH: **NO**.
+- **Option A vs B feasibility:** Option A (finite branch) statically EXACT at every Lb. Option B (2 nm localized fork)
+  numerically fragile AND geometrically limited (a zero-length coincident-pivot element can't create head separation —
+  heads carry world-fixed frames). Option A adopted.
+- **Numerical health — a PRE-EXISTING dynamic-solver caveat, not short-branch-specific:** static solver exact (gap 0)
+  everywhere; the dynamic path has rare seed-dependent large transient joint-gap spikes **present in the byte-identical
+  α=0/Lb=10 legacy reference too** (seed 5 → 15.9 nm; one >50 nm transient at 8 seeds). Reported via spike-robust
+  median-per-seed gap: soft short branches (EI×0.25, Lb≤8) elevate spikes; **stiffer (EI×0.50) keeps short branches as
+  robust as the reference** (medGap ~2 nm, 0 spikes down to Lb=5). 0 NaN/solver failures.
+- **Best stable short alternative** (if biological plausibility weighted over the offset metric): **Lb=6 nm, EI×0.50**
+  (shared S2 34 nm, stroke 7.64 nm, moderate coupling 0.65, stable) — offered, not promoted.
+- **Viewer cleanup (§13/§14, harness-side, shared viewer untouched):** the "translucent grey converter sphere" = the
+  **fork node** emitted as a viewer `nodes` entry (r=6 nm at the fork, ~10 nm from the pivots) — now **default-OFF**
+  (`-forknode` restores it; anchor kept; fork shown by the beam-cylinder junction). Also fixed a duplicate: the myosin
+  `rod` overlapped the branch beam segment → rod emitted **invisible** (beam segment retained). Removal verified in the
+  exported JSON (node count 2→1). Browser screenshot tooling declined this session ⇒ matched before/after trajectories
+  provided (`threejs_hmm_dimer_beforefork` vs `threejs_hmm_dimer_shortbranch_B`) for the user to capture.
+- **New:** `ExplicitHmmDimerShortBranchHarness` + `scripts/run_hmm_dimer_shortbranch.sh` (`-sweep`/`-static`/`-offsets`/
+  `-optionb`/`-cell`). Matched movies A (legacy)/B (reference)/C (Lb=6 short), seed 3, 1068 frames each, invalid 0.
+
+### 2026-07-18 — EXPLICIT HMM DIMER: proximal-fork relaxation study (head-coincidence relaxed; α=10°/branchEI×0.25 recommended)
+
+Confirmed the two heads' coincidence in the first dimer movie is PHYSICAL (the zero-rest-angle fork pulls both
+branches collinear), quantified it, and added a locally-compliant proximal fork that relaxes it while preserving the
+intact shared paired-S2, the ~7.6 nm stroke, coupling, production binding/chemistry, and numerical health. Shared S2
+(EA/EI) untouched. Report `docs/matsoa/EXPLICIT_HMM_DIMER_FORK_RELAXATION_FINDINGS.md`. Core motor files
+(`TwoBodyConverterMotor`/`MotorModel`) UNMODIFIED; α=0/×1 default byte-stable (5-gate characterization re-passes).
+- **Mechanics (`ExplicitHmmDimer`):** configurable DIRECTIONAL fork rest half-angle α (branch A prefers shared-S2
+  tangent rotated +α, branch B −α) as a FULL-3D preferred-direction energy term (not a positional constraint / head–head
+  spring / repulsion) + independent `branchEI`/`branchEA` multipliers on the two fork hinges + branch segments. Caught+fixed
+  a real instability: an in-plane-only (atan2 signed-angle) first cut left zero out-of-plane fork stiffness → beam blow-up;
+  the angle-to-preferred-direction term restores 3D stiffness (α=0 reproduces the baseline maxGap 1.585 nm exactly).
+- **§1 baseline overlap (α=0):** mean head-center sep 4.7 nm, overlap<9nm 0.92, two-head ADP axial offset 1.8 nm, only 3%
+  in the 3–8 nm structural range. `-3js` coords == sim coords (frame writer reads the live nd/xH/xF8 objects).
+- **Static fixtures (§7):** detached open = 2α exactly (stable), single-head-pull coupling ratio 0.53, antisym-pull elastic
+  (no buckling), controlled two-head axial-offset 0–11 nm smooth preload (~2.5 pN @5.5 nm, <1 kT stored, stable).
+- **α×branchEI sweep (5×4, 10 nm branch, 3 seeds × 8000-step production runs, all invalid=0):** α is the separation lever;
+  α≥20° over-separates and SUPPRESSES second-head binding (dblFrac→0.01–0.03) ⇒ rejected (§11); branchEI≤0.1 absorbs the
+  stroke. **RECOMMENDED α=10°/branchEI×0.25:** overlap 0.92→0.59, detached sep 4.7→8.8 nm (distinct-but-overlapping), two-head
+  ADP frac(3–8 nm) 3%→56%, two-head binding PRESERVED (dblFrac 0.05, dwell 0.58 ms), STATIC single-head stroke 7.58 nm
+  preserved, coupling present, 0 invalid/failures. NOT default-promoted (selectable via `-alpha 10 -branchei 0.25`).
+- **Two comparison movies (seed 3, 40 ms, 1068 frames):** `threejs_hmm_dimer_baseline` (α=0, headSep 5.2/overlap 87%/open 18°)
+  vs `threejs_hmm_dimer_relaxed` (α=10 EI×0.25, headSep 8.4/overlap 58%/open 40°, maxDetachedSep 22.4 nm) — identical
+  physics/colors, only the fork differs; both READY. New: `ExplicitHmmDimerForkHarness`, `scripts/run_hmm_dimer_fork.sh`.
+  Next (flagged): Option-A finer branch length; longer multi-seed runs to tighten frac(3–8 nm).
+
+### 2026-07-18 — EXPLICIT HMM DIMER: dynamic one-dimer `-3js` movie (real actin + PRODUCTION binding/chemistry; all events + READY)
+
+A directly-viewable coded-geometry movie of ONE anchored `explicit-hmm-dimer-s2-l40` on a REAL dynamic actin
+filament through the PRODUCTION per-head machinery — search → canonical half-open bind gate (zero margin) →
+`cycleLymnTaylor` chemistry (ADP·Pi→ADP power stroke) → `bondForces` → detach → renewed search. NOT hand-authored,
+NOT a fixture replay, NOT the fixed-actin spring. New files only; `ExplicitHmmDimer` core + single-head model +
+`TwoBodyConverterMotor`/`MotorModel` byte-unchanged. Report `docs/matsoa/EXPLICIT_HMM_DIMER_3JS_FINDINGS.md`.
+- **Architecture:** a 2-motor `Glide2D` runs the exact `stepGlideS2` stages (cull, bind gate, chemistry, θ_s cocking,
+  placeHead, bondForces, CSR gather, chainForces, z-confine, filament Brownian+integrate+derive); the ONLY swap is the
+  two independent `s2SolveM` tail solves → the coupled forked-tail `ExplicitHmmDimer.solve` (shared S2). Per-head
+  converter/pivot state bridged into `Glide2D` each step; chemistry-driven θ_s drives the stroke; `forceDotFil`/`forceMag`
+  written back for catch-slip. ⇒ binding/chemistry/stroke/detach/filament are 100% production; only the shared-tail is new.
+  Added a lateral (y) confine mirroring the z-confine so the visible piece of the µm filament stays in the heads' plane
+  (still fully dynamic — integrates/bends/responds to load/full FDT Brownian).
+- **Movie (seed 3, 40 ms, 1068 frames @ stride 15):** all events YES — detached search (frame 9), first bind + two-bound
+  (46), stroke ADP·Pi→ADP (47), detach (95), then repeated re-engagement (214 bound frames; engaged across all four
+  10-ms quartiles). **stroke 6.94/6.72 nm** (≈ the 7.6 nm working stroke), **peak F8 9.04/9.96 pN**, **partner-head
+  induced 9.82 nm** through the shared S2 (the HMM coupling), max joint gap 1.585 nm, contour drift 2.121 nm, binding
+  discontinuity 3.02 nm = finite force-onset within the 6.35 nm normal per-step motion (binding writes no coordinates),
+  **0 invalid arcs, 0 NaN/solver failures. READY FOR USER VISUAL INSPECTION: YES.**
+- **Viewer (no change needed):** 2 `myosins` entries (rod=branch, lever=converter, motor=head colored by nucleotide
+  state), shared S2 + branches as `motorSeg` segments from the dimer nodes (fork is ONE shared node, not 2 coincident
+  motors), fork+anchor as `nodes`, real actin via the actin renderer, F8 bond line when bound — all exported coords are
+  exact simulation state. New: `ExplicitHmmDimer3jsHarness`, `scripts/run_hmm_dimer_3js.sh`. Watch:
+  `threejs_hmm_dimer/` at `http://localhost:8000/SoftBox/sim_viewer_boa.html`.
+  `./scripts/run_hmm_dimer_3js.sh -3js threejs_hmm_dimer -seed 3 -steps 16000 -stride 15 -splay 16 -gap 3.0 -nseg 12`
+
+### 2026-07-18 — EXPLICIT HMM-LIKE MYOSIN DIMER built from the flagship explicit S2 motor (default-off; all 5 gates PASS)
+
+First two-headed HMM-like myosin dimer built from `explicit-s2-l40`. NEW default-off architecture; the single-head
+explicit model preserved BYTE-IDENTICAL (git-verified: only new files; `TwoBodyConverterMotor.java`/`MotorModel.java`
+UNMODIFIED). CPU-only. Design/audit `docs/matsoa/EXPLICIT_HMM_DIMER_DESIGN.md`; report `docs/matsoa/EXPLICIT_HMM_DIMER_FINDINGS.md`.
+- **Archaeology:** two disjoint motor worlds — World A (articulated 3-body `MotorStore`, ALL existing dimer/minifilament
+  code) and World B (explicit `TwoBodyConverterMotor`, strictly single-head, no dimer/fork/shared-S2 notion). NO prior
+  art for a physical shared tail anywhere (v1 + BoA + explicit): every prior "dimer" is two independent rods + coupling
+  springs. ⇒ do NOT reuse any existing dimer class (all assume the obsolete `3m/3m+1/3m+2` articulated layout + `moveC`
+  PAIRS springs). Clean new composition instead.
+- **S2 audit (decisive):** `EA=4.2e-9 N, EI=7.2e-28 N·m²` already represent the PAIRED S2 coiled coil as one effective
+  element (Adamovic–Mijailović–Karplus 2008 = the two-chain S2 subdomain; "free S2 coiled coil" in code; one beam/motor,
+  no ×2). ⇒ the dimer's shared paired-S2 region REUSES EA/EI AS-IS, NOT doubled.
+- **Topology (forked "Y" beam):** two explicit converter heads (each its own θ_s + pivot + F8, byte-faithful) whose
+  pivots tie to a common junction via a SHARED paired-S2 beam forked from the 4G beam. Default: shared Ms=3 (30 nm) +
+  branches Ma=Mb=1 (10 nm), splay 25° ⇒ 40 nm per-head path (= single-head L40), most of S2 shared. One coupled Newton
+  step over `q={nd[1..NF],φ_A,ψ_A,φ_B,ψ_B}` (n=19): stretch analytic + two F8/converter Gauss–Newton blocks (single-head
+  block ×2) implicit; bending+floor explicit (FD-oracle tangent) + node drag. All head↔head coupling flows through the
+  shared beam DOF — no inter-rod springs, no atomics.
+- **5 gates PASS (CPU):** (1) rest hold — gap 0.000 nm, rest force 0.001 pN; (2) stroke — both heads −7.64 nm/7.87 pN,
+  symmetric, fork moves 0.11 nm; (3) single-head equivalence — dimer −7.64 nm/7.87 pN vs single −7.70 nm/7.92 pN (~0.8%
+  stiffer, expected — both branches load the shared coiled coil); (4) shared-tail coupling — stroke A ALONE ⇒ head B
+  induced Δ0.105 pN + pivot Δ0.101 nm through the shared fork (the new HMM physics); (5) ΣF 1.6e-12 pN self-balanced,
+  CPU bit-reproducible. New: `ExplicitHmmDimer`, `ExplicitHmmDimerHarness`, `scripts/run_hmm_dimer.sh`.
+- **Deferred (flagged):** GPU device path; MotorModel registry entry (kept out — would touch the exhaustive switches);
+  dynamic gliding/walking (isometric only here); branch softening + nonzero fork rest angle (first retuning knobs); viewer.
+
 ### 2026-07-18 — CANONICAL ROLLOUT: half-open filament-segment ownership + 50 nm margin removed + quick density sweep
 
 Rolled the validated half-open ownership fix through ALL two-body binding paths, removed the finite 50 nm exclusion,
