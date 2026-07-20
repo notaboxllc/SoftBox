@@ -91,6 +91,9 @@ public final class ExplicitHmmDimer {
         // ---- proximal-fork relaxation (this study) ----
         double alpha;                       // fork rest HALF-angle (rad); 0 = collinear baseline
         double branchEImult = 1, branchEAmult = 1;   // proximal-branch compliance (shared S2 is NOT touched)
+        double forkKmult = 1;               // fork-root angular-coupling compliance: scales ONLY the two fork hinges'
+                                            // bending stiffness (hingeIsFork), MULTIPLICATIVELY on top of branchEImult.
+                                            // 1.0 ⇒ byte-identical (fork hinge kb = EI·branchEImult/lrep as before).
         boolean[] hingeIsFork;              // parallel to hinge[]: the two fork hinges get a DIRECTIONAL rest angle
         double[] hingeRest;                 // parallel to hinge[]: signed rest angle in the splay plane (+α branch A / −α branch B; 0 else)
         int[] hingeBranchSide;              // parallel to hinge[]: 0 = fork-A hinge, 1 = fork-B hinge, −1 = not a fork hinge
@@ -116,6 +119,9 @@ public final class ExplicitHmmDimer {
     static Dimer build(int Ms, int Ma, int Mb, double splayDeg, double dt, double alphaDeg, double branchEImult, double branchEAmult) {
         return build(Ms, Ma, Mb, splayDeg, dt, alphaDeg, branchEImult, branchEAmult, Ma * L0_NM);
     }
+    static Dimer build(int Ms, int Ma, int Mb, double splayDeg, double dt, double alphaDeg, double branchEImult, double branchEAmult, double branchLenNm) {
+        return build(Ms, Ma, Mb, splayDeg, dt, alphaDeg, branchEImult, branchEAmult, branchLenNm, 1.0);
+    }
     /**
      * Fork-relaxation + variable-branch-length build. {@code alphaDeg} = the fork rest HALF-angle (branch A
      * prefers the shared-S2 tangent rotated +α, branch B −α, as an energy term — NOT a positional constraint);
@@ -130,7 +136,7 @@ public final class ExplicitHmmDimer {
      * are 10 nm and this reduces bit-for-bit to the uniform-l0 model. Node count / indexing / solver dimension are
      * UNCHANGED (only rest spacings + per-element stiffness change); node drag (fixed rNode=5 nm) is unchanged.
      */
-    static Dimer build(int Ms, int Ma, int Mb, double splayDeg, double dt, double alphaDeg, double branchEImult, double branchEAmult, double branchLenNm) {
+    static Dimer build(int Ms, int Ma, int Mb, double splayDeg, double dt, double alphaDeg, double branchEImult, double branchEAmult, double branchLenNm, double forkKmult) {
         Dimer d = new Dimer();
         d.Ms = Ms; d.Ma = Ma; d.Mb = Mb; d.NF = Ms + Ma + Mb; d.dt = dt;
         d.branchLenNm = branchLenNm; d.sharedLenNm = TOTAL_NM - branchLenNm;
@@ -138,7 +144,7 @@ public final class ExplicitHmmDimer {
         double lS = sharedSegNm * 1e-3, lB = branchSegNm * 1e-3;                     // µm
         d.l0 = lS;                                            // NOMINAL (display/back-compat) = shared segment rest length
         d.ks = EA_SI / (lS * 1e-6); d.kb = EI_SI / (lS * 1e-6);        // SI (shared S2 — FROZEN material EA/EI)
-        d.alpha = Math.toRadians(alphaDeg); d.branchEImult = branchEImult; d.branchEAmult = branchEAmult;
+        d.alpha = Math.toRadians(alphaDeg); d.branchEImult = branchEImult; d.branchEAmult = branchEAmult; d.forkKmult = forkKmult;
         d.ksBr = EA_SI * branchEAmult / (lB * 1e-6); d.kbBr = EI_SI * branchEImult / (lB * 1e-6);   // NOMINAL branch per-element
         d.gammaNode = 6 * Math.PI * Constants.aeta * (RNODE_NM * 1e-9);
         d.eup = new double[]{ 0, 0, 1 };
@@ -195,6 +201,7 @@ public final class ExplicitHmmDimer {
         for (int hi = 0; hi < d.hinge.length; hi++) {
             double lrep = 0.5 * (segLenOf(d, d.hinge[hi][0], d.hinge[hi][1]) + segLenOf(d, d.hinge[hi][1], d.hinge[hi][2]));  // µm
             double eiEff = d.hingeIsBranch[hi] ? EI_SI * branchEImult : EI_SI;
+            if (d.hingeIsFork[hi]) eiEff *= forkKmult;   // fork-root angular coupling: scales ONLY the two fork hinges (default 1 ⇒ byte-identical)
             d.hingeKb[hi] = eiEff / (lrep * 1e-6);
         }
         d.kbEmg = EI_SI / (lS * 1e-6);                        // clamped emergence bends the first shared segment (rest len lS)
@@ -243,7 +250,16 @@ public final class ExplicitHmmDimer {
                 // directional survey: cant the fork branch's preferred direction toward/away from the barbed end
                 double cant = forkCant(d, d.hingeBranchSide[hIdx]);
                 if (cant != 0) dPref = rotToward(dPref, d.bHat, cant);
+                // AXIAL LEAD-LAG (mech 8): the rest-angle torque uses a tunable stiffness (dirConvStiffMult × branch kb)
+                if (d.dirMech == 8 && d.dirAct > 0 && d.hingeIsFork[hIdx]) kb *= d.dirConvStiffMult;
                 double th = Math.acos(clamp(dot(b, dPref) / lb)); E += 0.5 * kb * th * th;
+            } else if (d.dirMech == 9 && d.dirAct > 0 && d.boundHead >= 0 && h[2] == d.Ms) {
+                // AXIAL DISTAL-S2 HINGE (mech 9): the shared hinge immediately below the fork (iC = fork node) gets a
+                // state-dependent preferred bend that rotates the last shared segment toward the barbed end, intended
+                // to advance the fork junction toward +bHat. Tunable stiffness (dirConvStiffMult × kb).
+                double[] ah = scl(a, 1.0 / la);
+                double[] dPref = rotToward(ah, d.bHat, d.dirAmp * d.dirAct);   // toward barbed; null if a ∥ bHat
+                double th = Math.acos(clamp(dot(b, dPref) / lb)); E += 0.5 * (kb * d.dirConvStiffMult) * th * th;
             } else {
                 double c = clamp(dot(a, b) / (la * lb)); double th = Math.acos(c); E += 0.5 * kb * th * th;
             }
@@ -368,6 +384,41 @@ public final class ExplicitHmmDimer {
     /** Total contour length (µm). */
     static double contour(Dimer d) { double c = 0; for (int[] sg : d.seg) c += Math.sqrt(dot(sub(d.nd[sg[1]], d.nd[sg[0]]), sub(d.nd[sg[1]], d.nd[sg[0]]))); return c; }
 
+    /** Max branch-segment axial spring force (pN) = max over branch stretch elements of |segKs·(len−l0)|. */
+    static double maxBranchAxialForcePn(Dimer d) {
+        double mx = 0;
+        for (int si = 0; si < d.seg.length; si++) if (d.segIsBranch[si]) {
+            int[] sg = d.seg[si]; double len = Math.sqrt(dot(sub(d.nd[sg[1]], d.nd[sg[0]]), sub(d.nd[sg[1]], d.nd[sg[0]])));
+            double fN = d.segKs[si] * ((len - d.segL0[si]) * 1e-6);
+            mx = Math.max(mx, Math.abs(fN) * 1e12);
+        }
+        return mx;
+    }
+    /** Max branch-segment extension (nm) = max over branch stretch elements of |len−l0|. */
+    static double maxBranchExtNm(Dimer d) {
+        double mx = 0;
+        for (int si = 0; si < d.seg.length; si++) if (d.segIsBranch[si]) {
+            int[] sg = d.seg[si]; double len = Math.sqrt(dot(sub(d.nd[sg[1]], d.nd[sg[0]]), sub(d.nd[sg[1]], d.nd[sg[0]])));
+            mx = Math.max(mx, Math.abs(len - d.segL0[si]) * 1e3);
+        }
+        return mx;
+    }
+    /** Max branch-segment extension as a FRACTION of the branch rest length (physical-plausibility check). */
+    static double maxBranchExtFrac(Dimer d) {
+        double mx = 0;
+        for (int si = 0; si < d.seg.length; si++) if (d.segIsBranch[si]) {
+            int[] sg = d.seg[si]; double len = Math.sqrt(dot(sub(d.nd[sg[1]], d.nd[sg[0]]), sub(d.nd[sg[1]], d.nd[sg[0]])));
+            mx = Math.max(mx, Math.abs(len - d.segL0[si]) / d.segL0[si]);
+        }
+        return mx;
+    }
+    /** Fork opening angle (deg): the full angle between the two proximal branches at the fork node (rest = 2·α). */
+    static double forkAngleDeg(Dimer d) {
+        double[] a = sub(d.nd[d.Ms + 1], d.nd[d.Ms]), b = sub(d.nd[d.Ms + d.Ma + 1], d.nd[d.Ms]);
+        double la = Math.sqrt(dot(a, a)), lb = Math.sqrt(dot(b, b)); if (la < 1e-12 || lb < 1e-12) return 0;
+        return Math.toDegrees(Math.acos(clamp(dot(a, b) / (la * lb))));
+    }
+
     /** Rest length (µm) of the segment connecting nodes a and b (unordered); used to size hinge bending stiffness. */
     static double segLenOf(Dimer d, int a, int b) {
         for (int si = 0; si < d.seg.length; si++) {
@@ -384,11 +435,13 @@ public final class ExplicitHmmDimer {
      *  (the rotation target is d.bHat). Returns 0 when no branch-cant mechanism is active. */
     static double forkCant(Dimer d, int bs) {
         if (d.dirAct <= 0 || d.boundHead < 0 || bs < 0) return 0;
-        boolean branchMech = d.dirMech == 1 || d.dirMech == 2 || d.dirMech == 3 || d.dirMech == 5 || d.dirMech == 7;
+        boolean branchMech = d.dirMech == 1 || d.dirMech == 2 || d.dirMech == 3 || d.dirMech == 5 || d.dirMech == 7 || d.dirMech == 8;
         if (!branchMech) return 0;
         int freeSide = 1 - d.boundHead;
+        // Mechanism 8 (AXIAL LEAD-LAG): the free branch rotates TOWARD barbed (+φFree), the bound branch rotates AWAY
+        // from barbed toward the pointed end (−φBound = −dirComp·φFree) — this offsets the two pivots along bHat.
         if (bs == freeSide) return d.dirAmp * d.dirAct;
-        boolean balanced = d.dirMech == 2 || d.dirMech == 3;   // M1b + M2 apply a rearward bound-branch compensation
+        boolean balanced = d.dirMech == 2 || d.dirMech == 3 || d.dirMech == 8;   // M1b/M2/lead-lag apply a bound-branch counter-rotation
         if (bs == d.boundHead && balanced) return -d.dirComp * d.dirAmp * d.dirAct;
         return 0;
     }

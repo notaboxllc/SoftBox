@@ -1,5 +1,115 @@
 # Soft Box Project Journal
 
+### 2026-07-20 — EXPLICIT HMM DIMER: dimer-compliance vs the dense-mat joint-gap instability — branchEA is the cure, NOT branch bending / fork
+
+Is the double-head mat's joint-gap instability (maxGap up to ~670 nm, `..._GLIDING_DIRECTIONALITY_FINDINGS.md` §7/§9) and
+its dt-sensitivity caused by **excessive dimer-specific stiffness**, and does mechanically-reasonable softening remove it
+before adding any cross-bridge substep? Report `docs/matsoa/EXPLICIT_HMM_DIMER_COMPLIANCE_SENSITIVITY_FINDINGS.md`.
+Controls added to `ExplicitHmmDimer` (`forkKmult` + census helpers) + the dimer harness (`-branchEA/-branchEI/-forkK`,
+`-dt`, gap/branch/excursion instrumentation, `-fixtures` F1–F5); all default 1.0 ⇒ **byte-identical** (velRaw −3.553 @
+seed101). Single-head/`TwoBodyConverterMotor`/`MotorModel`/shared-S2 UNCHANGED (git: 0 diff; multipliers read only in
+`ExplicitHmmDimer`). Density 500 dimers/µm², D0, 5.4 nm exclusion ON, 6 seeds × 5000 steps.
+- **Audit:** REFERENCE BRANCH AXIAL STIFFNESS **420 pN/nm** (= EA_SI 4.2e-9 N / lB 10 nm), traced to `d.segKs`; branch
+  bending 0.25·EI on the two fork hinges. **DOUBLE-COUNTING: NO.** **`forkK ≡ branchEI` for Ma=1** (branch has NO interior
+  bending hinge ⇒ the only branch hinges ARE the two fork hinges) — the new forkK control is degenerate here (needs Ma>1).
+- **Trigger: FILAMENT-MOTION — 100% of >10 nm excursions** (0% at second-bind/stroke/detach). Corroborated by the static
+  F1–F5 fixtures (actin fixed ⇒ never >2 nm gap / >110 pN): the moving filament drags bound heads through the near-rigid
+  420 pN/nm branch (baseline peak branch force **29 171 pN**, ext to 69 nm) ⇒ transient solver excursion (always recovers,
+  invalid 0).
+- **branchEA is the clean lever.** **branchEA 0.03 (12.6 pN/nm): maxGap 270→11.8 nm (23×), peak branch force 29171→103 pN
+  (283×), zero >50 nm excursions, velocity +1.49 (=baseline +1.48), meanBound 4.46, coupling+stroke preserved (7.98 nm),
+  D0≈D2 preserved, 0 invalid** — PROMOTE (stiffest that removes the excursions; 0.01 works but softer than needed).
+- **branchEI / forkK softening is REJECTED — destabilizing in the MOVING mat** (opposite of the static fixture): halves-to-
+  kills the glide (+1.48→+0.23…+0.61) and makes excursions FAR worse (maxGap to 3817 nm, peak force to **1.6e6 pN**) —
+  bending is load-bearing (holds a bound head's geometry through the fork; softening ⇒ fork flops, F2 fork opens 54→75°,
+  bound-force+coupling collapse). **No combination beats pure branchEA 0.03** (any bending softening re-introduces the flop).
+- **dt (§10):** softening makes the gap/force **dt-CONVERGED** (EA0.03 maxGap 8.4→9.3, peakBrF 96→91 at dt/2 vs baseline
+  270→64, 29171→1592) and halves the velocity dt-shift (+27%→+13%). **Excessive branch AXIAL stiffness explains the joint-
+  gap instability; the residual ~13% velocity dt-shift is the SEPARATE known cross-bridge under-sampling (substep still
+  indicated for THAT, not for the gap instability).**
+- Movies `threejs_hmm_compliance_{base,ea0.03,ea0.1,ei0.1,comboEA0.1EI0.3}/` (seed 101, ρ500). Single-head control PASS
+  (−2.25 µm/s, no joint-gap metric exists — no forked beam). Raw: `RUN_LOGS/hmm_compliance_sensitivity/`.
+- **RECOMMENDED: branchEA=0.03 as the mat-dimer default (branchEI/forkK unchanged); then the cross-bridge substep for the
+  residual velocity convergence.** NEXT: adopt + re-baseline the density sweep at branchEA 0.03.
+
+### 2026-07-19 — EXPLICIT HMM DIMER: ENSEMBLE GLIDING + directional rules D0/D1/D2 + DOUBLE-HEAD MAT — OUTCOME A (motion supplies the bias)
+
+New `softbox/ExplicitHmmDimerGlidingHarness.java` (`scripts/run_hmm_gliding.sh`): two reciprocal ensemble gliding assays +
+a 2D double-head mat, each dimer running the validated production per-head step (`ExplicitHmmDimer.solve` +
+bind/chemistry/gather) generalized to N dimers. NO new conformational mechanism (dirMech=0, per task). 5.4 nm
+occupancy exclusion ON in every condition. Report `docs/matsoa/EXPLICIT_HMM_DIMER_GLIDING_DIRECTIONALITY_FINDINGS.md`.
+`ExplicitHmmDimer.java`/single-head/TwoBodyConverterMotor/MotorModel/viewer UNCHANGED; new files only.
+- **Question:** does the explicit HMM dimer glide directionally WITHOUT an imposed rearward second-head rule, and do
+  graded (D1 γ=0.25) / hard (D2 veto) rules change assay behavior? **Answer: OUTCOME A.**
+- **Assay A (mobile actin, 16 seeds) + Assay B (fixed actin/mobile assembly, 12 seeds):** both glide directed;
+  velocity rises with density (A: +0.55→+1.65 µm/s over ρ 2.85→15.2/µm), **D0 ≈ D1 ≈ D2 within CI on velocity/force/
+  persistence** at every density — the rule only trims backward binds (D0 45 → D2 0 at ρ15). RECIPROCITY PASS.
+- **E3 prescribed-motion control (the clean test):** forward second-head eligible fraction RISES with forward speed
+  (0.70 still → 0.76 at −5 µm/s) and COLLAPSES to 0.22 under reverse motion ⇒ relative translation biases the free-head
+  search barbed-ward.
+- **Event-conditioned:** backward binds are self-filtering — dwell 0.34 vs 1.09 ms (3.2× shorter) and force −2.4 vs
+  +1.1 pN (opposing) ⇒ rare, brief, mechanically harmless. No directional rule needed; D1 optional.
+- **DOUBLE-HEAD MAT (per jba: dimers/µm², mirror single-head buildS2Mat 3×1 µm lawn, 2µm filament):** established +
+  glides pointed-first **−1.59/−2.29/−2.24 µm/s at 500/750/1000 dimers/µm² (meanBound 4.5/6.8/8.0)**, **D0≈D1≈D2
+  (Outcome A holds in the mat)**. Two jba-flagged corrections: (1) **random azimuthal orientation** (`rotateDimerZ` —
+  each dimer rotated about vertical; per-dimer frame threaded through bind + solve) — was orientationally aligned; (2)
+  **active-cull 30→120 nm** — the tight cull froze dimers as the gliding filament reached them + undercounted binding
+  (plateau ~120 nm; meanBound 4.2→6.8). Duty now ≈ single-head mat (4.5 vs 4.57), velocity ~2× slower (shared-tail
+  coupling) — the earlier "2–4× lower duty" was the cull artifact. Single-head mat STOPPED per jba (mat must be
+  double-head). **Health: maxGap up to ~670 nm mat transients (recovers, invalid 0) ⇒ cross-bridge substep needed.**
+- **Health:** invalid 0 / solver-fail 0 everywhere; velocity dt-SENSITIVE (+0.58→+0.32 at dt/2 — known explicit
+  cross-bridge substep; directional conclusion dt-robust); coupled-tail joint-gap transients up to ~100–230 nm in a
+  minority of mat seeds (recovers) ⇒ a cross-bridge substep is the indicated cure before the mat is a quantitative assay.
+- Movies: `threejs_hmm_gliding_{A,B}_D{0,1,2}/` (nDim16) + `threejs_hmm_matglide_D0/` (200 dimers/µm²).
+
+### 2026-07-19 — EXPLICIT HMM DIMER: binding-triggered DISTAL-S2 HINGE (fork forward-advance, mech 9) — FAILS (fork can't advance + unstable)
+
+Tested advancing the shared S2–fork junction PAST the bound actin site via a localized distal-S2 hinge that bends
+barbed-ward on binding (the lead-lag successor). Report
+`docs/matsoa/EXPLICIT_HMM_DIMER_FORWARD_JUNCTION_HINGE_FINDINGS.md`. Mech 9, default OFF; single-head / TwoBodyConverterMotor
+/ MotorModel / shared-S2 / viewer UNCHANGED; gates + exclusion fixtures re-pass byte-identically.
+- **FAILS the mandatory J1 fork-advance gate — provable + measured.** Two geometric facts: (1) the distal-S2 tangent is
+  already PARALLEL to the barbed axis (tS2·bHat = 0.992) — the fork sits at the +x tip of a straight anchored beam, so
+  a barbed-ward bend has NO forward room; (2) the fork already sits **21 nm BEHIND the bound site** (baseline
+  junctionLead −20.99 nm — the bound head reaches forward to bind). J1: hingeAdvance goes 0 → −0.23 nm (monotonically
+  BACKWARD) as φ 0→30°; junctionLead only worsens. Advancing the fork past the site would need +21 nm — impossible by
+  bending. J6 internal balance PASS (1.1e-18 pN), so it's geometry, not a bug.
+- **Dynamically unstable** when activated (φ20/stiff1 → gap 3126 nm, 297 pN, invalid 3); only φ2/stiff0.02 stays
+  near-healthy (gap 3.96 nm) but is inert-to-BACKWARD (8-seed forward fraction 0.30 < C0 0.652; 1/8 seeds gap>10 nm).
+- **Verdict: HINGE RESOLVES FORWARD BIAS = NO; READY TO PROMOTE = NO.** Stroke (8.00/7.60) + shared S2 (<0.003%)
+  preserved. A forward-junction advance needs a STRUCTURAL geometry change (angle the S2 anchor pointed-ward of the
+  fork, or add S2 slack so straightening advances the fork), tested against the same J1 gate; else adopt the C4 γ0.25
+  phenomenological penalty. C0/C4/C3 refs unchanged (0.65 / 0.85 / 1.0).
+- **New:** mech 9 in `ExplicitHmmDimer` (distal shared hinge below the fork, preferred bend toward bHat, tunable
+  stiffness); `ExplicitHmmDimerForwardHarness -hinge` (junctionLead/hingeAdvance metrics + baseline probe + J1 + J6).
+  Movies: `_hinge_ctrl`, `_hinge_mech` (inert low-amp), `_hinge_penalty` (C4). **7th directional mechanism tested; all
+  fail without a phenomenological rule — the shared-tail-parallel-to-actin architecture fundamentally resists forward
+  biasing.**
+
+### 2026-07-19 — EXPLICIT HMM DIMER: AXIAL LEAD-LAG fork (branch-root rest-angle torques, mech 8) — FAILS (no pivot offset + dynamically unstable)
+
+Tested the directional survey's recommended "genuinely different geometry": state-dependent internal rest-angle
+torques at the two branch roots to rotate the fork into an AXIAL lead-lag (free branch leads barbed, bound branch lags
+pointed), creating a real `axialPivotOffset = dot(pivotFree−pivotBound, bHat)`. Report
+`docs/matsoa/EXPLICIT_HMM_DIMER_AXIAL_LEAD_LAG_FINDINGS.md`. Default OFF; single-head / TwoBodyConverterMotor /
+MotorModel / shared-S2 / viewer UNCHANGED; gates + exclusion fixtures re-pass byte-identically.
+- **DOUBLE FAILURE.** (1) **Mandatory G1 axial-offset test FAILS:** offset ≤0.16 nm, non-monotonic, goes NEGATIVE at
+  large φ (−0.55 nm @30°) — target ≥2.5 nm. Root cause (NOT a rotation-axis bug — G2 polarity / G4 mirror / G5 balance
+  2.3e-13 pN all PASS): the PREFERRED branch directions are correctly axially offset, but the SETTLED pivots don't
+  follow — the bound pivot is pinned by the head's actin anchor + stiff branch stretch (420 pN/nm), and the free branch
+  is already near-axial (ceiling ~0.4 nm). (2) **Dynamically UNSTABLE** at every usable amplitude: φ2/stiff0.1 → gap
+  8.5 nm; φ20/stiff0.25 → 394 nm; φ8/stiff1.0 → 2846 nm/796 pN/invalid — the activated fork torque destabilises the
+  solve.
+- **Dynamic comparison (16 seeds):** lead-lag DEGRADES it — fwdFrac 0.667 (C0) → **0.438** (below 0.5), continuous
+  shift +1.29 → −1.36 nm (backward). Only C4 γ0.25 (0.867 [0.50,1.00]) and C3 veto (1.0) resolve it.
+- **Verdict: AXIAL LEAD-LAG RESOLVES FORWARD BIAS = NO; READY TO PROMOTE = NO.** A rest-angle torque cannot create a
+  pivot lead-lag in this pinned/stiff geometry — a genuine one needs a STRUCTURAL change decoupling the bound pivot
+  from its anchor (longer/compliant proximal segment or axially-staggered anchor points), tested with the same G1
+  gate; else adopt the C4 γ0.25 phenomenological penalty. Stroke (8.00/7.60 nm) + shared S2 (<0.01 nm) preserved.
+- **New:** mech 8 in `ExplicitHmmDimer` (forkCant free +φ toward bHat / bound −ratio·φ away + tunable fork stiffness);
+  `ExplicitHmmDimerForwardHarness -leadlag` (G1 monotonicity + screen + G2–G5 fixtures) + `-leadcompare`. Movies:
+  `_ll_ctrl` (C0), `_ll_mech` (lead-lag, least-unstable), `_ll_penalty` (C4 γ0.25).
+
 ### 2026-07-19 — EXPLICIT HMM DIMER: directional-mechanism SURVEY (M1–M6 conformational steering) — NO conformational mechanism resolves the forward bias
 
 Tested whether a polarity-aware, state-dependent conformational rearrangement can steer the free head barbed-ward for

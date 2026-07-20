@@ -6,6 +6,7 @@ import static softbox.TwoBodyConverterMotor.scl;
 import static softbox.TwoBodyConverterMotor.dot;
 
 import softbox.ExplicitHmmDimer.Dimer;
+import softbox.TwoBodyConverterMotor.Cmot;
 import softbox.ExplicitHmmDimer3jsHarness.Scene;
 import softbox.ExplicitHmmDimer3jsHarness.Run;
 
@@ -49,7 +50,11 @@ public final class ExplicitHmmDimerForwardHarness {
     public static void main(String[] args) throws IOException {
         boolean maps = has(args, "-maps"), nat = has(args, "-natural"), survey = has(args, "-survey");
         NAT_SEEDS = (int) argD(args, "-seeds", NAT_SEEDS); NAT_STEPS = (int) argD(args, "-steps", NAT_STEPS);
+        LL_PHI = argD(args, "-phi", LL_PHI); LL_RATIO = argD(args, "-ratio", LL_RATIO); LL_STIFF = argD(args, "-stiff", LL_STIFF);
         if (survey) { mechanismSurvey(); return; }
+        if (has(args, "-hinge")) { hingeSurvey(); return; }
+        if (has(args, "-leadlag")) { leadLagSurvey(); return; }
+        if (has(args, "-leadcompare")) { leadLagCompare(); return; }
         if (has(args, "-compare")) { compareModels(); return; }
         if (!maps && !nat) { maps = true; nat = true; NAT_SEEDS = (int) argD(args, "-seeds", 24); }
         DetResult det = null; NatResult nr = null;
@@ -400,6 +405,169 @@ public final class ExplicitHmmDimerForwardHarness {
         return nr;
     }
 
+    // ============================ FORWARD-JUNCTION DISTAL-S2 HINGE survey (this task) ============================
+    /** Distal-S2 hinge case: head A bound; mech 9 with (phiHinge, stiffness). Returns {junctionLead nm
+     *  (dot(pFork−pBind,bHat)), hingeAdvance nm (dot(pFork_on−pFork_off,bHat)), freeF8Lead nm (dot(pFreeF8−pBind,bHat)),
+     *  maxGap nm, distalTangent·bHat, s2contourChange%}. */
+    static double[] hingeCase(double phiHingeDeg, double stiff, boolean stroked) {
+        Scene sc = ExplicitHmmDimer3jsHarness.buildScene(SPLAY, GAP, NSEG, DT, 7, 0.0, ALPHA, BREI, BREA, BRANCHLEN);
+        Dimer d = sc.d; FilamentStore f = sc.G.fil; int nSeg = sc.G.nSeg;
+        double sA = projectMat(f, nSeg, d.hA.xF8); double[] pBind = matToWorld(f, nSeg, sA);
+        // OFF baseline
+        d.dirMech = 0; d.dirAct = 0; d.boundHead = -1; settleBound(d, pBind, stroked ? POST : PRE, false, 7);
+        double[] forkOff = d.nd[d.Ms].clone(); double c0 = ExplicitHmmDimer.contour(d);
+        // distal S2 tangent (segment Ms-1 → Ms), normalized · bHat
+        double[] tDist = sub(d.nd[d.Ms], d.nd[d.Ms - 1]); double tdb = dot(tDist, new double[]{ 1, 0, 0 }) / Math.sqrt(dot(tDist, tDist));
+        // ON
+        d.dirMech = 9; d.dirAmp = Math.toRadians(phiHingeDeg); d.dirConvStiffMult = stiff; d.boundHead = 0; d.dirAct = 1; d.bHat = new double[]{ 1, 0, 0 };
+        settleBound(d, pBind, stroked ? POST : PRE, false, 7);
+        double[] forkOn = d.nd[d.Ms].clone();
+        double junctionLead = dot(sub(forkOn, pBind), d.bHat) * 1e3;
+        double hingeAdvance = dot(sub(forkOn, forkOff), d.bHat) * 1e3;
+        double freeF8Lead = dot(sub(d.hB.xF8, pBind), d.bHat) * 1e3;
+        double s2pct = 100.0 * (ExplicitHmmDimer.contour(d) - c0) / c0;
+        return new double[]{ junctionLead, hingeAdvance, freeF8Lead, ExplicitHmmDimer.maxJointGap(d), tdb, s2pct };
+    }
+
+    static void hingeSurvey() {
+        System.out.println("=== FORWARD-JUNCTION DISTAL-S2 HINGE SURVEY (mech 9; Brownian off; head A bound) ===");
+        // baseline geometry probe (grounds the analysis)
+        double[] b0 = hingeCase(0, 1.0, true);
+        System.out.printf(Locale.US, "BASELINE geometry (A bound, mech off): junctionLead(pFork−pBind)·bHat = %+.3f nm; distal-S2 tangent·bHat = %.4f (1.0 ⇒ S2 ∥ filament barbed axis)%n",
+                b0[0], b0[4]);
+        System.out.println("   ⇒ if distal-S2 tangent·bHat ≈ 1, the S2 already points at the barbed end and the fork is at the straight-beam +x tip;");
+        System.out.println("     a barbed-ward bend then has NO forward room (it can only move the fork back/transverse). J1 measures this directly.");
+
+        // --- J1 mandatory monotonic fork advance ---
+        System.out.println("\n§8-J1 MONOTONIC FORK ADVANCE: hingeAdvance = dot(pFork_active − pFork_baseline, bHat) vs phiHinge (stiff 1.0×, bound-post):");
+        double prev = -1e9; boolean mono = true, moved = false;
+        for (double p : new double[]{ 0, 1, 2, 5, 8, 10, 15, 20, 30 }) { double[] r = hingeCase(p, 1.0, true);
+            System.out.printf(Locale.US, "   phiHinge=%2.0f° → hingeAdvance %+.3f nm, junctionLead %+.3f nm, freeF8Lead %+.3f nm, maxGap %.2f, s2Δ %.3f%%%n",
+                    p, r[1], r[0], r[2], r[3], r[5]);
+            if (Math.abs(r[1]) > 1.0) moved = true; if (p > 0 && r[1] < prev - 0.05) mono = false; prev = r[1]; }
+        System.out.println("   J1 " + (moved && mono ? "PASS" : "FAIL") + " (needs monotonic fork advance > 1 nm; a fork that does not move FAILS).");
+
+        // --- stiffness sweep at phi=20 to probe whether a softer/stiffer hinge advances the fork ---
+        System.out.println("\n§7 stiffness sweep at phiHinge=20° (bound-post): hingeAdvance | junctionLead | maxGap | s2Δ%");
+        for (double ks : new double[]{ 0.02, 0.05, 0.1, 0.25, 0.5, 1.0 }) { double[] r = hingeCase(20, ks, true);
+            System.out.printf(Locale.US, "   stiff=%.2f× → hingeAdvance %+.3f nm, junctionLead %+.3f nm, maxGap %.2f, s2Δ %.3f%%%n", ks, r[1], r[0], r[3], r[5]); }
+
+        // --- J6 internal balance ---
+        Scene sc = ExplicitHmmDimer3jsHarness.buildScene(SPLAY, GAP, NSEG, DT, 7, 0.0, ALPHA, BREI, BREA, BRANCHLEN);
+        Dimer d = sc.d; d.dirMech = 9; d.dirAmp = Math.toRadians(20); d.dirConvStiffMult = 1.0; d.boundHead = 0; d.dirAct = 1; d.bHat = new double[]{ 1, 0, 0 };
+        d.hA.thetaS = POST; d.hB.thetaS = PRE;
+        double[][] Fn = ExplicitHmmDimer.nodeForces(d, d.nd); double[] sum = { 0, 0, 0 };
+        for (int j = 0; j <= d.NF; j++) for (int k = 0; k < 3; k++) sum[k] += Fn[j][k];
+        System.out.printf(Locale.US, "%n§8-J6 internal balance: |net node-force| %.3e pN → %s%n", Math.sqrt(dot(sum, sum)) * 1e12, Math.sqrt(dot(sum, sum)) * 1e12 < 1e-2 ? "PASS" : "FAIL");
+        double[] sd = strokeDecomp();
+        System.out.printf(Locale.US, "§14 stroke preservation: intrinsic %.2f nm, head-anchor %.2f nm (unaffected by the hinge)%n", sd[0], sd[1]);
+    }
+
+    // ============================ AXIAL LEAD-LAG survey (this task) ============================
+    /** Deterministic lead-lag case: head A bound, head B free; mechanism 8 with (φFree, φBound/φFree ratio, stiffness).
+     *  Returns {axialPivotOffset nm (dot(pivotFree−pivotBound,bHat)), freeF8fwdShift nm, fwdAdvantage nm, maxGap nm,
+     *  s2def nm, freePreload pN, boundForce pN}. */
+    static double[] leadLagCase(double phiFreeDeg, double ratio, double stiff, boolean stroked, boolean decouple, boolean bindB) {
+        Scene sc = ExplicitHmmDimer3jsHarness.buildScene(SPLAY, GAP, NSEG, DT, 7, 0.0, ALPHA, BREI, BREA, BRANCHLEN);
+        Dimer d = sc.d; FilamentStore f = sc.G.fil; int nSeg = sc.G.nSeg;
+        int boundIdx = bindB ? 1 : 0, freeIdx = 1 - boundIdx;
+        Cmot bh = bindB ? d.hB : d.hA;
+        double sBnd = projectMat(f, nSeg, bh.xF8); double[] actinBnd = matToWorld(f, nSeg, sBnd);
+        // OFF baseline
+        d.dirMech = 0; d.dirAct = 0; d.boundHead = -1;
+        if (bindB) settleBoundB(d, actinBnd, stroked ? POST : PRE, 7); else settleBound(d, actinBnd, stroked ? POST : PRE, false, 7);
+        double sF0 = (projectMat(f, nSeg, (freeIdx == 0 ? d.hA : d.hB).xF8) - sBnd) * 1e3, sharedC0 = sharedContour(d);
+        // ON (lead-lag)
+        d.dirMech = 8; d.dirAmp = Math.toRadians(phiFreeDeg); d.dirComp = ratio; d.dirConvStiffMult = stiff;
+        d.boundHead = boundIdx; d.dirAct = 1; d.bHat = new double[]{ 1, 0, 0 };
+        if (bindB) settleBoundB(d, actinBnd, stroked ? POST : PRE, 7); else settleBound(d, actinBnd, stroked ? POST : PRE, decouple, 7);
+        Cmot fr = freeIdx == 0 ? d.hA : d.hB;
+        double[] pivF = d.nd[freeIdx == 0 ? d.pA : d.pB], pivB = d.nd[boundIdx == 0 ? d.pA : d.pB];
+        double axialOff = dot(sub(pivF, pivB), d.bHat) * 1e3;                       // dot(pivotFree − pivotBound, bHat)
+        double sF1 = (projectMat(f, nSeg, fr.xF8) - sBnd) * 1e3;
+        double surfP = (dist(fr.xF8, matToWorld(f, nSeg, sBnd + 5.4e-3)) - FIL_R) * 1e3;
+        double surfM = (dist(fr.xF8, matToWorld(f, nSeg, sBnd - 5.4e-3)) - FIL_R) * 1e3;
+        double maxGap = ExplicitHmmDimer.maxJointGap(d), s2def = Math.abs(sharedContour(d) - sharedC0) * 1e3;
+        return new double[]{ axialOff, sF1 - sF0, surfM - surfP, maxGap, s2def, sF0, sF1 };
+    }
+
+    static void leadLagSurvey() {
+        System.out.println("=== AXIAL LEAD-LAG SURVEY (mech 8; internal branch-root rest-angle torques; Brownian off; head A bound) ===");
+        // --- G1: mandatory axial-pivot-offset monotonicity (ratio 1.0, full stiffness) ---
+        System.out.println("§7-G1 MONOTONICITY: axialPivotOffset = dot(pivotFree − pivotBound, bHat) vs φFree (ratio 1.0, stiff 1.0×, bound-post):");
+        double prev = -1e9; boolean mono = true;
+        for (double p : new double[]{ 0, 2, 5, 10, 15, 20, 25, 30 }) { double off = leadLagCase(p, 1.0, 1.0, true, false, false)[0];
+            System.out.printf(Locale.US, "   φFree=%2.0f° → axialPivotOffset %+.3f nm%n", p, off);
+            if (p > 0 && off < prev - 0.05) mono = false; prev = off; }
+        System.out.println("   G1 " + (mono ? "PASS (monotonic increasing)" : "FAIL (non-monotonic)") + "; a near-zero offset would FAIL the mechanism.");
+
+        // --- full deterministic screen: φFree × ratio × stiffness ---
+        System.out.println("\n§8 deterministic screen (bound-post T2): axialOff | freeF8fwd | fwdAdv | maxGap s2def | health");
+        System.out.println("  φFree ratio stiff | axialOff freeF8fwd fwdAdv | maxGap  s2def | status");
+        double bestOff = 0, bestShift = 0; String bestP = "-"; double[] best = null;
+        for (double p : new double[]{ 10, 15, 20, 25, 30 }) for (double rat : new double[]{ 0, 0.5, 1.0 }) for (double ks : new double[]{ 0.1, 0.25, 0.5, 1.0 }) {
+            double[] r = leadLagCase(p, rat, ks, true, false, false);
+            boolean h = r[3] < 4.0 && r[4] < 1.0;
+            if (p == 20 || (h && r[0] > 4.5 && r[0] < 9)) System.out.printf(Locale.US, "  %3.0f  %.2f  %.2f | %+7.3f  %+7.3f  %+6.3f | %5.2f  %5.2f | %s%n",
+                    p, rat, ks, r[0], r[1], r[2], r[3], r[4], h ? "OK" : "REJECT");
+            // pick the candidate whose axial offset is closest to 5.4 nm among healthy configs
+            if (h && Math.abs(r[0] - 5.4) < Math.abs(bestOff - 5.4)) { bestOff = r[0]; bestShift = r[1]; bestP = String.format(Locale.US, "φFree=%.0f° ratio=%.2f stiff=%.2f", p, rat, ks); best = r; }
+        }
+        System.out.printf(Locale.US, "%n>>> best ~5.4 nm axial-offset healthy candidate: %s → axialOffset %+.2f nm, freeF8fwd %+.2f nm, fwdAdv %+.2f nm%n",
+                bestP, bestOff, bestShift, best == null ? 0 : best[2]);
+
+        // --- fixtures G2 (polarity), G3 (A/B swap), G4 (mirror), G5 (force/torque balance) at a representative φ=20°, ratio1, stiff1 ---
+        double[] gA = leadLagCase(20, 1.0, 1.0, true, false, false);      // A bound, free B leads
+        double[] gB = leadLagCase(20, 1.0, 1.0, true, false, true);       // B bound, free A leads (A/B swap)
+        System.out.printf(Locale.US, "%n§7-G3 A/B swap: A-bound axialOffset %+.3f nm; B-bound axialOffset %+.3f nm (free head leads in both) → %s%n",
+                gA[0], gB[0], (gA[0] > 0.5 && gB[0] > 0.5) ? "PASS" : "FAIL");
+        double polOff = leadLagPolarityReversed(20, 1.0, 1.0);
+        System.out.printf(Locale.US, "§7-G2 polarity reversal: free branch leads toward the NEW barbed end, axialOffset(new bHat) %+.3f nm → %s%n",
+                polOff, polOff > 0.5 ? "PASS" : "FAIL");
+        double mirOff = leadLagMirror(20, 1.0, 1.0);
+        System.out.printf(Locale.US, "§7-G4 spatial mirror (y→−y): axialOffset %+.3f nm (preserved) → %s%n", mirOff, Math.abs(mirOff - gA[0]) < 0.5 ? "PASS" : "FAIL");
+        double netF = leadLagNetForce(20, 1.0, 1.0);
+        System.out.printf(Locale.US, "§7-G5 internal balance: |net mechanism node-force| %.3e pN (should be ≈ solver tol) → %s%n", netF, netF < 1e-2 ? "PASS" : "FAIL");
+        // stroke preservation
+        double[] sd = strokeDecomp();
+        System.out.printf(Locale.US, "%n§11 stroke preservation (unaffected by mech): intrinsic %.2f nm, head-anchor %.2f nm, head-actin %.2f nm%n", sd[0], sd[1], sd[2]);
+    }
+    /** Polarity-reversed lead-lag axial offset toward the NEW barbed end (flip filament uVec + neighbours + bHat). */
+    static double leadLagPolarityReversed(double phiFree, double ratio, double stiff) {
+        Scene sc = ExplicitHmmDimer3jsHarness.buildScene(SPLAY, GAP, NSEG, DT, 7, 0.0, ALPHA, BREI, BREA, BRANCHLEN);
+        Dimer d = sc.d; FilamentStore f = sc.G.fil; int nSeg = sc.G.nSeg;
+        for (int k = 0; k < nSeg; k++) { f.setUVec(k, -f.uVecX(k), -f.uVecY(k), -f.uVecZ(k));
+            int e1 = f.end1NbrSlot.get(k), e2 = f.end2NbrSlot.get(k); f.end1NbrSlot.set(k, e2); f.end2NbrSlot.set(k, e1); }
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        double sA = projectMat(f, nSeg, d.hA.xF8); double[] actinA = matToWorld(f, nSeg, sA);
+        d.dirMech = 8; d.dirAmp = Math.toRadians(phiFree); d.dirComp = ratio; d.dirConvStiffMult = stiff;
+        d.boundHead = 0; d.dirAct = 1; d.bHat = new double[]{ -1, 0, 0 };   // NEW barbed = −x after polarity flip
+        settleBound(d, actinA, POST, false, 7);
+        return dot(sub(d.nd[d.pB], d.nd[d.pA]), d.bHat) * 1e3;   // free-B pivot leads toward the new barbed (−x)
+    }
+    static double leadLagMirror(double phiFree, double ratio, double stiff) {
+        Scene sc = ExplicitHmmDimer3jsHarness.buildScene(SPLAY, GAP, NSEG, DT, 7, 0.0, ALPHA, BREA == 0 ? 1 : BREI, BREA, BRANCHLEN);
+        Dimer d = sc.d; FilamentStore f = sc.G.fil; int nSeg = sc.G.nSeg;
+        for (int j = 0; j <= d.NF; j++) d.nd[j][1] = -d.nd[j][1]; d.E[1] = -d.E[1];
+        ExplicitHmmDimer.pinHead(d.hA, d.nd[d.pA]); ExplicitHmmDimer.pinHead(d.hB, d.nd[d.pB]);
+        double sA = projectMat(f, nSeg, d.hA.xF8); double[] actinA = matToWorld(f, nSeg, sA);
+        d.dirMech = 8; d.dirAmp = Math.toRadians(phiFree); d.dirComp = ratio; d.dirConvStiffMult = stiff;
+        d.boundHead = 0; d.dirAct = 1; d.bHat = new double[]{ 1, 0, 0 };
+        settleBound(d, actinA, POST, false, 7);
+        return dot(sub(d.nd[d.pB], d.nd[d.pA]), d.bHat) * 1e3;
+    }
+    /** Net internal node force introduced by the mechanism on the isolated dimer (F8h=0, no external load). */
+    static double leadLagNetForce(double phiFree, double ratio, double stiff) {
+        Scene sc = ExplicitHmmDimer3jsHarness.buildScene(SPLAY, GAP, NSEG, DT, 7, 0.0, ALPHA, BREI, BREA, BRANCHLEN);
+        Dimer d = sc.d;
+        d.dirMech = 8; d.dirAmp = Math.toRadians(phiFree); d.dirComp = ratio; d.dirConvStiffMult = stiff;
+        d.boundHead = 0; d.dirAct = 1; d.bHat = new double[]{ 1, 0, 0 };
+        d.hA.thetaS = POST; d.hB.thetaS = PRE;
+        double[][] Fn = ExplicitHmmDimer.nodeForces(d, d.nd);
+        double[] sum = { 0, 0, 0 }; for (int j = 0; j <= d.NF; j++) for (int k = 0; k < 3; k++) sum[k] += Fn[j][k];
+        return Math.sqrt(dot(sum, sum)) * 1e12;   // pN
+    }
+
     // ============================ §16 conformational vs phenomenological comparison ============================
     static void compareModels() throws IOException {
         int seeds = (int) argD(new String[0], "-seeds", 30); seeds = NAT_SEEDS > 0 ? NAT_SEEDS : 30;
@@ -420,6 +588,23 @@ public final class ExplicitHmmDimerForwardHarness {
                     names[i], nr.fwd, nr.bwd, nr.fwdFrac, nr.fwdFracLo, nr.fwdFracHi, nr.dblFrac, nr.dwell, nr.shift, nr.postFwdAccess);
         }
         System.out.println("\nInterpretation: a resolved forward bias requires the clustered CI to EXCLUDE 0.5. Compare which configs achieve it.");
+    }
+
+    // ============================ lead-lag dynamic comparison ============================
+    static double LL_PHI = 20, LL_RATIO = 1.0, LL_STIFF = 0.25;   // best candidate (set from -phi/-ratio/-stiff)
+    static void leadLagCompare() throws IOException {
+        int seeds = NAT_SEEDS > 0 ? NAT_SEEDS : 24, steps = NAT_STEPS;
+        System.out.printf(Locale.US, "=== LEAD-LAG DYNAMIC COMPARISON (%d seeds × %d steps; exclusion 5.4 nm; lead-lag φ=%.0f ratio=%.2f stiff=%.2f T2) ===%n",
+                seeds, steps, LL_PHI, LL_RATIO, LL_STIFF);
+        System.out.println("config             | fwd bwd  fwdFrac  clusteredCI    | dblFrac  dwell(ms) | shift(nm) postAcc");
+        String[] names = { "C0 baseline", "lead-lag (mech8)", "C4 penalty γ0.25", "C3 hard veto" };
+        int[] mech = { 0, 8, 0, 0 }; double[] amp = { 0, LL_PHI, 0, 0 }; double[] cmp = { 0, LL_RATIO, 0, 0 };
+        double[] ks = { 1, LL_STIFF, 1, 1 }; boolean[] veto = { false, false, false, true }; double[] pen = { 1, 1, 0.25, 1 };
+        for (int i = 0; i < names.length; i++) {
+            NatResult nr = poolCfg(seeds, steps, mech[i], amp[i], cmp[i], ks[i], 2, veto[i], pen[i]);
+            System.out.printf(Locale.US, "%-18s | %3d %3d  %6.3f  [%.2f,%.2f]  | %6.4f  %6.3f   | %+7.3f  %6.3f%n",
+                    names[i], nr.fwd, nr.bwd, nr.fwdFrac, nr.fwdFracLo, nr.fwdFracHi, nr.dblFrac, nr.dwell, nr.shift, nr.postFwdAccess);
+        }
     }
 
     // ============================ status block ============================
