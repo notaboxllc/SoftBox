@@ -66,6 +66,8 @@ public final class ExplicitHmmDimerGlidingHarness {
     //  -forkK   m ⇒ the two fork-root angular-coupling hinges × m (on top of branchEI; new selectable term)
     // All default 1.0 ⇒ the build call is byte-identical to the reference dimer.
     static double CFG_EA = 1.0, CFG_EI = 1.0, CFG_FORK = 1.0;
+    // GPU-backend selector (task §1). Default CPU (the permanent oracle); gpu refused until DEVICE_VALIDATED.
+    static ExplicitHmmDimerGpuParams.Backend BACKEND = ExplicitHmmDimerGpuParams.Backend.CPU;
     static Dimer buildRefDimer() {
         return ExplicitHmmDimer.build(3, 1, 1, SPLAY, DT, ALPHA, BREI * CFG_EI, BREA * CFG_EA, BRANCHLEN, CFG_FORK);
     }
@@ -594,6 +596,22 @@ public final class ExplicitHmmDimerGlidingHarness {
         // dimer-only compliance multipliers (this study; default 1.0 ⇒ reference dimer byte-identical)
         CFG_EA = argD(args, "-branchEA", 1.0); CFG_EI = argD(args, "-branchEI", 1.0); CFG_FORK = argD(args, "-forkK", 1.0);
         DT = argD(args, "-dt", 2.5e-6);   // timestep override (mat sensitivity study); default byte-identical
+        // ---- GPU-backend selector (task §1/§22): default CPU; gpu refused until DEVICE_VALIDATED (never silent fallback) ----
+        if (has(args, "-gpu-experimental")) ExplicitHmmDimerGpuParams.EXPERIMENTAL_OVERRIDE = true;
+        BACKEND = ExplicitHmmDimerGpuParams.Backend.parse(argStr(args, "-backend", "cpu"));
+        ExplicitHmmDimerGpuParams.requireUsable(BACKEND);
+        printBackendBanner();
+        if (has(args, "-gpu-g1a-validate")) { int rc = ExplicitHmmDimerGpuValidation.runG1a(); System.exit(rc); }
+        if (has(args, "-gpu-g1b-validate")) { int rc = ExplicitHmmDimerGpuValidation.runG1b(args); System.exit(rc); }
+        if (has(args, "-gpu-g23-validate")) { int rc = ExplicitHmmDimerGpuValidation.runG23(args); System.exit(rc); }
+        if (has(args, "-gpu-g4a-validate")) { int rc = ExplicitHmmDimerGpuValidation.runG4a(args); System.exit(rc); }
+        if (has(args, "-gpu-g4b-validate")) { int rc = ExplicitHmmDimerGpuValidation.runG4b(args); System.exit(rc); }
+        if (has(args, "-gpu-g4c-validate")) { int rc = ExplicitHmmDimerGpuValidation.runG4c(args); System.exit(rc); }
+        if (has(args, "-gpu-g4d-validate")) { int rc = ExplicitHmmDimerGpuValidation.runG4d(args); System.exit(rc); }
+        if (has(args, "-gpu-g5-active-validate")) { int rc = ExplicitHmmDimerGpuValidation.runG5(args); System.exit(rc); }
+        if (has(args, "-gpu-validate-fixtures") || BACKEND == ExplicitHmmDimerGpuParams.Backend.GPU_VALIDATE && has(args, "-fixtures-gpu")) {
+            ExplicitHmmDimerGpuValidation.runFixtures(args); return;
+        }
         if (has(args, "-fixtures")) { fixtures(args); return; }
         if (has(args, "-shcell")) { shCell(args); return; }
 
@@ -625,6 +643,23 @@ public final class ExplicitHmmDimerGlidingHarness {
             }
             default: smoke(seeds, steps, nDim, spacing, gap);
         }
+    }
+
+    /** Startup disclosure (task §22): print the resolved backend, validation status, precision, kernel variant,
+     *  topology, branchEA, dt, and whether arrays are device-resident. Never prints an ambiguous "GPU enabled"
+     *  message when only a CPU path is running. */
+    static void printBackendBanner() {
+        boolean deviceResident = BACKEND != ExplicitHmmDimerGpuParams.Backend.CPU;
+        String kernelVariant = deviceResident
+                ? (ExplicitHmmDimerGpuParams.DEFAULT_TANGENT == ExplicitHmmDimerGpuParams.Tangent.FINITE_DIFFERENCE ? "gpu-fd" : "gpu-analytic")
+                : "cpu-object-solver";
+        System.out.printf(Locale.US,
+                "=== HMM-DIMER BACKEND: %s | DEVICE_VALIDATED=%b | precision=%s | kernel=%s | topology Ms=%d,Ma=%d,Mb=%d (%d DOF) | branchEA=%.4g | dt=%.3g | device-resident=%b ===%n",
+                BACKEND, ExplicitHmmDimerGpuParams.DEVICE_VALIDATED, ExplicitHmmDimerGpuParams.DEFAULT_PRECISION,
+                kernelVariant, ExplicitHmmDimerGpuParams.MS, ExplicitHmmDimerGpuParams.MA, ExplicitHmmDimerGpuParams.MB,
+                ExplicitHmmDimerGpuParams.NDOF, CFG_EA, DT, deviceResident);
+        if (deviceResident && !ExplicitHmmDimerGpuParams.DEVICE_VALIDATED)
+            System.out.println("  [experimental override active — device path is UN-VALIDATED; results not for production]");
     }
 
     // ---- DOUBLE-HEAD MAT: single cell (one density × mode × seed) — emits a MATROW CSV line for parallel drives ----
