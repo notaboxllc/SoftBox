@@ -87,6 +87,27 @@ public final class ExplicitHmmDimerGpuParams {
     public static final Tangent   DEFAULT_TANGENT   = Tangent.FINITE_DIFFERENCE;
     public static final Precision DEFAULT_PRECISION = Precision.FLOAT;   // primary device path (scaled units)
 
+    // ---------------- high-strain bond-rupture failsafe (separate task) ----------------
+    // A PHYSICAL constitutive rule: an actomyosin attachment dissociates when the PRE-SOLVE deformation needed to
+    // maintain it exceeds a physically admissible maximum — released BEFORE the forked solve turns a large imposed
+    // displacement into the known high-density joint-gap/branch-force runaway. R5 (gap) is the separate EMERGENCY
+    // failsafe, counted separately. DEFAULT R0 (disabled) ⇒ byte-identical to the pre-rupture path.
+    //   R0 disabled | R1 bond-displacement | R2 branch-extension/strain | R3 combined (R1∨R2, preferred candidate)
+    //   R4 pre-solve force (diagnostic) | R5 emergency joint-gap (release most-strained head)
+    public static int RUPTURE_MODE = 0;
+    public static double BOND_RELEASE_NM = 20.0;       // R1/R3 bond-displacement threshold (nm)
+    public static double BRANCH_RELEASE_NM = 10.0;     // R2/R3 branch tensile-extension threshold (nm)
+    public static double BRANCH_RELEASE_STRAIN = 1.0;  // R2/R3 branch strain threshold (ext/rest)
+    public static double RUPTURE_FORCE_PN = 40.0;      // R4 pre-solve force threshold (pN; diagnostic)
+    public static double EMERGENCY_GAP_NM = 50.0;      // R5 emergency joint-gap threshold (nm)
+    public static boolean EMERGENCY_ON = false;        // R5 emergency guard (diagnostic-count by default)
+
+    /** Pack the rupture params for the device kernel (native units): [mode,bondNm,branchNm,strain,forcePn,gapNm,emergencyOn]. */
+    public static float[] rupturePackScalars() {
+        return new float[]{ (float) RUPTURE_MODE, (float) BOND_RELEASE_NM, (float) BRANCH_RELEASE_NM, (float) BRANCH_RELEASE_STRAIN,
+                (float) RUPTURE_FORCE_PN, (float) EMERGENCY_GAP_NM, EMERGENCY_ON ? 1f : 0f };
+    }
+
     // ---------------- physical scaling (float primary path) ----------------
     // The flat FLOAT kernel works in nm / pN / rad; conversions from the object oracle's µm / SI-N / rad:
     public static final double NM_PER_UM   = 1e3;     // length:   µm → nm

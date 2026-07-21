@@ -303,6 +303,32 @@ G1a/G1b/G2/G3 were sized):
 
 ### G4a–G4d final status: BINDING/CHEMISTRY/FORCE-GATHER/ACTIN-INTEGRATION BACKEND = **GPU** (full device timestep = YES).
 
+## 3f. High-strain bond-rupture failsafe — MECHANISM done (2026-07-20); threshold promotion pending the sweep
+
+A physical constitutive rupture rule + a separate emergency gap failsafe, both device-resident float, inserted into
+the unified timestep AFTER actin motion + bound-site refresh and BEFORE the forked solve (so a large imposed
+displacement is released before it becomes an extreme branch force / joint gap). `ExplicitHmmDimerGpuKernel.ruptureCheck`
+(one work-item/dimer): per bound head computes **B1 bondDisp = |actinSite(post-move) − headTip|**, **B2 branchExt/strain**
+(head A seg {3,4}, head B seg {3,5}), **B3 force = myoSpring·bondDisp** (R4 diagnostic). Modes: **R0** disabled (default),
+**R1** bond-displacement, **R2** branch-extension/strain, **R3** combined (R1∨R2, the candidate), **R4** force (diagnostic),
+**R5** emergency joint-gap (releases the most-strained still-bound head, counted separately). Per-head independent release
+(both only if both qualify); score `bondDisp/bondNm + posBranchExt/branchNm + posStrain/strainNm` ranks the R5 emergency
+pick. Release = FREE_BINDABLE + clear bindArc/forceDotFil + nucleotide→NONE (no invented ATP); a dedicated per-motor
+event code (1 physical / 2 emergency). Run `./scripts/run_hmm_gpu.sh -rupture-validate`.
+
+Validation: **F1/F2/F6/F9 threshold PASS** — the release set matches `{bondDisp>threshold}` EXACTLY per head (moving-actin
+fixture; actin shift ≠ bondDisp because heads carry a nonzero residual stretch, so the rule is tested against its own
+metric); **R0 preservation PASS** (mode 0 ⇒ 0 releases even at 40 nm — byte-identical, gated so the kernel isn't even
+called); **CPU↔GPU event-identical PASS** (CPU 4 == GPU 4 releases at shift 25). Controls (§22): `-ruptureMode 0..5`,
+`-bondReleaseNm`, `-branchReleaseNm`, `-branchReleaseStrain`, `-ruptureForcePn`, `-emergencyGapNm`, `-ruptureEmergency`
+(startup prints all thresholds when active). **Default RUPTURE_MODE=0 (disabled) — NOT promoted.**
+
+**DEFERRED (compute-heavy standing runs, the threshold-promotion gate):** §12 reproduce the ρ1500 ~162 nm / ρ3000 ~32149
+nm R0 runaway; §13 threshold screen ρ750/1500/3000 × ≥4 seeds × 5000 steps; §14 physical-success gate (0 >50 nm
+excursions @1500, no µm runaway @3000, 0 emergency, 0 invalid/solveFail); §15 biological-range false-positive ρ100–750
+(velocity/bound Δ<10%, D0 unchanged); §16 lifetime-tail; §17 D0≈D2; §18 dt. The likely promoted rule is R3 with bond
+~20–30 nm + branch ~7.5–15 nm + emergency gap ~50 nm, but the actual values must come from the sweep.
+
 ## 3e. Phase G5 — active-list fold + promotion decision (2026-07-20)
 
 **Active-list fold (§2/§3) DONE + validated.** `ExplicitHmmDimerGpuKernel.cullDimers` writes a per-dimer active

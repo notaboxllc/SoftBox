@@ -508,5 +508,79 @@ public final class ExplicitHmmDimerGpuKernel {
         }
     }
 
+    // ================================================================================================
+    // ===================== High-strain bond-rupture failsafe (physical + emergency) =================
+    // Runs AFTER actin motion + bound-site refresh, BEFORE the forked mechanical solve. For each bound head:
+    //   B1 bondDisp = |actinSite(post-move) − headTip|  (nm)  — the cross-bridge stretch the solve must resolve
+    //   B2 branchExt/strain = (branchLen − rest)/rest         — head A: seg {3,4}, head B: seg {3,5}
+    //   B3 force = myoSpring·bondDisp                          — pre-solve predicted load (pN; R4 diagnostic)
+    // Physical rupture R1/R2/R3/R4 releases each head that INDEPENDENTLY crosses its threshold (both only if both
+    // qualify). R5 EMERGENCY (gap>threshold) releases the MOST-strained still-bound head (score-ranked), counted
+    // separately. Release = FREE_BINDABLE + clear bindArc/forceDotFil/forceMag + nucleotide→NONE (no ATP invented).
+    // rp: [0]mode [1]bondNm [2]branchNm [3]strain [4]forcePn [5]gapNm [6]emergencyOn [7]myoSpring [8]headLen(µm)
+    // events: per-motor 0 none / 1 physical / 2 emergency.
+    // ================================================================================================
+    static float branchExtNm(FloatArray D, int o, int pivotNode, FloatArray sp, int segIdx) {
+        int nd = o + ExplicitHmmDimerGpu.O_ND;
+        float ex = D.get(nd + pivotNode * 3) - D.get(nd + 3 * 3), ey = D.get(nd + pivotNode * 3 + 1) - D.get(nd + 3 * 3 + 1), ez = D.get(nd + pivotNode * 3 + 2) - D.get(nd + 3 * 3 + 2);
+        return (float) Math.sqrt(ex * ex + ey * ey + ez * ez) - sp.get(ExplicitHmmDimerGpu.SP_SEGL0 + segIdx);   // nm − nm
+    }
+    static float bondDispNm(FloatArray D, int m, FloatArray bodyCoord, FloatArray bodyUVec, int nB, FloatArray filC, FloatArray filU, FloatArray filSeg, int nSeg, int s, float arc, float headLen) {
+        float half = 0.5f * filSeg.get(s);
+        float apx = (filC.get(s) + (arc - half) * filU.get(s)) * NM_PER_UM_F, apy = (filC.get(nSeg + s) + (arc - half) * filU.get(nSeg + s)) * NM_PER_UM_F, apz = (filC.get(2 * nSeg + s) + (arc - half) * filU.get(2 * nSeg + s)) * NM_PER_UM_F;
+        int h = 3 * m + 2;
+        float htx = (bodyCoord.get(h) + 0.5f * headLen * bodyUVec.get(h)) * NM_PER_UM_F, hty = (bodyCoord.get(nB + h) + 0.5f * headLen * bodyUVec.get(nB + h)) * NM_PER_UM_F, htz = (bodyCoord.get(2 * nB + h) + 0.5f * headLen * bodyUVec.get(2 * nB + h)) * NM_PER_UM_F;
+        float dx = apx - htx, dy = apy - hty, dz = apz - htz; return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    static void releaseHead(IntArray boundSeg, FloatArray bindArc, IntArray nucState, FloatArray forceDotFil, int m, IntArray events, int kind) {
+        boundSeg.set(m, -1); bindArc.set(m, 0f); forceDotFil.set(m, 0f); nucState.set(m, 0);   // FREE_BINDABLE, NUC_NONE (forceMag reset next-step)
+        events.set(m, kind);
+    }
+
+    /** rc = [nDim, nSeg, nB]. */
+    public static void ruptureCheck(FloatArray D, FloatArray bodyCoord, FloatArray bodyUVec, IntArray boundSeg, FloatArray bindArc, IntArray nucState,
+                                    FloatArray forceDotFil, FloatArray filC, FloatArray filU, FloatArray filSeg,
+                                    FloatArray sp, FloatArray rp, IntArray events, IntArray rc) {
+        int mode = (int) rp.get(0); int nDim = rc.get(0), nSeg = rc.get(1), nB = rc.get(2);
+        float bondRel = rp.get(1), brRel = rp.get(2), strainRel = rp.get(3), fRel = rp.get(4), gapRel = rp.get(5); int emergOn = (int) rp.get(6);
+        float myoSpring = rp.get(7), headLen = rp.get(8);
+        for (@Parallel int i = 0; i < nDim; i++) {
+            int o = i * ExplicitHmmDimerGpu.DIM_STRIDE;
+            events.set(2 * i, 0); events.set(2 * i + 1, 0);
+            float scoreA = -1f, scoreB = -1f;   // >=0 ⇒ still-bound head's rupture score (for R5 ranking)
+            for (int hh = 0; hh < 2; hh++) {
+                int m = 2 * i + hh; if (boundSeg.get(m) < 0) continue;
+                int s = boundSeg.get(m); float arc = bindArc.get(m);
+                float bd = bondDispNm(D, m, bodyCoord, bodyUVec, nB, filC, filU, filSeg, nSeg, s, arc, headLen);
+                int piv = hh == 0 ? 4 : 5, seg = hh == 0 ? 3 : 4;
+                float brExt = branchExtNm(D, o, piv, sp, seg); float rest = sp.get(ExplicitHmmDimerGpu.SP_SEGL0 + seg); float brStrain = brExt / rest;
+                float force = myoSpring * bd * 1e9f;   // pN (myoSpring N/µm · nm · 1e9)
+                boolean phys = false;
+                if (mode == 1) phys = bd > bondRel;
+                else if (mode == 2) phys = brExt > brRel || brStrain > strainRel;
+                else if (mode == 3) phys = bd > bondRel || brExt > brRel || brStrain > strainRel;
+                else if (mode == 4) phys = force > fRel;
+                if (phys) { releaseHead(boundSeg, bindArc, nucState, forceDotFil, m, events, 1); }
+                else {
+                    float pe = brExt > 0 ? brExt : 0f, ps = brStrain > 0 ? brStrain : 0f;
+                    float score = bd / bondRel + pe / brRel + ps / strainRel;
+                    if (hh == 0) scoreA = score; else scoreB = score;
+                }
+            }
+            // R5 emergency: dimer max joint gap over segments; release most-strained still-bound head
+            if (emergOn == 1 || mode == 5) {
+                float gap = 0f;
+                for (int si = 0; si < 5; si++) { int lo = si < 3 ? si : 3, hi = si < 3 ? si + 1 : (si == 3 ? 4 : 5);   // segs {0,1}{1,2}{2,3}{3,4}{3,5}
+                    float bx = D.get(o + ExplicitHmmDimerGpu.O_ND + hi * 3) - D.get(o + ExplicitHmmDimerGpu.O_ND + lo * 3), by = D.get(o + ExplicitHmmDimerGpu.O_ND + hi * 3 + 1) - D.get(o + ExplicitHmmDimerGpu.O_ND + lo * 3 + 1), bz = D.get(o + ExplicitHmmDimerGpu.O_ND + hi * 3 + 2) - D.get(o + ExplicitHmmDimerGpu.O_ND + lo * 3 + 2);
+                    float len = (float) Math.sqrt(bx * bx + by * by + bz * bz); float g = len - sp.get(ExplicitHmmDimerGpu.SP_SEGL0 + si); if (g < 0) g = -g; if (g > gap) gap = g; }
+                if (gap > gapRel) {
+                    int mA = 2 * i, mB = 2 * i + 1;
+                    if (scoreA >= 0f && scoreA >= scoreB) releaseHead(boundSeg, bindArc, nucState, forceDotFil, mA, events, 2);
+                    else if (scoreB >= 0f) releaseHead(boundSeg, bindArc, nucState, forceDotFil, mB, events, 2);
+                }
+            }
+        }
+    }
+
     private ExplicitHmmDimerGpuKernel() {}
 }

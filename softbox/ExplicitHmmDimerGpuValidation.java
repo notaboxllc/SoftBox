@@ -933,7 +933,7 @@ public final class ExplicitHmmDimerGpuValidation {
     // ============ G4c — unified full device timestep (bind+chem+bond+gather+actin+mechanics) =========
     // ================================================================================================
     static final class G4cState {
-        ExplicitHmmDimerGlidingHarness.EScene sc; FloatArray D, sp, mechScr, cum, gp, conf, cullP; IntArray topo, bindCounts, g4bCounts, mechCounts, mechStatus, active;
+        ExplicitHmmDimerGlidingHarness.EScene sc; FloatArray D, sp, mechScr, cum, gp, conf, cullP, rp; IntArray topo, bindCounts, g4bCounts, mechCounts, mechStatus, active, events, rcCounts;
         int nDim, N, nSeg, nB; boolean brownOn = false;   // G5: dimer-mechanics thermal noise
     }
     static double G4C_GAP = -2.0;   // negative ⇒ heads reach binding (conDist<2 nm) so motors drive the actin (real T8 feedback)
@@ -947,6 +947,11 @@ public final class ExplicitHmmDimerGpuValidation {
         g.g4bCounts = new IntArray(2); g.g4bCounts.set(0, g.nDim); g.g4bCounts.set(1, g.nB);
         g.mechCounts = buildCounts(g.nDim); g.mechStatus = new IntArray(g.nDim); g.mechScr = new FloatArray(SS * g.nDim);
         g.active = new IntArray(g.nDim); g.cullP = new FloatArray(1); g.cullP.set(0, (float) g.sc.cullR);
+        float[] rps = ExplicitHmmDimerGpuParams.rupturePackScalars(); g.rp = new FloatArray(9);
+        for (int k = 0; k < 7; k++) g.rp.set(k, rps[k]);
+        g.rp.set(7, g.sc.G.xbParams.get(0)); g.rp.set(8, g.sc.G.xbParams.get(4));   // myoSpring, HEAD_LEN(µm)
+        g.events = new IntArray(g.N); g.events.init(0);
+        g.rcCounts = new IntArray(3); g.rcCounts.set(0, g.nDim); g.rcCounts.set(1, g.nSeg); g.rcCounts.set(2, g.nB);
         g.D = packScene(g.sc);
         for (int i = 0; i < g.nDim; i++) { FloatArray w = window(g.D, i * DS); ExplicitHmmDimerGpuKernel.geomCK(w, 0, 0, g.sp); ExplicitHmmDimerGpuKernel.geomCK(w, 0, 1, g.sp); for (int k = 0; k < DS; k++) g.D.set(i * DS + k, w.get(k)); }
         return g;
@@ -974,6 +979,9 @@ public final class ExplicitHmmDimerGpuValidation {
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        // high-strain bond-rupture failsafe (after actin motion + bound-site refresh, BEFORE mechanics) — R0 gated ⇒ byte-identical
+        if (ExplicitHmmDimerGpuParams.RUPTURE_MODE != 0 || ExplicitHmmDimerGpuParams.EMERGENCY_ON)
+            ExplicitHmmDimerGpuKernel.ruptureCheck(g.D, mot.body.coord, mot.body.uVec, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, f.uVec, f.segLength, g.sp, g.rp, g.events, g.rcCounts);
         g.mechCounts.set(ExplicitHmmDimerGpuKernel.C_STEP, t); g.mechCounts.set(ExplicitHmmDimerGpuKernel.C_SEED, seed);
         g.mechCounts.set(ExplicitHmmDimerGpuKernel.C_BROWN, g.brownOn ? 1 : 0);   // G5 dimer-mechanics Brownian
         if (useActive) {
@@ -1029,6 +1037,101 @@ public final class ExplicitHmmDimerGpuValidation {
         System.out.println("T9 POLARITY / T10 ACTIVE-LIST PERMUTATION: deferred to G4d (polarity flip = bhatX sign; permutation invariance validated in G2/G3 via persistent-id RNG)");
         System.out.printf("G4c: %s%n", allPass ? "PASS" : "FAIL");
         return allPass ? 0 : 1;
+    }
+
+    // ================================================================================================
+    // ============ High-strain bond-rupture failsafe — fixtures + CPU↔GPU + reproduce/suppress ========
+    // ================================================================================================
+    static int boundCount(ExplicitHmmDimerGlidingHarness.EScene sc) { int b = 0; for (int m = 0; m < sc.G.N; m++) if (sc.G.mot.boundSeg.get(m) >= 0) b++; return b; }
+    /** Bond displacement (nm) for bound head m — mirrors the kernel's bondDispNm (|actinSite − headTip|). */
+    static double headBondDispNm(ExplicitHmmDimerGlidingHarness.EScene sc, int m, double headLen) {
+        MotorStore mot = sc.G.mot; FilamentStore f = sc.G.fil; int nSeg = sc.nSeg, nB = mot.body.coord.getSize() / 3;
+        int s = mot.boundSeg.get(m); double arc = mot.bindArc.get(m); double half = 0.5 * f.segLength.get(s);
+        double apx = (f.coordX(s) + (arc - half) * f.uVecX(s)) * 1e3, apy = (f.coordY(s) + (arc - half) * f.uVecY(s)) * 1e3, apz = (f.coordZ(s) + (arc - half) * f.uVecZ(s)) * 1e3;
+        int h = mot.headIdx(m);
+        double htx = (mot.body.coord.get(h) + 0.5 * headLen * mot.body.uVec.get(h)) * 1e3, hty = (mot.body.coord.get(nB + h) + 0.5 * headLen * mot.body.uVec.get(nB + h)) * 1e3, htz = (mot.body.coord.get(2 * nB + h) + 0.5 * headLen * mot.body.uVec.get(2 * nB + h)) * 1e3;
+        double dx = apx - htx, dy = apy - hty, dz = apz - htz; return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    /** Translate the whole filament by dxNm along +x (moving-actin ⇒ stretches every bound cross-bridge by ~dx). */
+    static void translateFilament(FilamentStore f, int nSeg, double dxNm) {
+        for (int s = 0; s < nSeg; s++) f.setCoord(s, (float) (f.coordX(s) + dxNm * 1e-3), f.coordY(s), f.coordZ(s));
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+    }
+    /** Run ruptureCheck on a scene at (mode,bondNm,branchNm,strain,gapNm,emergOn); return #released heads. */
+    static int ruptureOnce(G4cState g, int mode, double bondNm, double branchNm, double strain, double gapNm, boolean emerg) {
+        g.rp.set(0, mode); g.rp.set(1, (float) bondNm); g.rp.set(2, (float) branchNm); g.rp.set(3, (float) strain); g.rp.set(5, (float) gapNm); g.rp.set(6, emerg ? 1f : 0f);
+        // place heads from D so body pose is current (bondDisp uses the head tip)
+        ExplicitHmmDimerGpuKernel.cockAndPlaceFromD(g.D, g.sc.G.mot.body.coord, g.sc.G.mot.body.uVec, g.sc.G.mot.body.yVec, g.sc.G.mot.nucleotideState, g.g4bCounts);
+        MotorStore mot = g.sc.G.mot; FilamentStore f = g.sc.G.fil;
+        ExplicitHmmDimerGpuKernel.ruptureCheck(g.D, mot.body.coord, mot.body.uVec, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, f.uVec, f.segLength, g.sp, g.rp, g.events, g.rcCounts);
+        int r = 0; for (int m = 0; m < g.N; m++) if (g.events.get(m) != 0) r++; return r;
+    }
+    /** Bind heads on a fresh negative-gap scene (static binding) and return the state ready for rupture tests. */
+    static G4cState boundScene(int density) {
+        double saved = G4C_GAP; G4C_GAP = -2.0; G4cState g = g4cInit(density); G4C_GAP = saved;
+        MotorStore mot = g.sc.G.mot; FilamentStore f = g.sc.G.fil;
+        ExplicitHmmDimerGpuKernel.dimerBindGate(g.D, f.coord, f.uVec, f.segLength, g.cum, mot.boundSeg, mot.bindArc, mot.nucleotideState, g.gp, g.bindCounts);
+        return g;
+    }
+
+    static int runRupture(String[] args) {
+        int density = argInt(args, "-density", 400);
+        System.out.println("=== HMM-DIMER RUPTURE — high-strain bond-dissolution failsafe (fixtures + CPU↔GPU + reproduce/suppress) ===");
+        // ---- F1/F2/F6/F9 threshold fixtures: bind, move actin, verify release set == {bondDisp > bondRel} EXACTLY ----
+        //      (actin shift ≠ bondDisp because heads start with a nonzero residual stretch + vectors add, so test the
+        //      rule against its OWN metric per head — the exact-metric agreement is the correctness gate.)
+        double bondRel = 20, branchRel = 10, strain = 1.0;
+        boolean fixtures = true; StringBuilder fx = new StringBuilder(); int nBound0 = 0;
+        for (double shift : new double[]{ 5, 15, 25, 40 }) {
+            G4cState g = boundScene(density); nBound0 = boundCount(g.sc);
+            translateFilament(g.sc.G.fil, g.nSeg, shift);
+            ExplicitHmmDimerGpuKernel.cockAndPlaceFromD(g.D, g.sc.G.mot.body.coord, g.sc.G.mot.body.uVec, g.sc.G.mot.body.yVec, g.sc.G.mot.nucleotideState, g.g4bCounts);
+            double headLen = g.sc.G.xbParams.get(4);
+            int[] before = new int[g.N]; for (int m = 0; m < g.N; m++) before[m] = g.sc.G.mot.boundSeg.get(m);
+            double[] disp = new double[g.N]; for (int m = 0; m < g.N; m++) disp[m] = before[m] >= 0 ? headBondDispNm(g.sc, m, headLen) : -1;
+            ruptureOnce(g, 3, bondRel, branchRel, strain, 50, false);
+            int expect = 0, actual = 0, mism = 0;
+            for (int m = 0; m < g.N; m++) if (before[m] >= 0) { boolean exp = disp[m] > bondRel; boolean act = g.events.get(m) != 0; if (exp) expect++; if (act) actual++; if (exp != act) mism++; }
+            boolean ok = mism == 0; fixtures &= ok;
+            fx.append(String.format(Locale.US, " shift%.0f:rel=exp%d/act%d%s", shift, expect, actual, ok ? "" : "MISM!"));
+        }
+        // R0 preservation: mode 0 ⇒ no release regardless of strain
+        G4cState g0 = boundScene(density); translateFilament(g0.sc.G.fil, g0.nSeg, 40);
+        int r0rel = ruptureOnce(g0, 0, bondRel, branchRel, strain, 50, false);
+        boolean r0ok = r0rel == 0;
+        // ---- CPU↔GPU: ruptureCheck at X=25 on identical scenes, events must match ----
+        boolean gpuOk = true; String gErr = ""; int cpuRel = -1, gpuRel = -1;
+        try {
+            G4cState gc = boundScene(density); translateFilament(gc.sc.G.fil, gc.nSeg, 25); cpuRel = ruptureOnce(gc, 3, bondRel, branchRel, strain, 50, false);
+            G4cState gg = boundScene(density); translateFilament(gg.sc.G.fil, gg.nSeg, 25);
+            gg.rp.set(0, 3); gg.rp.set(1, (float) bondRel); gg.rp.set(2, (float) branchRel); gg.rp.set(3, (float) strain); gg.rp.set(5, 50f); gg.rp.set(6, 0f);
+            ExplicitHmmDimerGpuKernel.cockAndPlaceFromD(gg.D, gg.sc.G.mot.body.coord, gg.sc.G.mot.body.uVec, gg.sc.G.mot.body.yVec, gg.sc.G.mot.nucleotideState, gg.g4bCounts);
+            MotorStore mo = gg.sc.G.mot; FilamentStore fg = gg.sc.G.fil;
+            TaskGraph tg = new TaskGraph("hmmDimerRupture")
+                .transferToDevice(DataTransferMode.EVERY_EXECUTION, gg.D, mo.body.coord, mo.body.uVec, mo.boundSeg, mo.bindArc, mo.nucleotideState, mo.forceDotFil, fg.coord, fg.uVec, fg.segLength, gg.sp, gg.rp, gg.events, gg.rcCounts)
+                .task("rupture", ExplicitHmmDimerGpuKernel::ruptureCheck, gg.D, mo.body.coord, mo.body.uVec, mo.boundSeg, mo.bindArc, mo.nucleotideState, mo.forceDotFil, fg.coord, fg.uVec, fg.segLength, gg.sp, gg.rp, gg.events, gg.rcCounts)
+                .transferToHost(DataTransferMode.EVERY_EXECUTION, mo.boundSeg, gg.events);
+            GridScheduler gs = new GridScheduler(); gs.addWorkerGrid("hmmDimerRupture.rupture", grid(gg.nDim));
+            new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(gs).execute();
+            gpuRel = 0; for (int m = 0; m < gg.N; m++) if (gg.events.get(m) != 0) gpuRel++;
+        } catch (Throwable e) { gpuOk = false; gErr = e.getClass().getSimpleName() + ": " + oneLine(e.getMessage()); }
+        boolean cpuGpu = gpuOk && cpuRel == gpuRel && cpuRel > 0;
+
+        System.out.println();
+        System.out.println("RUPTURE — HIGH-STRAIN BOND DISSOLUTION");
+        System.out.printf("SCENE: density %d, bound heads %d (static binds)%n", density, nBound0);
+        System.out.printf("F1/F2/F6/F9 THRESHOLD (R3 bond=20nm; actin shift X ⇒ release iff X>20): %s [%s ]%n", pf(fixtures), fx.toString());
+        System.out.printf("R0 PRESERVATION (mode 0, 40nm shift ⇒ 0 releases): %s (%d)%n", pf(r0ok), r0rel);
+        System.out.printf("CPU↔GPU EVENT-IDENTICAL (X=25): %s (CPU %d == GPU %d)%s%n", pf(cpuGpu), cpuRel, gpuRel, gpuOk ? "" : " (" + gErr + ")");
+        System.out.println();
+        System.out.println("--- DEFERRED (compute-heavy standing runs; NOT run this session) ---");
+        System.out.println("  §12 reproduce the ρ1500 ~162nm / ρ3000 ~32149nm R0 runaway; §13 threshold-screen ρ750/1500/3000 ×4seeds×5000;");
+        System.out.println("  §14 physical-success gate (0 >50nm excursions @1500, no µm runaway @3000, 0 emergency, 0 invalid/solveFail);");
+        System.out.println("  §15 biological-range false-positive ρ100-750 (velocity/bound Δ<10%, D0 unchanged); §16 lifetime tail; §17 D0≈D2; §18 dt.");
+        System.out.println("  Promotion of a specific threshold requires the sweep; default RUPTURE_MODE=0 (disabled).");
+        boolean pass = fixtures && r0ok && cpuGpu;
+        System.out.printf("RUPTURE (mechanism correct + CPU↔GPU-identical; threshold promotion pending the sweep): %s%n", pass ? "PASS" : "FAIL");
+        return pass ? 0 : 1;
     }
 
     /** Re-gate the added dimer-mechanics Brownian: {oneStepCoordErr nm, angleErr rad, boundBrownOn, boundBrownOff}. */

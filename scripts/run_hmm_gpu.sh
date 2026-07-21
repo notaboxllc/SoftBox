@@ -16,7 +16,7 @@ if [[ "$1" == "-g1a-validate" || "$1" == "" ]]; then
     exit $?
 fi
 
-if [[ "$1" == "-g1b-validate" || "$1" == "-g23-validate" || "$1" == "-g4a-validate" || "$1" == "-g4b-validate" || "$1" == "-g4c-validate" || "$1" == "-g4d-validate" || "$1" == "-g5-active-validate" ]]; then
+if [[ "$1" == "-g1b-validate" || "$1" == "-g23-validate" || "$1" == "-g4a-validate" || "$1" == "-g4b-validate" || "$1" == "-g4c-validate" || "$1" == "-g4d-validate" || "$1" == "-g5-active-validate" || "$1" == "-rupture-validate" ]]; then
     case "$1" in
       -g23-validate) MODEFLAG="-gpu-g23-validate";;
       -g4a-validate) MODEFLAG="-gpu-g4a-validate";;
@@ -24,6 +24,7 @@ if [[ "$1" == "-g1b-validate" || "$1" == "-g23-validate" || "$1" == "-g4a-valida
       -g4c-validate) MODEFLAG="-gpu-g4c-validate";;
       -g4d-validate) MODEFLAG="-gpu-g4d-validate";;
       -g5-active-validate) MODEFLAG="-gpu-g5-active-validate";;
+      -rupture-validate) MODEFLAG="-gpu-rupture-validate";;
       *)             MODEFLAG="-gpu-g1b-validate";;
     esac
     shift

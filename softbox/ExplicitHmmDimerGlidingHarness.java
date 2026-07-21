@@ -609,6 +609,19 @@ public final class ExplicitHmmDimerGlidingHarness {
         if (has(args, "-gpu-g4c-validate")) { int rc = ExplicitHmmDimerGpuValidation.runG4c(args); System.exit(rc); }
         if (has(args, "-gpu-g4d-validate")) { int rc = ExplicitHmmDimerGpuValidation.runG4d(args); System.exit(rc); }
         if (has(args, "-gpu-g5-active-validate")) { int rc = ExplicitHmmDimerGpuValidation.runG5(args); System.exit(rc); }
+        // ---- high-strain bond-rupture failsafe controls (task §22) ----
+        ExplicitHmmDimerGpuParams.RUPTURE_MODE = (int) argD(args, "-ruptureMode", ExplicitHmmDimerGpuParams.RUPTURE_MODE);
+        ExplicitHmmDimerGpuParams.BOND_RELEASE_NM = argD(args, "-bondReleaseNm", ExplicitHmmDimerGpuParams.BOND_RELEASE_NM);
+        ExplicitHmmDimerGpuParams.BRANCH_RELEASE_NM = argD(args, "-branchReleaseNm", ExplicitHmmDimerGpuParams.BRANCH_RELEASE_NM);
+        ExplicitHmmDimerGpuParams.BRANCH_RELEASE_STRAIN = argD(args, "-branchReleaseStrain", ExplicitHmmDimerGpuParams.BRANCH_RELEASE_STRAIN);
+        ExplicitHmmDimerGpuParams.RUPTURE_FORCE_PN = argD(args, "-ruptureForcePn", ExplicitHmmDimerGpuParams.RUPTURE_FORCE_PN);
+        ExplicitHmmDimerGpuParams.EMERGENCY_GAP_NM = argD(args, "-emergencyGapNm", ExplicitHmmDimerGpuParams.EMERGENCY_GAP_NM);
+        if (has(args, "-ruptureEmergency")) ExplicitHmmDimerGpuParams.EMERGENCY_ON = true;
+        if (ExplicitHmmDimerGpuParams.RUPTURE_MODE != 0 || ExplicitHmmDimerGpuParams.EMERGENCY_ON)
+            System.out.printf(Locale.US, "  [rupture: mode R%d bond<%.0fnm branch<%.0fnm strain<%.2f force<%.0fpN emergencyGap<%.0fnm emergency=%b]%n",
+                    ExplicitHmmDimerGpuParams.RUPTURE_MODE, ExplicitHmmDimerGpuParams.BOND_RELEASE_NM, ExplicitHmmDimerGpuParams.BRANCH_RELEASE_NM,
+                    ExplicitHmmDimerGpuParams.BRANCH_RELEASE_STRAIN, ExplicitHmmDimerGpuParams.RUPTURE_FORCE_PN, ExplicitHmmDimerGpuParams.EMERGENCY_GAP_NM, ExplicitHmmDimerGpuParams.EMERGENCY_ON);
+        if (has(args, "-gpu-rupture-validate")) { int rc = ExplicitHmmDimerGpuValidation.runRupture(args); System.exit(rc); }
         if (has(args, "-gpu-validate-fixtures") || BACKEND == ExplicitHmmDimerGpuParams.Backend.GPU_VALIDATE && has(args, "-fixtures-gpu")) {
             ExplicitHmmDimerGpuValidation.runFixtures(args); return;
         }
