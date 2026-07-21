@@ -39,6 +39,29 @@ if [[ "$1" == "-g1b-validate" || "$1" == "-g23-validate" || "$1" == "-g4a-valida
     exit $?
 fi
 
+# Focused rupture campaign: GPU full-device engine (runCandidateGpu). Needs the SAME device flags as the
+# validate branch — the active-only mechanics (solveActiveFloat) inlines to ~984 nodes ⇒ fullInlining REQUIRED.
+if [[ "$1" == -rupture-focused-* ]]; then
+    ./scripts/build.sh || exit 2
+    java @"$TORNADOVM_HOME"/tornado-argfile --enable-preview -Xmx8G \
+         -Dtornado.recover.bailout=false -Dtornado.enable.fma=false -Dtornado.tvm.maxbytecodesize=262144 \
+         -Dtornado.compiler.fullInlining=true \
+         -cp "$TDIR/tornado-api-4.0.1-dev.jar:." \
+         softbox.ExplicitHmmDimerGlidingHarness -backend gpu -gpu-experimental -branchEA 0.03 "$@"
+    exit $?
+fi
+
+# Production density-sweep single CELL (one density×seed) on the GPU full-device engine (active-only mechanics).
+# Same device flags as the rupture-focused engine. Frozen config enforced + printed inside runProductionCell.
+if [[ "$1" == "-production-cell" ]]; then
+    java @"$TORNADOVM_HOME"/tornado-argfile --enable-preview -Xmx8G \
+         -Dtornado.recover.bailout=false -Dtornado.enable.fma=false -Dtornado.tvm.maxbytecodesize=262144 \
+         -Dtornado.compiler.fullInlining=true \
+         -cp "$TDIR/tornado-api-4.0.1-dev.jar:." \
+         softbox.ExplicitHmmDimerGlidingHarness -backend gpu -gpu-experimental -branchEA 0.03 -production-cell "$@"
+    exit $?
+fi
+
 # passthrough for other GPU-backend flags later (G1b+)
 java @"$TORNADOVM_HOME"/tornado-argfile --enable-preview -Xmx8G \
      -Dtornado.recover.bailout=false -Dtornado.enable.fma=false -Dtornado.tvm.maxbytecodesize=65536 \

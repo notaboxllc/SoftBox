@@ -1,5 +1,36 @@
 # Soft Box Project Journal
 
+### 2026-07-21 — EXPLICIT HMM DIMER: definitive GPU-only density sweep (density-response science on the device path)
+
+Ran the 36-cell GPU-device density sweep (9 densities {100,200,400,500,700,750,1000,1500,3000} × seeds {101–104} ×
+5000 steps) at the frozen §1 config (branchEA=0.03, D0, dt=2.5e-6, Brownian ON, cull+`solveGuarded` **active-only**
+mechanics, rupture R0, scaled-float, persistent-id RNG). **All 36 cells `status=ok`; 0 invalid, 0 solveFail campaign-wide.**
+Report `docs/matsoa/EXPLICIT_HMM_DIMER_GPU_DENSITY_SWEEP_FINDINGS.md`; raw `RUN_LOGS/hmm_density_sweep/` (per-cell JSON +
+`ANALYSIS.md` + per-cell logs).
+- **NEW driver (device-path science; the prior rupture engine returned only 7 health metrics + used DENSE mechanics).**
+  `ExplicitHmmDimerGpuValidation.runProductionCell`/`buildProductionGpu` — one density×seed per JVM, active-only mechanics
+  per §1, config enforced+printed+**abort-gated**, ~80 observables pulled per step (motion/velocity, binding
+  counts/events/lifetimes, fwd/bwd 2nd-head directionality, chemistry occupancy/turnover, gap/branch/F8 health) →
+  **atomic JSON** (temp→rename) + `.done`. Orchestrator `scripts/run_hmm_density_sweep.sh` (§3 order, checkpoint/resume,
+  progress file, per-cell logs, hang-retry-once-then-stop). Analyzer `scripts/hmm_density_analysis.py` (§6 stats / §7
+  hyperbolic+Hill fits / §8 relationships / §9 per-seed high-density health). `DEVICE_VALIDATED` unchanged (false);
+  model unmodified; existing paths byte-unaffected (new files/methods only).
+- **Density-response = Hill-shaped saturation to a plateau.** Hill vmax=2.95±0.18, ρ½=**163±26**, **n=1.89±0.57**,
+  R²=0.905 (beats hyperbolic ΔR²+0.079). velProd rises +0.88 (ρ100) → **peak +3.14 @ρ750**, then **plateaus ~2.6–3.1
+  for ρ≥700** (peak→ρ3000 drop 0.30 ≈ 1 SEM ⇒ marginal; **NOT forced as "high-density suppression"** — saturation-to-
+  plateau). All velProd positive/productive; ρ3000 +2.84 ≈ CPU-ref +2.85.
+- **The mechanism: efficiency decline, NOT attachment saturation.** Bound heads rise ~LINEARLY with ρ (1.1→38; ATPturn
+  22→676 tracks it); attachment lifetime density-INVARIANT (~0.68 ms); two-head fraction flat (~0.06). But **vel/boundHead
+  collapses ~10×** (0.78→0.075) and **backward 2nd-head binds grow to dominate** (fwd:bwd ~1:1→~1:1.7). ⇒ crowding adds
+  internally-opposing (co-bound tug-of-war) heads, not propulsive ones — glide is **transport-efficiency-limited**.
+- **Health clean through ρ1500** (maxGap <5.2 nm, ≤66 pN, 0 exc>50). **ρ3000: 1/4 seeds (s101) → 69.4 nm gap / 825 pN**
+  (0 >100 nm, 0 invalid/solveFail); recorded, NOT ruptured (R0). **BASIN-sensitive:** this active-only graph puts the
+  >50 nm event at ρ3000 **s101**; the prior dense-mechanics spot-check saw it at **s102** (14.3 nm; clean here 4.3 nm) —
+  the documented gliding chaotic-bistability / graph-split hazard. Aggregate response is basin-robust; only the rare gap
+  tail is seed/basin-intermittent (CPU = arbiter for that rupture-threshold question, deferred).
+- **Fixed en route:** an orchestrator shell bug (`progress()` reused the main loop's `d`/`s` without `local` ⇒ clobbered
+  the density index ⇒ scrambled/early-exit first attempt; the 13 cells it did finish were valid and reused on resume).
+
 ### 2026-07-20 — EXPLICIT HMM DIMER: dimer-compliance vs the dense-mat joint-gap instability — branchEA is the cure, NOT branch bending / fork
 
 Is the double-head mat's joint-gap instability (maxGap up to ~670 nm, `..._GLIDING_DIRECTIONALITY_FINDINGS.md` §7/§9) and

@@ -622,6 +622,11 @@ public final class ExplicitHmmDimerGlidingHarness {
                     ExplicitHmmDimerGpuParams.RUPTURE_MODE, ExplicitHmmDimerGpuParams.BOND_RELEASE_NM, ExplicitHmmDimerGpuParams.BRANCH_RELEASE_NM,
                     ExplicitHmmDimerGpuParams.BRANCH_RELEASE_STRAIN, ExplicitHmmDimerGpuParams.RUPTURE_FORCE_PN, ExplicitHmmDimerGpuParams.EMERGENCY_GAP_NM, ExplicitHmmDimerGpuParams.EMERGENCY_ON);
         if (has(args, "-gpu-rupture-validate")) { int rc = ExplicitHmmDimerGpuValidation.runRupture(args); System.exit(rc); }
+        if (has(args, "-production-cell")) { int rc = ExplicitHmmDimerGpuValidation.runProductionCell(args); System.exit(rc); }
+        for (String p : new String[]{ "reproduce", "challenge", "biological", "cpu-gpu" })
+            if (has(args, "-rupture-focused-" + p)) System.exit(ExplicitHmmDimerGpuValidation.runRuptureFocused(args, p));
+        for (String p : new String[]{ "reproduce-full", "reproduce", "stage-a", "stage-b", "stage-c", "biological-range", "lifetimes", "directionality", "dt", "force-diagnostic", "cpu-gpu" })
+            if (has(args, "-rupture-" + p)) { String[] a2 = java.util.Arrays.copyOf(args, args.length + 2); a2[args.length] = "-phase"; a2[args.length + 1] = p; System.exit(ExplicitHmmDimerGpuValidation.runRuptureStudy(a2)); }
         if (has(args, "-gpu-validate-fixtures") || BACKEND == ExplicitHmmDimerGpuParams.Backend.GPU_VALIDATE && has(args, "-fixtures-gpu")) {
             ExplicitHmmDimerGpuValidation.runFixtures(args); return;
         }

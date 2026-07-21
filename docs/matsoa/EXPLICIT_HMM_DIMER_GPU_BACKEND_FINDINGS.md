@@ -323,11 +323,71 @@ called); **CPU↔GPU event-identical PASS** (CPU 4 == GPU 4 releases at shift 25
 `-bondReleaseNm`, `-branchReleaseNm`, `-branchReleaseStrain`, `-ruptureForcePn`, `-emergencyGapNm`, `-ruptureEmergency`
 (startup prints all thresholds when active). **Default RUPTURE_MODE=0 (disabled) — NOT promoted.**
 
-**DEFERRED (compute-heavy standing runs, the threshold-promotion gate):** §12 reproduce the ρ1500 ~162 nm / ρ3000 ~32149
-nm R0 runaway; §13 threshold screen ρ750/1500/3000 × ≥4 seeds × 5000 steps; §14 physical-success gate (0 >50 nm
-excursions @1500, no µm runaway @3000, 0 emergency, 0 invalid/solveFail); §15 biological-range false-positive ρ100–750
-(velocity/bound Δ<10%, D0 unchanged); §16 lifetime-tail; §17 D0≈D2; §18 dt. The likely promoted rule is R3 with bond
-~20–30 nm + branch ~7.5–15 nm + emergency gap ~50 nm, but the actual values must come from the sweep.
+**PHASE-A / §3 REPRODUCE — PATHOLOGY CONFIRMED on the compliant device path (2026-07-20).** First full 5000-step R0
+cell (config-enforced branchEA=0.03): **ρ1500 seed 101 → maxGap 91.1 nm, peakBranchF 441 pN, meanBound 19.0, invalid 0,
+solveFail 0 → PATHOLOGY = TRUE** (>50 nm event class, same class as the historical ~162 nm ρ1500 1/6-seed event). So the
+>50 nm runaway is NOT purely a stiff-branch/CPU-oracle artifact — it persists on the compliant float device path at
+ρ1500. §4 gate satisfied ⇒ the threshold campaign proceeds (not blocked), and ρ1500 5000-step cells are feasible.
+FOCUSED campaign (this task): reproduce done (91 nm); **C1/C2/C3 challenge running** (`-rupture-focused-challenge`,
+checkpointed, ρ1500 seed 101 first then ρ3000 seed 102) — does the loosest candidate suppress the 91 nm gap? Decision +
+biological-range (§6) follow the challenge data. RUPTURE_MODE=0 stays default until a candidate passes.
+
+**FOCUSED CAMPAIGN ON THE GPU FULL-DEVICE ENGINE — COMPLETE (2026-07-21); pathology does NOT reproduce on the engine
+⇒ leave R0.** Per the campaign-engine correction (the GPU full-device path is the engine; the CPU object path is a spot
+oracle only), the reproduce + challenge were re-run through `runCandidateGpu`/`buildCampaignGpu` (unified device graph +
+the rupture task before mechanics, Brownian mechCounts, `-branchEA 0.03` enforced, D0, dt=2.5e-6, 5000 steps). **KEY
+FINDING — the >50 nm R0 runaway that the CPU unified-probe showed (ρ1500 s101 → 91.1 nm) does NOT reproduce on the GPU
+device engine:**
+
+| cell (R0) | GPU maxGap | peakBranchF | meanBound | invalid | solveFail | pathology |
+|---|---|---|---|---|---|---|
+| ρ1500 s101 | **8.0 nm** | 66 pN | 19.2 | 0 | 0 | **FALSE** |
+| ρ3000 s102 | **14.3 nm** | 109 pN | 37.1 | 0 | 0 | **FALSE** |
+
+Both far under the 50 nm gate (the CPU probe showed 91 nm at ρ1500 and a historical extreme blow-up at ρ3000). The
+GPU number is reproducible (identical 8.0 nm across two independent runs, including one before + one after a machine
+shutdown) and the gap metric (`maxGapForce`, max |seg−rest| over all 5 segments) is byte-for-byte the same code the CPU
+probe uses — so this is a genuine **CPU↔GPU basin/path divergence** on the very question of whether the pathology exists,
+not a measurement artifact. It is consistent with the documented gliding **chaotic bistability / basin-split hazard**
+(GPU-number-trust rule): the high-gap excursion is a CPU-basin phenomenon; the GPU active-list device path lands in the
+well-behaved basin. **Challenge (all 6 cells, C1/C2/C3 × {ρ1500 s101, ρ3000 s102}): every candidate produces dynamics
+BYTE-IDENTICAL to R0** (maxGap 8.0/14.3 nm, meanBound 19.2/37.1, **physRupt 0, emergency 0**) — because R0 never
+approaches the gate, the R3 rule (bond 20–30 / branch 7.5–15 / strain 0.75–1.5) never fires, so it is trivially
+zero-false-positive but also unexercised.
+
+**PROMOTION DECISION — keep `RUPTURE_MODE=0` (default-off); retain the validated mechanism as a dormant failsafe.** Both
+the pre-registered §4/§18 rule ("no reproduction on the compliant device path ⇒ the rule is not needed ⇒ leave R0") and
+both interpretive readings of the CPU↔GPU divergence converge on the same operational outcome. The branchEA=0.03
+compliance fix (maxGap 270→11.8) already removed the stiff-branch runaway on the device path; the rupture rule is a
+belt-and-suspenders guard that does not engage at the standing config. `DEVICE_VALIDATED` stays FALSE; nothing promoted.
+**Remaining (optional) arbiter:** the authorized matched ρ3000 s102 CPU-object-path run (branchEA=0.03) — the one
+apples-to-apples CPU-vs-GPU oracle that would characterize (not change) the divergence; it is a multi-hour CPU run,
+deferred pending a steer. GPU biological-intrusion (ρ500/750 × 4 seeds, tightest candidate C3) run as the final
+zero-false-positive confirmation.
+
+**Config-enforcement catch (important).** `runRuptureStudy` now FORCES the §2 frozen model `branchEA=0.03` (CFG_EA):
+the harness default CFG_EA=1.0 is the STIFF pre-fix branch, and a probe accidentally on it showed peakBranchF 1627 pN at
+ρ500 (420 pN/nm × ~3.9 nm) that R3 did NOT catch — because on a stiff branch a force spike comes from a SMALL extension a
+displacement/extension threshold can't see. On the compliant branch (12.6 pN/nm — the whole point of the 0.03 fix) the
+same force needs a large, catchable extension. Corrected probe (ρ500, 300 steps, seed 102, branchEA=0.03): **R0 maxGap
+4.3 nm, peakBranchF 54 pN, 0 invalid/solveFail; R3 0 ruptures** — biological-range clean, no false-positive (a partial
+§10 data point). No pathology at ρ500 (expected — it is a ρ1500+ rare event needing 5000-step seeds).
+
+**Threshold-promotion study (2026-07-20) — infrastructure wired; NOT promoted.** `runRuptureStudy` + `runUnifiedProbe`
+(unified device timestep CPU-runner, active + Brownian; `maxGapForce` reads max joint gap + peak branch force from the
+resident D each step). Commands (§20): `-rupture-reproduce -rupture-stage-a/-b/-c -rupture-biological-range
+-rupture-lifetimes -rupture-directionality -rupture-dt -rupture-force-diagnostic -rupture-cpu-gpu` (harness-main →
+runRuptureStudy `-phase`). **Doc §1 stale text corrected** (active cull GPU; active-only mechanics folded into the
+unified graph; dimer Brownian implemented — no longer a pending code gap; rupture mechanism implemented; only threshold
+promotion + production validation remain).
+
+**DEFERRED (compute-heavy standing runs, the threshold-promotion gate):** §4 reproduce the ρ1500 ~162 nm / ρ3000 ~32149
+nm R0 runaway (RARE — 1/6 seeds @1500, seed-102 @3000 — so needs the FULL 5000-step high-density seeds; a feasible probe
+will not trigger it); §5–§9 Stage A/B/C threshold screen ρ750/1500/3000 × ≥4 seeds × 5000 steps; §10 biological-range
+false-positive ρ100–750 (velocity/bound Δ<10%, D0 unchanged); §11 lifetime-tail; §13 D0≈D2; §14 dt. This is a genuine
+multi-hour-to-days simulation campaign. **PROMOTION HELD: `RUPTURE_MODE=0` default until a threshold passes
+reproduce → Stage A/B/C → biological → lifetime → D0≈D2 → dt.** The likely promoted rule is R3 with bond ~20–30 nm +
+branch ~7.5–15 nm + emergency gap ~50 nm, but the actual values MUST come from the sweep.
 
 ## 3e. Phase G5 — active-list fold + promotion decision (2026-07-20)
 
@@ -390,7 +450,7 @@ GPU PRECISION: FLOAT (scaled nm/pN/rad) — min pivot 5.03; double retained only
 GPU TANGENT: FINITE-DIFFERENCE (exact) — runs on GPU via -Dtornado.compiler.fullInlining=true; NO analytic fallback needed
 GPU LINEAR SOLVER: flat 19×19 Gauss–Jordan partial-pivot, float (per work-item scratch, SC_M stride 380)
 GPU DEVICE-RESIDENT STATE: YES (FIRST_EXECUTION upload once, evolves on device; UNDER_DEMAND pull)
-ACTIVE LIST BUILT ON: CPU (G2/G3 compact persistent-id list; unified G4c graph uses full-batch — active-list fold = G4d remaining)
+ACTIVE LIST BUILT ON: CPU (compact persistent-id list); ACTIVE-ONLY MECHANICS FOLDED INTO THE UNIFIED GRAPH (G5: cullDimers + solveGuarded)
 MECHANICS/BINDING/CHEMISTRY/GATHER/ACTIN BACKEND: GPU (G4 — full device-resident timestep, one 17-task TaskGraph, CPU↔GPU validated)
 FULL DEVICE TIMESTEP: YES (G4c); per-step host↔device 32 B, 1 sync, 17 launches (G4d audit); GPU 85.6 steps/s vs CPU-runner 2.8
 BINDING BACKEND: GPU (dimerBindGate)  CHEMISTRY BACKEND: GPU (cycleLymnTaylor)  FORCE-GATHER BACKEND: GPU (CSR/segGather)  ACTIN-INTEGRATION BACKEND: GPU (RigidRodLangevin)
@@ -409,11 +469,12 @@ DIMER-MECHANICS BROWNIAN: ADDED + re-gated (one-step matched to oracle 8e-3 nm; 
 DEVICE_VALIDATED: FALSE — now blocked ONLY by the production matrix (compute-heavy standing run); no remaining code gap
 GPU DEFAULT ENABLED: NO
 CPU DENSITY SWEEP NEEDS REINTERPRETATION: NO
-READY FOR LARGE GPU DIMER SWEEPS: NO (device timestep exists + CPU↔GPU-validated; production-equivalence pending)
-PRIMARY REMAINING LIMITATION: (a) device forked-mechanics is Brownian-OFF — add per-dimer thermal noise keyed to
-           persistent id for production binding fidelity; (b) launch-bound at moderate active counts (fullInlining'd
+RUPTURE FAILSAFE: IMPLEMENTED (device float, CPU↔GPU-identical, R0 default-disabled; §3f) — threshold NOT promoted
+READY FOR LARGE GPU DIMER SWEEPS: NO (device timestep + active fold + Brownian + rupture mechanism all done + CPU↔GPU-validated; production-equivalence + rupture-threshold sweeps pending)
+PRIMARY REMAINING LIMITATION: no remaining code gap — only compute-heavy standing runs (production equivalence matrix +
+           rupture threshold/biological/dt sweeps). Perf note: launch-bound at moderate active counts (fullInlining'd
            kernel per-launch cost); the resident/active win so far is transfer-elimination (32 B/step, 105× less copy).
-NEXT STEP: (1) add dimer-mechanics Brownian (brownTorqueD node+angle, keyed persistent-id+step+seed) to solveOneK +
-           re-gate; (2) run the production matrix (ρ100–1500 ×≥4 seeds ×5000 steps, device-vs-production-CPU, §5–§13);
-           (3) T9 polarity + D0≈D2 + long-run stability; then the DEVICE_VALIDATED decision.
+NEXT STEP: run the standing simulation campaigns — (1) production-CPU-vs-GPU equivalence (ρ100–1500 ×≥4 seeds ×5000);
+           (2) rupture threshold promotion (reproduce runaway → Stage A/B/C screen → biological-range → promote or reject);
+           (3) T9 polarity + D0≈D2 + long-run stability; then the DEVICE_VALIDATED + rupture-default decisions.
 ```

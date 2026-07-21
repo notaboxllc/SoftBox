@@ -12,8 +12,15 @@ import uk.ac.manchester.tornado.api.types.arrays.FloatArray;
 import uk.ac.manchester.tornado.api.types.arrays.IntArray;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 
 /**
  * ============ EXPLICIT-HMM-DIMER GPU BACKEND — CPU↔flat-kernel validation (Phase G1a, task §6–§11) ============
@@ -629,6 +636,7 @@ public final class ExplicitHmmDimerGpuValidation {
 
     static String oneLine(String s) { return s == null ? "null" : s.replaceAll("\\s+", " ").trim(); }
     static int argInt(String[] a, String k, int d) { for (int i = 0; i < a.length - 1; i++) if (a[i].equals(k)) try { return Integer.parseInt(a[i + 1]); } catch (Exception e) { } return d; }
+    static String argStr(String[] a, String k, String d) { for (int i = 0; i < a.length - 1; i++) if (a[i].equals(k)) return a[i + 1]; return d; }
 
     // ================================================================================================
     // ============ G4a — device dimer bind search + gate + 5.4 nm occupancy exclusion ================
@@ -1074,6 +1082,175 @@ public final class ExplicitHmmDimerGpuValidation {
         return g;
     }
 
+    /** {maxJointGap nm, peakBranchForce pN} over all dimers, from the resident state D. */
+    static double[] maxGapForce(G4cState g) {
+        double mg = 0, pf = 0;
+        for (int i = 0; i < g.nDim; i++) { int o = i * DS;
+            for (int si = 0; si < 5; si++) { int lo = si < 3 ? si : 3, hi = si < 3 ? si + 1 : (si == 3 ? 4 : 5);
+                double bx = g.D.get(o + ExplicitHmmDimerGpu.O_ND + hi * 3) - g.D.get(o + ExplicitHmmDimerGpu.O_ND + lo * 3), by = g.D.get(o + ExplicitHmmDimerGpu.O_ND + hi * 3 + 1) - g.D.get(o + ExplicitHmmDimerGpu.O_ND + lo * 3 + 1), bz = g.D.get(o + ExplicitHmmDimerGpu.O_ND + hi * 3 + 2) - g.D.get(o + ExplicitHmmDimerGpu.O_ND + lo * 3 + 2);
+                double len = Math.sqrt(bx * bx + by * by + bz * bz); double rest = g.sp.get(ExplicitHmmDimerGpu.SP_SEGL0 + si); double gap = Math.abs(len - rest); if (gap > mg) mg = gap;
+                if (si >= 3) { double force = Math.abs(g.sp.get(ExplicitHmmDimerGpu.SP_SEGKS + si) * (len - rest)); if (force > pf) pf = force; }
+            }
+        }
+        return new double[]{ mg, pf };
+    }
+    /** Run the unified device timestep (CPU-runner, active + Brownian) at (density,steps,seed,mode); return
+     *  {maxGap nm, peakBranchF pN, ruptures, meanBound, invalid, solveFail}. */
+    static double[] runUnifiedProbe(int density, int steps, int seed, int mode) {
+        int savedMode = ExplicitHmmDimerGpuParams.RUPTURE_MODE; ExplicitHmmDimerGpuParams.RUPTURE_MODE = mode;
+        G4cState g = g4cInit(density); g.brownOn = true;
+        ExplicitHmmDimerGpuParams.RUPTURE_MODE = savedMode;   // g.rp already captured the mode at init
+        g.rp.set(0, mode);
+        double mgMax = 0, pfMax = 0; long ruptSum = 0, boundSum = 0; int invalid = 0, sf = 0;
+        for (int t = 0; t < steps; t++) {
+            g4cStepCPU(g, t, seed, true);
+            double[] mf = maxGapForce(g); if (mf[0] > mgMax) mgMax = mf[0]; if (mf[1] > pfMax) pfMax = mf[1];
+            if (mode != 0) for (int m = 0; m < g.N; m++) if (g.events.get(m) != 0) ruptSum++;
+            boundSum += boundCount(g.sc);
+            for (int m = 0; m < g.nDim; m++) if (g.mechStatus.get(m) != 0) sf++;
+            for (int s = 0; s < g.nSeg; s++) if (Float.isNaN(g.sc.G.fil.coordX(s))) invalid++;
+        }
+        return new double[]{ mgMax, pfMax, ruptSum, (double) boundSum / steps, invalid, sf };
+    }
+
+    /** Threshold-aware candidate run: {maxGap nm, peakBranchF pN, physRupt, emergRupt, meanBound, invalid, solveFail}. */
+    static double[] runCandidate(int density, int steps, int seed, int mode, double bondNm, double branchNm, double strain, boolean emergOn) {
+        int sm = ExplicitHmmDimerGpuParams.RUPTURE_MODE; double sb = ExplicitHmmDimerGpuParams.BOND_RELEASE_NM, sbr = ExplicitHmmDimerGpuParams.BRANCH_RELEASE_NM, sst = ExplicitHmmDimerGpuParams.BRANCH_RELEASE_STRAIN; boolean se = ExplicitHmmDimerGpuParams.EMERGENCY_ON;
+        ExplicitHmmDimerGpuParams.RUPTURE_MODE = mode; ExplicitHmmDimerGpuParams.BOND_RELEASE_NM = bondNm; ExplicitHmmDimerGpuParams.BRANCH_RELEASE_NM = branchNm; ExplicitHmmDimerGpuParams.BRANCH_RELEASE_STRAIN = strain; ExplicitHmmDimerGpuParams.EMERGENCY_ON = emergOn;
+        try {
+            G4cState g = g4cInit(density); g.brownOn = true;
+            double mgMax = 0, pfMax = 0; long phys = 0, emerg = 0, boundSum = 0; int invalid = 0, sf = 0;
+            for (int t = 0; t < steps; t++) {
+                g4cStepCPU(g, t, seed, true);   // RUPTURE_MODE stays = mode during the run (g4cStepCPU gate reads the global)
+                double[] mf = maxGapForce(g); if (mf[0] > mgMax) mgMax = mf[0]; if (mf[1] > pfMax) pfMax = mf[1];
+                if (mode != 0 || emergOn) for (int m = 0; m < g.N; m++) { int e = g.events.get(m); if (e == 1) phys++; else if (e == 2) emerg++; }
+                boundSum += boundCount(g.sc);
+                for (int m = 0; m < g.nDim; m++) if (g.mechStatus.get(m) != 0) sf++;
+                for (int s = 0; s < g.nSeg; s++) if (Float.isNaN(g.sc.G.fil.coordX(s))) invalid++;
+            }
+            return new double[]{ mgMax, pfMax, phys, emerg, (double) boundSum / steps, invalid, sf };
+        } finally {
+            ExplicitHmmDimerGpuParams.RUPTURE_MODE = sm; ExplicitHmmDimerGpuParams.BOND_RELEASE_NM = sb; ExplicitHmmDimerGpuParams.BRANCH_RELEASE_NM = sbr; ExplicitHmmDimerGpuParams.BRANCH_RELEASE_STRAIN = sst; ExplicitHmmDimerGpuParams.EMERGENCY_ON = se;
+        }
+    }
+    // Focused candidates (§2): C1 loose, C2 middle, C3 tight. {bondNm, branchNm, strain}
+    static final double[][] FOCUSED = { { 30, 15, 1.5 }, { 25, 10, 1.0 }, { 20, 7.5, 0.75 } };
+    static final String[] FOCUSED_NAME = { "C1-loose", "C2-middle", "C3-tight" };
+
+    /** Focused decision-oriented rupture campaign (§1–§11): reproduce / challenge / biological / cpu-gpu. Checkpointed. */
+    static int runRuptureFocused(String[] args, String fphase) throws java.io.IOException {
+        ExplicitHmmDimerGlidingHarness.CFG_EA = 0.03; ExplicitHmmDimerGlidingHarness.CFG_EI = 1.0; ExplicitHmmDimerGlidingHarness.CFG_FORK = 1.0;   // §1 freeze
+        String dir = "RUN_LOGS/rupture_campaign"; new java.io.File(dir).mkdirs();
+        int steps = argInt(args, "-steps", 5000);
+        System.out.printf(Locale.US, "=== FOCUSED RUPTURE CAMPAIGN phase=%s (branchEA=0.03 ENFORCED, D0, dt=2.5e-6, Brownian ON, %d steps) ===%n", fphase, steps);
+        if (fphase.equals("reproduce")) {
+            // §3 — reproduce at ρ1500 seed 101 (already ρ1500-seed101→91nm in phase1.csv) + a ρ3000 seed 102 control.
+            for (int[] c : new int[][]{ { 1500, 101 }, { 3000, 102 } }) {
+                String mk = dir + "/focR0_d" + c[0] + "_s" + c[1] + ".done"; if (new java.io.File(mk).exists()) { System.out.printf("  [skip ρ%d seed%d]%n", c[0], c[1]); continue; }
+                double[] r = runCandidateGpu(c[0], steps, c[1], 0, 30, 15, 1.5, false);
+                boolean path = r[0] > 50 || r[1] > 1000;
+                String line = String.format(Locale.US, "R0,%d,%d,%.1f,%.0f,%.1f,%.0f,%.0f,%b%n", c[0], c[1], r[0], r[1], r[4], r[5], r[6], path);
+                try (java.io.FileWriter w = new java.io.FileWriter(dir + "/focused_reproduce.csv", true)) { w.write(line); }
+                try (java.io.FileWriter w = new java.io.FileWriter(mk)) { w.write(line); }
+                System.out.printf(Locale.US, "  R0 ρ%d seed%d: maxGap %.1f nm, peakBranchF %.0f pN, meanBound %.1f, invalid %.0f, solveFail %.0f → PATHOLOGY %b%n", c[0], c[1], r[0], r[1], r[4], r[5], r[6], path);
+            }
+        } else if (fphase.equals("challenge")) {
+            // §4 — C1/C2/C3 against the reproducing ρ1500 seed 101 (feasible) + ρ3000 seed 102 challenge if reached.
+            int[][] chal = { { 1500, 101 }, { 3000, 102 } };
+            for (int[] c : chal) for (int ci = 0; ci < 3; ci++) {   // all ρ1500 candidates first (feasible), then ρ3000
+                String mk = dir + "/foc_" + FOCUSED_NAME[ci] + "_d" + c[0] + "_s" + c[1] + ".done"; if (new java.io.File(mk).exists()) { System.out.printf("  [skip %s ρ%d seed%d]%n", FOCUSED_NAME[ci], c[0], c[1]); continue; }
+                double[] t = FOCUSED[ci];
+                double[] r = runCandidateGpu(c[0], steps, c[1], 3, t[0], t[1], t[2], true);   // R3, emergency gap 50 counted
+                boolean pass = r[0] <= 50 && r[1] < 1000 && r[5] == 0 && r[6] == 0 && r[3] == 0;   // gap<50, force<1000pN, no invalid/solveFail, 0 emergency
+                String line = String.format(Locale.US, "%s,%d,%d,bond%.0f/br%.1f/st%.2f,%.1f,%.0f,%.0f,%.0f,%.1f,%.0f,%.0f,%b%n", FOCUSED_NAME[ci], c[0], c[1], t[0], t[1], t[2], r[0], r[1], r[2], r[3], r[4], r[5], r[6], pass);
+                try (java.io.FileWriter w = new java.io.FileWriter(dir + "/focused_challenge.csv", true)) { w.write(line); }
+                try (java.io.FileWriter w = new java.io.FileWriter(mk)) { w.write(line); }
+                System.out.printf(Locale.US, "  %s ρ%d s%d: maxGap %.1f nm, peakF %.0f pN, physRupt %.0f, emerg %.0f, bound %.1f, inv %.0f, sf %.0f → PASS %b%n", FOCUSED_NAME[ci], c[0], c[1], r[0], r[1], r[2], r[3], r[4], r[5], r[6], pass);
+            }
+        } else if (fphase.equals("biological")) {
+            int ci = argInt(args, "-cand", 0);   // default C1
+            for (int dens : new int[]{ 500, 750 }) for (int sd : new int[]{ 101, 102, 103, 104 }) {
+                String mk = dir + "/focBio_" + FOCUSED_NAME[ci] + "_d" + dens + "_s" + sd + ".done"; if (new java.io.File(mk).exists()) continue;
+                double[] r0 = runCandidateGpu(dens, steps, sd, 0, 30, 15, 1.5, false);
+                double[] rc = runCandidateGpu(dens, steps, sd, 3, FOCUSED[ci][0], FOCUSED[ci][1], FOCUSED[ci][2], true);
+                double dv = r0[4] > 0 ? Math.abs(rc[4] - r0[4]) / r0[4] : 0;
+                String line = String.format(Locale.US, "%s,%d,%d,R0bound%.2f,Cbound%.2f,dBound%.3f,physRupt%.0f,maxGapR0%.1f,maxGapC%.1f,inv%.0f,sf%.0f%n", FOCUSED_NAME[ci], dens, sd, r0[4], rc[4], dv, rc[2], r0[0], rc[0], rc[5], rc[6]);
+                try (java.io.FileWriter w = new java.io.FileWriter(dir + "/focused_biological.csv", true)) { w.write(line); }
+                try (java.io.FileWriter w = new java.io.FileWriter(mk)) { w.write(line); }
+                System.out.printf(Locale.US, "  %s ρ%d s%d: bound R0 %.2f→C %.2f (Δ%.1f%%), physRupt %.0f, maxGap R0 %.1f→C %.1f, inv %.0f sf %.0f%n", FOCUSED_NAME[ci], dens, sd, r0[4], rc[4], dv * 100, rc[2], r0[0], rc[0], rc[5], rc[6]);
+            }
+        } else if (fphase.equals("cpu-gpu")) {
+            // §8 — ONLY the 2-3 matched oracle spot checks (CPU object-path vs GPU engine). Boundary fixture = runRupture (already CPU↔GPU-identical).
+            int ci = argInt(args, "-cand", 0); double[] tt = FOCUSED[ci];
+            System.out.printf("  matched CPU-oracle vs GPU-engine (candidate %s bond%.0f/br%.1f/st%.2f). Boundary fixture: see -rupture-validate (F1-F9 already event-identical).%n", FOCUSED_NAME[ci], tt[0], tt[1], tt[2]);
+            for (int[] c : new int[][]{ { 500, 102 }, { 3000, 102 } }) {   // 2 required matched long runs (ρ3000 CPU is slow — the allowed oracle case)
+                double[] gpu = runCandidateGpu(c[0], steps, c[1], 3, tt[0], tt[1], tt[2], true);
+                double[] cpu = runCandidate(c[0], steps, c[1], 3, tt[0], tt[1], tt[2], true);
+                double dBound = cpu[4] > 0 ? Math.abs(gpu[4] - cpu[4]) / cpu[4] : 0;
+                String line = String.format(Locale.US, "%s,%d,%d,GPUrupt%.0f,CPUrupt%.0f,GPUgap%.1f,CPUgap%.1f,GPUbound%.1f,CPUbound%.1f,dBound%.3f%n", FOCUSED_NAME[ci], c[0], c[1], gpu[2], cpu[2], gpu[0], cpu[0], gpu[4], cpu[4], dBound);
+                try (java.io.FileWriter w = new java.io.FileWriter(dir + "/focused_cpu_gpu.csv", true)) { w.write(line); }
+                System.out.printf(Locale.US, "  ρ%d s%d %s: GPU rupt %.0f / CPU rupt %.0f, GPU gap %.1f / CPU gap %.1f nm, bound GPU %.1f / CPU %.1f (Δ%.1f%%)%n", c[0], c[1], FOCUSED_NAME[ci], gpu[2], cpu[2], gpu[0], cpu[0], gpu[4], cpu[4], dBound * 100);
+            }
+        }
+        System.out.println("  [checkpoint written to " + dir + "; resumable — completed cells skipped]");
+        return 0;
+    }
+
+    static int runRuptureStudy(String[] args) throws java.io.IOException {
+        // §2 FROZEN MODEL: force the standing compliant branch (branchEA=0.03). The default CFG_EA=1.0 is the STIFF
+        // pre-fix branch — with it, a force spike comes from a SMALL extension (420 pN/nm) that a displacement/extension
+        // threshold cannot catch; the whole point of branchEA=0.03 (12.6 pN/nm) is that the same force needs a LARGE,
+        // catchable extension. Any study on the wrong branch is invalid.
+        ExplicitHmmDimerGlidingHarness.CFG_EA = 0.03; ExplicitHmmDimerGlidingHarness.CFG_EI = 1.0; ExplicitHmmDimerGlidingHarness.CFG_FORK = 1.0;
+        String phase = argStr(args, "-phase", "reproduce");
+        int density = argInt(args, "-density", 1500), steps = argInt(args, "-steps", 800), seed = argInt(args, "-seed", 102);
+        System.out.printf("=== HMM-DIMER RUPTURE-STUDY phase=%s density=%d steps=%d seed=%d ===%n", phase, density, steps, seed);
+        System.out.println("  NOTE: the R0 pathology is RARE (ρ1500 1/6 seeds ~162nm; ρ3000 seed-102 ~32149nm) and needs 5000-step runs.");
+        System.out.println("  This is a feasible PROBE, not the full §4–§18 campaign; the full sweep is a standing compute run.");
+        if (phase.equals("reproduce-full")) {
+            // §4 Phase 1 — reproduce the R0 pathology at full spec, CHECKPOINTED (§2): skip cells with a .done marker.
+            String dir = "RUN_LOGS/rupture_campaign"; new java.io.File(dir).mkdirs();
+            int fullSteps = argInt(args, "-steps", 5000);
+            int[][] cells = { { 1500, 101 }, { 1500, 102 }, { 1500, 103 }, { 1500, 104 }, { 1500, 105 }, { 1500, 106 }, { 3000, 101 }, { 3000, 102 }, { 3000, 103 }, { 3000, 104 } };
+            int done = 0, path = 0;
+            for (int[] c : cells) {
+                int dens = c[0], sd = c[1]; String mk = dir + "/p1_d" + dens + "_s" + sd + ".done";
+                if (new java.io.File(mk).exists()) { done++; System.out.printf("  [skip completed cell ρ%d seed%d]%n", dens, sd); continue; }
+                System.out.printf(Locale.US, "  [run ρ%d seed%d %d steps R0 ...]%n", dens, sd, fullSteps); System.out.flush();
+                double[] r = runUnifiedProbe(dens, fullSteps, sd, 0);
+                boolean pathology = r[0] > 50 || r[1] > 1000; if (pathology) path++;
+                String line = String.format(Locale.US, "%d,%d,%d,%.1f,%.0f,%.1f,%.0f,%.0f,%b%n", dens, sd, fullSteps, r[0], r[1], r[3], r[4], r[5], pathology);
+                try (java.io.FileWriter w = new java.io.FileWriter(dir + "/phase1.csv", true)) { w.write(line); }
+                try (java.io.FileWriter w = new java.io.FileWriter(mk)) { w.write("density,seed,steps,maxGapNm,peakBranchFpN,meanBound,invalid,solveFail,pathology\n" + line); }
+                System.out.printf(Locale.US, "  ρ%d seed%d: maxGap %.1f nm, peakBranchF %.0f pN, meanBound %.1f, invalid %.0f, solveFail %.0f, PATHOLOGY %b%n", dens, sd, r[0], r[1], r[3], r[4], r[5], pathology);
+                done++;
+            }
+            System.out.printf("  PHASE 1 CHECKPOINT: %d/%d cells done, %d with pathology (>50nm or >1000pN under R0)%n", done, cells.length, path);
+            System.out.println(path > 0 ? "  PATHOLOGY REPRODUCED on the compliant device path ⇒ proceed to Stage A threshold screen."
+                    : "  PATHOLOGY NOT reproduced on the compliant device path (all cells done) ⇒ per §4/§18 the rupture rule is NOT needed on the compliant model; leave R0 default.");
+            return 0;
+        }
+        if (phase.equals("reproduce")) {
+            double[] r0 = runUnifiedProbe(density, steps, seed, 0);
+            double[] r3 = runUnifiedProbe(density, steps, seed, 3);
+            System.out.printf(Locale.US, "  R0: maxGap %.1f nm, peakBranchF %.0f pN, meanBound %.1f, invalid %.0f, solveFail %.0f%n", r0[0], r0[1], r0[3], r0[4], r0[5]);
+            System.out.printf(Locale.US, "  R3(bond20/branch10/strain1): maxGap %.1f nm, peakBranchF %.0f pN, ruptures %.0f, meanBound %.1f, invalid %.0f, solveFail %.0f%n", r3[0], r3[1], r3[2], r3[3], r3[4], r3[5]);
+            boolean pathology = r0[0] > 50 || r0[1] > 1000;
+            System.out.printf("  PATHOLOGY IN THIS PROBE (maxGap>50nm or peakF>1000pN under R0): %s%n", pathology ? "REPRODUCED" : "NOT observed (rare event — needs full 5000-step high-density seeds)");
+            if (pathology) System.out.printf(Locale.US, "  R3 SUPPRESSION: maxGap %.1f→%.1f nm, peakF %.0f→%.0f pN, %.0f ruptures%n", r0[0], r3[0], r0[1], r3[1], r3[2]);
+        } else {
+            System.out.println("  This phase (" + phase + ") is a STANDING compute run (§5–§18): Stage A/B/C threshold screens, biological-range,");
+            System.out.println("  lifetimes, D0≈D2, dt — each 4–6 seeds × 5000 steps × 3–7 densities. Not run here (multi-hour campaign).");
+        }
+        System.out.println();
+        System.out.println("--- PROMOTION STATUS ---");
+        System.out.println("  Threshold NOT promoted. Promotion requires: reproduce the pathology (§4, 5000-step high-density seeds) →");
+        System.out.println("  Stage A/B/C screen (§5–§9) → biological-range false-positive gate (§10) → lifetime tail (§11) → D0≈D2 (§13) → dt (§14).");
+        System.out.println("  The rupture MECHANISM is validated (fixtures + CPU↔GPU); default RUPTURE_MODE=0 stays until a threshold passes the sweep.");
+        System.out.println("RUPTURE-STUDY (probe + infrastructure; full threshold campaign deferred): DONE (no promotion)");
+        return 0;
+    }
+
     static int runRupture(String[] args) {
         int density = argInt(args, "-density", 400);
         System.out.println("=== HMM-DIMER RUPTURE — high-strain bond-dissolution failsafe (fixtures + CPU↔GPU + reproduce/suppress) ===");
@@ -1271,13 +1448,72 @@ public final class ExplicitHmmDimerGpuValidation {
     }
 
     static final class G4cGpu {
-        G4cState g; TornadoExecutionPlan plan; GridScheduler gs; uk.ac.manchester.tornado.api.TornadoExecutionResult lastRes;
+        G4cState g; TornadoExecutionPlan plan; GridScheduler gs; uk.ac.manchester.tornado.api.TornadoExecutionResult lastRes; boolean brownOn = false;
         void step(int t, int seed) {
             MotorStore mot = g.sc.G.mot; FilamentStore f = g.sc.G.fil;
             mot.setCounts(t, seed, g.nSeg); f.counts.set(1, t); f.counts.set(2, seed);
+            g.mechCounts.set(ExplicitHmmDimerGpuKernel.C_STEP, t); g.mechCounts.set(ExplicitHmmDimerGpuKernel.C_SEED, seed); g.mechCounts.set(ExplicitHmmDimerGpuKernel.C_BROWN, brownOn ? 1 : 0);
             lastRes = plan.withGridScheduler(gs).execute();   // state stays resident (UNDER_DEMAND pull)
         }
         void pull() { if (lastRes != null) lastRes.transferToHost(g.sc.G.fil.coord, g.sc.G.fil.uVec, g.sc.G.mot.boundSeg, g.sc.G.mot.nucleotideState); }
+        void pullEvents() { if (lastRes != null) lastRes.transferToHost(g.events); }
+        void pullState() { if (lastRes != null) lastRes.transferToHost(g.D, g.sc.G.mot.boundSeg, g.sc.G.fil.coord, g.mechStatus); }
+    }
+    /** Campaign GPU graph = the unified timestep + the rupture stage (before mechanics) + Brownian mechanics.
+     *  Separate builder so G4c/d/G5 (buildG4cGpu) are untouched. rp/events drive rupture; mechCounts EVERY_EXECUTION for Brownian. */
+    static G4cGpu buildCampaignGpu(int density) {
+        G4cGpu gg = new G4cGpu(); G4cState g = g4cInit(density); gg.g = g; gg.brownOn = true;
+        TwoBodyConverterMotor.Glide2D G = g.sc.G; MotorStore mot = G.mot; FilamentStore f = G.fil;
+        TaskGraph tg = new TaskGraph("hmmCampaign")
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION, g.D, g.sp, g.mechScr, g.topo, g.cum, g.gp, g.conf, g.bindCounts, g.g4bCounts, g.mechStatus, g.rp, g.rcCounts)
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.body.coord, mot.body.uVec, mot.body.yVec, mot.body.bRotGam, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, G.xbParams, G.segCount, G.segOff, G.segMyo, G.bondData)
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.chainParams, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, f.counts, g.mechCounts)
+            .task("bind", ExplicitHmmDimerGpuKernel::dimerBindGate, g.D, f.coord, f.uVec, f.segLength, g.cum, mot.boundSeg, mot.bindArc, mot.nucleotideState, g.gp, g.bindCounts)
+            .task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts)
+            .task("cockPlace", ExplicitHmmDimerGpuKernel::cockAndPlaceFromD, g.D, mot.body.coord, mot.body.uVec, mot.body.yVec, mot.nucleotideState, g.g4bCounts)
+            .task("bond", CrossBridgeSystem::bondForces, mot.body.coord, mot.body.uVec, mot.body.yVec, mot.body.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams)
+            .task("feedback", ExplicitHmmDimerGpuKernel::bondDataToD, G.bondData, g.D, mot.boundSeg, mot.forceDotFil, g.g4bCounts)
+            .task("zero", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
+            .task("csrH", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, G.segCount)
+            .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, G.segCount, G.segOff)
+            .task("csrScat", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, G.segOff, G.segCount, G.segMyo)
+            .task("gather", CrossBridgeSystem::segGather, G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts)
+            .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
+            .task("confine", ExplicitHmmDimerGpuKernel::yzConfine, f.forceSum, f.coord, g.conf, f.counts)
+            .task("brown", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
+            .task("integ", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
+            .task("orthoY", DerivedGeometrySystem::orthogonalizeY, f.uVec, f.yVec, f.counts)
+            .task("derive", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
+            .task("rupture", ExplicitHmmDimerGpuKernel::ruptureCheck, g.D, mot.body.coord, mot.body.uVec, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, f.uVec, f.segLength, g.sp, g.rp, g.events, g.rcCounts)
+            .task("mech", ExplicitHmmDimerGpuKernel::solveBatchFloat, g.D, g.sp, g.mechScr, g.topo, g.mechCounts, g.mechStatus)
+            .transferToHost(DataTransferMode.UNDER_DEMAND, g.D, g.events, mot.boundSeg, f.coord, g.mechStatus);
+        GridScheduler gs = new GridScheduler();
+        String[] perDim = { "bind", "cockPlace", "feedback", "rupture", "mech" }; for (String t : perDim) gs.addWorkerGrid("hmmCampaign." + t, grid(g.nDim));
+        for (String t : new String[]{ "chem", "bond" }) gs.addWorkerGrid("hmmCampaign." + t, grid(g.N));
+        for (String t : new String[]{ "zero", "gather", "chain", "confine", "brown", "integ", "orthoY", "derive" }) gs.addWorkerGrid("hmmCampaign." + t, grid(g.nSeg));
+        for (String t : new String[]{ "csrH", "csrScan", "csrScat" }) gs.addWorkerGrid("hmmCampaign." + t, grid(1));
+        gg.gs = gs; gg.plan = new TornadoExecutionPlan(tg.snapshot());
+        return gg;
+    }
+    /** GPU candidate run (the campaign engine): {maxGap nm, peakBranchF pN, physRupt, emergRupt, meanBound, invalid, solveFail}. */
+    static double[] runCandidateGpu(int density, int steps, int seed, int mode, double bondNm, double branchNm, double strain, boolean emergOn) {
+        int sm = ExplicitHmmDimerGpuParams.RUPTURE_MODE; ExplicitHmmDimerGpuParams.RUPTURE_MODE = mode;   // g4cInit packs rp; also set explicitly below
+        G4cGpu gg; try { gg = buildCampaignGpu(density); } finally { ExplicitHmmDimerGpuParams.RUPTURE_MODE = sm; }
+        G4cState g = gg.g;
+        g.rp.set(0, mode); g.rp.set(1, (float) bondNm); g.rp.set(2, (float) branchNm); g.rp.set(3, (float) strain); g.rp.set(5, 50f); g.rp.set(6, emergOn ? 1f : 0f);
+        double mgMax = 0, pfMax = 0; long phys = 0, emerg = 0, boundSum = 0; int strideN = 0, sf = 0, invalid = 0;
+        for (int t = 0; t < steps; t++) {
+            gg.step(t, seed);
+            gg.pullEvents(); for (int m = 0; m < g.N; m++) { int e = g.events.get(m); if (e == 1) phys++; else if (e == 2) emerg++; }
+            if (t % 25 == 0 || t == steps - 1) {
+                gg.pullState(); double[] mf = maxGapForce(g); if (mf[0] > mgMax) mgMax = mf[0]; if (mf[1] > pfMax) pfMax = mf[1];
+                int b = 0; for (int m = 0; m < g.N; m++) if (g.sc.G.mot.boundSeg.get(m) >= 0) b++; boundSum += b; strideN++;
+                for (int s = 0; s < g.nSeg; s++) if (Float.isNaN(g.sc.G.fil.coordX(s))) invalid++;
+                for (int m = 0; m < g.nDim; m++) if (g.mechStatus.get(m) != 0) sf++;
+            }
+        }
+        return new double[]{ mgMax, pfMax, phys, emerg, strideN > 0 ? (double) boundSum / strideN : 0, invalid, sf };
     }
     static G4cGpu buildG4cGpu(int density) {
         G4cGpu gg = new G4cGpu(); G4cState g = g4cInit(density); gg.g = g;
@@ -1451,6 +1687,331 @@ public final class ExplicitHmmDimerGpuValidation {
         System.out.printf("READY FOR G4 (bind/chem/gather/integrate on device): %s%n", allPass ? "YES" : "NO");
         return allPass ? 0 : 1;
     }
+
+    // ================================================================================================
+    // ============ PRODUCTION DENSITY SWEEP — definitive GPU-only campaign (this task) ================
+    // One density×seed CELL per JVM (checkpoint-per-cell, GPU-hang-safe: a hang kills only this cell).
+    // Frozen config (§1): branchEA=0.03, branchEI standing, forkK=1.0, D0, 5.4nm exclusion, dt=2.5e-6,
+    // production chem + catch-slip + binding gate, actin Brownian ON, dimer Brownian ON, cull ON,
+    // solveGuarded active-only mechanics ON, rupture R0 (emergency OFF), scaled-float, persistent-id RNG.
+    // ================================================================================================
+
+    /** Campaign graph with ACTIVE-ONLY mechanics (§1: cull + solveGuarded), Brownian ON, rupture R0.
+     *  Differs from buildCampaignGpu ONLY by replacing dense solveBatchFloat with cull+guarded (G5 fold),
+     *  which is dense≡active (A1–A6). All observable arrays pulled UNDER_DEMAND. */
+    static G4cGpu buildProductionGpu(int density) {
+        G4cGpu gg = new G4cGpu(); G4cState g = g4cInit(density); gg.g = g; gg.brownOn = true;
+        g.rp.set(0, 0f); g.rp.set(6, 0f);   // §1 hard-enforce R0 + emergency OFF (in-graph rupture task no-ops)
+        TwoBodyConverterMotor.Glide2D G = g.sc.G; MotorStore mot = G.mot; FilamentStore f = G.fil;
+        TaskGraph tg = new TaskGraph("hmmProd")
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION, g.D, g.sp, g.mechScr, g.topo, g.cum, g.gp, g.conf, g.bindCounts, g.g4bCounts, g.mechStatus, g.rp, g.rcCounts, g.active, g.cullP)
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.body.coord, mot.body.uVec, mot.body.yVec, mot.body.bRotGam, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, G.xbParams, G.segCount, G.segOff, G.segMyo, G.bondData)
+            .transferToDevice(DataTransferMode.FIRST_EXECUTION, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.chainParams, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, f.counts, g.mechCounts)
+            .task("bind", ExplicitHmmDimerGpuKernel::dimerBindGate, g.D, f.coord, f.uVec, f.segLength, g.cum, mot.boundSeg, mot.bindArc, mot.nucleotideState, g.gp, g.bindCounts)
+            .task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts)
+            .task("cockPlace", ExplicitHmmDimerGpuKernel::cockAndPlaceFromD, g.D, mot.body.coord, mot.body.uVec, mot.body.yVec, mot.nucleotideState, g.g4bCounts)
+            .task("bond", CrossBridgeSystem::bondForces, mot.body.coord, mot.body.uVec, mot.body.yVec, mot.body.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams)
+            .task("feedback", ExplicitHmmDimerGpuKernel::bondDataToD, G.bondData, g.D, mot.boundSeg, mot.forceDotFil, g.g4bCounts)
+            .task("zero", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
+            .task("csrH", CrossBridgeSystem::csrHistogram, mot.boundSeg, mot.counts, G.segCount)
+            .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, G.segCount, G.segOff)
+            .task("csrScat", CrossBridgeSystem::csrScatter, mot.boundSeg, mot.counts, G.segOff, G.segCount, G.segMyo)
+            .task("gather", CrossBridgeSystem::segGather, G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts)
+            .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
+            .task("confine", ExplicitHmmDimerGpuKernel::yzConfine, f.forceSum, f.coord, g.conf, f.counts)
+            .task("brown", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
+            .task("integ", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
+            .task("orthoY", DerivedGeometrySystem::orthogonalizeY, f.uVec, f.yVec, f.counts)
+            .task("derive", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
+            .task("rupture", ExplicitHmmDimerGpuKernel::ruptureCheck, g.D, mot.body.coord, mot.body.uVec, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, f.uVec, f.segLength, g.sp, g.rp, g.events, g.rcCounts)
+            .task("cull", ExplicitHmmDimerGpuKernel::cullDimers, g.D, f.coord, f.uVec, f.segLength, g.active, g.cullP, g.bindCounts)
+            .task("mech", ExplicitHmmDimerGpuKernel::solveGuarded, g.D, g.sp, g.mechScr, g.topo, g.mechCounts, g.mechStatus, g.active)
+            .transferToHost(DataTransferMode.UNDER_DEMAND, g.D, g.events, g.mechStatus, g.active, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, f.coord, f.uVec);
+        GridScheduler gs = new GridScheduler();
+        for (String t : new String[]{ "bind", "cockPlace", "feedback", "rupture", "cull", "mech" }) gs.addWorkerGrid("hmmProd." + t, grid(g.nDim));
+        for (String t : new String[]{ "chem", "bond" }) gs.addWorkerGrid("hmmProd." + t, grid(g.N));
+        for (String t : new String[]{ "zero", "gather", "chain", "confine", "brown", "integ", "orthoY", "derive" }) gs.addWorkerGrid("hmmProd." + t, grid(g.nSeg));
+        for (String t : new String[]{ "csrH", "csrScan", "csrScat" }) gs.addWorkerGrid("hmmProd." + t, grid(1));
+        gg.gs = gs; gg.plan = new TornadoExecutionPlan(tg.snapshot());
+        return gg;
+    }
+
+    /** Run ONE production cell (density×seed) on the GPU device engine; write an atomic JSON + .done marker.
+     *  Entry: -production-cell -density D -seed S [-steps M -outdir DIR -rev SHA -healthStride K]. */
+    static int runProductionCell(String[] args) throws IOException {
+        // ---- §1 FROZEN CONFIG (force + verify + print; abort on any violation) ----
+        ExplicitHmmDimerGlidingHarness.CFG_EA = 0.03; ExplicitHmmDimerGlidingHarness.CFG_EI = 1.0; ExplicitHmmDimerGlidingHarness.CFG_FORK = 1.0;
+        ExplicitHmmDimerGlidingHarness.DT = 2.5e-6;
+        ExplicitHmmDimerGpuParams.RUPTURE_MODE = 0; ExplicitHmmDimerGpuParams.EMERGENCY_ON = false;
+        int density = argInt(args, "-density", 500), seed = argInt(args, "-seed", 101), steps = argInt(args, "-steps", 5000);
+        int healthStride = argInt(args, "-healthStride", 10);
+        String outdir = argStr(args, "-outdir", "RUN_LOGS/hmm_density_sweep"); new File(outdir).mkdirs();
+        String rev = argStr(args, "-rev", "unknown");
+        double dt = ExplicitHmmDimerGlidingHarness.DT;
+        boolean deviceBackend = ExplicitHmmDimerGlidingHarness.BACKEND != ExplicitHmmDimerGpuParams.Backend.CPU;
+        // ABORT gates
+        String abort = null;
+        if (Math.abs(ExplicitHmmDimerGlidingHarness.CFG_EA - 0.03) > 1e-9) abort = "branchEA != 0.03";
+        else if (!deviceBackend) abort = "backend is CPU (no device path)";
+        else if (ExplicitHmmDimerGpuParams.RUPTURE_MODE != 0) abort = "rupture is active (RUPTURE_MODE != 0)";
+        else if (ExplicitHmmDimerGpuParams.EMERGENCY_ON) abort = "emergency rupture is ON";
+
+        System.out.println("=== HMM-DIMER PRODUCTION CELL — FROZEN CONFIG ===");
+        System.out.printf(Locale.US, "  backend=%s (device-resident=%b) | DEVICE_VALIDATED=%b (experimental override)%n", ExplicitHmmDimerGlidingHarness.BACKEND, deviceBackend, ExplicitHmmDimerGpuParams.DEVICE_VALIDATED);
+        System.out.printf(Locale.US, "  topology Ms=%d Ma=%d Mb=%d (%d DOF) | branchEA=%.4g (eff ~12.6 pN/nm) | branchEI standing | forkK=%.2g%n", ExplicitHmmDimerGpuParams.MS, ExplicitHmmDimerGpuParams.MA, ExplicitHmmDimerGpuParams.MB, ExplicitHmmDimerGpuParams.NDOF, ExplicitHmmDimerGlidingHarness.CFG_EA, ExplicitHmmDimerGlidingHarness.CFG_FORK);
+        System.out.printf(Locale.US, "  D0 (dirMech=0) | 5.4nm occupancy exclusion ON | dt=%.3g s | production chem+catch-slip+binding-gate ON%n", dt);
+        System.out.printf(Locale.US, "  actin Brownian ON | dimer-mechanics Brownian ON | GPU cullDimers ON | solveGuarded active-only ON%n");
+        System.out.printf(Locale.US, "  rupture mode R0 | emergency rupture OFF | scaled-float mechanics | persistent dimer-id RNG | no CPU fallback%n");
+        System.out.printf(Locale.US, "  CELL: density=%d dimers/µm² | seed=%d | steps=%d | healthStride=%d | outdir=%s | rev=%s%n", density, seed, steps, healthStride, outdir, rev);
+        if (abort != null) {
+            System.out.printf("  *** ABORT (§1 config violation): %s ***%n", abort);
+            return 3;
+        }
+        System.out.println("  frozen config VERIFIED — proceeding.");
+
+        long startMs = System.currentTimeMillis();
+        G4cGpu gg = buildProductionGpu(density);
+        G4cState g = gg.g; MotorStore mot = g.sc.G.mot; FilamentStore f = g.sc.G.fil;
+        int N = g.N, nDim = g.nDim, nSeg = g.nSeg;
+        System.out.printf(Locale.US, "  SCENE: nDim=%d heads=%d nSeg=%d lawn=%.1f×%.1f µm cullR=%.0f nm%n", nDim, N, nSeg, TwoBodyConverterMotor.G4_MATX, TwoBodyConverterMotor.G4_MATY, g.sc.cullR * 1e3);
+
+        ProdObs o = new ProdObs(N, nDim, steps, dt);
+        String status = "ok"; String errMsg = "";
+        double warmMs = 0;
+        try {
+            // warm/compile step (t=0)
+            long w0 = System.nanoTime();
+            gg.step(0, seed);
+            warmMs = (System.nanoTime() - w0) / 1e6;
+            gg.lastRes.transferToHost(mot.boundSeg, mot.nucleotideState, mot.forceDotFil, f.coord, g.active);
+            o.observeCheap(0, mot, f, g, nSeg);
+            gg.lastRes.transferToHost(g.D, g.mechStatus); o.observeHealth(0, g);
+            for (int t = 1; t < steps; t++) {
+                gg.step(t, seed);
+                gg.lastRes.transferToHost(mot.boundSeg, mot.nucleotideState, mot.forceDotFil, f.coord, g.active);
+                o.observeCheap(t, mot, f, g, nSeg);
+                if (t % healthStride == 0 || t == steps - 1) { gg.lastRes.transferToHost(g.D, g.mechStatus); o.observeHealth(t, g); }
+            }
+        } catch (Throwable e) {
+            status = "error"; errMsg = e.getClass().getSimpleName() + ": " + oneLine(e.getMessage());
+            System.out.printf("  *** RUNTIME ERROR at cell ρ%d s%d: %s ***%n", density, seed, errMsg);
+        }
+        long endMs = System.currentTimeMillis();
+        double wallS = (endMs - startMs) / 1e3;
+        o.finish();
+
+        // ---- console summary ----
+        System.out.printf(Locale.US, "  RESULT ρ%d s%d: velProd=%+.4f µm/s (full-run %+.4f) meanBoundHeads=%.3f meanBoundDim=%.3f twoFrac=%.4f cont=%.4f%n",
+                density, seed, o.velProd, o.velFullRun, o.meanBoundHeads, o.meanBoundDimers, o.twoFracAmongBound, o.continuity);
+        System.out.printf(Locale.US, "         fwd/bwd 2nd binds=%d/%d | maxGap=%.1f nm p99.9=%.1f | exc>50/>100=%d/%d | peakBranchF=%.0f pN peakF8=%.2f pN | invalid=%d solveFail=%d%n",
+                o.fwdSecond, o.bwdSecond, o.maxGap, o.gapP999, o.exc50, o.exc100, o.peakBranchF, o.peakF8, o.invalidStates, o.solverFailures);
+        System.out.printf(Locale.US, "         meanActive=%.1f (%.1f%%) | ATPturn=%d | wall=%.1fs | %.1f steps/s | status=%s%n",
+                o.meanActive, 100.0 * o.meanActive / Math.max(1, nDim), o.atpTurnover, wallS, status.equals("ok") ? (steps / wallS) : Double.NaN, status);
+
+        // ---- atomic JSON write ----
+        String base = String.format(Locale.US, "cell_d%d_s%d", density, seed);
+        String json = o.toJson(density, seed, steps, dt, nDim, N, nSeg, g.sc.cullR, rev, ExplicitHmmDimerGlidingHarness.BACKEND.toString(), startMs, endMs, wallS, status, errMsg, warmMs);
+        Path fin = new File(outdir, base + ".json").toPath();
+        Path tmp = new File(outdir, base + ".json.tmp").toPath();
+        Files.writeString(tmp, json);
+        Files.move(tmp, fin, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        if (status.equals("ok")) { try (FileWriter w = new FileWriter(new File(outdir, base + ".done"))) { w.write(fin.getFileName().toString() + "\n"); } }
+        System.out.printf("  wrote %s (%s)%n", fin, status);
+        return status.equals("ok") ? 0 : 1;
+    }
+
+    /** Per-cell observable accumulator (host-side, from per-step device pulls). */
+    static final class ProdObs {
+        final int N, nDim, steps; final double dt;
+        // motion
+        final double[] cx;                        // filament centroid X (µm) per step
+        double velFullRun, velProd, velInstMean, velInstVar, fracMovingProd; int reversals;
+        double[] windowVel = new double[5];
+        // binding
+        long boundHeadSum, boundDimSum, singlySum, doublySum; long twoAmongBoundNum, twoAmongBoundDen;
+        double meanBoundHeads, meanBoundDimers, singlyFrac, doublyFrac, twoFracAmongBound, continuity;
+        long bindEvents, detachEvents; long headStepsBound;
+        final IntList lifetimes = new IntList();
+        // directionality
+        int fwdSecond, bwdSecond; final DoubleList fwdDwell = new DoubleList(), bwdDwell = new DoubleList();
+        final DoubleList fwdForce = new DoubleList(), bwdForce = new DoubleList(), fwdVel = new DoubleList(), bwdVel = new DoubleList();
+        // mechanical health
+        double maxGap, gapP99, gapP999, peakBranchF, branchFP99, peakF8; int exc10, exc50, exc100; final DoubleList gapSamp = new DoubleList(), branchSamp = new DoubleList();
+        long activeSum; int activeMax; double meanActive; int invalidStates, solverFailures; int healthSamples;
+        // chemistry
+        final long[] nucOcc = new long[4]; long nucSteps; long chemTransitions, atpTurnover, catchSlipDetach;
+        int reboundLE1, reboundLE5, reboundLE20;
+        // per-head trackers
+        final int[] prevBound, attachStart, prevNuc, lastDetach; final boolean[] wasSecond; final double[] secondBindForce, secondBindVel;
+        // reversal helper
+        double blockDispAccum; int blockLen; int blockSign; final int BLOCK = 100;
+
+        ProdObs(int N, int nDim, int steps, double dt) {
+            this.N = N; this.nDim = nDim; this.steps = steps; this.dt = dt;
+            cx = new double[steps];
+            prevBound = new int[N]; Arrays.fill(prevBound, -1);
+            attachStart = new int[N]; Arrays.fill(attachStart, -1);
+            prevNuc = new int[N]; lastDetach = new int[N]; Arrays.fill(lastDetach, Integer.MIN_VALUE / 2);
+            wasSecond = new boolean[N]; secondBindForce = new double[N]; secondBindVel = new double[N];
+        }
+
+        /** cheap per-step observe: boundSeg, nucleotideState, forceDotFil, filament coord, active (all pulled). */
+        void observeCheap(int t, MotorStore mot, FilamentStore f, G4cState g, int nSeg) {
+            double c = 0; for (int s = 0; s < nSeg; s++) c += f.coordX(s); c /= nSeg; cx[t] = c;
+            double instV = t > 0 ? (cx[t] - cx[t - 1]) / dt : 0;   // µm/s
+            if (t > 0) { velInstMean += instV; velInstVar += instV * instV; if (instV < 0) fracMovingProd += 1; }
+            // reversal detection on BLOCK-averaged displacement (thermal-robust)
+            if (t > 0) { blockDispAccum += (cx[t] - cx[t - 1]); blockLen++;
+                if (blockLen >= BLOCK) { int sgn = blockDispAccum < 0 ? -1 : (blockDispAccum > 0 ? 1 : 0);
+                    if (blockSign != 0 && sgn != 0 && sgn != blockSign) reversals++; if (sgn != 0) blockSign = sgn; blockDispAccum = 0; blockLen = 0; } }
+            int bh = 0, active = 0;
+            for (int i = 0; i < nDim; i++) active += g.active.get(i);
+            activeSum += active; if (active > activeMax) activeMax = active;
+            // per-dimer binding classification + per-head event tracking
+            int boundDim = 0, singly = 0, doubly = 0;
+            for (int d = 0; d < nDim; d++) {
+                int hA = 2 * d, hB = 2 * d + 1;
+                int bA = mot.boundSeg.get(hA), bB = mot.boundSeg.get(hB);
+                boolean a = bA >= 0, b = bB >= 0;
+                if (a || b) boundDim++;
+                if (a ^ b) singly++; else if (a && b) doubly++;
+            }
+            for (int m = 0; m < N; m++) {
+                int cur = mot.boundSeg.get(m); int prev = prevBound[m];
+                if (cur >= 0) { bh++; headStepsBound++; }
+                if (prev < 0 && cur >= 0) {           // BIND event
+                    bindEvents++; attachStart[m] = t;
+                    if (t - lastDetach[m] <= 1) reboundLE1++; if (t - lastDetach[m] <= 5) reboundLE5++; if (t - lastDetach[m] <= 20) reboundLE20++;
+                    // is this the SECOND head of its dimer to be bound now? (partner already bound)
+                    int partner = (m % 2 == 0) ? m + 1 : m - 1;
+                    if (mot.boundSeg.get(partner) >= 0) {
+                        wasSecond[m] = true;
+                        double fb = mot.forceDotFil.get(m);          // load along filament at bind (sign discriminates fwd/bwd)
+                        secondBindForce[m] = fb; secondBindVel[m] = instV;
+                        if (fb >= 0) { fwdSecond++; fwdForce.add(fb); fwdVel.add(instV); }
+                        else { bwdSecond++; bwdForce.add(fb); bwdVel.add(instV); }
+                    } else wasSecond[m] = false;
+                } else if (prev >= 0 && cur < 0) {     // DETACH event
+                    detachEvents++; catchSlipDetach++;
+                    if (attachStart[m] >= 0) { int life = t - attachStart[m]; lifetimes.add(life);
+                        if (wasSecond[m]) { double dw = life * dt * 1e3;   // ms
+                            if (secondBindForce[m] >= 0) fwdDwell.add(dw); else bwdDwell.add(dw); } }
+                    attachStart[m] = -1; lastDetach[m] = t; wasSecond[m] = false;
+                }
+                prevBound[m] = cur;
+                // chemistry occupancy + transitions
+                int nu = mot.nucleotideState.get(m); if (nu >= 0 && nu < 4) nucOcc[nu]++;
+                if (t > 0 && nu != prevNuc[m]) { chemTransitions++; if (prevNuc[m] == MotorStore.NUC_NONE && nu == MotorStore.NUC_ATP) atpTurnover++; }
+                prevNuc[m] = nu;
+            }
+            nucSteps++;
+            boundHeadSum += bh; boundDimSum += boundDim; singlySum += singly; doublySum += doubly;
+            if (boundDim > 0) { twoAmongBoundNum += doubly; twoAmongBoundDen += boundDim; }
+        }
+
+        /** strided health observe (needs full D + mechStatus). */
+        void observeHealth(int t, G4cState g) {
+            double[] mf = maxGapForce(g);           // {worst joint gap nm, peak branch force pN} across all dimers this step
+            double gap = mf[0], brF = mf[1];
+            gapSamp.add(gap); branchSamp.add(brF);
+            if (gap > maxGap) maxGap = gap; if (brF > peakBranchF) peakBranchF = brF;
+            if (gap > 10) exc10++; if (gap > 50) exc50++; if (gap > 100) exc100++;
+            // peak F8 across dimers (O_F8A/O_F8B, scaled pN)
+            for (int d = 0; d < g.nDim; d++) { int o = d * DS;
+                double fa = mag3(g.D, o + ExplicitHmmDimerGpu.O_F8A), fb = mag3(g.D, o + ExplicitHmmDimerGpu.O_F8B);
+                if (fa > peakF8) peakF8 = fa; if (fb > peakF8) peakF8 = fb; }
+            for (int d = 0; d < g.nDim; d++) if (g.mechStatus.get(d) != 0) solverFailures++;
+            for (int s = 0; s < g.nSeg; s++) if (Float.isNaN(g.sc.G.fil.coordX(s))) { invalidStates++; break; }
+            healthSamples++;
+        }
+
+        void finish() {
+            // motion fits
+            velFullRun = lsSlope(cx, dt);           // µm/s (LS slope of centroid vs time); negative = pointed-leading = productive
+            velProd = -velFullRun;                  // positive = productive glide
+            int nInst = Math.max(1, steps - 1);
+            velInstMean /= nInst; velInstVar = velInstVar / nInst - velInstMean * velInstMean; fracMovingProd /= nInst;
+            for (int w = 0; w < 5; w++) { int a = w * steps / 5, b = (w + 1) * steps / 5; windowVel[w] = -lsSlope(Arrays.copyOfRange(cx, a, b), dt); }
+            // binding aggregates
+            meanBoundHeads = (double) boundHeadSum / steps; meanBoundDimers = (double) boundDimSum / steps;
+            singlyFrac = (double) singlySum / steps / Math.max(1, nDim); doublyFrac = (double) doublySum / steps / Math.max(1, nDim);
+            twoFracAmongBound = twoAmongBoundDen > 0 ? (double) twoAmongBoundNum / twoAmongBoundDen : 0;
+            continuity = (double) headStepsBound / ((long) steps * N);
+            // health percentiles
+            gapP99 = gapSamp.pctl(0.99); gapP999 = gapSamp.pctl(0.999); branchFP99 = branchSamp.pctl(0.99);
+            meanActive = (double) activeSum / steps;
+        }
+
+        String toJson(int density, int seed, int steps, double dt, int nDim, int N, int nSeg, double cullR, String rev, String backend,
+                      long startMs, long endMs, double wallS, String status, String err, double warmMs) {
+            StringBuilder b = new StringBuilder(); b.append("{\n");
+            // metadata (§4)
+            kv(b, "density", density); kv(b, "seed", seed); kv(b, "steps", steps); kv(b, "dt", dt);
+            kv(b, "backend", q(backend)); kv(b, "device_validated", false); kv(b, "rupture_mode", 0);
+            kv(b, "branchEA", 0.03); kv(b, "branchEI_standing", true); kv(b, "forkK", 1.0); kv(b, "dirMech", 0);
+            kv(b, "nDim", nDim); kv(b, "heads", N); kv(b, "nSeg", nSeg); kv(b, "cullR_nm", cullR * 1e3);
+            kv(b, "code_rev", q(rev)); kv(b, "start_ms", startMs); kv(b, "end_ms", endMs); kv(b, "wall_s", wallS);
+            kv(b, "warm_compile_ms", warmMs); kv(b, "status", q(status)); kv(b, "error", q(err));
+            kv(b, "steps_per_s", status.equals("ok") ? steps / wallS : 0.0); kv(b, "health_samples", healthSamples);
+            // motion (§5)
+            kv(b, "vel_full_run", velFullRun); kv(b, "vel_prod", velProd);
+            kv(b, "total_axial_disp_um", cx[steps - 1] - cx[0]); kv(b, "productive_disp_um", -(cx[steps - 1] - cx[0]));
+            kv(b, "vel_inst_mean", velInstMean); kv(b, "vel_inst_var", velInstVar);
+            kv(b, "frac_moving_prod", fracMovingProd); kv(b, "reversals", reversals);
+            b.append("  \"window_vel\": ").append(arr(windowVel)).append(",\n");
+            // binding (§5)
+            kv(b, "mean_bound_heads", meanBoundHeads); kv(b, "mean_bound_dimers", meanBoundDimers);
+            kv(b, "singly_frac", singlyFrac); kv(b, "doubly_frac", doublyFrac); kv(b, "two_head_frac_among_bound", twoFracAmongBound);
+            kv(b, "bind_events", bindEvents); kv(b, "detach_events", detachEvents); kv(b, "continuity", continuity);
+            kv(b, "lifetime_mean_steps", lifetimes.mean()); kv(b, "lifetime_median_steps", lifetimes.pctl(0.5));
+            kv(b, "lifetime_p90_steps", lifetimes.pctl(0.90)); kv(b, "lifetime_p99_steps", lifetimes.pctl(0.99));
+            kv(b, "lifetime_mean_ms", lifetimes.mean() * dt * 1e3);
+            // directionality (§5)
+            kv(b, "fwd_second_binds", fwdSecond); kv(b, "bwd_second_binds", bwdSecond);
+            kv(b, "fwd_dwell_ms", fwdDwell.mean()); kv(b, "bwd_dwell_ms", bwdDwell.mean());
+            kv(b, "fwd_force_at_bind", fwdForce.mean()); kv(b, "bwd_force_at_bind", bwdForce.mean());
+            kv(b, "fwd_vel_at_bind", fwdVel.mean()); kv(b, "bwd_vel_at_bind", bwdVel.mean());
+            // mechanical health (§5, §9)
+            kv(b, "max_gap_nm", maxGap); kv(b, "gap_p99_nm", gapP99); kv(b, "gap_p999_nm", gapP999);
+            kv(b, "exc_gt10_nm", exc10); kv(b, "exc_gt50_nm", exc50); kv(b, "exc_gt100_nm", exc100);
+            kv(b, "peak_branch_force_pn", peakBranchF); kv(b, "branch_force_p99_pn", branchFP99); kv(b, "peak_f8_pn", peakF8);
+            kv(b, "mean_active", meanActive); kv(b, "max_active", activeMax);
+            kv(b, "invalid_states", invalidStates); kv(b, "solver_failures", solverFailures);
+            // chemistry (§5)
+            double occDen = Math.max(1, nucSteps * (long) N);
+            kv(b, "nuc_occ_none", nucOcc[0] / occDen); kv(b, "nuc_occ_atp", nucOcc[1] / occDen);
+            kv(b, "nuc_occ_adppi", nucOcc[2] / occDen); kv(b, "nuc_occ_adp", nucOcc[3] / occDen);
+            kv(b, "chem_transitions", chemTransitions); kv(b, "atp_turnover", atpTurnover); kv(b, "catch_slip_detach", catchSlipDetach);
+            kv(b, "rebound_le1", reboundLE1); kv(b, "rebound_le5", reboundLE5); kv(b, "rebound_le20", reboundLE20);
+            // derived per-motor efficiency (§8)
+            kv(b, "vel_per_bound_head", meanBoundHeads > 0 ? velProd / meanBoundHeads : 0.0);
+            kv(b, "vel_per_bound_dimer", meanBoundDimers > 0 ? velProd / meanBoundDimers : 0.0);
+            // last field (no trailing comma)
+            b.append("  \"note\": ").append(q("min_solver_pivot + max_residual + per-cell GPU util/mem are NOT host-instrumented (would need kernel/driver hooks); solver_failures + invalid_states cover solve health. gap/branch/F8 sampled every healthStride steps.")).append("\n}\n");
+            return b.toString();
+        }
+        static void kv(StringBuilder b, String k, double v) { b.append("  \"").append(k).append("\": ").append(fmtNum(v)).append(",\n"); }
+        static void kv(StringBuilder b, String k, long v) { b.append("  \"").append(k).append("\": ").append(v).append(",\n"); }
+        static void kv(StringBuilder b, String k, boolean v) { b.append("  \"").append(k).append("\": ").append(v).append(",\n"); }
+        static void kv(StringBuilder b, String k, String vq) { b.append("  \"").append(k).append("\": ").append(vq).append(",\n"); }
+        static String q(String s) { return "\"" + (s == null ? "" : s.replace("\\", "\\\\").replace("\"", "'")) + "\""; }
+        static String fmtNum(double v) { if (Double.isNaN(v) || Double.isInfinite(v)) return "null"; return String.format(Locale.US, "%.6g", v); }
+        static String arr(double[] a) { StringBuilder s = new StringBuilder("["); for (int i = 0; i < a.length; i++) { if (i > 0) s.append(", "); s.append(fmtNum(a[i])); } return s.append("]").toString(); }
+    }
+
+    static double mag3(FloatArray D, int o) { double x = D.get(o), y = D.get(o + 1), z = D.get(o + 2); return Math.sqrt(x * x + y * y + z * z); }
+    static double lsSlope(double[] y, double dt) {   // least-squares slope of y vs time (t = i·dt); returns dy/dt
+        int n = y.length; if (n < 2) return 0; double sx = 0, sy = 0, sxx = 0, sxy = 0;
+        for (int i = 0; i < n; i++) { double x = i * dt; sx += x; sy += y[i]; sxx += x * x; sxy += x * y[i]; }
+        double den = n * sxx - sx * sx; return den == 0 ? 0 : (n * sxy - sx * sy) / den;
+    }
+    static final class IntList { int[] a = new int[64]; int n; void add(int v) { if (n == a.length) a = Arrays.copyOf(a, n * 2); a[n++] = v; }
+        double mean() { if (n == 0) return 0; long s = 0; for (int i = 0; i < n; i++) s += a[i]; return (double) s / n; }
+        double pctl(double p) { if (n == 0) return 0; int[] c = Arrays.copyOf(a, n); Arrays.sort(c); int idx = (int) Math.min(n - 1, Math.max(0, Math.round(p * (n - 1)))); return c[idx]; } }
+    static final class DoubleList { double[] a = new double[64]; int n; void add(double v) { if (n == a.length) a = Arrays.copyOf(a, n * 2); a[n++] = v; }
+        double mean() { if (n == 0) return 0; double s = 0; for (int i = 0; i < n; i++) s += a[i]; return s / n; }
+        double pctl(double p) { if (n == 0) return 0; double[] c = Arrays.copyOf(a, n); Arrays.sort(c); int idx = (int) Math.min(n - 1, Math.max(0, Math.round(p * (n - 1)))); return c[idx]; } }
 
     private ExplicitHmmDimerGpuValidation() {}
 }
