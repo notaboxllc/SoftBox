@@ -1,9 +1,12 @@
 # Explicit-HMM dimer — DEFINITIVE GPU-only density sweep (density-response results)
 
-**Status: COMPLETE (2026-07-21).** 36 GPU device-path cells (9 densities × 4 seeds × 5000 steps), all
-`status=ok`, **0 invalid states, 0 solver failures** across the entire campaign. This is the scientific
-density-response result on the **device path** (task objective), NOT the CPU↔GPU promotion matrix —
-`DEVICE_VALIDATED` is unchanged (`false`); nothing promoted; the model was not modified during the sweep.
+**Status: COMPLETE (2026-07-21).** **68 GPU device-path cells** (11 densities × 5000 steps), all
+`status=ok`, **0 invalid states, 0 solver failures** across the entire campaign. Run in two batches: the
+original 9-density × 4-seed sweep (rev e342b8f), then a statistics top-up (rev f8dffd3 — harness-only commit,
+model/kernels byte-unchanged ⇒ physics identical, pooling valid) adding seeds 105–108 at ρ{200,400,500,700,
+750,1000} (→ **n=8**) and the new densities **ρ300, ρ600** (n=4). This is the scientific density-response
+result on the **device path** (task objective), NOT the CPU↔GPU promotion matrix — `DEVICE_VALIDATED` is
+unchanged (`false`); nothing promoted; the model was not modified during the sweep.
 
 Raw per-cell JSON: `RUN_LOGS/hmm_density_sweep/cell_d<ρ>_s<seed>.json`; auto-analysis
 `RUN_LOGS/hmm_density_sweep/ANALYSIS.md`; per-cell stdout `RUN_LOGS/hmm_density_sweep/logs/`.
@@ -22,38 +25,44 @@ Driver: `ExplicitHmmDimerGpuValidation.runProductionCell` / `buildProductionGpu`
 
 Device throughput: 84 steps/s @ρ100 → 58 steps/s @ρ3000 (~15.5 % active, launch-bound); ~60–86 s wall/cell.
 
-## 2. Headline density-response (velProd, µm/s, mean±SD across 4 seeds; seed values in ANALYSIS.md)
+## 2. Headline density-response (velProd, µm/s, mean±SD; n seeds; seed values in ANALYSIS.md)
 
-| ρ (dim/µm²) | velProd mean | SD | SEM | 95% CI | median | boundHeads | twoFrac | fwd/bwd 2nd (Σ) |
+| ρ (dim/µm²) | n | velProd mean | SD | SEM | 95% CI | median | boundHeads | twoFrac |
 |---|---|---|---|---|---|---|---|---|
-| 100 | **+0.875** | 0.148 | 0.074 | [+0.64,+1.11] | +0.88 | 1.12 | 0.053 | 5/6 |
-| 200 | **+1.777** | 1.060 | 0.530 | [+0.09,+3.46] | +1.93 | 2.66 | 0.050 | 8/14 |
-| 400 | **+2.190** | 1.121 | 0.560 | [+0.41,+3.97] | +2.19 | 5.53 | 0.064 | 19/42 |
-| 500 | **+2.586** | 0.881 | 0.441 | [+1.18,+3.99] | +2.48 | 6.47 | 0.064 | 20/49 |
-| 700 | **+3.100** | 0.577 | 0.289 | [+2.18,+4.02] | +2.93 | 8.98 | 0.071 | 32/67 |
-| 750 | **+3.138** | 0.696 | 0.348 | [+2.03,+4.25] | +3.03 | 9.32 | 0.073 | 36/68 |
-| 1000 | **+2.857** | 0.881 | 0.441 | [+1.46,+4.26] | +2.93 | 12.23 | 0.067 | 41/88 |
-| 1500 | **+2.629** | 0.653 | 0.327 | [+1.59,+3.67] | +2.50 | 19.63 | 0.064 | 68/139 |
-| 3000 | **+2.843** | 0.462 | 0.231 | [+2.11,+3.58] | +2.83 | 38.00 | 0.065 | 156/263 |
+| 100 | 4 | **+0.875** | 0.148 | 0.074 | [+0.64,+1.11] | +0.88 | 1.12 | 0.053 |
+| 200 | 8 | **+1.903** | 0.944 | 0.334 | [+1.11,+2.69] | +2.04 | 2.79 | 0.062 |
+| 300 | 4 | **+1.940** | 1.449 | 0.725 | [−0.37,+4.25] | +1.99 | 4.33 | 0.064 |
+| 400 | 8 | **+2.432** | 0.815 | 0.288 | [+1.75,+3.11] | +2.60 | 5.62 | 0.067 |
+| 500 | 8 | **+2.715** | 0.653 | 0.231 | [+2.17,+3.26] | +2.70 | 6.52 | 0.065 |
+| 600 | 4 | **+2.830** | 0.775 | 0.388 | [+1.60,+4.06] | +2.67 | 8.18 | 0.068 |
+| 700 | 8 | **+2.828** | 0.602 | 0.213 | [+2.33,+3.33] | +2.79 | 9.28 | 0.070 |
+| 750 | 8 | **+2.964** | 0.577 | 0.204 | [+2.48,+3.45] | +2.80 | 9.48 | 0.073 |
+| 1000 | 8 | **+2.964** | 0.655 | 0.232 | [+2.42,+3.51] | +3.08 | 12.33 | 0.070 |
+| 1500 | 4 | **+2.629** | 0.653 | 0.327 | [+1.59,+3.67] | +2.50 | 19.63 | 0.064 |
+| 3000 | 4 | **+2.843** | 0.462 | 0.231 | [+2.11,+3.58] | +2.83 | 38.00 | 0.065 |
 
 All velProd **positive (productive, pointed-leading −x glide)**; velocity = LS slope of filament centroid.
+The n=8 top-up roughly halved the SEMs on the mid-range densities (e.g. ρ500 0.44→0.23, ρ750 0.35→0.20).
 Agreement with the CPU reference gate table (`..._GPU_BACKEND_FINDINGS.md §3`) is good in shape and close in
 magnitude (ρ100 +0.88 vs CPU +0.99; **ρ3000 +2.84 vs CPU +2.85**); the GPU basin binds somewhat more in the
-mid-range (ρ500 boundHeads 6.47 vs prior GPU-biological 6.29 — reproduces it; CPU 4.46), a documented
-CPU↔GPU basin difference, not a new effect.
+mid-range (ρ500 boundHeads 6.52 vs prior GPU-biological 6.29 — reproduces it; CPU 4.46), a documented
+CPU↔GPU basin difference, not a new effect. Note ρ200/ρ300 are intrinsically high-variance (wide seed range,
+SEM 0.33/0.73) — the rising, sub-half-saturation shoulder where a few seeds under-recruit.
 
 ## 3. Density-response FITS (§7)
 
-- **Hill wins.** Hyperbolic `v=vmax·ρ/(ρ½+ρ)`: vmax=3.31±0.26, ρ½=170±59, **R²=0.826**. Hill
-  `v=vmax·ρⁿ/(ρ½ⁿ+ρⁿ)`: vmax=**2.95±0.18**, ρ½=**163±26**, **n=1.89±0.57**, **R²=0.905** (ΔR²=+0.079 ⇒
-  the Hill exponent **materially improves** the fit — mild positive cooperativity, n≈1.9).
-- **Apparent onset** ~ρ100 (already >10 % vmax); **half-maximal** at ρ½≈**165 dim/µm²**; **90 % of fitted
-  max** at ρ≈1500.
-- **High-density behavior = SATURATION-to-PLATEAU, not robust suppression.** velProd peaks +3.14 @ρ750,
-  sits on a **plateau ~2.6–3.1 µm/s for ρ≥700**. The peak(ρ750)→ρ3000 drop (0.30 µm/s) is **~1 combined SEM**
-  — a marginal, non-monotonic dip (lowest at ρ1500 +2.63) **within seed noise**. Per §7 we do NOT force a
-  "high-density suppression" narrative: the honest description is **saturation to a plateau**; any suppression
-  is at most weak and not resolved at n=4.
+- **Hill wins, and the top-up tightened it.** Hyperbolic `v=vmax·ρ/(ρ½+ρ)`: vmax=3.29±0.20, ρ½=160±42,
+  **R²=0.852**. Hill `v=vmax·ρⁿ/(ρ½ⁿ+ρⁿ)`: vmax=**2.93±0.12**, ρ½=**160±17**, **n=1.89±0.37**, **R²=0.936**
+  (ΔR²=+0.084 ⇒ the Hill exponent **materially improves** the fit — mild positive cooperativity, n≈1.9; the
+  n=8 top-up shrank the parameter errors ~1.5× and raised R² 0.905→0.936).
+- **Apparent onset** ~ρ100 (already >10 % vmax); **half-maximal** at ρ½≈**160 dim/µm²**; **90 % of fitted
+  max** at ρ≈1440.
+- **High-density behavior = PURE SATURATION (no significant suppression) — resolved by the top-up.** velProd
+  plateaus at **~2.8–3.0 µm/s for ρ≥600**, peaks +2.96 (ρ750 = ρ1000), and ρ3000 (+2.84) sits **within noise
+  of the plateau** (peak→ρ3000 Δ0.12 µm/s ≪ the ~0.2–0.3 SEMs). The earlier n=4 read had a marginal "dip"
+  hint (peak ρ750 +3.14 → ρ3000 +2.84, ~1 SEM); with n=8 on the mid-range that washed out entirely — the
+  analyzer's automated verdict flipped to **"no significant decline (pure saturation)."** Per §7 we do NOT
+  impose a high-density-suppression term the data do not support.
 
 ## 4. Binding–density relationships & the efficiency mechanism (§8) — the real finding
 
@@ -62,9 +71,11 @@ CPU↔GPU basin difference, not a new effect.
 | ρ | boundHeads | vel/boundHead | twoFrac | attachLife (ms) | ATPturn |
 |---|---|---|---|---|---|
 | 100 | 1.12 | **+0.781** | 0.053 | 0.67 | 22 |
-| 500 | 6.47 | +0.400 | 0.064 | 0.68 | 114 |
-| 1000 | 12.23 | +0.234 | 0.067 | 0.68 | 217 |
+| 500 | 6.52 | +0.416 | 0.065 | 0.69 | 115 |
+| 1000 | 12.33 | +0.240 | 0.070 | 0.67 | 222 |
 | 3000 | 38.00 | **+0.075** | 0.065 | 0.68 | 676 |
+
+(full 11-density efficiency ladder in ANALYSIS.md §8: vel/boundHead falls monotonically 0.78→0.075 as ρ100→ρ3000)
 
 - **Bound heads rise ~LINEARLY with density** (1.1→38, ∝ρ; no saturation — Δ(boundHeads)/Δρ still 0.012 at
   the top). ATP turnover tracks bound heads linearly (22→676). Attachment lifetime is **density-invariant**
@@ -97,13 +108,16 @@ CPU↔GPU basin difference, not a new effect.
 
 ## 6. Bottom line
 
-On the explicit-HMM dimer **GPU device path**, gliding velocity **rises with motor density, half-saturates at
-ρ≈165 dim/µm², and plateaus at ~2.6–3.1 µm/s above ρ700** (Hill n≈1.9). The plateau is set by **declining
-per-motor efficiency** — bound heads grow linearly but net forward transport per head falls ~10×, driven by
-growing backward-second-head/co-bound opposition, not by any failure to bind (attachment lifetime and
-two-head fraction are density-flat). Mechanical health is clean through ρ1500; at ρ3000 a single seed shows a
-69 nm joint-gap excursion (basin-intermittent, no NaN/solve-failure, R0-recorded). `DEVICE_VALIDATED` stays
-`false`; this is a device-path science result, not a promotion.
+On the explicit-HMM dimer **GPU device path** (68 cells, up to n=8/density), gliding velocity **rises with
+motor density, half-saturates at ρ≈160 dim/µm², and reaches a clean plateau at ~2.8–3.0 µm/s above ρ600**
+(Hill n≈1.9, R²=0.94). The improved statistics resolve the high-density question: it is **pure saturation —
+no significant suppression** (ρ3000 within noise of the plateau; the earlier n=4 "dip" hint washed out). The
+plateau is set by **declining per-motor efficiency** — bound heads grow linearly (1.1→38) but net forward
+transport per head falls ~10× (0.78→0.075 µm/s/head), driven by growing backward-second-head/co-bound
+opposition, not by any failure to bind (attachment lifetime ~0.68 ms and two-head fraction ~0.06 are
+density-flat). Mechanical health is clean through ρ1500; at ρ3000 a single seed shows a 69 nm joint-gap
+excursion (basin-intermittent, no NaN/solve-failure, R0-recorded). `DEVICE_VALIDATED` stays `false`; this is
+a device-path science result, not a promotion.
 
 ## 7. Reproduce
 

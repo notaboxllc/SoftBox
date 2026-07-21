@@ -30,6 +30,14 @@ Report `docs/matsoa/EXPLICIT_HMM_DIMER_GPU_DENSITY_SWEEP_FINDINGS.md`; raw `RUN_
   tail is seed/basin-intermittent (CPU = arbiter for that rupture-threshold question, deferred).
 - **Fixed en route:** an orchestrator shell bug (`progress()` reused the main loop's `d`/`s` without `local` ⇒ clobbered
   the density index ⇒ scrambled/early-exit first attempt; the 13 cells it did finish were valid and reused on resume).
+- **STATISTICS TOP-UP (same day, rev f8dffd3 — harness-only, model/kernels byte-unchanged ⇒ physics identical, pooling
+  valid).** Added an explicit `-cells "d:s ..."` mode to the orchestrator and ran 32 more cells: seeds 105–108 at
+  ρ{200,400,500,700,750,1000} (→ **n=8**) + new densities **ρ300, ρ600** (n=4). **68 cells total, all ok, 0 invalid/
+  solveFail.** The n=8 mid-range halved SEMs (ρ500 0.44→0.23, ρ750 0.35→0.20) and **tightened the Hill fit**
+  (R² 0.905→0.936; vmax 2.93, ρ½ **160±17**, n 1.89±0.37). **Key update: the marginal n=4 "high-density dip" WASHED OUT
+  — the verdict flips to PURE SATURATION (no significant suppression); ρ3000 sits within noise of the ~2.8–3.0 plateau
+  (peak ρ750=ρ1000 +2.96).** Efficiency-decline mechanism unchanged and cleaner (vel/boundHead 0.78→0.075 monotonic
+  across the full 11-density ladder). Report + JOURNAL updated.
 
 ### 2026-07-20 — EXPLICIT HMM DIMER: dimer-compliance vs the dense-mat joint-gap instability — branchEA is the cure, NOT branch bending / fork
 
