@@ -17,17 +17,19 @@ cd "$(dirname "$0")/.." || exit 2
 
 STEPS=5000
 CELLS_ARG=""
+OUT="RUN_LOGS/hmm_density_sweep"
+CELL_TIMEOUT=3600          # per-cell wall ceiling (s); a hang trips this (raised for long 40k-step cells)
 for ((i=1;i<=$#;i++)); do case "${!i}" in
-  -steps) j=$((i+1)); STEPS="${!j}";;
-  -cells) j=$((i+1)); CELLS_ARG="${!j}";;
+  -steps)   j=$((i+1)); STEPS="${!j}";;
+  -cells)   j=$((i+1)); CELLS_ARG="${!j}";;
+  -outdir)  j=$((i+1)); OUT="${!j}";;
+  -timeout) j=$((i+1)); CELL_TIMEOUT="${!j}";;
 esac; done
 
-OUT="RUN_LOGS/hmm_density_sweep"
 LOGDIR="$OUT/logs"
 PROG="$OUT/progress.txt"
 mkdir -p "$LOGDIR"
 REV="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-CELL_TIMEOUT=2400          # per-cell wall ceiling (s); a hang trips this
 MAX_ATTEMPTS=2             # §10: resume a hung cell ONCE; a 2nd hang on the same cell STOPS the campaign
 
 # ---- build the target CELLS list (each entry "density:seed") ----

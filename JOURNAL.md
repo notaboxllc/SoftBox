@@ -1,5 +1,28 @@
 # Soft Box Project Journal
 
+### 2026-07-21 — EXPLICIT HMM DIMER: LONG-run (0.1 s) GPU density sweep — steady-state curve is plain hyperbolic
+
+A second, independent device-path density dataset at **8× longer simulated time** (40 000 steps × 2.5e-6 = **0.1 s**/cell
+vs the first sweep's 12.5 ms) to cut per-seed variance. **52 cells, 13 densities {100,150,200,250,300,400,500,600,700,
+750,1000,1500,3000} × 4 seeds, all ok, 0 invalid/0 solveFail.** Separate dir `RUN_LOGS/hmm_density_sweep_long/`
+(gitignored data + CSV `density_summary.csv` + `ANALYSIS.md`); report `docs/matsoa/EXPLICIT_HMM_DIMER_GPU_DENSITY_SWEEP_
+LONG_FINDINGS.md`. Config IDENTICAL to the short sweep (only `-steps 40000`); added `-outdir`/`-timeout` to the
+orchestrator + an explicit `-cells` mode so top-ups pool into one dataset. Ran low-density-first.
+- **VARIANCE COLLAPSED:** the 0.1 s window shrank per-seed velProd SD ~5–7× at low ρ (ρ200 SD 0.94→0.17, ρ300 1.45→0.21);
+  final SEMs 0.03–0.11 µm/s (n=4 long beats n=8 short).
+- **MEANS DROPPED + CURVE RESHAPED:** longer window strips the startup-transient inflation from the LS-slope velocity
+  (e.g. ρ200 +1.90→+1.14, ρ400 +2.43→+1.76). **The steady-state density-response is now plain hyperbolic
+  (Michaelis–Menten) saturation: vmax 3.40±0.10, ρ½ 363±28, R²=0.985; Hill n=1.27±0.07 adds nothing (ΔR²+0.009).**
+  The short sweep's apparent n≈1.9 cooperativity was a finite-window artifact. Saturates at ρ3000 (+2.914), no decline.
+- **Direction verified** (user check): positive velProd = −(centroid-x slope) = harness `velFwd` = **pointed-end-leading**
+  glide (barbed=+x, so −x drift = pointed-first = correct for plus-end-directed myosin). Confirmed by code trace + the
+  negative raw slope / negative net axial displacement in the JSON.
+- **Mechanism unchanged, cleaner:** bound heads rise ~linearly (0.86→26.5), lifetime density-invariant (~0.7 ms),
+  two-head frac flat (~0.04); vel/boundHead falls 0.69→0.11 (6.3×) ⇒ transport-efficiency ceiling, not a binding ceiling.
+- **Health:** the longer window surfaces the seed-intermittent high-gap tail more, at lower ρ (ρ500 s103 73 nm). **ρ3000
+  s102 → 24 µm gap / 78 nN — reproduces the documented ρ3000-seed-102 pathology (CPU ~32 149 nm), finite (0 invalid/
+  solveFail), R0-recorded; velProd within-spread and excluding it moves the ρ3000 mean <0.05 ⇒ curve robust.**
+
 ### 2026-07-21 — EXPLICIT HMM DIMER: definitive GPU-only density sweep (density-response science on the device path)
 
 Ran the 36-cell GPU-device density sweep (9 densities {100,200,400,500,700,750,1000,1500,3000} × seeds {101–104} ×
