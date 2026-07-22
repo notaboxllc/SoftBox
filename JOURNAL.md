@@ -1,5 +1,33 @@
 # Soft Box Project Journal
 
+### 2026-07-22 — RIGOR MECHANICAL-RUPTURE pathway (SM4 campaign): flag-gated, default OFF
+
+New force-dependent mechanical detachment for a BOUND rigor (NUC_NONE) head, physically separate from ATP binding and
+the ADP catch-slip. New kernel `NucleotideCycleSystem.cycleLymnTaylorRigor` (byte-copy of cycleLymnTaylor + the pathway;
+cycleLymnTaylor UNTOUCHED); competing hazards resolved by a SINGLE-UNIFORM PARTITION of the cycle's existing draw
+([0,pAtp)=ATP, [pAtp,pAtp+pRig)=rupture) ⇒ NO event-order bias, ZERO new RNG draws ⇒ flag-off byte-identical by
+construction. Params in a DEDICATED `MotorStore.rigorParams` (no ADP sharing) + `ruptureStats` cause counter. Wired in
+Sm4/single-head-mat(CPU+GPU TaskGraph)/HMM-dimer(CPU). `-rigor-rupture`, default OFF.
+- **Part A (isolated, ATP-free, n=200, both fixtures):** recovers Guo & Guilford 2006 Table-2 rigor catch-slip. fixed-anchor
+  k0=146±11, xCatch=1.63±0.16 nm, xSlip=0.51 nm, peak 6.88 pN, χ²/dof=0.05; explicit-s2-l40 k0=172, xCatch=1.54, peak 7.44.
+  Two-pathway beats one-path Bell ΔAIC≥461. k0 upward bias = Jensen thermal convexity (Brownian-off→145; dt-halved→136,
+  rate dt-invariant). All deliverables (survival/KM/hazard/cause-summary/fit/covariance). Guo-Guilford ambiguities flagged
+  (Fig-4A vs Table-2; ⊥-loading vs axial forceDotFil ⇒ shape match, not absolute lifetimes).
+- **Part B regression:** SM4 flag-off 280 events BIT-IDENTICAL; motor-regression Gates A–F max|Δ|=0; ADP→NONE bit-identical
+  flag ON vs OFF (total ADP life within SEM, 0.5% rupture leakage at 10pN saturating ATP); SM6 structurally independent,
+  unchanged; 0 invalid/0 solverFail/0 rate-cap-warnings.
+- **Part C gliding (single-head GPU):** rupture is RARE at saturating ATP (<2% of detachments, 3–43/40k-step cell, at ~0pN
+  low load — bound NONE is transient ~50µs). When it doesn't fire ON≡OFF bit-identical. Gliding is chaotic/bistable ⇒
+  per-seed ΔV is basin scatter (OFF seeds scatter ±3.5–28%); the one non-chaos signal is d1500 (both seeds +4.3/+5.4%,
+  |t|=9) — a small SYSTEMATIC ON-faster effect (rupture clears spent post-stroke drag heads). MODEST/MATERIAL boundary.
+- **Part D/E — NEGLIGIBLE; blind SM4 study MAY PROCEED.** Seed expansion decisive: the 2-seed d1500 "+4.8% |t|=9" was a
+  COINCIDENCE (10-seed → +1.2%±1.5%, |t|=0.78). POOLED over resolved densities (bound>4, n=22 seeds) = +0.33%±1.56% (|t|=0.21,
+  indistinguishable from zero); every density |t|<1, within the chaotic envelope; bound change <1.8%. Dimer (CPU arbiter)
+  velocity <0.06% (0.000% when no rupture ⇒ ON≡OFF bit-identical). All 4 Negligible criteria met. Docs:
+  `RIGOR_RUPTURE_AND_GLIDING_IMPACT_FINDINGS.md`, `docs/matsoa/SM4_RIGOR_MECHANICAL_RUPTURE_FINDINGS.md`. `BoA-v1ref` byte-clean;
+  no production default changed. LESSON: chaotic/bistable gliding A/B needs ensemble + paired t over resolved densities.
+
+
 ### 2026-07-21 — EXPLICIT HMM DIMER: LONG-run (0.1 s) GPU density sweep — steady-state curve is plain hyperbolic
 
 A second, independent device-path density dataset at **8× longer simulated time** (40 000 steps × 2.5e-6 = **0.1 s**/cell

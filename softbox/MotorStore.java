@@ -108,6 +108,24 @@ public final class MotorStore {
     // mirroring v1's separate myoBreakForceRelease vs normalRelease counters.
     public final IntArray   capStats; // nMotors
 
+    // ---- RIGOR MECHANICAL RUPTURE (flag-gated, default OFF ⇒ every existing path byte-identical) ----
+    // A force-dependent detachment pathway available ONLY to a BOUND head in NUC_NONE (rigor). Physically
+    // SEPARATE from ATP binding (NONE→ATP) and from the ADP→NONE catch-slip. Read ONLY by the new
+    // NucleotideCycleSystem.cycleLymnTaylorRigor kernel; the production cycleLymnTaylor never touches it.
+    // Parameters stored HERE, wholly separate from kinParams — NO sharing with xCatch/xSlip/aCatch/aSlip.
+    //   rigorParams[0] = enabled (0 = off/default, 1 = on)
+    //   rigorParams[1] = model   (0 = two-pathway catch-slip, 1 = one-path Bell slip — comparison only)
+    //   rigorParams[2] = k0Rigor    (zero-load rate, s^-1; INDEPENDENT of kOff/onADP)
+    //   rigorParams[3] = aRigorCatch     rigorParams[4] = xRigorCatch (m)
+    //   rigorParams[5] = aRigorSlip      rigorParams[6] = xRigorSlip  (m)
+    //   rigorParams[7] = kT (J, own copy)  rigorParams[8] = dt (s)
+    //   rigorParams[9] = pDtCap  (rate·dt small-limit guard; steps above it are flagged, never silently clipped)
+    public final FloatArray rigorParams;   // 12
+    // Cause accounting for the mechanical rigor rupture (race-free; per-motor):
+    //   ruptureStats[2m]   = # mechanical rigor ruptures this motor fired
+    //   ruptureStats[2m+1] = # steps where (pAtp+pRig) exceeded pDtCap (rate·dt-not-small warning → substep/abort)
+    public final IntArray   ruptureStats;  // 2*nMotors
+
     // ---- Kernel scalar params ----
     // kinParams (float): [0]=kOff [1]=alphaCatch [2]=alphaSlip [3]=xCatch [4]=xSlip
     //   [5]=kT [6]=dt [7]=myoColTol(reach) [8]=alignTol [9]=forceDotFil(=0 this increment)
@@ -209,6 +227,8 @@ public final class MotorStore {
         headTiltCS = new FloatArray(3);            // PHASE-2 HEAD-ANGLE SWEEP θ (default unused; setFlag 0)
         stats    = new IntArray(2 * nMotors);
         capStats = new IntArray(nMotors);          // §6.10 break-force release fires per motor (measurement only)
+        rigorParams  = new FloatArray(12); rigorParams.init(0f);   // [0]=0 ⇒ rigor rupture OFF (byte-identical default)
+        ruptureStats = new IntArray(2 * nMotors); ruptureStats.init(0);
         kinParams = new FloatArray(28);   // [0..17] kinetics; [18]=F_ext (N, measurement); [19]=-nobind; [20]=-adppibind (ADP·Pi bind-gate)
         // AZIMUTHAL (Inc 2): [22]=cos(Δ accept), [23]=twistRate rad/µm (signed, LEFT-handed), [24]=monomer spacing µm, [25]=azGate(0/1). Default 0 ⇒ gate off ⇒ byte-identical.
         // AZIMUTHAL (Inc 3): [26]=falloff steepness n (graded orientational affinity a=b^n, b=max_s (1−headU·n̂)/2). n=0 ⇒ a≡1 ⇒ baseline.
@@ -300,6 +320,30 @@ public final class MotorStore {
     /** PHASE-2 step-4a: impose a controlled SUSTAINED external load (pN, signed) on the catch input — the
      *  force-response guard for the time-averaged catch. Measurement only; 0 ⇒ off (byte-identical). */
     public void setExtLoad(double pN) { kinParams.set(18, (float) (pN * 1.0e-12)); }
+
+    /** RIGOR MECHANICAL RUPTURE (flag-gated, default OFF). Enable a force-dependent detachment pathway for a
+     *  BOUND rigor (NUC_NONE) head, physically SEPARATE from ATP binding and from the ADP→NONE catch-slip. Only
+     *  {@link NucleotideCycleSystem#cycleLymnTaylorRigor} reads these; the production {@code cycleLymnTaylor}
+     *  never does. Two-pathway law (model 0):
+     *    k(F) = k0·[aCatch·e^{−F·xCatch/kT} + aSlip·e^{+F·xSlip/kT}]  (g(0)=aCatch+aSlip should be 1)
+     *  Bell comparison (model 1): k(F) = k0·e^{+F·xSlip/kT}. F = realized instantaneous axial bond load
+     *  {@code forceDotFil}; project sign +opposing/barbed = the CATCH side. Distances passed in nm.
+     *  Stored wholly separate from the ADP kinParams — no parameter sharing. */
+    public void setRigorRupture(boolean on, int model, double k0Rigor,
+                                double aCatch, double xCatchNm, double aSlip, double xSlipNm) {
+        rigorParams.set(0, on ? 1f : 0f);
+        rigorParams.set(1, (float) model);
+        rigorParams.set(2, (float) k0Rigor);
+        rigorParams.set(3, (float) aCatch);
+        rigorParams.set(4, (float) (xCatchNm * 1.0e-9));
+        rigorParams.set(5, (float) aSlip);
+        rigorParams.set(6, (float) (xSlipNm * 1.0e-9));
+        rigorParams.set(7, (float) Constants.kT);
+        rigorParams.set(8, kinParams.get(6));   // dt as installed by setKinParams
+        rigorParams.set(9, 0.2f);               // rate·dt small-limit guard threshold
+    }
+    /** Turn the rigor mechanical-rupture pathway OFF (restores byte-identical production behavior). */
+    public void disableRigorRupture() { rigorParams.set(0, 0f); }
     /** PHASE-2 step-4b: override the catch distance parameter xCatch (the model's d, in nm) — calibrate the
      *  force-sensitivity to Veigel d≈2.7 nm ("1 pN resisting halves detachment"). v1 default 2.5 nm. */
     public void setXCatch(double nm) { kinParams.set(3, (float) (nm * 1.0e-9)); }

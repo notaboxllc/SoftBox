@@ -472,6 +472,127 @@ public final class NucleotideCycleSystem {
         }
     }
 
+    // ============================================================================================
+    // RIGOR MECHANICAL RUPTURE (jba, 2026-07-22; flag-gated `-rigor-rupture`, default-off ⇒ every existing path
+    // byte-identical). Adds a FORCE-DEPENDENT mechanical detachment pathway that is available ONLY to a BOUND
+    // head in NUC_NONE (rigor). It is PHYSICALLY SEPARATE from ATP binding (NONE→ATP) and from the ADP→NONE
+    // catch-slip (which this kernel leaves BYTE-IDENTICAL to cycleLymnTaylor). The biological motivation is
+    // Guo & Guilford 2006 (PNAS 103:26): rigor actomyosin bonds show a CATCH-SLIP force-lifetime (lifetime rises
+    // with load to a peak near ~6-7 pN, then falls), which a force-INDEPENDENT ATP-release cannot reproduce.
+    //
+    // Competing hazards for a rigor (NONE) bound head, resolved with NO event-order bias and NO new RNG draw:
+    //   • ATP-triggered release  at rate atpOn                      (band [0, pAtp),         pAtp = atpOn·dt)
+    //   • mechanical rigor rupture at rate k_rigor(F)               (band [pAtp, pAtp+pRig), pRig = k_rigor·dt)
+    // The SAME single uniform draw `u` (byte-for-byte cycleLymnTaylor's) is PARTITIONED into adjacent bands —
+    // mutually-exclusive outcomes of one draw ⇒ each cause gets probability exactly ∝ its rate, no tie-break,
+    // no order bias, and (crucially) ZERO new RNG draws ⇒ with the flag OFF the sequence is unperturbed and this
+    // kernel is byte-identical to cycleLymnTaylor. The ATP band keeps its EXACT flag-off threshold (u < atpOn·dt),
+    // so the two-pathway partition degrades to the single ATP pathway continuously as k_rigor→0.
+    //
+    // k_rigor(F) (model 0, two-pathway; F = realized instantaneous forceDotFil, +opposing/barbed = catch side):
+    //   k0·[aCatch·e^{−F·xCatch/kT} + aSlip·e^{+F·xSlip/kT}]     (own params in rigorParams; NO xCatch/xSlip share)
+    // model 1 (one-path Bell slip, comparison only): k0·e^{+F·xSlip/kT}.
+    //
+    // Small-dt discipline: the whole cycle is Euler rate·dt (linear). If (pAtp+pRig) exceeds pDtCap the step is
+    // FLAGGED in ruptureStats[2m+1] (a substep/abort signal) rather than silently clipping the combined hazard.
+    // Cause accounting: a rigor rupture DETACHES with the nucleotide state STAYING NUC_NONE (distinct from the
+    // ATP terminus, which ends in NUC_ATP) and increments ruptureStats[2m]; ATP releases still increment
+    // stats[2m+1]. Detach reuses the EXACT FREE_COOLDOWN/refractory of the ATP terminus; per-motor pure function
+    // ⇒ CPU≡GPU bit-identical.
+    public static void cycleLymnTaylorRigor(IntArray nucleotideState, IntArray boundSeg,
+                                            FloatArray forceDotFil, FloatArray forceDotAvg, IntArray avgInit,
+                                            IntArray cooldown, IntArray stats,
+                                            FloatArray nucParams, FloatArray kinParams, IntArray counts,
+                                            FloatArray rigorParams, IntArray ruptureStats) {
+        int nM = nucleotideState.getSize();
+        int step = counts.get(1), seed = counts.get(2);
+        float dt = nucParams.get(0);
+        float atpOn = nucParams.get(1);
+        float onATP = nucParams.get(2), offATP = nucParams.get(3);
+        float onPi = nucParams.get(4),  offPi = nucParams.get(5);
+        float onADP = nucParams.get(6), offADP = nucParams.get(7);
+        float aCatch = kinParams.get(1), aSlip = kinParams.get(2);
+        float xCatch = kinParams.get(3), xSlip = kinParams.get(4), kT = kinParams.get(5);
+        int refractorySteps = (int) kinParams.get(10);
+        float alpha = kinParams.get(17);   // EMA dt/τ (the ADP→NONE catch averaging); 0 ⇒ instantaneous
+
+        boolean rigorOn = rigorParams.get(0) > 0.5f;
+        int    rigorModel = (int) rigorParams.get(1);
+        float  k0Rig = rigorParams.get(2);
+        float  aRC = rigorParams.get(3), xRC = rigorParams.get(4);
+        float  aRS = rigorParams.get(5), xRS = rigorParams.get(6);
+        float  kTr = rigorParams.get(7);
+        float  pDtCap = rigorParams.get(9);
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            int bs = boundSeg.get(m);
+            boolean bound = bs >= 0;
+            int state = nucleotideState.get(m);
+            int h = wangHash((m * 1000003) ^ (step * 999983) ^ (seed * 7919) ^ 0x4E55);  // NUC salt (== cycle)
+            float u = (h >>> 1) / 2147483647.0f;
+
+            // ADP→NONE catch input F = τ-averaged forceDotFil (EMA seeded at bind); free heads carry no load.
+            // BYTE-IDENTICAL to cycleLymnTaylor.
+            float Favg;
+            if (bound) {
+                float Finst = forceDotFil.get(m);
+                if (alpha > 0f) {
+                    if (avgInit.get(m) == 0) { Favg = Finst; forceDotAvg.set(m, Finst); avgInit.set(m, 1); }
+                    else { Favg = forceDotAvg.get(m) + alpha * (Finst - forceDotAvg.get(m)); forceDotAvg.set(m, Favg); }
+                } else { Favg = Finst; }
+            } else { Favg = 0f; forceDotAvg.set(m, 0f); avgInit.set(m, 0); }
+
+            boolean rigorRupture = false;   // did the mechanical pathway fire THIS step?
+            if (state == MotorStore.NUC_NONE) {
+                if (rigorOn && bound) {
+                    // realized INSTANTANEOUS axial bond load — the value the rate law reads (not the request)
+                    float F = forceDotFil.get(m);
+                    float kRig;
+                    if (rigorModel == 1) { kRig = k0Rig * (float) Math.exp(F * xRS / kTr); }             // one-path Bell
+                    else { kRig = k0Rig * (aRC * (float) Math.exp(-F * xRC / kTr) + aRS * (float) Math.exp(F * xRS / kTr)); }
+                    float pAtp = atpOn * dt;
+                    float pRig = kRig * dt;
+                    if (pAtp + pRig > pDtCap) ruptureStats.set(2 * m + 1, ruptureStats.get(2 * m + 1) + 1);  // rate·dt-not-small flag
+                    // competing-risk single-uniform partition (no order bias, no new RNG draw):
+                    if (u < pAtp) { state = MotorStore.NUC_ATP; }                 // ATP uptake (SAME band as flag-off)
+                    else if (u < pAtp + pRig) { rigorRupture = true; }            // rigor rupture — state STAYS NUC_NONE
+                } else {
+                    if (u < atpOn * dt) state = MotorStore.NUC_ATP;               // flag-off / free head: == cycleLymnTaylor
+                }
+            } else if (state == MotorStore.NUC_ATP) {
+                float rate = bound ? onATP : offATP;
+                if (u < rate * dt) state = MotorStore.NUC_ADPPI;                  // hydrolysis recovery
+            } else if (state == MotorStore.NUC_ADPPI) {
+                float rate = bound ? onPi : offPi;
+                if (u < rate * dt) state = MotorStore.NUC_ADP;                    // powerstroke (Pi release)
+            } else { // ADP → NONE — base rate × catch g(F) (BYTE-IDENTICAL to cycleLymnTaylor; NOT altered)
+                float g = aCatch * (float) Math.exp(-Favg * xCatch / kT) + aSlip * (float) Math.exp(Favg * xSlip / kT);
+                float rate = (bound ? onADP : offADP) * g;
+                if (u < rate * dt) state = MotorStore.NUC_NONE;
+            }
+            nucleotideState.set(m, state);
+
+            if (bound) {
+                stats.set(2 * m, stats.get(2 * m) + 1);
+                if (state == MotorStore.NUC_ATP) {                               // ATP-triggered release
+                    stats.set(2 * m + 1, stats.get(2 * m + 1) + 1);
+                    forceDotAvg.set(m, 0f); avgInit.set(m, 0);
+                    if (refractorySteps > 0) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                } else if (rigorRupture) {                                        // mechanical rigor rupture (DISTINCT cause)
+                    ruptureStats.set(2 * m, ruptureStats.get(2 * m) + 1);
+                    forceDotAvg.set(m, 0f); avgInit.set(m, 0);
+                    if (refractorySteps > 0) { boundSeg.set(m, MotorStore.FREE_COOLDOWN); cooldown.set(m, refractorySteps); }
+                    else { boundSeg.set(m, MotorStore.FREE_BINDABLE); }
+                }
+            } else if (bs == MotorStore.FREE_COOLDOWN) {
+                int c = cooldown.get(m) - 1;
+                if (c <= 0) { boundSeg.set(m, MotorStore.FREE_BINDABLE); }        // refractory elapsed
+                else { cooldown.set(m, c); }
+            }
+        }
+    }
+
     /** (2)+(3) catchSlipReleaseAvg + ATP recharge: byte-for-byte catchSlipReleaseAvg EXCEPT on every release it
      *  ALSO sets nucleotideState ← NUC_ATP. This is the variant the calibrated stack (`-tauavg`) uses. */
     public static void catchSlipReleaseAvgRecharge(IntArray boundSeg, FloatArray forceDotFil, FloatArray forceDotAvg, IntArray avgInit,

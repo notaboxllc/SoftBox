@@ -244,7 +244,8 @@ public final class ExplicitCompleteMatHarness {
         for (int m = 0; m < N; m++) e.active.set(m, 1);   // no-cull smoke (physically identical; far motors fail the gate)
         TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom);
         TwoBodyBeamAnalyticGpu.matBindExplicit(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
-        NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+        if (RIGOR_ON) NucleotideCycleSystem.cycleLymnTaylorRigor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
+        else          NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
         MatSoaSlice.matCock(mot.nucleotideState, e.q, e.cockP, e.exCounts);
         TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit(e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec);
         CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams);
@@ -280,11 +281,15 @@ public final class ExplicitCompleteMatHarness {
                 mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.forceMag,
                 G.xbParams, G.segCount, G.segOff, G.segMyo);
         if (prod) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
+        if (RIGOR_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.rigorParams, mot.ruptureStats);
         tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.matc, mot.counts, f.counts);
         if (!prod) tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
         tg.task("beamGeom", TwoBodyBeamAnalyticGpu::matBeamGeom, e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom)
           .task("bind", TwoBodyBeamAnalyticGpu::matBindExplicit, e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts)
-          .task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts)
+          ;
+        if (RIGOR_ON) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRigor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
+        else          tg.task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+        tg
           .task("cock", MatSoaSlice::matCock, mot.nucleotideState, e.q, e.cockP, e.exCounts)
           .task("place", TwoBodyBeamAnalyticGpu::matPlaceHeadExplicit, e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec)
           .task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams)
@@ -310,6 +315,8 @@ public final class ExplicitCompleteMatHarness {
             // buffer the `chem` task already writes on device. Default false ⇒ the -sweep/-throughput paths are byte-unchanged.
             if (PROD_SCI) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg, mot.nucleotideState);
             else          tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg);
+            // RIGOR RUPTURE: read the per-motor rupture/cap accumulators + the realized load each step (cause count + force-at-rupture).
+            if (RIGOR_ON) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, mot.ruptureStats, mot.forceDotFil);
         }
         else      tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.nodes, e.q, e.redOut, f.coord, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, G.bondData);
         int pn = ((N + 63) / 64) * 64, ps = ((nSeg + 63) / 64) * 64, nCh = e.csrChunkParams.get(1);
@@ -827,12 +834,21 @@ public final class ExplicitCompleteMatHarness {
     // ============================================================= Phase C: explicit density-saturation sweep (GPU)
     static double argD(String[] a, String key, double def) { for (int i = 0; i < a.length - 1; i++) if (a[i].equals(key)) return Double.parseDouble(a[i + 1]); return def; }
     static int argI(String[] a, String key, int def) { for (int i = 0; i < a.length - 1; i++) if (a[i].equals(key)) return Integer.parseInt(a[i + 1]); return def; }
+    static boolean hasFlag(String[] a, String key) { for (String s : a) if (s.equals(key)) return true; return false; }
     static String argS(String[] a, String key, String def) { for (int i = 0; i < a.length - 1; i++) if (a[i].equals(key)) return a[i + 1]; return def; }
     /** {vel µm/s, avgBound, continuity, netForce pN, invalid, N, minBound, maxBound, boundFrac} for one (model,density,seed).
      *  model 0=explicit-s2-l40 (buildGlidingGraph), 1=calibrated-s2-l40 (MatSoaSlice.buildTrajGraph). Device-resident;
      *  velocity = LS slope of the resident redOut centroid·b̂ over the MEASURED window (negative = pointed-first). */
     static boolean SWEEP_NOCULL = false;   // D3 control: force calibrated no-cull (cullP huge) to test culling is a semantic no-op
     static boolean PROD_SCI = false;        // production-cell: add per-step nucleotideState readback (science observables); default off ⇒ sweep byte-unchanged
+    // ---- RIGOR MECHANICAL RUPTURE (default OFF ⇒ chem task == cycleLymnTaylor, byte-identical gliding) ----
+    static boolean RIGOR_ON = false; static int RIGOR_MODEL = 0;
+    static double RIGOR_K0 = 140.0, RIGOR_AC = 0.9071, RIGOR_XC = 1.5, RIGOR_AS = 0.0929, RIGOR_XS = 0.5;
+    /** Install the flag-gated rigor-rupture params on a built scene (no-op when OFF ⇒ rigorParams[0]=0). */
+    static void installRigor(MotorStore mot, double dt) {
+        if (RIGOR_ON) mot.setRigorRupture(true, RIGOR_MODEL, RIGOR_K0, RIGOR_AC, RIGOR_XC, RIGOR_AS, RIGOR_XS);
+        else mot.disableRigorRupture();
+    }
     static double[] runGlide(int model, double density, double dt, int seed, int equil, int meas) {
         double slack = TwoBodyConverterMotor.EXPLICIT_GLIDE_SLACK_NM;
         int recEvery = Math.max(1, meas / 2000);
@@ -945,6 +961,12 @@ public final class ExplicitCompleteMatHarness {
         int nsegReq = argI(args, "-nseg", savedNseg);
         TwoBodyConverterMotor.G4_NSEG_RUN = nsegReq;
 
+        // RIGOR MECHANICAL RUPTURE (flag-gated, default OFF ⇒ chem == cycleLymnTaylor, gliding byte-identical)
+        RIGOR_ON = hasFlag(args, "-rigor-rupture");
+        RIGOR_MODEL = argI(args, "-rigor-model", 0);
+        RIGOR_K0 = argD(args, "-rk0", 140.0); RIGOR_AC = argD(args, "-raC", 0.9071);
+        RIGOR_XC = argD(args, "-rxC", 1.5);   RIGOR_AS = argD(args, "-raS", 0.0929); RIGOR_XS = argD(args, "-rxS", 0.5);
+
         String abort = null;
         if (Math.abs(dt - 2.5e-6) > 1e-12) abort = "dt != 2.5e-6";
         else if (TwoBodyConverterMotor.LEGACY_OWNERSHIP) abort = "legacy segment ownership ON (canonical binding contract expected)";
@@ -970,6 +992,10 @@ public final class ExplicitCompleteMatHarness {
         int N = Gd.N, nSeg = Gd.nSeg;
         if (nSeg != nsegReq) { System.out.printf("  *** ABORT: built nSeg=%d != requested %d (geometry could not be instantiated) ***%n", nSeg, nsegReq); TwoBodyConverterMotor.G4_NSEG_RUN = savedNseg; return 3; }
         for (int m = 0; m < N; m++) Gd.mot.boundSeg.set(m, -1);
+        installRigor(Gd.mot, dt);
+        if (RIGOR_ON) System.out.printf(Locale.US, "  RIGOR MECHANICAL RUPTURE: ON (chem=cycleLymnTaylorRigor) model=%d k0=%.4g/s aCatch=%.4g xCatch=%.4g nm aSlip=%.4g xSlip=%.4g nm; competing with atpOn=%.3g/s ⇒ rupture is a rare channel at saturating ATP%n",
+                RIGOR_MODEL, RIGOR_K0, RIGOR_AC, RIGOR_XC, RIGOR_AS, RIGOR_XS, Gd.mot.nucParams.get(1));
+        else System.out.println("  RIGOR MECHANICAL RUPTURE: OFF (production cycleLymnTaylor).");
         ExMat ed = packExMat(Gd, 1);
         double[] bhat = Gd.bhat;
         System.out.printf(Locale.US, "  SCENE: N=%d heads | nSeg=%d | beam nodes M=%d | cullR=%.0f nm (free-binding, all active)%n", N, nSeg, ed.M, Gd.queryR * 1e3);
@@ -993,6 +1019,13 @@ public final class ExplicitCompleteMatHarness {
         } finally { PROD_SCI = prevSci; }
         long endMs = System.currentTimeMillis(); double wallS = (endMs - startMs) / 1e3;
         o.finish();
+        if (RIGOR_ON && status.equals("ok")) {
+            o.finishRigor(Gd.mot);
+            System.out.printf(Locale.US, "         RIGOR RUPTURE: %d ruptures (%.4f of detachments) | force@rupture mean %.2f pN [%.2f,%.2f] | rateCapWarn=%d%n",
+                    o.rigorRuptures, o.detachEvents > 0 ? (double) o.rigorRuptures / o.detachEvents : 0.0,
+                    o.rigorRuptures > 0 ? o.rupForceSum / o.rigorRuptures : 0.0,
+                    o.rigorRuptures > 0 ? o.rupForceMin : 0.0, o.rigorRuptures > 0 ? o.rupForceMax : 0.0, o.rateCapWarns);
+        }
 
         System.out.printf(Locale.US, "  RESULT ρ%d s%d: velProd=%+.4f µm/s (postEquil %+.4f) meanBoundHeads=%.3f cont=%.4f boundFrac=%.5f vel/boundHead=%+.4f%n",
                 density, seed, o.velProd, o.velPostEquil, o.meanBoundHeads, o.continuity, N > 0 ? o.meanBoundHeads / N : 0, o.meanBoundHeads > 0 ? o.velProd / o.meanBoundHeads : 0);
@@ -1027,6 +1060,9 @@ public final class ExplicitCompleteMatHarness {
         int invalidStates;
         final long[] nucOcc = new long[4]; long nucSteps, chemTransitions, atpTurnover;
         final int[] prevBound, attachStart, prevNuc; boolean nucInit;
+        // RIGOR RUPTURE cause accounting (per-motor delta of ruptureStats; force-at-rupture from the pulled load)
+        final int[] prevRup; long rigorRuptures, rateCapWarns; double rupForceSum, rupForceSq, rupForceMax = Double.NEGATIVE_INFINITY, rupForceMin = Double.POSITIVE_INFINITY;
+        int[] rupForceHist = new int[0];
         double meanBoundHeads, continuity;
         // reversal helper (block-averaged displacement, thermal-robust) — mirrors the dimer
         double blockDispAccum; int blockLen, blockSign; final int BLOCK = 100;
@@ -1038,6 +1074,7 @@ public final class ExplicitCompleteMatHarness {
             prevBound = new int[N]; java.util.Arrays.fill(prevBound, -1);
             attachStart = new int[N]; java.util.Arrays.fill(attachStart, -1);
             prevNuc = new int[N];
+            prevRup = new int[N];
         }
         void addLife(int v) { if (lifeN == lifeArr.length) lifeArr = java.util.Arrays.copyOf(lifeArr, lifeN * 2); lifeArr[lifeN++] = v; }
 
@@ -1063,6 +1100,17 @@ public final class ExplicitCompleteMatHarness {
                 int nu = mot.nucleotideState.get(m); if (nu >= 0 && nu < 4) nucOcc[nu]++;
                 if (nucInit && nu != prevNuc[m]) { chemTransitions++; if (prevNuc[m] == MotorStore.NUC_NONE && nu == MotorStore.NUC_ATP) atpTurnover++; }
                 prevNuc[m] = nu;
+                if (RIGOR_ON) {
+                    int rr = mot.ruptureStats.get(2 * m);
+                    if (rr > prevRup[m]) {            // this motor mechanically ruptured this step
+                        rigorRuptures++;
+                        double frup = mot.forceDotFil.get(m) * 1e12;   // realized axial bond load at rupture (pN)
+                        if (Double.isFinite(frup)) { rupForceSum += frup; rupForceSq += frup * frup;
+                            rupForceMax = Math.max(rupForceMax, frup); rupForceMin = Math.min(rupForceMin, frup);
+                            int bin = (int) Math.floor(frup) + 40; if (bin >= 0 && bin < 120) { if (rupForceHist.length == 0) rupForceHist = new int[120]; rupForceHist[bin]++; } }
+                    }
+                    prevRup[m] = rr;
+                }
             }
             nucInit = true; nucSteps++;
         }
@@ -1081,6 +1129,8 @@ public final class ExplicitCompleteMatHarness {
             netForcePn = sumForce / steps;
             if (minBound == Integer.MAX_VALUE) minBound = 0;
         }
+        /** RIGOR RUPTURE: total the per-motor rate·dt-cap warnings (substep/abort signal) at end of run. */
+        void finishRigor(MotorStore mot) { long w = 0; for (int m = 0; m < N; m++) w += mot.ruptureStats.get(2 * m + 1); rateCapWarns = w; }
         static double ls(double[] y, int lo, int hi, double dt) { int n = hi - lo; if (n < 2) return 0;
             double sx = 0, sy = 0, sxx = 0, sxy = 0; for (int i = lo; i < hi; i++) { double x = i * dt; sx += x; sy += y[i]; sxx += x * x; sxy += x * y[i]; }
             double den = n * sxx - sx * sx; return den == 0 ? 0 : (n * sxy - sx * sy) / den; }
@@ -1116,6 +1166,19 @@ public final class ExplicitCompleteMatHarness {
             kv(b, "nuc_occ_none", nucOcc[0] / occDen); kv(b, "nuc_occ_atp", nucOcc[1] / occDen);
             kv(b, "nuc_occ_adppi", nucOcc[2] / occDen); kv(b, "nuc_occ_adp", nucOcc[3] / occDen);
             kv(b, "chem_transitions", chemTransitions); kv(b, "atp_turnover", atpTurnover); kv(b, "catch_slip_detach", detachEvents);
+            // RIGOR MECHANICAL RUPTURE — distinct detachment cause (never folded into detach_events)
+            kv(b, "rigor_rupture_on", RIGOR_ON);
+            if (RIGOR_ON) {
+                kv(b, "rigor_model", (long) RIGOR_MODEL); kv(b, "rigor_k0_per_s", RIGOR_K0);
+                kv(b, "rigor_aCatch", RIGOR_AC); kv(b, "rigor_xCatch_nm", RIGOR_XC); kv(b, "rigor_aSlip", RIGOR_AS); kv(b, "rigor_xSlip_nm", RIGOR_XS);
+            }
+            kv(b, "rigor_ruptures", rigorRuptures);
+            kv(b, "rigor_rupture_frac_of_detach", detachEvents > 0 ? (double) rigorRuptures / detachEvents : 0.0);
+            kv(b, "rate_cap_warnings", rateCapWarns);
+            kv(b, "force_at_rupture_mean_pn", rigorRuptures > 0 ? rupForceSum / rigorRuptures : 0.0);
+            kv(b, "force_at_rupture_sd_pn", rigorRuptures > 1 ? Math.sqrt(Math.max(0, rupForceSq / rigorRuptures - (rupForceSum / rigorRuptures) * (rupForceSum / rigorRuptures))) : 0.0);
+            kv(b, "force_at_rupture_min_pn", rigorRuptures > 0 ? rupForceMin : 0.0);
+            kv(b, "force_at_rupture_max_pn", rigorRuptures > 0 ? rupForceMax : 0.0);
             // health
             kv(b, "net_force_pn", netForcePn); kv(b, "peak_load_pn", peakLoadPn);
             kv(b, "invalid_states", invalidStates); kv(b, "solver_failures", invalidStates);

@@ -103,7 +103,11 @@ public final class Sm4ForceLifetimeHarness {
         double tAttach, tDetach, lifetime; int censored;
         String pathway = "", detachState = "";
         double tAdpRelease = Double.NaN;          // isolates the FORCE-DEPENDENT sub-step (ADP->NONE)
+        double tRigorRupture = Double.NaN;        // isolates the mechanical rigor-rupture waiting time (NONE, rupture)
+        String detachCause = "";                  // atp_release | rigor_rupture | censored (explicit, never generic "detached")
+        int rateCapWarnings = 0;                  // steps where (pAtp+pRig) exceeded the small-rate cap (substep/abort signal)
         double maxDispNm, maxBondForcePn, maxAxialLoadPn;
+        double forceAtRupturePn = Double.NaN;     // realized axial load at the rupture step (for the force-at-rupture dist)
         int stepsRun, invalidStates, solverFailures;
         boolean valid = true; String abortReason = "";
     }
@@ -123,6 +127,15 @@ public final class Sm4ForceLifetimeHarness {
         List<Prep> states = new ArrayList<>();
         List<Double> forces = new ArrayList<>();
         List<String> dirs = new ArrayList<>();
+        // --- RIGOR MECHANICAL RUPTURE (default OFF ⇒ chemistry byte-identical to the production cycleLymnTaylor) ---
+        boolean rigor = false;                     // enable the force-dependent rigor-rupture pathway
+        int rigorModel = 0;                        // 0 = two-pathway catch-slip, 1 = one-path Bell slip
+        // defaults = Guo & Guilford 2006 Table-2 rigor fit mapped to k(F)=k0[aCatch e^{-F xCatch/kT}+aSlip e^{+F xSlip/kT}]:
+        //   catch k_c0=127/s (x_c=1.5 nm), slip k_s0=13/s (x_s=0.5 nm) ⇒ k0=140/s, aCatch=0.9071, aSlip=0.0929.
+        double rk0 = 140.0, raC = 0.9071, rxC = 1.5, raS = 0.0929, rxS = 0.5;
+        // ATP-free experimental condition: [ATP]=0 ⇒ atpOn=0 (matches Guo & Guilford's nucleotide-free rigor and
+        // isolates the mechanical channel). NOT a retune of the ATP rate constant — it sets the assay's [ATP].
+        boolean atpFree = false;
     }
 
     public static void main(String[] args) {
@@ -146,6 +159,14 @@ public final class Sm4ForceLifetimeHarness {
                 case "-states" -> { for (String s : args[++i].split(",")) c.states.add(Prep.of(s.trim())); }
                 case "-forces" -> { for (String s : args[++i].split(",")) c.forces.add(Double.parseDouble(s.trim())); }
                 case "-dirs" -> { for (String s : args[++i].split(",")) c.dirs.add(s.trim()); }
+                case "-rigor-rupture" -> c.rigor = true;
+                case "-atpfree" -> c.atpFree = true;
+                case "-rigor-model" -> c.rigorModel = Integer.parseInt(args[++i]);
+                case "-rk0" -> c.rk0 = Double.parseDouble(args[++i]);
+                case "-raC" -> c.raC = Double.parseDouble(args[++i]);
+                case "-rxC" -> c.rxC = Double.parseDouble(args[++i]);
+                case "-raS" -> c.raS = Double.parseDouble(args[++i]);
+                case "-rxS" -> c.rxS = Double.parseDouble(args[++i]);
                 default -> { }
             }
         }
@@ -180,6 +201,14 @@ public final class Sm4ForceLifetimeHarness {
     static TwoBodyConverterMotor.Cmot prepare(Cfg c, Prep prep, double signedForcePN, int seed) {
         TwoBodyConverterMotor.Cmot cm = TwoBodyConverterMotor.buildBoundMotor(c.model, c.dt);
         TwoBodyConverterMotor.initChem4a(cm, c.dt, true);          // canonical Env rates; bound; ADPPi
+        // RIGOR MECHANICAL RUPTURE (flag-gated, default off ⇒ initChem4a already left it off). When on, install the
+        // force-dependent rigor-rupture params (wholly separate storage; no ADP-param sharing). The pathway acts
+        // ONLY on a bound NUC_NONE head, so ADP/cycling prepared states are unaffected until they reach NONE.
+        if (c.rigor) cm.mot.setRigorRupture(true, c.rigorModel, c.rk0, c.raC, c.rxC, c.raS, c.rxS);
+        // ATP-free [ATP]=0 experimental condition (Guo & Guilford nucleotide-free rigor): zero the ATP-uptake so the
+        // mechanical rupture is the SOLE rigor detachment channel. This sets the assay's [ATP], not the rate constant
+        // semantics; it is applied only in this isolated assay and never touches any production default.
+        if (c.atpFree) cm.mot.nucParams.set(1, 0f);
         cm.mot.nucleotideState.set(0, prep.nuc);                   // PREPARED STATE override
         cm.thetaS = prep.thetaS();
         cm.mot.boundSeg.set(0, 0);
@@ -259,21 +288,38 @@ public final class Sm4ForceLifetimeHarness {
 
             int sBefore = cm.mot.nucleotideState.get(0);
             cm.mot.setCounts(t, seed, cm.fil.n);
-            NucleotideCycleSystem.cycleLymnTaylor(cm.mot.nucleotideState, cm.mot.boundSeg,
-                    cm.mot.forceDotFil, cm.mot.forceDotAvg, cm.mot.avgInit, cm.mot.cooldown,
-                    cm.mot.stats, cm.mot.nucParams, cm.mot.kinParams, cm.mot.counts);
+            int rupBefore = cm.mot.ruptureStats.get(0), capBefore = cm.mot.ruptureStats.get(1);
+            if (c.rigor) {
+                NucleotideCycleSystem.cycleLymnTaylorRigor(cm.mot.nucleotideState, cm.mot.boundSeg,
+                        cm.mot.forceDotFil, cm.mot.forceDotAvg, cm.mot.avgInit, cm.mot.cooldown,
+                        cm.mot.stats, cm.mot.nucParams, cm.mot.kinParams, cm.mot.counts,
+                        cm.mot.rigorParams, cm.mot.ruptureStats);
+            } else {
+                NucleotideCycleSystem.cycleLymnTaylor(cm.mot.nucleotideState, cm.mot.boundSeg,
+                        cm.mot.forceDotFil, cm.mot.forceDotAvg, cm.mot.avgInit, cm.mot.cooldown,
+                        cm.mot.stats, cm.mot.nucParams, cm.mot.kinParams, cm.mot.counts);
+            }
             int sAfter = cm.mot.nucleotideState.get(0);
+            boolean ruptured = cm.mot.ruptureStats.get(0) > rupBefore;   // mechanical rigor rupture fired THIS step
+            if (cm.mot.ruptureStats.get(1) > capBefore) e.rateCapWarnings++;   // rate·dt-not-small (substep/abort signal)
 
             if (sAfter < 0 || sAfter > 3 || !legalTransition(sBefore, sAfter)) e.invalidStates++;
             // the FORCE-DEPENDENT sub-step, timestamped separately (ADP -> NONE)
             if (sBefore == MotorStore.NUC_ADP && sAfter == MotorStore.NUC_NONE && Double.isNaN(e.tAdpRelease))
                 e.tAdpRelease = (t + 1) * c.dt;
+            if (ruptured && Double.isNaN(e.tRigorRupture)) {
+                e.tRigorRupture = (t + 1) * c.dt;
+                e.forceAtRupturePn = fPn;   // the realized axial bond load the rate law read this step
+            }
 
             if (cm.mot.boundSeg.get(0) < 0) {                    // --- DETACHMENT, recorded EXACTLY ONCE ---
                 e.tDetach = (t + 1) * c.dt;
                 e.lifetime = e.tDetach - e.tAttach;
                 e.censored = 0;
-                e.pathway = nucName(sBefore) + "->" + nucName(sAfter);
+                // EXPLICIT cause (never generic "detached"): a rigor rupture detaches with the state STAYING NONE;
+                // the ATP terminus ends in ATP. Distinguished by the ruptureStats delta, not by state alone.
+                e.detachCause = ruptured ? "rigor_rupture" : "atp_release";
+                e.pathway = ruptured ? "NONE(rigor)~rupture" : nucName(sBefore) + "->" + nucName(sAfter);
                 e.detachState = nucName(sAfter);
                 detached = true; t++;
                 break;
@@ -300,6 +346,7 @@ public final class Sm4ForceLifetimeHarness {
             e.lifetime = maxSteps * c.dt;
             e.censored = 1;
             e.pathway = "censored";
+            e.detachCause = "censored";
             e.detachState = nucName(cm.mot.nucleotideState.get(0));
         }
         e.stepsRun = t;
@@ -405,6 +452,15 @@ public final class Sm4ForceLifetimeHarness {
                         + "structurally NOT wired into TwoBodyConverterMotor.stepC/stepSup/stepS2 -- inert here). "
                         + "Two-body break-cap is never read by cycleLymnTaylor. Detachment is 100%% natural chemistry.%n",
                 ExplicitHmmDimerGpuParams.RUPTURE_MODE, ExplicitHmmDimerGpuParams.EMERGENCY_ON));
+        if (c.rigor) {
+            s.append(String.format(Locale.US, "# RIGOR MECHANICAL RUPTURE: ON (kernel cycleLymnTaylorRigor). model=%d "
+                    + "k0=%.4g/s aCatch=%.4g xCatch=%.4g nm aSlip=%.4g xSlip=%.4g nm; g(0)=%.4f. atpFree=%s (atpOn=%.4g/s). "
+                    + "Competing hazard = single-uniform partition of the NONE draw: [0,atpOn*dt)=ATP, "
+                    + "[atpOn*dt,+k_rigor*dt)=rupture. F=realized forceDotFil; +opposing/barbed=catch. NO new RNG draw.%n",
+                    c.rigorModel, c.rk0, c.raC, c.rxC, c.raS, c.rxS, c.raC + c.raS, c.atpFree, m.nucParams.get(1)));
+        } else {
+            s.append(String.format(Locale.US, "# RIGOR MECHANICAL RUPTURE: OFF (production cycleLymnTaylor; rigor detach = ATP binding only, force-independent).%n"));
+        }
         s.append(String.format(Locale.US, "# window: maxDwell=%.4g ms (%d steps) = right-censoring horizon; events/cell=%d; seedBase=%d%n",
                 c.maxDwellMs, (int) Math.round(c.maxDwellMs * 1e-3 / c.dt), c.events, c.seedBase));
         s.append("# sign: trapParams[5] = axial external force (N) at filament COM along +uVec; barbed=end2=+uVec.\n");
@@ -428,7 +484,17 @@ public final class Sm4ForceLifetimeHarness {
         s.append(String.format(Locale.US, "  \"run_class\": \"%s\",%n", esc(c.runClass)));
         s.append(String.format(Locale.US, "  \"motor_model\": \"%s\",%n", c.model.id()));
         s.append(String.format(Locale.US, "  \"runner\": \"cpu\",%n"));
-        s.append(String.format(Locale.US, "  \"chemistry_kernel\": \"NucleotideCycleSystem.cycleLymnTaylor\",%n"));
+        s.append(String.format(Locale.US, "  \"chemistry_kernel\": \"%s\",%n",
+                c.rigor ? "NucleotideCycleSystem.cycleLymnTaylorRigor" : "NucleotideCycleSystem.cycleLymnTaylor"));
+        s.append(String.format(Locale.US, "  \"rigor_rupture_on\": %s,%n", c.rigor));
+        s.append(String.format(Locale.US, "  \"rigor_model\": %d,%n", c.rigorModel));
+        s.append(String.format(Locale.US, "  \"atp_free\": %s,%n", c.atpFree));
+        if (c.rigor) {
+            s.append(String.format(Locale.US, "  \"rigor_law\": \"k(F)=k0*(aCatch*exp(-F*xCatch/kT)+aSlip*exp(+F*xSlip/kT)); "
+                    + "F=realized forceDotFil; +opposing/barbed=catch\",%n"));
+            s.append(String.format(Locale.US, "  \"rigor_k0_per_s\": %.6g, \"rigor_aCatch\": %.6g, \"rigor_xCatch_nm\": %.6g, "
+                    + "\"rigor_aSlip\": %.6g, \"rigor_xSlip_nm\": %.6g,%n", c.rk0, c.raC, c.rxC, c.raS, c.rxS));
+        }
         s.append(String.format(Locale.US, "  \"prepared_state\": \"%s\",%n", prep.id));
         s.append(String.format(Locale.US, "  \"requested_force_pn\": %.6g,%n", f));
         s.append(String.format(Locale.US, "  \"force_dir\": \"%s\",%n", dir));
@@ -463,8 +529,10 @@ public final class Sm4ForceLifetimeHarness {
                             + "\"censored\": %d, ",
                     e.tAttach, num(e.tDetach), e.lifetime, e.censored));
             s.append(String.format(Locale.US, "\"detach_pathway\": \"%s\", \"detach_state\": \"%s\", "
-                            + "\"t_adp_release_s\": %s, ",
-                    e.pathway, e.detachState, num(e.tAdpRelease)));
+                            + "\"detach_cause\": \"%s\", \"t_adp_release_s\": %s, \"t_rigor_rupture_s\": %s, "
+                            + "\"force_at_rupture_pn\": %s, \"rate_cap_warnings\": %d, ",
+                    e.pathway, e.detachState, e.detachCause, num(e.tAdpRelease), num(e.tRigorRupture),
+                    num(e.forceAtRupturePn), e.rateCapWarnings));
             s.append(String.format(Locale.US, "\"max_disp_nm\": %.6g, \"max_bond_strain_nm\": %.6g, "
                             + "\"max_bond_force_pn\": %.6g, \"max_axial_load_pn\": %.6g, ",
                     e.maxDispNm, e.maxDispNm, e.maxBondForcePn, e.maxAxialLoadPn));

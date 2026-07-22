@@ -52,6 +52,14 @@ import java.util.Random;
 public final class ExplicitHmmDimerGlidingHarness {
 
     static double DT = 2.5e-6;   // global timestep (settable via -dt for the mat timestep-sensitivity study; default 2.5e-6)
+    // ---- RIGOR MECHANICAL RUPTURE (flag-gated, default OFF ⇒ chem == cycleLymnTaylor, dimer gliding byte-identical) ----
+    static boolean RIGOR_ON = false; static int RIGOR_MODEL = 0;
+    static double RIGOR_K0 = 140.0, RIGOR_AC = 0.9071, RIGOR_XC = 1.5, RIGOR_AS = 0.0929, RIGOR_XS = 0.5;
+    static void installRigor(MotorStore mot) {
+        if (RIGOR_ON) mot.setRigorRupture(true, RIGOR_MODEL, RIGOR_K0, RIGOR_AC, RIGOR_XC, RIGOR_AS, RIGOR_XS);
+        else mot.disableRigorRupture();
+    }
+    static long sumRateCap(MotorStore mot) { long w = 0; for (int m = 0; m < mot.nMotors; m++) w += mot.ruptureStats.get(2 * m + 1); return w; }
     static final double PRE  = TwoBodyConverterMotor.PRESTROKE_THETAS;
     static final double FIL_R = Constants.radius;
     static final int SETTLE = 800;
@@ -136,7 +144,7 @@ public final class ExplicitHmmDimerGlidingHarness {
         G.A = new double[N][]; G.C_ = new double[N][]; G.xH_ = new double[N][]; G.xF8_ = new double[N][];
         G.noBind = new boolean[N]; G.active = new boolean[N]; G.siteX = new double[N]; G.siteY = new double[N];
         for (int m = 0; m < N; m++) G.mot.assembleArticulated(m, 0f, 0f, (float) LaserTrapHarness.MANCHOR_Z, 0f, 0f, 1f, 0f);
-        DragTensorSystem.run(G.mot); G.mot.setBodyParams(DT); G.mot.setKinParams(0.006, -0.4, DT); G.mot.setNucParams(DT);
+        DragTensorSystem.run(G.mot); G.mot.setBodyParams(DT); G.mot.setKinParams(0.006, -0.4, DT); G.mot.setNucParams(DT); installRigor(G.mot);
         G.bondData = new FloatArray(N * CrossBridgeSystem.STRIDE); G.bondData.init(0f);
         G.segCount = new IntArray(nSeg); G.segOff = new IntArray(nSeg + 1); G.segMyo = new IntArray(N);
         G.cullMode = 2;
@@ -212,7 +220,7 @@ public final class ExplicitHmmDimerGlidingHarness {
         G.A = new double[N][]; G.C_ = new double[N][]; G.xH_ = new double[N][]; G.xF8_ = new double[N][];
         G.noBind = new boolean[N]; G.active = new boolean[N]; G.siteX = new double[N]; G.siteY = new double[N];
         for (int m = 0; m < N; m++) G.mot.assembleArticulated(m, 0f, 0f, (float) LaserTrapHarness.MANCHOR_Z, 0f, 0f, 1f, 0f);
-        DragTensorSystem.run(G.mot); G.mot.setBodyParams(DT); G.mot.setKinParams(0.006, -0.4, DT); G.mot.setNucParams(DT);
+        DragTensorSystem.run(G.mot); G.mot.setBodyParams(DT); G.mot.setKinParams(0.006, -0.4, DT); G.mot.setNucParams(DT); installRigor(G.mot);
         G.bondData = new FloatArray(N * CrossBridgeSystem.STRIDE); G.bondData.init(0f);
         G.segCount = new IntArray(nSeg); G.segOff = new IntArray(nSeg + 1); G.segMyo = new IntArray(N);
         G.cullMode = 2;
@@ -301,6 +309,8 @@ public final class ExplicitHmmDimerGlidingHarness {
         double rotDriftDeg = 0;
         // motion-conditioned proposal bias (E3 + dynamic): counts of eligible fwd/bwd proposals split by motion sign
         long propFwd_moveFwd = 0, propBwd_moveFwd = 0, propFwd_moveBwd = 0, propBwd_moveBwd = 0, propFwd_still = 0, propBwd_still = 0;
+        // RIGOR MECHANICAL RUPTURE cause accounting (distinct detachment cause; per-motor ruptureStats delta)
+        long rigorRuptures = 0, rateCapWarn = 0; double rupForceSum = 0, rupForceMax = Double.NEGATIVE_INFINITY, rupForceMin = Double.POSITIVE_INFINITY; int[] prevRup = null;
     }
 
     // ============================ one step ============================
@@ -348,7 +358,15 @@ public final class ExplicitHmmDimerGlidingHarness {
         }
         // 2. chemistry + 3. thetaS
         mot.setCounts(t, seed, G.nSeg);
-        NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+        if (RIGOR_ON) NucleotideCycleSystem.cycleLymnTaylorRigor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
+        else          NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+        if (RIGOR_ON) {   // distinct mechanical-rupture cause: per-motor ruptureStats delta + realized force-at-rupture
+            if (o.prevRup == null) o.prevRup = new int[N];
+            for (int m = 0; m < N; m++) { int rr = mot.ruptureStats.get(2 * m);
+                if (rr > o.prevRup[m]) { o.rigorRuptures++; double fr = mot.forceDotFil.get(m) * 1e12;
+                    if (Double.isFinite(fr)) { o.rupForceSum += fr; o.rupForceMax = Math.max(o.rupForceMax, fr); o.rupForceMin = Math.min(o.rupForceMin, fr); } }
+                o.prevRup[m] = rr; }
+        }
         for (int m = 0; m < N; m++) G.thetaS[m] = TwoBodyConverterMotor.thetaS4a(mot.nucleotideState.get(m));
         // 4. place + bond forces
         for (int m = 0; m < N; m++) { if (sc.matMode) { G.bhat = sc.dimerBhat[m / 2]; G.econv = sc.dimerEconv[m / 2]; }
@@ -539,6 +557,7 @@ public final class ExplicitHmmDimerGlidingHarness {
         double gapP50, gapP99, gapP999; int exc4, exc10, exc50, exc100;
         double peakBranchF, maxBranchExt, meanBranchExt;
         int excSecondBind, excStroke, excDetach, excFilMotion, excOther;
+        long rigorRuptures, rateCapWarn; double rupForceMean, rupForceMin, rupForceMax; double ruptureFracOfDetach;
     }
     static Summary summarize(EScene sc, Obs o, int steps) {
         Summary s = new Summary();
@@ -579,6 +598,13 @@ public final class ExplicitHmmDimerGlidingHarness {
         s.propBiasMoveFwd = frac(o.propFwd_moveFwd, o.propBwd_moveFwd);
         s.propBiasStill = frac(o.propFwd_still, o.propBwd_still);
         s.propBiasMoveBwd = frac(o.propFwd_moveBwd, o.propBwd_moveBwd);
+        // RIGOR RUPTURE cause accounting: total ruptures, cap warnings, force-at-rupture, fraction of all detachments
+        s.rigorRuptures = o.rigorRuptures;
+        s.rateCapWarn = RIGOR_ON ? sumRateCap(sc.G.mot) : 0;
+        s.rupForceMean = o.rigorRuptures > 0 ? o.rupForceSum / o.rigorRuptures : 0;
+        s.rupForceMin = o.rigorRuptures > 0 ? o.rupForceMin : 0; s.rupForceMax = o.rigorRuptures > 0 ? o.rupForceMax : 0;
+        long detachTot = o.fwdBinds + o.bwdBinds;   // proxy for total detachment events (binds ≈ detaches at steady state)
+        s.ruptureFracOfDetach = detachTot > 0 ? (double) o.rigorRuptures / detachTot : 0;
         return s;
     }
 
@@ -596,6 +622,13 @@ public final class ExplicitHmmDimerGlidingHarness {
         // dimer-only compliance multipliers (this study; default 1.0 ⇒ reference dimer byte-identical)
         CFG_EA = argD(args, "-branchEA", 1.0); CFG_EI = argD(args, "-branchEI", 1.0); CFG_FORK = argD(args, "-forkK", 1.0);
         DT = argD(args, "-dt", 2.5e-6);   // timestep override (mat sensitivity study); default byte-identical
+        // ---- RIGOR MECHANICAL RUPTURE (chemistry pathway; DISTINCT from the -ruptureMode HMM-dimer strain failsafe) ----
+        RIGOR_ON = has(args, "-rigor-rupture");
+        RIGOR_MODEL = (int) argD(args, "-rigor-model", 0);
+        RIGOR_K0 = argD(args, "-rk0", 140.0); RIGOR_AC = argD(args, "-raC", 0.9071); RIGOR_XC = argD(args, "-rxC", 1.5);
+        RIGOR_AS = argD(args, "-raS", 0.0929); RIGOR_XS = argD(args, "-rxS", 0.5);
+        if (RIGOR_ON) System.out.printf(Locale.US, "  [RIGOR MECHANICAL RUPTURE: ON (chem=cycleLymnTaylorRigor) model=%d k0=%.4g/s aCatch=%.4g xCatch=%.4g nm aSlip=%.4g xSlip=%.4g nm; rare competing channel at saturating ATP]%n",
+                RIGOR_MODEL, RIGOR_K0, RIGOR_AC, RIGOR_XC, RIGOR_AS, RIGOR_XS);
         // ---- GPU-backend selector (task §1/§22): default CPU; gpu refused until DEVICE_VALIDATED (never silent fallback) ----
         if (has(args, "-gpu-experimental")) ExplicitHmmDimerGpuParams.EXPERIMENTAL_OVERRIDE = true;
         BACKEND = ExplicitHmmDimerGpuParams.Backend.parse(argStr(args, "-backend", "cpu"));
@@ -692,6 +725,12 @@ public final class ExplicitHmmDimerGlidingHarness {
                 -s.velFwd, s.velFwd, s.meanBoundHeads, s.continuity, s.meanActive, s.twoFrac, s.netFwdForce, s.forcePerHead, s.fwd, s.bwd, wall);
         System.out.printf(Locale.US, "  GAP maxGap=%.2f p999=%.2f p99=%.2f p50=%.3f nm | exc>4/10/50/100=%d/%d/%d/%d | peakBrF=%.1f pN maxBrExt=%.2f nm meanBrExt=%.3f nm | trig 2nd/stroke/detach/filmo=%d/%d/%d/%d | inv=%d sf=%d%n",
                 s.maxGap, s.gapP999, s.gapP99, s.gapP50, s.exc4, s.exc10, s.exc50, s.exc100, s.peakBranchF, s.maxBranchExt, s.meanBranchExt, s.excSecondBind, s.excStroke, s.excDetach, s.excFilMotion, s.invalid, s.solverFail);
+        if (RIGOR_ON) System.out.printf(Locale.US, "  RIGOR RUPTURE: %d ruptures (%.4f of detachments) | force@rupture mean %.2f pN [%.2f,%.2f] | rateCapWarn=%d%n",
+                s.rigorRuptures, s.ruptureFracOfDetach, s.rupForceMean, s.rupForceMin, s.rupForceMax, s.rateCapWarn);
+        // RIGORROW,density,seed,nDim,heads,steps,rigorOn,velProd,meanBoundHeads,ruptures,ruptureFracOfDetach,rupForceMean,rupForceMin,rupForceMax,rateCapWarn,twoFrac,cont
+        System.out.printf(Locale.US, "RIGORROW,%.0f,%d,%d,%d,%d,%b,%.5f,%.4f,%d,%.6f,%.3f,%.3f,%.3f,%d,%.5f,%.5f%n",
+                density, seed, sc.nDim, 2 * sc.nDim, steps, RIGOR_ON, s.velFwd, s.meanBoundHeads,
+                s.rigorRuptures, s.ruptureFracOfDetach, s.rupForceMean, s.rupForceMin, s.rupForceMax, s.rateCapWarn, s.twoFrac, s.continuity);
         // MATROW,dmode,density,nDim,heads,seed,velRaw,velProd,meanBound,cont,activeDim,twoFrac,netF,Fhead,fwd,bwd,reversalHz,fracFwdT,maxGap,invalid,sf,   (f1..f21)
         //        branchEA,branchEI,forkK,gapP999,gapP99,gapP50,exc4,exc10,exc50,exc100,peakBrF,maxBrExt,meanBrExt,exc2nd,excStroke,excDetach,excFilmo,peakF, (f22..f39)
         //        startupMs,meanBoundDim,oneFrac,dblDwell,attachLife,fracFwdT2,velMed,velSd,cullR_nm,filLen_um  (f40..f49)
