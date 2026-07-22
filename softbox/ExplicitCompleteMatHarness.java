@@ -8,6 +8,7 @@ import uk.ac.manchester.tornado.api.enums.ProfilerMode;
 import uk.ac.manchester.tornado.api.types.arrays.DoubleArray;
 import uk.ac.manchester.tornado.api.types.arrays.FloatArray;
 import uk.ac.manchester.tornado.api.types.arrays.IntArray;
+import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.*;
@@ -33,6 +34,10 @@ public final class ExplicitCompleteMatHarness {
         boolean ok; String fn;
         boolean throughputCal = false, sweep = false;
         for (String a : args) { if (a.equals("-throughputcal")) throughputCal = true; if (a.equals("-sweep")) sweep = true; }
+        // Single-head LONG-run density-sweep PRODUCTION CELL (one density×seed → per-cell JSON), matched to the
+        // HMM-dimer campaign. Harness-only: reuses the validated buildS2Mat + buildGlidingGraph explicit-s2-l40 path
+        // unchanged; adds only per-step science readback + the per-cell JSON/accumulator. Exits directly.
+        for (String a : args) if (a.equals("-production-cell")) { System.exit(runProductionCell(args)); }
         if (sweep)      { log.append("# Explicit density-saturation sweep (Phase C) — GPU gliding velocity, explicit vs calibrated\n\n"); ok = sweepMode(log, quick, args); fn = "COMPLETEMAT_SWEEP.md"; }
         else if (throughputCal) { log.append("# Calibrated (calibrated-s2-l40) GENUINE FREE-BINDING NO-CULL throughput (Phase B arm) — CPU vs GPU, N=600–9000\n\n"); ok = throughputCalMode(log, quick); fn = "COMPLETEMAT_THROUGHPUT_CAL.md"; }
         else if (throughput) { log.append("# Explicit GENUINE FREE-BINDING NO-CULL throughput (Phase A) — CPU-analytic vs GPU-analytic, N=600–9000\n\n"); ok = throughputMode(log, quick); fn = "COMPLETEMAT_THROUGHPUT.md"; }
@@ -299,7 +304,13 @@ public final class ExplicitCompleteMatHarness {
           .task("s2solve", TwoBodyBeamAnalyticGpu::matS2SolveStep, e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts)
           .task("redBlk", MatSoaSlice::matReduceBlocks, mot.boundSeg, e.active, mot.forceDotFil, e.redP, e.exCounts, e.redBlk)
           .task("redFin", MatSoaSlice::matReduceFinal, e.redBlk, f.coord, e.redP, e.exCounts, e.redOut);
-        if (prod) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg);
+        if (prod) {
+            // PROD_SCI: additionally read back nucleotideState each step for the production-cell science observables
+            // (ATP turnover, nucleotide occupancy). No physics/kernel/order change — only an extra host readback of a
+            // buffer the `chem` task already writes on device. Default false ⇒ the -sweep/-throughput paths are byte-unchanged.
+            if (PROD_SCI) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg, mot.nucleotideState);
+            else          tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg);
+        }
         else      tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.nodes, e.q, e.redOut, f.coord, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, G.bondData);
         int pn = ((N + 63) / 64) * 64, ps = ((nSeg + 63) / 64) * 64, nCh = e.csrChunkParams.get(1);
         glSched = new GridScheduler();
@@ -821,6 +832,7 @@ public final class ExplicitCompleteMatHarness {
      *  model 0=explicit-s2-l40 (buildGlidingGraph), 1=calibrated-s2-l40 (MatSoaSlice.buildTrajGraph). Device-resident;
      *  velocity = LS slope of the resident redOut centroid·b̂ over the MEASURED window (negative = pointed-first). */
     static boolean SWEEP_NOCULL = false;   // D3 control: force calibrated no-cull (cullP huge) to test culling is a semantic no-op
+    static boolean PROD_SCI = false;        // production-cell: add per-step nucleotideState readback (science observables); default off ⇒ sweep byte-unchanged
     static double[] runGlide(int model, double density, double dt, int seed, int equil, int meas) {
         double slack = TwoBodyConverterMotor.EXPLICIT_GLIDE_SLACK_NM;
         int recEvery = Math.max(1, meas / 2000);
@@ -908,4 +920,216 @@ public final class ExplicitCompleteMatHarness {
     }
 
     static String oneLine(String s) { return s == null ? "(none)" : s.replaceAll("\\s+", " ").trim(); }
+
+    // =============================================================== SINGLE-HEAD LONG-RUN PRODUCTION CELL
+    /** One (density, seed) explicit-s2-l40 gliding cell → per-cell JSON, matched to the HMM-dimer campaign.
+     *  Harness-only: the validated buildS2Mat + buildGlidingGraph(prod) path is byte-unchanged; this only drives it,
+     *  reads back science observables, and serialises. Whole-window LS centroid·b̂ velocity estimator (equil=0),
+     *  identical to the dimer's runProductionCell. Frozen config enforced + printed + abort-gated. */
+    static int runProductionCell(String[] args) {
+        // ---- FROZEN CONFIG (enforce + print + abort on violation) ----
+        double dt = argD(args, "-dt", DT);                       // 2.5e-6
+        int density = argI(args, "-density", 500);
+        int seed = argI(args, "-seed", 101);
+        int steps = argI(args, "-steps", 40000);
+        String outdir = argS(args, "-outdir", "RUN_LOGS/single_head_density_sweep_long");
+        String rev = argS(args, "-rev", "unknown");
+        double slack = TwoBodyConverterMotor.EXPLICIT_GLIDE_SLACK_NM;   // 1.5 nm
+        double beamL = 40.0;                                     // explicit-s2-l40 (L=40 nm)
+        try { Files.createDirectories(Path.of(outdir)); } catch (IOException e) { throw new UncheckedIOException(e); }
+
+        // Optional actin filament-length control (-nseg): sets ONLY the actin segment count via the existing runtime
+        // override G4_NSEG_RUN. This changes filament LENGTH/geometry (apparatus), NOT motor chemistry/mechanics/binding/
+        // Brownian, and NOT the density definition (N = round(ρ·area) is nSeg-independent). Default = the validated 12.
+        int savedNseg = TwoBodyConverterMotor.G4_NSEG_RUN;
+        int nsegReq = argI(args, "-nseg", savedNseg);
+        TwoBodyConverterMotor.G4_NSEG_RUN = nsegReq;
+
+        String abort = null;
+        if (Math.abs(dt - 2.5e-6) > 1e-12) abort = "dt != 2.5e-6";
+        else if (TwoBodyConverterMotor.LEGACY_OWNERSHIP) abort = "legacy segment ownership ON (canonical binding contract expected)";
+        else if (nsegReq < 4) abort = "nseg < 4 (chain needs >= 4 segments)";
+
+        int Npre = TwoBodyConverterMotor.g4NMot(density);
+        System.out.println("=== SINGLE-HEAD (explicit-s2-l40) PRODUCTION CELL — FROZEN CONFIG ===");
+        System.out.printf(Locale.US, "  model=explicit-s2-l40 | GPU device-resident TaskGraph (buildGlidingGraph prod) | DEVICE_VALIDATED=%b (experimental, not gated on sweep path)%n", MotorGpuParams.DEVICE_VALIDATED);
+        System.out.printf(Locale.US, "  S2 beam L=%.0f nm | initial slack=%.2f nm | dt=%.3g s | free binding (matBindExplicit each step), NO cull, NO occupancy exclusion%n", beamL, slack, dt);
+        System.out.printf(Locale.US, "  actin: %d-seg flexible chain (%d mono/seg, contour≈%.3f µm) | actin Brownian ON | motor-body Brownian ON | z-confine %.1f pN/nm coverslip%n",
+                TwoBodyConverterMotor.G4_NSEG_RUN, TwoBodyConverterMotor.G4_MONO, TwoBodyConverterMotor.G4_NSEG_RUN * (TwoBodyConverterMotor.G4_MONO + 1) * Constants.actinMonoRadius, TwoBodyConverterMotor.G4_KZ);
+        System.out.printf(Locale.US, "  chemistry: Lymn–Taylor nucleotide cycle ON | canonical half-open segment ownership | bhat=+x, negative vel = pointed-first = productive%n");
+        System.out.printf(Locale.US, "  lawn=%.1f×%.1f µm (%.1f µm²) | density=%d heads/µm² ⇒ N=%d heads | seed=%d | steps=%d (%.4f s, WHOLE-window LS estimator, equil=0)%n",
+                TwoBodyConverterMotor.G4_MATX, TwoBodyConverterMotor.G4_MATY, TwoBodyConverterMotor.G4_MATX * TwoBodyConverterMotor.G4_MATY, density, Npre, seed, steps, steps * dt);
+        if (nsegReq != TwoBodyConverterMotor.G4_NSEG)
+            System.out.printf(Locale.US, "  *** FILAMENT-LENGTH CONTROL: nSeg=%d (override; validated default=%d) — actin geometry ONLY; motor physics + density unchanged ***%n", nsegReq, TwoBodyConverterMotor.G4_NSEG);
+        System.out.printf(Locale.US, "  outdir=%s | rev=%s%n", outdir, rev);
+        if (abort != null) { System.out.printf("  *** ABORT (frozen-config violation): %s ***%n", abort); TwoBodyConverterMotor.G4_NSEG_RUN = savedNseg; return 3; }
+        System.out.println("  frozen config VERIFIED — proceeding (GPU device-resident, no CPU fallback).");
+
+        long startMs = System.currentTimeMillis();
+        Glide2D Gd = TwoBodyConverterMotor.buildS2Mat(density, dt, beamL, slack, seed);
+        int N = Gd.N, nSeg = Gd.nSeg;
+        if (nSeg != nsegReq) { System.out.printf("  *** ABORT: built nSeg=%d != requested %d (geometry could not be instantiated) ***%n", nSeg, nsegReq); TwoBodyConverterMotor.G4_NSEG_RUN = savedNseg; return 3; }
+        for (int m = 0; m < N; m++) Gd.mot.boundSeg.set(m, -1);
+        ExMat ed = packExMat(Gd, 1);
+        double[] bhat = Gd.bhat;
+        System.out.printf(Locale.US, "  SCENE: N=%d heads | nSeg=%d | beam nodes M=%d | cullR=%.0f nm (free-binding, all active)%n", N, nSeg, ed.M, Gd.queryR * 1e3);
+
+        SingleHeadObs o = new SingleHeadObs(N, steps, dt);
+        String status = "ok", err = ""; double warmMs = 0;
+        boolean prevSci = PROD_SCI; PROD_SCI = true;   // enable per-step nucleotideState readback for this cell
+        try {
+            TornadoExecutionPlan plan = buildGlidingGraph(ed, true);
+            long w0 = System.nanoTime();
+            setCounters(0, ed, null, Gd, 0, seed, nSeg); plan.execute();
+            warmMs = (System.nanoTime() - w0) / 1e6;
+            o.observe(0, ed, Gd, bhat, nSeg);
+            for (int t = 1; t < steps; t++) {
+                setCounters(0, ed, null, Gd, t, seed, nSeg); plan.execute();
+                o.observe(t, ed, Gd, bhat, nSeg);
+            }
+        } catch (Throwable e) {
+            status = "error"; err = e.getClass().getSimpleName() + ": " + oneLine(e.getMessage());
+            System.out.printf("  *** RUNTIME ERROR at cell ρ%d s%d: %s ***%n", density, seed, err);
+        } finally { PROD_SCI = prevSci; }
+        long endMs = System.currentTimeMillis(); double wallS = (endMs - startMs) / 1e3;
+        o.finish();
+
+        System.out.printf(Locale.US, "  RESULT ρ%d s%d: velProd=%+.4f µm/s (postEquil %+.4f) meanBoundHeads=%.3f cont=%.4f boundFrac=%.5f vel/boundHead=%+.4f%n",
+                density, seed, o.velProd, o.velPostEquil, o.meanBoundHeads, o.continuity, N > 0 ? o.meanBoundHeads / N : 0, o.meanBoundHeads > 0 ? o.velProd / o.meanBoundHeads : 0);
+        System.out.printf(Locale.US, "         lifetime=%.3f ms | ATPturn=%d | netForce=%.3f pN peakLoad=%.2f pN | invalid=%d solveFail=%d | bound∈[%d,%d]%n",
+                o.lifetimeMean() * dt * 1e3, o.atpTurnover, o.netForcePn, o.peakLoadPn, o.invalidStates, o.invalidStates, o.minBound, o.maxBound);
+        System.out.printf(Locale.US, "         wall=%.1fs | %.1f steps/s | warm=%.0f ms | status=%s%n", wallS, status.equals("ok") ? steps / wallS : Double.NaN, warmMs, status);
+
+        // ---- atomic JSON write + .done ----
+        String base = String.format(Locale.US, "cell_d%d_s%d", density, seed);
+        String json = o.toJson(density, seed, steps, dt, N, nSeg, ed.M, beamL, slack, Gd.queryR, rev, startMs, endMs, wallS, status, err, warmMs);
+        try {
+            Path fin = new File(outdir, base + ".json").toPath();
+            Path tmp = new File(outdir, base + ".json.tmp").toPath();
+            Files.writeString(tmp, json);
+            Files.move(tmp, fin, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            if (status.equals("ok")) Files.writeString(new File(outdir, base + ".done").toPath(), fin.getFileName().toString() + "\n");
+            System.out.printf("  wrote %s (%s)%n", fin, status);
+        } catch (IOException e) { throw new UncheckedIOException(e); }
+        TwoBodyConverterMotor.G4_NSEG_RUN = savedNseg;   // restore (hygiene; each cell is a fresh JVM anyway)
+        return status.equals("ok") ? 0 : 1;
+    }
+
+    /** Per-cell single-head observable accumulator (host-side, from per-step device pulls: redOut + boundSeg + nucleotideState). */
+    static final class SingleHeadObs {
+        final int N, steps; final double dt;
+        final double[] cx;                       // filament centroid·b̂ (µm) per step
+        double velFullRun, velProd, velPostEquil, velInstMean, velInstVar, fracMovingProd; int reversals;
+        final double[] windowVel = new double[5];
+        long boundHeadSum, contHits; int minBound = Integer.MAX_VALUE, maxBound = 0;
+        long bindEvents, detachEvents;
+        double sumForce, peakLoadPn, netForcePn;
+        int invalidStates;
+        final long[] nucOcc = new long[4]; long nucSteps, chemTransitions, atpTurnover;
+        final int[] prevBound, attachStart, prevNuc; boolean nucInit;
+        double meanBoundHeads, continuity;
+        // reversal helper (block-averaged displacement, thermal-robust) — mirrors the dimer
+        double blockDispAccum; int blockLen, blockSign; final int BLOCK = 100;
+        // lifetimes
+        int[] lifeArr = new int[256]; int lifeN;
+
+        SingleHeadObs(int N, int steps, double dt) {
+            this.N = N; this.steps = steps; this.dt = dt; cx = new double[steps];
+            prevBound = new int[N]; java.util.Arrays.fill(prevBound, -1);
+            attachStart = new int[N]; java.util.Arrays.fill(attachStart, -1);
+            prevNuc = new int[N];
+        }
+        void addLife(int v) { if (lifeN == lifeArr.length) lifeArr = java.util.Arrays.copyOf(lifeArr, lifeN * 2); lifeArr[lifeN++] = v; }
+
+        void observe(int t, ExMat ed, Glide2D Gd, double[] bhat, int nSeg) {
+            DoubleArray r = ed.redOut; MotorStore mot = Gd.mot;
+            if (!finite6(r)) invalidStates++;
+            int nb = (int) r.get(0);
+            double com = r.get(1) * bhat[0] + r.get(2) * bhat[1] + r.get(3) * bhat[2];
+            double load = r.get(4) * 1e12;                       // N → pN (signed net axial load)
+            cx[t] = com; sumForce += load; if (Math.abs(load) > peakLoadPn) peakLoadPn = Math.abs(load);
+            double instV = t > 0 ? (cx[t] - cx[t - 1]) / dt : 0;
+            if (t > 0) { velInstMean += instV; velInstVar += instV * instV; if (instV < 0) fracMovingProd += 1;
+                blockDispAccum += (cx[t] - cx[t - 1]); blockLen++;
+                if (blockLen >= BLOCK) { int sgn = blockDispAccum < 0 ? -1 : (blockDispAccum > 0 ? 1 : 0);
+                    if (blockSign != 0 && sgn != 0 && sgn != blockSign) reversals++; if (sgn != 0) blockSign = sgn; blockDispAccum = 0; blockLen = 0; } }
+            boundHeadSum += nb; if (nb > 0) contHits++;
+            if (nb < minBound) minBound = nb; if (nb > maxBound) maxBound = nb;
+            for (int m = 0; m < N; m++) {
+                int cur = mot.boundSeg.get(m), prev = prevBound[m];
+                if (prev < 0 && cur >= 0) { bindEvents++; attachStart[m] = t; }
+                else if (prev >= 0 && cur < 0) { detachEvents++; if (attachStart[m] >= 0) { addLife(t - attachStart[m]); attachStart[m] = -1; } }
+                prevBound[m] = cur;
+                int nu = mot.nucleotideState.get(m); if (nu >= 0 && nu < 4) nucOcc[nu]++;
+                if (nucInit && nu != prevNuc[m]) { chemTransitions++; if (prevNuc[m] == MotorStore.NUC_NONE && nu == MotorStore.NUC_ATP) atpTurnover++; }
+                prevNuc[m] = nu;
+            }
+            nucInit = true; nucSteps++;
+        }
+
+        double lifetimeMean() { if (lifeN == 0) return 0; long s = 0; for (int i = 0; i < lifeN; i++) s += lifeArr[i]; return (double) s / lifeN; }
+        int lifetimePctl(double p) { if (lifeN == 0) return 0; int[] c = java.util.Arrays.copyOf(lifeArr, lifeN); java.util.Arrays.sort(c);
+            return c[(int) Math.min(lifeN - 1, Math.max(0, Math.round(p * (lifeN - 1))))]; }
+
+        void finish() {
+            velFullRun = ls(cx, 0, steps); velProd = -velFullRun;
+            velPostEquil = -ls(cx, steps / 2, steps);
+            int nInst = Math.max(1, steps - 1);
+            velInstMean /= nInst; velInstVar = velInstVar / nInst - velInstMean * velInstMean; fracMovingProd /= nInst;
+            for (int w = 0; w < 5; w++) windowVel[w] = -ls(cx, w * steps / 5, (w + 1) * steps / 5);
+            meanBoundHeads = (double) boundHeadSum / steps; continuity = (double) contHits / steps;
+            netForcePn = sumForce / steps;
+            if (minBound == Integer.MAX_VALUE) minBound = 0;
+        }
+        static double ls(double[] y, int lo, int hi, double dt) { int n = hi - lo; if (n < 2) return 0;
+            double sx = 0, sy = 0, sxx = 0, sxy = 0; for (int i = lo; i < hi; i++) { double x = i * dt; sx += x; sy += y[i]; sxx += x * x; sxy += x * y[i]; }
+            double den = n * sxx - sx * sx; return den == 0 ? 0 : (n * sxy - sx * sy) / den; }
+        double ls(double[] y, int lo, int hi) { return ls(y, lo, hi, dt); }
+
+        String toJson(int density, int seed, int steps, double dt, int N, int nSeg, int M, double beamL, double slack, double cullR,
+                      String rev, long startMs, long endMs, double wallS, String status, String err, double warmMs) {
+            StringBuilder b = new StringBuilder("{\n");
+            kv(b, "model", q("explicit-s2-l40")); kv(b, "density", density); kv(b, "seed", seed); kv(b, "steps", steps); kv(b, "dt", dt);
+            kv(b, "backend", q("gpu")); kv(b, "device_resident", true); kv(b, "device_validated", false);
+            kv(b, "heads", N); kv(b, "nSeg", nSeg); kv(b, "beam_nodes_M", M); kv(b, "beam_L_nm", beamL); kv(b, "slack_nm", slack);
+            kv(b, "mat_x_um", TwoBodyConverterMotor.G4_MATX); kv(b, "mat_y_um", TwoBodyConverterMotor.G4_MATY);
+            kv(b, "area_um2", TwoBodyConverterMotor.G4_MATX * TwoBodyConverterMotor.G4_MATY);
+            kv(b, "fil_contour_um", nSeg * (TwoBodyConverterMotor.G4_MONO + 1) * Constants.actinMonoRadius);
+            kv(b, "cullR_nm", cullR * 1e3); kv(b, "free_binding", true); kv(b, "occupancy_exclusion", false);
+            kv(b, "code_rev", q(rev)); kv(b, "start_ms", startMs); kv(b, "end_ms", endMs); kv(b, "wall_s", wallS);
+            kv(b, "warm_compile_ms", warmMs); kv(b, "status", q(status)); kv(b, "error", q(err));
+            kv(b, "steps_per_s", status.equals("ok") ? steps / wallS : 0.0);
+            // motion — velProd is the WHOLE-window LS estimator (matched to the dimer campaign)
+            kv(b, "vel_full_run", velFullRun); kv(b, "vel_prod", velProd); kv(b, "vel_postequil", velPostEquil);
+            kv(b, "total_axial_disp_um", cx[steps - 1] - cx[0]); kv(b, "productive_disp_um", -(cx[steps - 1] - cx[0]));
+            kv(b, "vel_inst_mean", velInstMean); kv(b, "vel_inst_var", velInstVar); kv(b, "frac_moving_prod", fracMovingProd); kv(b, "reversals", reversals);
+            b.append("  \"window_vel\": ").append(arr(windowVel)).append(",\n");
+            // binding
+            kv(b, "mean_bound_heads", meanBoundHeads); kv(b, "continuity", continuity);
+            kv(b, "bound_frac", N > 0 ? meanBoundHeads / N : 0.0); kv(b, "min_bound", minBound); kv(b, "max_bound", maxBound);
+            kv(b, "bind_events", bindEvents); kv(b, "detach_events", detachEvents);
+            kv(b, "lifetime_mean_steps", lifetimeMean()); kv(b, "lifetime_median_steps", lifetimePctl(0.5));
+            kv(b, "lifetime_p90_steps", lifetimePctl(0.90)); kv(b, "lifetime_p99_steps", lifetimePctl(0.99));
+            kv(b, "lifetime_mean_ms", lifetimeMean() * dt * 1e3);
+            // chemistry
+            double occDen = Math.max(1, nucSteps * (long) N);
+            kv(b, "nuc_occ_none", nucOcc[0] / occDen); kv(b, "nuc_occ_atp", nucOcc[1] / occDen);
+            kv(b, "nuc_occ_adppi", nucOcc[2] / occDen); kv(b, "nuc_occ_adp", nucOcc[3] / occDen);
+            kv(b, "chem_transitions", chemTransitions); kv(b, "atp_turnover", atpTurnover); kv(b, "catch_slip_detach", detachEvents);
+            // health
+            kv(b, "net_force_pn", netForcePn); kv(b, "peak_load_pn", peakLoadPn);
+            kv(b, "invalid_states", invalidStates); kv(b, "solver_failures", invalidStates);
+            // derived
+            kv(b, "vel_per_bound_head", meanBoundHeads > 0 ? velProd / meanBoundHeads : 0.0);
+            b.append("  \"note\": ").append(q("single-head explicit-s2-l40; velProd = whole-window LS slope of filament centroid·b̂ over all `steps` (equil=0, matched to the HMM-dimer campaign); vel_postequil = LS over the 2nd half (transient diagnostic). solver health on this device path is exposed only via redOut finiteness ⇒ solver_failures == invalid_states (no separate per-motor pivot/residual buffer crosses the bus in production residency). No two-head/branch/joint-gap fields (single head has no fork).")).append("\n}\n");
+            return b.toString();
+        }
+        static void kv(StringBuilder b, String k, double v) { b.append("  \"").append(k).append("\": ").append(fmt(v)).append(",\n"); }
+        static void kv(StringBuilder b, String k, long v) { b.append("  \"").append(k).append("\": ").append(v).append(",\n"); }
+        static void kv(StringBuilder b, String k, boolean v) { b.append("  \"").append(k).append("\": ").append(v).append(",\n"); }
+        static void kv(StringBuilder b, String k, String vq) { b.append("  \"").append(k).append("\": ").append(vq).append(",\n"); }
+        static String q(String s) { return "\"" + (s == null ? "" : s.replace("\\", "\\\\").replace("\"", "'")) + "\""; }
+        static String fmt(double v) { if (Double.isNaN(v) || Double.isInfinite(v)) return "null"; return String.format(Locale.US, "%.6g", v); }
+        static String arr(double[] a) { StringBuilder s = new StringBuilder("["); for (int i = 0; i < a.length; i++) { if (i > 0) s.append(", "); s.append(fmt(a[i])); } return s.append("]").toString(); }
+    }
 }
