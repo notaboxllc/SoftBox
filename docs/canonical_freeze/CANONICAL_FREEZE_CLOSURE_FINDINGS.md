@@ -69,13 +69,20 @@ CALIBRATED BY CONSTRAINT. **Not reopened** (the 0.03 calibration evidence stands
 **YES** — both CONDITIONALLY FROZEN — MD/LITERATURE CONSTRAINED (AMK-2008). Not reopened.
 
 ### 6. Is exposed S2 length frozen, conditionally frozen, or still open?
-**CONDITIONALLY FROZEN** (Gate A): canonical reference L = 40 nm; the 40–60 nm exposed-length geometry is
-bounded, mechanically characterized, and L-robust in every biological conclusion; L60 retained as an optional
-§6.2 structural sensitivity, not a blocker.
+**CONDITIONALLY FROZEN — GEOMETRY:** canonical reference L = 40 nm; bounded 40–60 nm exposed-contour + boundary
+uncertainty; declared-sensitivity variation only. The **beam / single-molecule** conclusions are *demonstrated*
+L-robust (contour, stiffness scaling, buckling, stroke, tension/compression asymmetry). The **ensemble-gliding**
+conclusions were **directly tested by the completed L60 sweep (2026-07-23) — Outcome 1 (quantitative rescaling
+only)**: saturation, modest Vmax (+2.6 % single-head), recruitment, and near-hyperbolic response are
+**demonstrated** robust; a modest ρ½ +20 % right-shift (mechanical accessibility) is demonstrated; the dimer
+slowdown and dimer/single ratio are **supported** (dimer arm noise-limited); the cooperativity interpretation is
+robust (`L40_VS_L60_GLIDING_COMPARISON.md`). L60 is a declared alternative boundary-condition sensitivity, **not**
+a competing tuned baseline; L40 stays canonical (`S2_LENGTH_FREEZE_DECISION.md`).
 
 ### 7. What exact parameters remain open before cooperativity analysis?
 A short **geometry / numerical** list — no chemistry:
-- **Exposed S2 contour length + surface boundary** (40–60 nm; material frozen; L-robust; optional L60 sweep).
+- **Exposed S2 contour length + surface boundary** (40–60 nm; material frozen; canonical L40; the L60 gliding
+  sensitivity is DONE — Outcome 1, robust; a tighter dimer L60 Vmax/ρ½ is an optional follow-up).
 - **HMM branch/fork geometry** (branchLen, SPLAY, ALPHA, BREI) — coarse sensitivity confirms dimer conclusions.
 - **Anchor / motor compliance** (kconv, kbind; fixed vs compliant) — the §6.2 compliance panel.
 - **Surface height / gap** (small gap sweep folded into §6.1).

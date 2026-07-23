@@ -87,7 +87,10 @@ public final class ExplicitHmmDimerGlidingHarness {
     // GPU-backend selector (task §1). Default CPU (the permanent oracle); gpu refused until DEVICE_VALIDATED.
     static ExplicitHmmDimerGpuParams.Backend BACKEND = ExplicitHmmDimerGpuParams.Backend.CPU;
     static Dimer buildRefDimer() {
-        return ExplicitHmmDimer.build(3, 1, 1, SPLAY, DT, ALPHA, BREI * CFG_EI, BREA * CFG_EA, BRANCHLEN, CFG_FORK);
+        // Ms derived from the (canonical or L60-sensitivity) total contour: shared = TOTAL_NM - branch; Ms = shared/10.
+        // L40 ⇒ Ms=3 (byte-identical); L60 ⇒ Ms=5 (declared CPU structural sensitivity). EA/EI (CFG_EA/CFG_EI) unchanged.
+        int ms = Math.max(1, (int) Math.round((ExplicitHmmDimer.TOTAL_NM - BRANCHLEN) / ExplicitHmmDimer.L0_NM));
+        return ExplicitHmmDimer.build(ms, 1, 1, SPLAY, DT, ALPHA, BREI * CFG_EI, BREA * CFG_EA, BRANCHLEN, CFG_FORK);
     }
     static final double SEGLEN = (64 + 1) * Constants.actinMonoRadius;             // ≈0.176 µm per actin segment
     static final String[] NUC = { "NONE", "ATP", "ADPPi", "ADP" };
@@ -634,6 +637,14 @@ public final class ExplicitHmmDimerGlidingHarness {
         int seeds = (int) argD(args, "-seeds", 8);
         int steps = (int) argD(args, "-steps", 12000);
         int nDim  = (int) argD(args, "-ndim", 8);
+        // Exposed S2 total contour (E→pivot). CANONICAL = 40 nm (explicit-hmm-dimer-l40, Ms=3). -L 60 selects the
+        // DECLARED L60 CPU structural sensitivity (Ms=5); SAME EA/EI, only the exposed length changes. GPU refuses it.
+        ExplicitHmmDimer.TOTAL_NM = argD(args, "-L", argD(args, "-totalNm", 40.0));
+        if (Math.abs(ExplicitHmmDimer.TOTAL_NM - 40.0) > 1e-9) {
+            int msSens = Math.max(1, (int) Math.round((ExplicitHmmDimer.TOTAL_NM - BRANCHLEN) / ExplicitHmmDimer.L0_NM));
+            System.out.printf(Locale.US, "  *** DECLARED L%.0f STRUCTURAL SENSITIVITY (explicit-hmm-dimer-l%.0f): total contour %.0f nm ⇒ Ms=%d, NF=%d, NDOF=%d — CPU-only (GPU kernel is Ms=3-specialized); EA/EI unchanged; L40 stays canonical ***%n",
+                    ExplicitHmmDimer.TOTAL_NM, ExplicitHmmDimer.TOTAL_NM, ExplicitHmmDimer.TOTAL_NM, msSens, msSens + 2, 3 * (msSens + 2) + 4);
+        }
         double spacing = argD(args, "-spacing", 40);
         double gap = argD(args, "-gap", 8);
         int assay = has(args, "-assayB") ? 1 : 0;

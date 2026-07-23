@@ -27,8 +27,8 @@ Canonical schema version **2** (`MotorModel.CANON_VERSION = 2`).
 > fallback; CPU supplemental. **(B) branchEA = 0.03** confirmed from run metadata (the "0.3" recollection was a
 > rejected candidate); split default eliminated; NUMERICAL COMPLIANCE — CALIBRATED BY CONSTRAINT. **(C) S2 EA and
 > EI are BOTH MD/LITERATURE CONSTRAINED** (AMK-2008; EI not open/unknown). **(D)** the S2 exposed length is
-> **CONDITIONALLY FROZEN at L40 (Gate A)**, material frozen; optional L60 gliding sweep is a §6.2 structural
-> sensitivity, not required. **(E) Rigor-only rupture (mode 1) PROMOTED to the canonical production default ON**
+> **CONDITIONALLY FROZEN at L40**, material frozen; the L60 gliding sensitivity is DONE (2026-07-23, Outcome 1 —
+> robust; supporting §6.2 result, L40 stays canonical). **(E) Rigor-only rupture (mode 1) PROMOTED to the canonical production default ON**
 > (canon v2): the ATP-free ADP protocol restored the ADP > rigor ordering (1.17×, peak 32.6 ms / 6.7 pN) with the
 > frozen params, so the double-counting guard is satisfied without recalibration; `-no-rupture` is the
 > byte-identical legacy-disable. Details in the closure companions + `MODEL_FREEZE_DECISION.md`.
@@ -262,7 +262,7 @@ against live `TwoBodyConverterMotor.EXP4G_*` (`:6263-6272`) by `assertFrozenPara
 | `Rnode` (beam-node drag radius) | 5 | nm | `:6267` | lumps a 10 nm segment; stability | E | FROZEN — NUMERICAL |
 | **`L` (explicit/exposed S2 length)** | **40** | nm | `:6270` (built {10,20,40,60}) | free-S2 CONTOUR length; canonical reference geometry (Gate A); a surface **boundary-condition/geometry** choice (material frozen); L-robust mechanics | F | **CONDITIONALLY FROZEN — GEOMETRY** (canonical L40; §E) |
 | `M` (segments at L40) | 4 (⇒ 5 nodes) | — | `MotorModel.java:318` | L/l0 | E | derived |
-| `k_ax = EA/L` @L40 | 105 | pN/nm | `MotorModel.java:321` | derived | — | inherits L |
+| `k_ax = EA/L` @L40 | 105 | pN/nm | `MotorModel.java:321` | derived | — | derived at canonical L40 (= EA/L; L60 ⇒ 70 pN/nm, declared sensitivity) |
 | `Lp = EI/kT` | 175 | nm | `MotorModel.java:322` | derived | — | inherits EI |
 | per-segment `ks = EA/l0` | 420 | pN/nm | `:6261,6303` | derived | — | — |
 
@@ -287,10 +287,15 @@ EA **and EI** are MD/literature-constrained (Adamovic 2008; kLatRef=0.01 is dead
 — `S2_MD_PROVENANCE_CORRECTION.md`), so the **material stiffness is not open**. What remains is the **exposed
 contour length + surface emergence boundary condition**: L∈{10,20,40,60} were built, and the **L40≠L60 caveat**
 (bending compliance softens the effective axial reaction ~2× below `ks/M`) means the choice of exposed length is
-a bounded geometry question. **L = 40 nm is the canonical reference geometry** and every main biological
-conclusion is L-robust across 40–60 nm (stroke L-robust; MD scaling; `S2_LENGTH_FREEZE_DECISION.md` — Gate A).
-**No new run is required;** an L60 gliding density sweep is retained as an **optional §6.2 structural
-sensitivity**, not a freeze blocker — no material-stiffness study (`OPEN_BIOPHYSICAL_PARAMETERS.md` §1).
+a bounded geometry question. **L = 40 nm is the canonical reference geometry** (conditionally frozen — geometry;
+declared-sensitivity variation only). The **beam / single-molecule** conclusions are *demonstrated* L-robust
+(contour, stiffness scaling, buckling, stroke, tension/compression asymmetry); the **ensemble-gliding**
+conclusions were **directly tested by the completed L60 sweep (2026-07-23) — Outcome 1 (quantitative rescaling
+only)**: saturation, modest Vmax (+2.6 % single-head), recruitment, near-hyperbolic response = **demonstrated**
+robust; ρ½ +20 % right-shift (mechanical accessibility) demonstrated; dimer slowdown + dimer/single ratio =
+**supported** (dimer arm noise-limited) (`S2_LENGTH_FREEZE_DECISION.md`, `L40_VS_L60_GLIDING_COMPARISON.md`). L60
+is a declared alternative boundary-condition sensitivity, not a competing tuned baseline; no material-stiffness study
+(`OPEN_BIOPHYSICAL_PARAMETERS.md` §1).
 
 ---
 
@@ -301,7 +306,7 @@ sensitivity**, not a freeze blocker — no material-stiffness study (`OPEN_BIOPH
 
 | param | value | units | code | provenance | class | freeze |
 |---|---|---|---|---|---|---|
-| TOTAL contour (E→pivot) | 40 | nm | `ExplicitHmmDimer.java:54` | = the L40 S2 length | B/F | inherits L (OPEN) |
+| TOTAL contour (E→pivot) | 40 | nm | `ExplicitHmmDimer.java:54` | = the L40 S2 length | B/F | inherits the canonical L40 geometry; L60 available as a declared structural sensitivity |
 | branchLen | 10 | nm | `ExplicitHmmDimerGlidingHarness.java:75,79` | fork-relaxation study; no citation | F | OPEN — BIOPHYSICAL |
 | sharedLen | 30 | nm | `ExplicitHmmDimer.java:142` | TOTAL − branchLen | — | derived |
 | SPLAY (branch splay half) | 16 | deg | `:75,78` | geometry; no citation | F | OPEN — BIOPHYSICAL |

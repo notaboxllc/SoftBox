@@ -46,8 +46,9 @@ Four closures revise the audit-rev-2 draft. Full evidence in the closure compani
 **Four-way final status distinction (the audit's required output shape):**
 - **Frozen material constants:** chemistry (7 LT rates + 5 catch-slip + kT), rigor-rupture params, S2 EA + EI,
   FDT drag, working stroke (PINNED).
-- **Open geometry / boundary conditions:** exposed S2 contour length + emergence boundary (40–60 nm), HMM
-  branch/fork geometry, anchor compliance, surface height.
+- **Bounded geometry / boundary conditions (CONDITIONALLY FROZEN — GEOMETRY; declared-sensitivity variation
+  only):** exposed S2 contour length (canonical L40; bounded 40–60 nm), HMM branch/fork geometry, anchor
+  compliance, surface height. These are the paper's §6 declared perturbation targets, not open freeze holes.
 - **Numerical compliance chosen by constraint:** branchEA = 0.03 (inextensible fork branch; stability/geometry),
   the cross-bridge dt sub-step (OPEN — NUMERICAL), integrator/RNG/precision.
 - **Production-path governance:** GPU is the normal canonical path via a per-assay-class gate
@@ -132,17 +133,18 @@ constrained by emergent gliding** (velocity non-monotonic, peaked at 1.0; avgBou
 softening/stiffening it to hit a gliding number is forbidden. **Any change is a structural mechanics study and
 must rerun the step-size and force-clamp single-molecule validations.**
 
-### 4. Is the 40 nm S2 region justified or still open? *(closed — Gate A, Part D)*
+### 4. Is the 40 nm S2 region justified or still open? *(CONDITIONALLY FROZEN at L40; L60 tested — Outcome 1)*
 **The S2 MATERIAL is frozen (MD-anchored); the EXPOSED LENGTH is CONDITIONALLY FROZEN at L40.** EA **and EI**
 are both `CONDITIONALLY FROZEN — MD/LITERATURE CONSTRAINED` (Adamovic–Mijailovich–Karplus 2008: axial 70 pN/nm
 mid-band, lateral 0.01 pN/nm dead-center, Lp≈175 nm in-band) — **EI is not unknown**
 (`S2_MD_PROVENANCE_CORRECTION.md`). The length L∈{10,20,40,60} was built and characterized; **stroke is L-robust,
-axial/bending/buckling scale exactly as MD predicts, and every main biological conclusion is L-robust across
-40–60 nm** (`S2_LENGTH_FREEZE_DECISION.md` — Gate A). **L = 40 nm is the canonical reference geometry** (a
-partially-supported gliding surface); the free/exposed contour length + surface emergence boundary (40–60 nm) is
-a bounded **geometry** question, conditionally frozen. **No new run is required;** L60 is retained as an
-**optional** §6.2 structural sensitivity — the single L60 gliding density sweep (to reconfirm ensemble Vmax/ρ½
-robustness); no material-stiffness study is needed.
+axial/bending/buckling scale exactly as MD predicts** at the beam/single-molecule level. **L = 40 nm is the
+canonical reference geometry** (a partially-supported gliding surface); the free/exposed contour length + surface
+emergence boundary (40–60 nm) is a bounded **geometry** question, conditionally frozen, declared-sensitivity
+variation only. **The L60 ensemble gliding sensitivity is COMPLETE (2026-07-23; single-head GPU full grid + dimer
+reduced CPU) — Outcome 1 (quantitative rescaling only): the gliding phenotype is robust to exposed S2 length**
+(modest Vmax +2.6 %, ρ½ +20 % via mechanical accessibility, saturation + dimer-slowdown preserved;
+`L40_VS_L60_GLIDING_COMPARISON.md`). No material-stiffness study is needed; L40 stays canonical.
 
 ### 5. Is the binding gate sufficiently closed?
 **YES.** The completed sensitivity study (`docs/matsoa/EXPLICIT_BINDING_RESOLUTION_FINDINGS.md`,
@@ -179,27 +181,34 @@ frozen at L40), and the GPU production gate: **(1)** exposed S2 contour length +
 item: the **cross-bridge dt sub-step** (≤12% binding under-sampling residual; affects absolute Vmax, not the
 qualitative saturation). **No chemistry, no release-model, and no GPU-governance items remain open.**
 
-### 9. What minimum experiments would close them?
-- **S2 length/stiffness (1,2):** a bounded L∈{20,40,60} sweep with per-length re-fit + an EI bracket; confirm
-  the cooperativity conclusions are robust or bracket them. (Folds into §6.2 of the paper.)
-- **Branch geometry (3):** a coarse branchLen/SPLAY sensitivity confirming the dimer conclusions.
-- **branchEA (4):** a governance decision + a regression asserting CPU and GPU configs agree — not a sweep.
-- **Compliance (5):** the already-planned §6.2 compliance panel (S2/lever/anchor stiffness).
-- **Surface (6):** a small gap sweep folded into §6.1.
-- **dt sub-step:** implement the cross-bridge sub-step and confirm dt/2 convergence.
-- **GPU:** DONE at closure — per-assay-class gate; the validated gliding class runs production without override;
-  the `runG4d` aggregate-equivalence suite is preserved for future kernel changes.
-- **Rigor-rupture promotion:** DONE at closure (canon v2) — the `RIGOR_RUPTURE_PROMOTION_REGRESSION` passed
-  (rigor + ATP-free ADP recovery with the ADP arm held at frozen values; gliding negligible; SM6 byte-identity;
-  legacy-disable byte-identical; 0 invalid). Rigor-only rupture is now the canonical default ON.
+### 9. What remaining paper-stage studies are left?
+These are **causal / robustness studies for the cooperativity paper's §6, NOT prerequisites for the frozen
+chemical core** — the chemistry, force-dependent release (rigor rupture default ON), binding gate, crossbridge
+stiffness, branchEA, EA/EI, and GPU governance are all closed at canon v2. What remains varies only OPEN
+structural/numerical parameters:
+1. **L60 exposed-S2 gliding sensitivity — DONE (2026-07-23; Outcome 1).** The declared sensitivity vs the frozen
+   L40 baseline (single-head GPU full grid + dimer reduced CPU) found the gliding phenotype **robust to exposed S2
+   length** — modest Vmax (+2.6 % single-head), ρ½ +20 % (mechanical accessibility), saturation + dimer-slowdown
+   preserved (`L40_VS_L60_GLIDING_COMPARISON.md`). L40 stays canonical; L60 is a supporting §6.2 sensitivity
+   result. (A tighter dimer L60 Vmax/ρ½ — substep / NDOF=25 GPU kernel + more seeds — is an optional follow-up.)
+2. **HMM branch/fork geometry sensitivity** — a coarse branchLen/SPLAY sweep confirming the dimer conclusions.
+3. **Converter / binding / anchor compliance panel** — the §6.2 compliance perturbations (S2 / lever / anchor
+   stiffness).
+4. **Surface height / gap bracket** — a small gap sweep folded into §6.1.
+5. **Cross-bridge substep convergence** — implement the sub-step and confirm dt/2 convergence (the one open
+   numerical item; affects absolute Vmax, not the qualitative saturation).
+
+None of these reopens the frozen core; each is a declared perturbation of an OPEN structural/numerical parameter.
+(EI, branchEA, GPU promotion, and rigor-rupture promotion are all **resolved** at canon v2 — not listed here.)
 
 ### 10. Can the current model be declared version 2 canonical?
 **YES — for the frozen core, now.** The chemistry, the force-dependent release model (rigor rupture now the
 canonical default ON), the binding gate, the numerics/methodology, the density conventions, the
 calibrated-surrogate registry, the GPU production governance, and branchEA (`MotorModel.CANON_VERSION=2`) are
-frozen and validated. **Declare CANONICAL v2** for this core. The **structural layer is v2-provisional** on the
-short open list above (S2 exposed length, branch/anchor geometry, surface gap, the dt-substep) — all
-structural/numerical, none chemistry. Those are exactly the cooperativity paper's §6 causal-perturbation targets:
+frozen and validated. **Declare CANONICAL v2** for this core. The **structural layer carries a short list of
+declared §6 sensitivity studies** (the exposed S2 length — conditionally frozen at L40, branch/anchor geometry,
+surface gap, the dt-substep) — all structural/numerical, none chemistry. Those are exactly the cooperativity
+paper's §6 causal-perturbation targets:
 the paper turns the open list into a result, not a liability. The cooperativity analysis can proceed on the
 frozen core **provided the firewall holds**: the §6 perturbations vary only OPEN structural/numerical parameters
 and never touch the frozen chemistry to chase a curve.
@@ -214,12 +223,12 @@ and never touch the frozen chemistry to chase a curve.
 | Force-dependent release | **FROZEN**; rigor-rupture params frozen, pathway **PROMOTED to canonical default ON (canon v2)**; `-no-rupture` = byte-identical legacy; all-strong-bound OPTIONAL |
 | Cross-bridge stiffness | **CONDITIONALLY FROZEN — generic but accepted** |
 | S2 material (EA + EI) | **CONDITIONALLY FROZEN — MD/LITERATURE CONSTRAINED** (AMK-2008; EI not unknown) |
-| S2 exposed length / boundary | **OPEN — GEOMETRY** (40–60 nm; beam-level robustness established; optional L60 gliding) |
+| S2 exposed length / boundary | **CONDITIONALLY FROZEN — GEOMETRY** (canonical value L40; bounded exposed-contour + surface-boundary uncertainty 40–60 nm; declared-sensitivity variation only; L60 is a declared alternative boundary-condition sensitivity, not a competing tuned baseline) |
 | branchEA | **NUMERICAL COMPLIANCE — CALIBRATED BY CONSTRAINT = 0.03** (confirmed from run metadata; split eliminated) |
 | Binding gate | **Sufficiently closed** (conditionally frozen) |
 | Single-head ≡ dimer chemistry | **YES** (bit-identical) |
 | Production path | **GPU normal canonical path via per-assay-class validation** (no override for the validated gliding class; unvalidated classes hard-fail; no silent fallback); CPU supplemental |
-| v2 canonical? | **YES for the frozen core** (canon v2); open items reduced to S2 exposed-length + branch/anchor geometry + dt-substep (all structural/numerical) |
+| v2 canonical? | **YES for the frozen core** (canon v2); remaining §6 sensitivity studies = S2 exposed-length (conditionally frozen at L40) + branch/anchor geometry + dt-substep (all structural/numerical) |
 
 **Desired outcome achieved:** freeze what is genuinely constrained (chemistry, release model, binding gate,
 numerics), isolate a very small set of defensible structural questions (chiefly the explicit S2 length), and

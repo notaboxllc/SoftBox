@@ -1,5 +1,12 @@
 # S2 LENGTH — EXISTING EVIDENCE INVENTORY
 
+> **SUPERSEDED for the ensemble question (2026-07-23):** this doc's "only an optional L60 gliding sweep remains"
+> recommendation is closed — the L60 gliding sensitivity sweep was RUN (single-head GPU full grid + dimer reduced
+> CPU). Result: **Outcome 1 (quantitative rescaling only) — robust to exposed S2 length.** See
+> `S2_LENGTH_FREEZE_DECISION.md` and `L40_VS_L60_GLIDING_COMPARISON.md`. The beam/single-molecule inventory below
+> stands as the pre-sweep evidence.
+
+
 **Part E of the freeze-audit finalization.** Inventories the completed short studies that already vary the S2
 length L ∈ {10, 20, 40, 60} nm, decides whether qualitative robustness is already established, and reframes the
 remaining open question as the **free/exposed S2 contour length + surface boundary condition** — **not** the S2

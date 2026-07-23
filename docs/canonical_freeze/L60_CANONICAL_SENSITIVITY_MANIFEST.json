@@ -1,0 +1,42 @@
+{
+  "schema": "softbox-l60-structural-sensitivity-manifest",
+  "kind": "declared_structural_sensitivity",
+  "NOT_canonical": "L40 remains the canonical reference geometry (CANONICAL_PARAMETER_MANIFEST.json); this is a named alternative-boundary-condition sensitivity config, NOT canonical v3. It never replaces the L40 baseline.",
+  "canonicalVersion_of_frozen_core": 2,
+  "date": "2026-07-23",
+  "rev": "0f92494",
+  "purpose": "Test whether changing ONLY the exposed S2 contour length 40 -> 60 nm materially changes the gliding phenotype or its interpretation. Not a tuning exercise.",
+  "models": {
+    "explicit-s2-l60": {
+      "arch": "single-head", "exposed_s2_nm": 60, "beam_segments_M": 6, "runner": "GPU device-resident (buildGlidingGraph)",
+      "select": "ExplicitCompleteMatHarness -production-cell -L 60", "surrogate": "none (production uses the explicit beam; calibrated-s2-l40 NOT touched)"
+    },
+    "explicit-hmm-dimer-l60": {
+      "arch": "HMM dimer", "exposed_s2_nm": 60, "shared_Ms": 5, "NF": 7, "NDOF": 25, "runner": "CPU object solver (ExplicitHmmDimer.solve, dimension-generic)",
+      "select": "ExplicitHmmDimerGlidingHarness -matsmoke -L 60", "gpu_status": "REFUSED — the forked-dimer GPU kernel is compile-time specialized to (3,1,1)/NDOF=19; L60 (Ms=5/NDOF=25) is a new un-validated kernel. CPU-only by governance."
+    }
+  },
+  "unchanged_from_canonical_L40": {
+    "S2_EA_si": 4.2e-9, "S2_EI_si": 7.2e-28, "material_provenance": "AMK-2008 MD/literature (NOT altered)",
+    "chemistry": "7 Lymn-Taylor rates + 5 catch-slip + kT (frozen)", "rigor_rupture_mode": 1,
+    "crossbridge_stiffness_pN_nm": 1.0, "branchEA": 0.03, "binding_gate": "canonical (25/25/20 deg, 2 pN preload, machine-eps in-segment)",
+    "surface_geometry": "canonical", "atp_condition": "saturating", "dt_s": 2.5e-6,
+    "density_convention": "single-head heads/um2; dimer dimers/um2 (not doubled)",
+    "velocity_estimator": "whole-window LS slope of filament centroid.bhat (equil=0)",
+    "filament_segments": {"single_head": 12, "dimer": 11}, "rng": "counter-based Wang hash"
+  },
+  "only_L_derived_changes": {
+    "L_nm": 60, "M_singlehead": 6, "Ms_dimer": 5,
+    "k_ax_pN_nm": 70.0, "k_ax_L40": 105.0, "note_k_ax": "= EA/L (1/L scaling); NOT obtained by editing the L40 surrogate axial stiffness",
+    "euler_buckle_pN": 2.0, "euler_buckle_L40": 4.4, "kComp_pN_nm": 0.684, "kComp_L40": 105.0,
+    "kTrans_pN_nm": 0.052, "kTrans_L40": 0.167, "stroke_nm": 7.26, "stroke_L40": 7.27, "total_HMM_contour_nm": 60
+  },
+  "preflight": {"status": "PASS", "doc": "L60_S2_MECHANICAL_PREFLIGHT.md", "contour_drift_nm": 0.01, "L40_byte_identity": "confirmed (velProd +6.5604, meanBoundHeads 4.898 reproduced exactly)"},
+  "sweep": {
+    "single_head_L60": {"grid": "13 densities {100..3000} x 4 seeds {101-104}", "steps": 40000, "outdir": "RUN_LOGS/l60_sensitivity/single_head_l60"},
+    "single_head_L40_ctrl": {"grid": "4 densities x 2 seeds (rigor-mode-1 bracket vs frozen mode-0 baseline)", "steps": 40000, "outdir": "RUN_LOGS/l60_sensitivity/single_head_l40_ctrl"},
+    "dimer_reduced": {"grid": "4 densities {150,400,700,1500} x 2 seeds x {L40,L60}", "steps": 10000, "runner": "CPU", "outdir": "RUN_LOGS/l60_sensitivity/dimer_cpu"}
+  },
+  "l40_reference": "RUN_LOGS/single_head_density_sweep_long (frozen mode-0 40k GPU baseline) + the paired mode-1 controls; the L40 canonical baseline is NOT re-run/replaced",
+  "hard_constraints_honored": ["no chemistry change", "no force-law change", "no binding-gate change", "no branchEA change", "no EA/EI change", "no surface-height change", "no retuning of L60 to match L40", "no replacement of L40 as canonical", "no silent fallback (dimer CPU is explicit + disclosed)"]
+}

@@ -112,16 +112,24 @@ z-confined boundary condition, whole-window estimator: FROZEN conventions/method
 | ATP-scaling mechanism (pseudo-first-order) | — | a declared model interface; the default ATP condition per assay is frozen with its assay. |
 | deterministic geometric bind gate; bindP[1..8] angular/preload/energy/steric | 25/25/20°, 2 pN, 15 kT, 3 nm, 2.25 nm | heuristics ("NOT tuned to a canonical rate"), but the **completed sensitivity study** shows the angular gates in a ±7 % flat plateau, distance a no-op, preload at its recruitment optimum. CONDITIONALLY FROZEN — sufficiently closed; the §6.1 perturbation is a declared study. |
 
-## G. OPEN — GEOMETRY / BOUNDARY (the short pre-freeze list — see `OPEN_BIOPHYSICAL_PARAMETERS.md`)
+## G. BOUNDED GEOMETRY / BOUNDARY — CONDITIONALLY FROZEN — GEOMETRY (declared-sensitivity variation only; see `OPEN_BIOPHYSICAL_PARAMETERS.md`)
 
 *(EI and branchEA were removed from this list in audit rev 2 — EI is MD-constrained/frozen (§F); branchEA is
-resolved to 0.03 (§F). S2 is now the exposed-length/boundary question, not a material question.)*
+resolved to 0.03 (§F). S2 is the exposed-length/boundary question, not a material question. These are bounded
+geometry uncertainties, conditionally frozen at their canonical values and varied only as declared §6
+sensitivity studies — not open freeze holes.)*
 
-- **Exposed/free S2 contour length + surface boundary condition (40–60 nm) — CONDITIONALLY FROZEN at L40
-  (Gate A).** The S2 *material* is frozen; what remains is how much S2 is exposed above the coverslip (L40
-  partially-supported vs L60 exposed). **L = 40 nm is the canonical reference geometry** and every main
-  biological conclusion is L-robust across 40–60 nm (stroke L-robust; MD scaling; `S2_LENGTH_FREEZE_DECISION.md`).
-  **No new run required;** an L60 gliding sweep is an **optional §6.2 structural sensitivity**. A geometry
+- **Exposed/free S2 contour length + surface boundary condition — CONDITIONALLY FROZEN — GEOMETRY, canonical
+  value L40.** The S2 *material* (EA+EI) is frozen; the bounded uncertainty is how much S2 is exposed above the
+  coverslip (L40 partially-supported vs L60 exposed, 40–60 nm). **L = 40 nm is the canonical reference geometry;**
+  permitted variation is **declared structural sensitivity only** (changing L to improve gliding agreement and
+  then silently replacing the canonical baseline is NOT permitted). **Demonstrated L-robust across L**
+  (beam/single-molecule): contour conservation, numerical stability, axial/bending/buckling scaling, working
+  stroke, tension/compression asymmetry. **Ensemble tested by the completed L60 sweep (2026-07-23) — Outcome 1
+  (quantitative rescaling only):** hyperbolic saturation, modest Vmax (+2.6 % single-head), recruitment beyond
+  saturation, near-hyperbolic (n≈1) = **DEMONSTRATED** robust; ρ½ +20 % right-shift (mechanical accessibility)
+  demonstrated; dimer slowdown + dimer/single ratio = **SUPPORTED** (dimer arm noise-limited)
+  (`L40_VS_L60_GLIDING_COMPARISON.md`). L40 stays canonical; L60 is a supporting §6.2 sensitivity. A geometry
   question, not a stiffness question.
 - **HMM branch/fork geometry** (branchLen 10, SPLAY 16°, ALPHA 10°, BREI 0.25) — fork-relaxation choices, no
   citation.

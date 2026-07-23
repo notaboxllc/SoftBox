@@ -97,7 +97,7 @@ public final class TwoBodyBeamAnalyticGpu {
             double l0m = l0um * 1e-6, aN = gNode / dt, aphi = gPhi / dt, apsi = gPsi / dt;
             double f8x = F8h.get(m), f8y = F8h.get(nM + m), f8z = F8h.get(2 * nM + m);
             double phi = q.get(m), psi = q.get(nM + m), thetaS = q.get(2 * nM + m), psiActin = q.get(3 * nM + m);
-            int base = m * SYS_STRIDE;
+            int base = m * (n * W);   // per-item scratch = n*(n+1), M-generic (=210 at M=4 [L40], =420 at M=6 [L60])
             int st = 0, itDone = maxIt;
 
             for (int it = 0; it < maxIt; it++) {
@@ -520,7 +520,7 @@ public final class TwoBodyBeamAnalyticGpu {
             int bs = boundSeg.get(m); boolean bnd = bs >= 0; int dB = m * STRIDE;
             double f8x = bnd ? bondData.get(dB) : 0.0, f8y = bnd ? bondData.get(dB + 1) : 0.0, f8z = bnd ? bondData.get(dB + 2) : 0.0;
             double phi = q.get(m), psi = q.get(nM + m), thetaS = q.get(2 * nM + m), psiActin = q.get(3 * nM + m);
-            int base = m * SYS_STRIDE;
+            int base = m * (n * W);   // per-item scratch = n*(n+1), M-generic (=210 at M=4 [L40], =420 at M=6 [L60])
             int st = 0, itDone = maxIt;
             for (int it = 0; it < maxIt; it++) {
                 for (int i = 0; i < n; i++) for (int j = 0; j < W; j++) sys.set(base + i * W + j, 0.0);

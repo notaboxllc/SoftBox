@@ -14,3 +14,7 @@ hs_err_pid*.log
 scratch_*/
 threejs_hmm_dimer*/
 threejs_hmm_dimer_*/
+
+# Blind-study unblind key/comparison — NEVER commit (analyst must not receive these)
+UNBLIND_KEY_DO_NOT_GIVE_ANALYST.json
+unblind_comparison.txt

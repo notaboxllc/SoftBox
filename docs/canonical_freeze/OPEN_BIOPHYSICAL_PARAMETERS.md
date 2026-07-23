@@ -22,22 +22,27 @@ completed validations that must rerun if changed.
 
 ---
 
-## 1. Exposed/free S2 contour length + surface boundary condition (40–60 nm) — FLAGSHIP (reframed)
+## 1. Exposed/free S2 contour length + surface boundary condition — FLAGSHIP (CONDITIONALLY FROZEN — GEOMETRY, L40)
 
-- **Why open.** The S2 **material is frozen** (EA + EI MD-constrained). What is uncertain is **how much of the
-  ~60 nm S2 is exposed above the coverslip** vs adsorbed/supported — the free contour length and the emergence
-  boundary condition. L∈{10,20,40,60} were built (`EXP4G_L_NM`); 40 nm is the standing config (partially-
-  supported gliding), 60 nm the exposed-tail limit. Because bending compliance grows with L, the effective axial
-  reaction cannot be 1/L-scaled between L40 and L60 (**L40≠L60**), so the *choice of exposed length* is a real
-  boundary-condition unknown even though the material is fixed.
+- **Canonical value L40; conditionally frozen — geometry.** The S2 **material is frozen** (EA + EI MD-constrained).
+  The bounded uncertainty is **how much of the ~60 nm S2 is exposed above the coverslip** vs adsorbed/supported —
+  the free contour length and the emergence boundary condition (40–60 nm). L∈{10,20,40,60} were built
+  (`EXP4G_L_NM`); L40 is the canonical partially-supported reference, L60 the exposed-tail limit. Because bending
+  compliance grows with L, the effective axial reaction cannot be 1/L-scaled between L40 and L60 (**L40≠L60**),
+  so the exposed length is a real boundary-condition choice even though the material is fixed. **Permitted
+  variation = declared structural sensitivity only** (never retune L to a gliding target and silently swap the
+  baseline).
 - **Plausible range + basis.** 40–60 nm exposed (the full S2 is ~60 nm; a surface assay adsorbs some fraction).
   A geometry choice on the same MD-characterized molecule.
 - **Observables expected to change.** `k_ax=EA/L` (105 pN/nm at L40 → 70 at L60); Euler buckling F_crit (4.4 →
   2.0 pN); the load-bearing-vs-bending head fraction (explicit ≈67% taut at L40); gliding Vmax (amplitude).
-- **Robustness already established (Part E).** Stroke is L-robust; axial/bending/buckling scale exactly as MD
-  predicts; contour conserved; the decoupling holds for L≥40. **Minimum remaining experiment = one OPTIONAL L60
-  gliding density sweep** (ensemble Vmax/ρ½ robustness to exposed length); the beam-level and material-level
-  robustness needs no new runs. Do NOT run a material-stiffness study.
+- **Evidence split (L60 sweep COMPLETE 2026-07-23 — Outcome 1).** *Demonstrated across L* (beam/single-molecule):
+  stroke L-robust; axial/bending/buckling scale as MD predicts; contour conserved; decoupling holds for L≥40.
+  *Ensemble (now tested)*: hyperbolic saturation, modest Vmax (+2.6 % single-head), recruitment beyond
+  saturation, near-hyperbolic response = **DEMONSTRATED** robust; ρ½ +20 % right-shift (mechanical accessibility)
+  demonstrated; dimer slowdown + dimer/single ratio = **SUPPORTED** (dimer arm noise-limited). L40 stays
+  canonical; L60 is a supporting §6.2 sensitivity result (`L40_VS_L60_GLIDING_COMPARISON.md`). Do NOT run a
+  material-stiffness study; the only optional follow-up is a tighter dimer L60 (substep / NDOF=25 GPU + seeds).
 - **Reruns if the exposed length is changed.** Dimer + single-head gliding density sweeps, the calibrated
   surrogate re-fit at the new L (kAxTension), GPU/CPU spot-check. (Step-size / force-clamp are L-robust in stroke.)
 

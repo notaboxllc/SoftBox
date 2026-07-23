@@ -51,7 +51,11 @@ public final class ExplicitHmmDimer {
 
     // ------- frozen material (inherited from EXPLICIT_S2_L40 — NOT retuned) -------
     static final double L0_NM   = TwoBodyConverterMotor.EXP4G_L0_NM;      // 10 nm nominal segment length
-    static final double TOTAL_NM = 40.0;                                  // head→anchor contour (E→pivot) = shared + branch
+    // head→anchor contour (E→pivot) = shared + branch. CANONICAL = 40 nm (explicit-hmm-dimer-l40, shared 30 ⇒ Ms=3).
+    // Settable ONLY for the declared L60 CPU structural sensitivity (60 ⇒ shared 50 ⇒ Ms=5, NF=7, NDOF=25); default 40
+    // keeps every L40 build byte-identical. The GPU forked-dimer kernel is specialized to Ms=3 and correctly aborts
+    // (assertStandingConfig) if this drives a non-(3,1,1) topology — L60 dimer is CPU-only.
+    static double TOTAL_NM = 40.0;
     static final double EA_SI   = TwoBodyConverterMotor.EXP4G_EA_SI;      // 4.2e-9 N  (paired coiled coil, as-is)
     static final double EI_SI   = TwoBodyConverterMotor.EXP4G_EI_SI;      // 7.2e-28 N·m²
     static final double RNODE_NM = TwoBodyConverterMotor.EXP4G_RNODE_NM;  // 5 nm node drag radius

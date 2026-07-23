@@ -124,24 +124,43 @@ oracle, but its role changes across the migration:
   decorrelates the microstate (Lyapunov divergence) — bit-identity is unattainable and is not the
   test. The standard there is **aggregate-statistical agreement within SEM**, matching how v1's own
   CPU-vs-GPU runs agree.
-- **GPU-number trust rule (the CPU is the basin arbiter — standing discipline, 2026-07-08).** The gliding
-  steady state at the production operating point is **chaotic AND bistable**, and a **last-bit GPU perturbation
-  deterministically tips which basin a run lands in** — including a *flag-dependent transcendental in a hot
-  kernel* (e.g. the `-ratefix` swing `exp/log`) whose mere presence changes PTX scheduling of the surrounding
-  float math, even when it computes a bit-identical value (`docs/BISTABILITY_ORIGIN.md`; the `-allnoise` graph-split
-  artifact). The failure mode is **silent** — a wrong basin masquerades as a stable baseline. So: **a GPU
-  gliding result REQUIRES a CPU-arbiter cross-check when** (a) it is an A/B whose arms differ in **hot-kernel
-  structure** — any flag that adds/removes a TaskGraph task or toggles an in-kernel transcendental
-  (`-bondnoise`/`-allnoise`/`-thermcorr`/`-syswide`, `-xbimplicit*`/`-segimplicit`/`-xbdash`,
-  `-canonical`/`-config1`/`-perphead`/`-lymntaylor`/`-tauavg`/`-freshread`, and — pre-promotion — `-ratefix`),
-  (b) it is an **absolute number used for validation / a reported result**, or (c) as a **periodic spot-check**
-  of the production baseline. The CPU cross-check need not be full-scale — smallest scale/window that resolves
-  the basin. **GPU is for fast exploration; the deterministic CPU runner is the basin arbiter.** The default
-  gliding formulation is now the transcendental-free **springs** path (`docs/SPRINGS_PROMOTION.md`; default-on,
-  `-nosprings` to opt out to raw, `-nosprings -ratefix -structrate` for the rate path) specifically so the
-  *default* is not exposed to the swing-`exp/log` hazard; the residual hazard flags above are NOT covered by
-  springs and stay arbiter-gated. When in doubt, run the same A/B on the CPU runner (or a same-graph factor-1.0
-  control) and trust it.
+- **CPU/GPU validation policy (evidence-based; supersedes the blanket "CPU is the basin arbiter" rule, 2026-07-22).**
+  **The governing document is `docs/CPU_GPU_VALIDATION_POLICY.md`; the evidence base is
+  `docs/CPU_GPU_EQUIVALENCE_EVIDENCE.md`; the audit is `docs/CPU_ARBITER_RETIREMENT_FINDINGS.md`.** In brief:
+  **a device-path result is PRIMARY once its assay class has passed a CPU/GPU equivalence benchmark at the
+  current revision.** The RNG is a counter-based Wang hash, **bit-identical on both runners by construction**, so
+  the ONLY divergence channel is float32 op-ordering — which matters only when it (a) accumulates on a chaotic
+  trajectory or (b) flips a decision taken on a float threshold. Deterministic mechanics and stochastic
+  single-motor assays are bit-identical or event-identical CPU↔GPU (30+ recorded comparisons, plus a rev-`0d7966e`
+  benchmark); **no CPU/GPU comparison has ever caught a logic error in this project.** CPU confirmation is
+  therefore **triggered, not standing** — required for: a new hot kernel; a structural physics change; a changed
+  RNG; a changed dt/integrator; an unresolved discrepancy; non-zero invalid/solver-failure counts; extreme outlier
+  or "does seed X blow up" questions; promotion of a `DEVICE_VALIDATED` path; a **chaotic-ensemble A/B whose arms
+  differ in hot-kernel structure**; and one periodic mid-range spot-check per campaign reporting an absolute
+  ensemble number. It is **NOT** required per production sweep, per parameter point, or for data-only flags
+  (density/coltol/seed/steps) that share identical hot-kernel structure.
+  **Historical note (why the old rule existed — preserved, still true in its own scope):** at the 2026-07-08
+  production gliding point the steady state is chaotic and **bistable**, and a last-bit GPU perturbation
+  deterministically tips the basin — including a flag-dependent in-kernel transcendental (the `-ratefix` swing
+  `exp/log`) whose mere *presence* changes PTX scheduling even when it computes a bit-identical value
+  (`docs/BISTABILITY_ORIGIN.md`; the `-allnoise` graph-split artifact, where forcing an arithmetic no-op
+  reproduced a 66% "effect" on GPU but was byte-identical on CPU). That hazard is **real and retained for chaotic
+  many-body ensembles** (of ~9 gliding arbiter runs, 7 confirmed the GPU, 1 refuted it outright — d8000 CPU 9.93
+  vs GPU 13.84 — and 1 exposed a standing ~20% offset). It was **never observed** in any deterministic,
+  single-motor, or non-gliding assay. The default gliding formulation is the transcendental-free **springs** path
+  (`docs/SPRINGS_PROMOTION.md`; default-on, `-nosprings` to opt out) specifically so the default carries no
+  swing-`exp/log` hazard. *(The old rule also named `-bondnoise`/`-allnoise`/`-thermcorr`/`-syswide`/
+  `-xbimplicit*`/`-xbdash`/`-freshread`; those flags were DELETED in the canonical collapse and the rule text was
+  never updated — one of the staleness findings behind this revision.)*
+- **GPU production gate is PER-ASSAY-CLASS since canon v2 (2026-07-22; `docs/canonical_freeze/GPU_CANONICAL_PRODUCTION_SIGNOFF.md`).**
+  The blanket `DEVICE_VALIDATED=false` refusal is superseded by `ExplicitHmmDimerGpuParams.productionValidated(Backend)`:
+  the **validated forked-dimer / explicit-S2 gliding class** (`Backend.GPU`/`GPU_MECH`) is the **normal canonical
+  production path** and runs device-resident **WITHOUT `-gpu-experimental`** (evidence: V1–V8 fixtures +
+  moving-actin + binding + chemistry bit-identical CPU↔GPU, 0 invalid/solver across all production cells;
+  aggregate-statistical equivalence). **Unvalidated classes still hard-fail** — the full experimental single-graph
+  device timestep (`GPU_FULL_EXPERIMENTAL`) and the un-ported two-body GPU models (`MotorGpuParams`, gate still
+  `false`) are refused, **never silently swapped or fallen back**. The `runG4d` aggregate-equivalence suite is
+  preserved and re-triggered by any future hot-kernel change.
 
 ## Porting discipline (per v1 GPU_MIGRATION_LESSONS.md)
 - **Force-coverage audit** for every ported subsystem: every force applied on exactly one path —

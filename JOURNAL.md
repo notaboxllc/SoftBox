@@ -1,5 +1,62 @@
 # Soft Box Project Journal
 
+### 2026-07-23 — L60 exposed-S2 gliding SENSITIVITY (declared structural study; L40 stays canonical)
+
+Part A refined the freeze docs (Q9 corrected to the real §6 studies; L40 standardized as CONDITIONALLY FROZEN —
+GEOMETRY; **demonstrated-vs-predicted split** — beam/single-molecule L-robustness is demonstrated, ensemble-gliding
+L-robustness was only *predicted* since production ran only at L40; L40-reference rationale added;
+`S2_DOCUMENT_REFINEMENTS.md`). Part B implemented the L60 config **without touching L40**: single-head beam SoA
+strides made M-derived (`base = m·(n·W)`, byte-identical n·W=210 at M=4 — **L40 reproduces velProd +6.5604 exactly**),
+`-L 60` flag ⇒ M=6 on the **GPU** device path (0 invalid); dimer `ExplicitHmmDimer.TOTAL_NM` made settable ⇒ Ms=5/
+NDOF=25 on the dimension-generic **CPU** object solver (the GPU forked-dimer kernel is Ms=3-specialized and correctly
+refuses L60). Part C preflight PASS (`-exp4g`): k_ax 105→70 pN/nm, Euler buckle 4.4→2.0 pN, kComp 105→0.68 (buckles),
+stroke 7.27→7.26 (L-robust), contour conserved. **Governance divergence surfaced + user-approved:** dimer L60 GPU
+needs a new un-validated kernel ⇒ **reduced CPU dimer sensitivity** (4 ρ × 2 seeds × {L40,L60}, 10k steps) while
+single-head L60 gets the full GPU grid (13 ρ × 4 seeds, 40k). Sweeps launched device-disclosed
+(`L60_GLIDING_SWEEP_RUN_PLAN.md`, `L60_CANONICAL_SENSITIVITY_MANIFEST.json`).
+**RESULT — OUTCOME 1 (quantitative rescaling only; the gliding phenotype is ROBUST to exposed S2 length).**
+Single-head (52/52 GPU cells, 0 invalid): Vmax 4.77→4.90 (**+2.6 %, negligible**), ρ½ 418→500 (**+20 %**, a modest
+recruitment right-shift = L60 recruits ~10–15 % fewer bound heads/density via the softer axial reaction; mechanical
+accessibility, not a new kinetic regime), Hill n≈1 both (near-hyperbolic; hyperbolic preferred ΔAIC +56/+62),
+saturation preserved, ATP ~12 % lower (tracks bound heads), peak loads higher (compliant-buckling signature). Dimer
+(16/16 reduced CPU cells, 0 invalid): **dimer slowdown PRESERVED** (dimer/single ~0.59 at L40, ~0.7–0.8 at L60),
+two-head frac ~0.0002 (single-head-bound fork opposition = a Vmax effect, mechanism unchanged), curve right-shifted
+like single-head — quantitatively **noise-limited** (4×2×10k CPU + the L60 branch-excursion tail at the canonical
+branchEA=0.03, numerically stable 0 invalid/solver; a flagged substep/NDOF=25-GPU follow-up). **Decision: retain L40
+canonical; the §4b "predicted" items reclassified DEMONSTRATED (single-head) / SUPPORTED (dimer); L60 = supporting
+§6.2 causal-sensitivity result, NOT canonical v3.** Docs: `L60_{S2_MECHANICAL_PREFLIGHT,SINGLE_HEAD_DENSITY_SWEEP,
+HMM_DIMER_DENSITY_SWEEP}_FINDINGS.md`, `L40_VS_L60_GLIDING_COMPARISON.md`, `S2_DOCUMENT_REFINEMENTS.md`,
+`L60_{GLIDING_CELLS,DENSITY_FITS}.csv`; freeze docs reclassified. **L40 byte-identity preserved; no chemistry/
+force-law/gate/branchEA/EA/EI change; L40 not replaced.**
+
+### 2026-07-22 — CANONICAL FREEZE CLOSURE (canon v2): ADP corrected · rigor rupture promoted · GPU per-assay-class production · S2 Gate A
+
+Closed the canonical-model freeze at **`MotorModel.CANON_VERSION = 2`**. No chemistry tuning, no gliding-target fitting,
+no broad reruns. Four closures (`docs/canonical_freeze/CANONICAL_FREEZE_CLOSURE_FINDINGS.md` + three companions):
+- **ADP corrected (Part A):** the stale "ADP calibration required / `onADP=1000/s` gives rigor>ADP / partial pass"
+  blocker is removed everywhere. The ATP-free protocol (`atpOn=0`) restored **ADP > rigor** (1.17× rigor, peak 32.6 ms /
+  6.7 pN; G&G ~1.24×/31.7/6.4) with the frozen params recovered stage-resolved — the prior mismatch was a
+  protocol/observation-model artifact, **no ADP retuning**. Remaining ADP limitation stated accurately (sequential
+  ADP→NONE+rupture vs the experiment's direct ADP-bond rupture; optional direct channel outcompeted, not required).
+- **Rigor rupture PROMOTED (Part B):** `RIGOR_RUPTURE_PROMOTION_REGRESSION` passed every check (rigor force-clamp law
+  xCatch 1.5/peak ~7 pN; ATP-free ADP preserved; gliding impact +0.33%±1.56% negligible; **legacy-disable byte-identical**
+  — `-no-rupture` reproduced the pre-v2 SHA exactly; SM6 unchanged; SM4 selftest PASS; mode-1 default health-clean
+  CPU+GPU, 0 invalid/solver). **rupture_mode = 1 is now the canonical production default** in the single-head/HMM-dimer/
+  GPU-production paths; `-no-rupture`/`-legacy-disable`/`-rupture-mode 0` = byte-identical legacy; SM4 apparatus keeps
+  default OFF but invokes the same `cycleLymnTaylorRigor` explicitly. all-strong-bound (mode 2) stays OPTIONAL. Double-
+  counting guard satisfied without recalibration.
+- **GPU per-assay-class production (Part C):** replaced the blanket `DEVICE_VALIDATED=false` refusal with
+  `ExplicitHmmDimerGpuParams.productionValidated(Backend)`. The validated forked-dimer/explicit-S2 gliding class runs
+  device-resident as the **normal canonical path WITHOUT `-gpu-experimental`** (verified); the full experimental
+  single-graph timestep + un-ported two-body GPU models **hard-fail** (verified); no silent fallback. Evidence: V1–V8 +
+  moving-actin + binding + chemistry bit-identical CPU↔GPU + 0 invalid/solver all cells; no sweep rerun. `runG4d`
+  equivalence suite preserved for future kernel changes.
+- **S2 length (Part D):** **Gate A** — L = 40 nm canonical reference geometry; exposed contour length CONDITIONALLY
+  FROZEN (all main conclusions L-robust across 40–60 nm at the beam/material level); L60 retained as an optional §6.2
+  structural sensitivity. EA/EI unchanged (MD-constrained). No new run.
+- Regenerated the manifest + CSVs + the 7 freeze docs to canon v2; updated CLAUDE.md's GPU-gate invariant. Code defaults,
+  production runners, manifest, and freeze docs now describe the same canonical model with no contradictions.
+
 ### 2026-07-22 — RIGOR MECHANICAL-RUPTURE pathway (SM4 campaign): flag-gated, default OFF
 
 New force-dependent mechanical detachment for a BOUND rigor (NUC_NONE) head, physically separate from ATP binding and

@@ -62,8 +62,11 @@ public final class ExplicitCompleteMatHarness {
     }
     static ExMat packExMat(Glide2D G, int brownOn) {
         ExMat e = new ExMat(); e.G = G; int N = G.N, M = G.g4M, nSeg = G.nSeg; e.N = N; e.M = M; e.nSeg = nSeg;
-        e.nodes = new DoubleArray(15 * N); e.frame = new DoubleArray(15 * N); e.params = new DoubleArray(17 * N);
-        e.sys = new DoubleArray(SYS * N); e.outGeom = new DoubleArray(9 * N); e.q = new DoubleArray(4 * N); e.sys.init(0.0);
+        // Beam SoA strides are M-derived (byte-identical to the old 15/210 constants at the canonical M=4 [L40];
+        // grow for L60's M=6 to 3*(M+1)=21 node comps and n*(n+1)=420 scratch). frame is the fixed converter frame (15).
+        int nodeStride = 3 * (M + 1), sysStride = (3 * M + 2) * (3 * M + 3);
+        e.nodes = new DoubleArray(nodeStride * N); e.frame = new DoubleArray(15 * N); e.params = new DoubleArray(17 * N);
+        e.sys = new DoubleArray(sysStride * N); e.outGeom = new DoubleArray(9 * N); e.q = new DoubleArray(4 * N); e.sys.init(0.0);
         e.boundSeg = new IntArray(N); e.active = new IntArray(N);
         double[] pr = ExplicitMatSolveHarness.paramArr(G);
         for (int m = 0; m < N; m++) {
@@ -960,7 +963,12 @@ public final class ExplicitCompleteMatHarness {
         String outdir = argS(args, "-outdir", "RUN_LOGS/single_head_density_sweep_long");
         String rev = argS(args, "-rev", "unknown");
         double slack = TwoBodyConverterMotor.EXPLICIT_GLIDE_SLACK_NM;   // 1.5 nm
-        double beamL = 40.0;                                     // explicit-s2-l40 (L=40 nm)
+        // Exposed S2 contour length. CANONICAL = 40 nm (explicit-s2-l40). -L 60 selects the DECLARED L60 structural
+        // sensitivity (explicit-s2-l60): SAME MD material moduli EA/EI, only the exposed length + M=round(L/10) change
+        // (L40->M=4, L60->M=6). EA/EI are NOT edited; the surrogate is not touched (production uses the explicit beam).
+        double beamL = argD(args, "-L", argD(args, "-beamL", 40.0));
+        boolean canonicalL = Math.abs(beamL - 40.0) < 1e-9;
+        String modelId = String.format(Locale.US, "explicit-s2-l%.0f", beamL);
         try { Files.createDirectories(Path.of(outdir)); } catch (IOException e) { throw new UncheckedIOException(e); }
 
         // Optional actin filament-length control (-nseg): sets ONLY the actin segment count via the existing runtime
@@ -985,10 +993,14 @@ public final class ExplicitCompleteMatHarness {
         if (Math.abs(dt - 2.5e-6) > 1e-12) abort = "dt != 2.5e-6";
         else if (TwoBodyConverterMotor.LEGACY_OWNERSHIP) abort = "legacy segment ownership ON (canonical binding contract expected)";
         else if (nsegReq < 4) abort = "nseg < 4 (chain needs >= 4 segments)";
+        else if (beamL < 10.0 || Math.abs(beamL / 10.0 - Math.round(beamL / 10.0)) > 1e-9) abort = "beam L must be a positive multiple of 10 nm (10 nm beam discretization)";
 
         int Npre = TwoBodyConverterMotor.g4NMot(density);
-        System.out.println("=== SINGLE-HEAD (explicit-s2-l40) PRODUCTION CELL — FROZEN CONFIG ===");
-        System.out.printf(Locale.US, "  model=explicit-s2-l40 | GPU device-resident TaskGraph (buildGlidingGraph prod) | single-head gliding assay class VALIDATED for production (canonical GPU path; aggregate-statistical CPU↔GPU equivalence; no CPU fallback)%n");
+        System.out.printf(Locale.US, "=== SINGLE-HEAD (%s) PRODUCTION CELL — %s ===%n", modelId, canonicalL ? "FROZEN CONFIG" : "DECLARED L60 STRUCTURAL SENSITIVITY");
+        if (canonicalL)
+            System.out.printf(Locale.US, "  model=%s | GPU device-resident TaskGraph (buildGlidingGraph prod) | single-head gliding assay class VALIDATED for production (canonical GPU path; aggregate-statistical CPU↔GPU equivalence; no CPU fallback)%n", modelId);
+        else
+            System.out.printf(Locale.US, "  model=%s | GPU device-resident TaskGraph (buildGlidingGraph prod) | DECLARED STRUCTURAL SENSITIVITY vs canonical L40 (EA/EI unchanged; only exposed length L=%.0f nm ⇒ M=%d; NOT a competing tuned baseline; L40 stays canonical)%n", modelId, beamL, (int) Math.round(beamL / 10.0));
         System.out.printf(Locale.US, "  S2 beam L=%.0f nm | initial slack=%.2f nm | dt=%.3g s | free binding (matBindExplicit each step), NO cull, NO occupancy exclusion%n", beamL, slack, dt);
         System.out.printf(Locale.US, "  actin: %d-seg flexible chain (%d mono/seg, contour≈%.3f µm) | actin Brownian ON | motor-body Brownian ON | z-confine %.1f pN/nm coverslip%n",
                 TwoBodyConverterMotor.G4_NSEG_RUN, TwoBodyConverterMotor.G4_MONO, TwoBodyConverterMotor.G4_NSEG_RUN * (TwoBodyConverterMotor.G4_MONO + 1) * Constants.actinMonoRadius, TwoBodyConverterMotor.G4_KZ);
@@ -1164,7 +1176,12 @@ public final class ExplicitCompleteMatHarness {
         String toJson(int density, int seed, int steps, double dt, int N, int nSeg, int M, double beamL, double slack, double cullR,
                       String rev, long startMs, long endMs, double wallS, String status, String err, double warmMs) {
             StringBuilder b = new StringBuilder("{\n");
-            kv(b, "model", q("explicit-s2-l40")); kv(b, "density", density); kv(b, "seed", seed); kv(b, "steps", steps); kv(b, "dt", dt);
+            String model = String.format(Locale.US, "explicit-s2-l%.0f", beamL);
+            boolean canonL = Math.abs(beamL - 40.0) < 1e-9;
+            kv(b, "model", q(model)); kv(b, "exposed_s2_nm", beamL); kv(b, "canonical_L", canonL);
+            kv(b, "ea_si", TwoBodyConverterMotor.EXP4G_EA_SI); kv(b, "ei_si", TwoBodyConverterMotor.EXP4G_EI_SI);
+            kv(b, "rupture_mode", RUPTURE_MODE);
+            kv(b, "density", density); kv(b, "seed", seed); kv(b, "steps", steps); kv(b, "dt", dt);
             kv(b, "backend", q("gpu")); kv(b, "device_resident", true); kv(b, "device_validated", false);
             kv(b, "heads", N); kv(b, "nSeg", nSeg); kv(b, "beam_nodes_M", M); kv(b, "beam_L_nm", beamL); kv(b, "slack_nm", slack);
             kv(b, "mat_x_um", TwoBodyConverterMotor.G4_MATX); kv(b, "mat_y_um", TwoBodyConverterMotor.G4_MATY);
@@ -1209,7 +1226,7 @@ public final class ExplicitCompleteMatHarness {
             kv(b, "invalid_states", invalidStates); kv(b, "solver_failures", invalidStates);
             // derived
             kv(b, "vel_per_bound_head", meanBoundHeads > 0 ? velProd / meanBoundHeads : 0.0);
-            b.append("  \"note\": ").append(q("single-head explicit-s2-l40; velProd = whole-window LS slope of filament centroid·b̂ over all `steps` (equil=0, matched to the HMM-dimer campaign); vel_postequil = LS over the 2nd half (transient diagnostic). solver health on this device path is exposed only via redOut finiteness ⇒ solver_failures == invalid_states (no separate per-motor pivot/residual buffer crosses the bus in production residency). No two-head/branch/joint-gap fields (single head has no fork).")).append("\n}\n");
+            b.append("  \"note\": ").append(q("single-head " + model + "; velProd = whole-window LS slope of filament centroid·b̂ over all `steps` (equil=0, matched to the HMM-dimer campaign); vel_postequil = LS over the 2nd half (transient diagnostic). solver health on this device path is exposed only via redOut finiteness ⇒ solver_failures == invalid_states (no separate per-motor pivot/residual buffer crosses the bus in production residency). No two-head/branch/joint-gap fields (single head has no fork).")).append("\n}\n");
             return b.toString();
         }
         static void kv(StringBuilder b, String k, double v) { b.append("  \"").append(k).append("\": ").append(fmt(v)).append(",\n"); }
