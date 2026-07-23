@@ -38,7 +38,7 @@ answers the nine closure questions. Companions: `RIGOR_RUPTURE_PROMOTION_REGRESS
 4. **branchEA = 0.03 — resolved numerical compliance** (calibrated by stability/geometry, not gliding;
    split default eliminated; `BRANCHEA_CALIBRATION_FINDINGS.md`).
 
-5. **S2 — EA + EI frozen (MD-constrained); exposed length conditionally frozen at L40** (Gate A;
+5. **S2 — EA + EI frozen (MD-constrained); exposed length conditionally frozen at L40, L60 sensitivity COMPLETED** (Outcome 1;
    `S2_LENGTH_FREEZE_DECISION.md`).
 
 ---
@@ -75,7 +75,8 @@ L-robust (contour, stiffness scaling, buckling, stroke, tension/compression asym
 conclusions were **directly tested by the completed L60 sweep (2026-07-23) — Outcome 1 (quantitative rescaling
 only)**: saturation, modest Vmax (+2.6 % single-head), recruitment, and near-hyperbolic response are
 **demonstrated** robust; a modest ρ½ +20 % right-shift (mechanical accessibility) is demonstrated; the dimer
-slowdown and dimer/single ratio are **supported** (dimer arm noise-limited); the cooperativity interpretation is
+slowdown and dimer/single ratio are **qualitatively supported** (the reduced-CPU dimer arm is a qualitative stress
+test — Vmax/ρ½ UNRESOLVED / not freeze-grade, with physically-inadmissible branch excursions); the cooperativity interpretation is
 robust (`L40_VS_L60_GLIDING_COMPARISON.md`). L60 is a declared alternative boundary-condition sensitivity, **not**
 a competing tuned baseline; L40 stays canonical (`S2_LENGTH_FREEZE_DECISION.md`).
 

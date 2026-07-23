@@ -260,7 +260,7 @@ against live `TwoBodyConverterMotor.EXP4G_*` (`:6263-6272`) by `assertFrozenPara
 | `Lref` | 60 | nm | `:6265` | MD reference length | B | reference constant |
 | `l0` (beam segment) | 10 | nm | `:6266` | discretization | E | FROZEN — NUMERICAL |
 | `Rnode` (beam-node drag radius) | 5 | nm | `:6267` | lumps a 10 nm segment; stability | E | FROZEN — NUMERICAL |
-| **`L` (explicit/exposed S2 length)** | **40** | nm | `:6270` (built {10,20,40,60}) | free-S2 CONTOUR length; canonical reference geometry (Gate A); a surface **boundary-condition/geometry** choice (material frozen); L-robust mechanics | F | **CONDITIONALLY FROZEN — GEOMETRY** (canonical L40; §E) |
+| **`L` (explicit/exposed S2 length)** | **40** | nm | `:6270` (built {10,20,40,60}) | free-S2 CONTOUR length; canonical reference geometry (L60 sensitivity completed, Outcome 1); a surface **boundary-condition/geometry** choice (material frozen); L-robust mechanics | F | **CONDITIONALLY FROZEN — GEOMETRY** (canonical L40; §E) |
 | `M` (segments at L40) | 4 (⇒ 5 nodes) | — | `MotorModel.java:318` | L/l0 | E | derived |
 | `k_ax = EA/L` @L40 | 105 | pN/nm | `MotorModel.java:321` | derived | — | derived at canonical L40 (= EA/L; L60 ⇒ 70 pN/nm, declared sensitivity) |
 | `Lp = EI/kT` | 175 | nm | `MotorModel.java:322` | derived | — | inherits EI |
@@ -282,7 +282,7 @@ segments. It enters the physics four ways:
   L40 through k_ax=105 and the buckling geometry; the FXB blind force-clamp fixture is the compliant
   explicit-s2-l40 tail.
 
-**Why the LENGTH is CONDITIONALLY FROZEN at L40 — GEOMETRY (the MATERIAL is frozen; Gate A, Part D):** the S2
+**Why the LENGTH is CONDITIONALLY FROZEN at L40 — GEOMETRY (the MATERIAL is frozen; L60 sensitivity completed, Outcome 1):** the S2
 EA **and EI** are MD/literature-constrained (Adamovic 2008; kLatRef=0.01 is dead-center in the 0.008–0.012 band
 — `S2_MD_PROVENANCE_CORRECTION.md`), so the **material stiffness is not open**. What remains is the **exposed
 contour length + surface emergence boundary condition**: L∈{10,20,40,60} were built, and the **L40≠L60 caveat**
@@ -291,10 +291,12 @@ a bounded geometry question. **L = 40 nm is the canonical reference geometry** (
 declared-sensitivity variation only). The **beam / single-molecule** conclusions are *demonstrated* L-robust
 (contour, stiffness scaling, buckling, stroke, tension/compression asymmetry); the **ensemble-gliding**
 conclusions were **directly tested by the completed L60 sweep (2026-07-23) — Outcome 1 (quantitative rescaling
-only)**: saturation, modest Vmax (+2.6 % single-head), recruitment, near-hyperbolic response = **demonstrated**
-robust; ρ½ +20 % right-shift (mechanical accessibility) demonstrated; dimer slowdown + dimer/single ratio =
-**supported** (dimer arm noise-limited) (`S2_LENGTH_FREEZE_DECISION.md`, `L40_VS_L60_GLIDING_COMPARISON.md`). L60
-is a declared alternative boundary-condition sensitivity, not a competing tuned baseline; no material-stiffness study
+only)**. **Single-head DEMONSTRATED:** saturation, negligible Vmax (+2.6 %), recruitment, near-hyperbolic response
+robust; ρ½ +20 % right-shift (mechanical accessibility) demonstrated. **Dimer QUALITATIVELY SUPPORTED** (slowdown
+preserved) but **Vmax/ρ½ UNRESOLVED / not freeze-grade** — the reduced-CPU dimer arm (4 ρ × 2 seeds × 10k) is a
+qualitative stress test with physically-inadmissible L60 branch excursions (fitted ratios are artifacts)
+(`S2_LENGTH_FREEZE_DECISION.md`, `L40_VS_L60_GLIDING_COMPARISON.md`). L60 is a declared alternative
+boundary-condition sensitivity, not a competing tuned baseline; no material-stiffness study
 (`OPEN_BIOPHYSICAL_PARAMETERS.md` §1).
 
 ---

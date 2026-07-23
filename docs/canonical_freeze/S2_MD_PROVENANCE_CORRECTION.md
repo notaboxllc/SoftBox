@@ -54,8 +54,11 @@ tune gliding.
 
 ## 4. What this correction does NOT do
 
-It does not change the **exposed S2 length / boundary-condition** question, which remains genuinely open (Part E,
-`S2_LENGTH_EXISTING_EVIDENCE.md`). The material stiffnesses are frozen; what is uncertain is **how much free S2
-is exposed above the surface** (the free contour length + the emergence boundary condition), which is a
-geometry/boundary question, not a material-stiffness question. Keeping these two cleanly separated is the point
-of this correction: the audit must not present a literature-anchored material constant as an open unknown.
+It does not change the **exposed S2 length / boundary-condition** question. That is a bounded
+geometry/boundary-condition uncertainty, **CONDITIONALLY FROZEN at L40, with the declared L60 sensitivity now
+COMPLETED** (Outcome 1 — single-head phenotype robust; `S2_LENGTH_FREEZE_DECISION.md`,
+`L40_VS_L60_GLIDING_COMPARISON.md`) — it is **not** an open material-stiffness question. The material stiffnesses
+are frozen; what remains a bounded geometry choice is **how much free S2 is exposed above the surface** (the free
+contour length + the emergence boundary condition). Keeping these two cleanly separated is the point of this
+correction: the audit must not present a literature-anchored material constant as an open unknown, nor a
+conditionally-frozen bounded geometry as an unresolved pre-freeze open parameter.

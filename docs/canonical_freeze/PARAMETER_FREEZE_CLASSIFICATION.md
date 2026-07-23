@@ -18,7 +18,7 @@ PROVENANCE`.
 > (§G→resolved). **Rigor-only rupture (mode 1)** → **PROMOTED to the CANONICAL PRODUCTION DEFAULT ON** (canon v2;
 > `-no-rupture` = byte-identical legacy) (§C). **Production governance** → GPU is the normal canonical production
 > path via a per-assay-class gate (no `-gpu-experimental` override for the validated gliding class; unvalidated
-> classes hard-fail; no silent fallback) (§H). **S2 exposed length** → CONDITIONALLY FROZEN at L40 (Gate A).
+> classes hard-fail; no silent fallback) (§H). **S2 exposed length** → CONDITIONALLY FROZEN at L40; L60 sensitivity COMPLETED (Outcome 1).
 
 ---
 
@@ -128,9 +128,10 @@ sensitivity studies — not open freeze holes.)*
   stroke, tension/compression asymmetry. **Ensemble tested by the completed L60 sweep (2026-07-23) — Outcome 1
   (quantitative rescaling only):** hyperbolic saturation, modest Vmax (+2.6 % single-head), recruitment beyond
   saturation, near-hyperbolic (n≈1) = **DEMONSTRATED** robust; ρ½ +20 % right-shift (mechanical accessibility)
-  demonstrated; dimer slowdown + dimer/single ratio = **SUPPORTED** (dimer arm noise-limited)
-  (`L40_VS_L60_GLIDING_COMPARISON.md`). L40 stays canonical; L60 is a supporting §6.2 sensitivity. A geometry
-  question, not a stiffness question.
+  demonstrated; dimer slowdown + dimer/single ratio = **QUALITATIVELY SUPPORTED** (the reduced-CPU dimer arm is a
+  qualitative stress test — dimer Vmax/ρ½ UNRESOLVED / not freeze-grade, with physically-inadmissible L60 branch
+  excursions; fitted ratios are artifacts) (`L40_VS_L60_GLIDING_COMPARISON.md`). L40 stays canonical; L60 is a
+  supporting §6.2 sensitivity. A geometry question, not a stiffness question.
 - **HMM branch/fork geometry** (branchLen 10, SPLAY 16°, ALPHA 10°, BREI 0.25) — fork-relaxation choices, no
   citation.
 - **Anchor / motor compliance** — fixed-anchor rigid limit vs the compliant S2 pivot; `kconv`/`kbind` (also

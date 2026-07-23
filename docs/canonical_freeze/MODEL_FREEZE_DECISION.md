@@ -33,10 +33,12 @@ Four closures revise the audit-rev-2 draft. Full evidence in the closure compani
    Mijailovich–Karplus 2008 band (0.008–0.012); Lp≈175 nm is in the MD-implied 140–210 nm band. **S2 EA and EI
    are both `CONDITIONALLY FROZEN — MD/LITERATURE CONSTRAINED` frozen material constants** — do not call EI
    unknown (`S2_MD_PROVENANCE_CORRECTION.md`).
-4. **S2 length — Gate A, conditionally frozen at L40 (Part D).** L∈{10,20,40,60} were built; stroke is L-robust,
-   axial/bending/buckling scale as MD predicts, and every main biological conclusion is L-robust across 40–60 nm.
-   **L = 40 nm is the canonical reference geometry; the exposed contour length is CONDITIONALLY FROZEN;** L60 is
-   retained as an optional §6.2 structural sensitivity — no new run required (`S2_LENGTH_FREEZE_DECISION.md`).
+4. **S2 length — conditionally frozen at L40; L60 sensitivity COMPLETE (Part D).** L∈{10,20,40,60} were built;
+   stroke is L-robust, axial/bending/buckling scale as MD predicts (beam level). **L = 40 nm is the canonical
+   reference geometry; the exposed contour length is CONDITIONALLY FROZEN — GEOMETRY.** The declared L60 gliding
+   sensitivity has been RUN (single-head GPU full grid + reduced-CPU dimer stress test) — **Outcome 1**:
+   single-head phenotype DEMONSTRATED robust (negligible Vmax, +20 % ρ½), dimer slowdown QUALITATIVELY SUPPORTED
+   (Vmax/ρ½ not freeze-grade). L40 stays canonical (`S2_LENGTH_FREEZE_DECISION.md`).
 5. **ADP corrected + rigor rupture promoted (Part B).** The ATP-free ADP protocol (`atpOn=0`) restored the
    **ADP > rigor** ordering (1.17× rigor; peak 32.6 ms / 6.7 pN) with the frozen params — the prior mismatch was a
    protocol/observation-model artifact, **no ADP retuning**. With the guard thus satisfied, **rigor-only rupture
@@ -174,12 +176,16 @@ default is RESOLVED** (single source of truth `STANDING_BRANCH_EA=0.03`). No par
 
 ### 8. Which exact parameters remain open before cooperativity analysis? *(shortened — closure)*
 A short **geometry/numerical** list (`OPEN_BIOPHYSICAL_PARAMETERS.md`), after closure resolved the chemistry,
-the release model (rigor rupture promoted), EI (MD-constrained), branchEA (0.03), the S2 length (conditionally
-frozen at L40), and the GPU production gate: **(1)** exposed S2 contour length + surface boundary condition
-(40–60 nm geometry, material frozen); **(2)** HMM branch/fork geometry (branchLen, SPLAY, ALPHA, BREI);
-**(3)** anchor/motor compliance (kconv/kbind; fixed vs compliant); **(4)** surface height/gap. Plus one numerical
-item: the **cross-bridge dt sub-step** (≤12% binding under-sampling residual; affects absolute Vmax, not the
-qualitative saturation). **No chemistry, no release-model, and no GPU-governance items remain open.**
+the release model (rigor rupture promoted), EI (MD-constrained), branchEA (0.03), and the GPU production gate.
+**Exposed S2 length is NOT on this list** — it is a **bounded geometry uncertainty, CONDITIONALLY FROZEN at L40,
+with the declared L60 sensitivity COMPLETED** (Outcome 1). The remaining structural §6 studies are: **(1)** HMM
+branch/fork geometry (branchLen, SPLAY, ALPHA, BREI); **(2)** anchor/motor compliance (kconv/kbind; fixed vs
+compliant); **(3)** surface height/gap. Plus one numerical item: the **cross-bridge dt sub-step** (≤12% binding
+under-sampling residual; affects absolute Vmax, not the qualitative saturation). The only remaining OPTIONAL
+L60-related work is **paper-strengthening, not freeze-blocking**: physically-admissible longer dimer runs (a
+cross-bridge substep or an NDOF=25 GPU kernel + more seeds); head-resolved taut/buckled and work telemetry; and
+the L40-comparator provenance reconciliation (Part F). **No chemistry, no release-model, and no GPU-governance
+items remain open.**
 
 ### 9. What remaining paper-stage studies are left?
 These are **causal / robustness studies for the cooperativity paper's §6, NOT prerequisites for the frozen

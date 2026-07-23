@@ -1,4 +1,4 @@
-# L60 HMM-DIMER DENSITY SWEEP — FINDINGS (reduced CPU sensitivity)
+# L60 HMM-DIMER DENSITY SWEEP — FINDINGS (reduced CPU **qualitative stress test**)
 
 **Date 2026-07-23 · rev 0f92494 · CPU object solver (`explicit-hmm-dimer-l60`, Ms=5, NF=7, NDOF=25).**
 Declared structural sensitivity: exposed S2 total contour 40→60 nm, **all else canonical** (EA, EI, chemistry,
@@ -6,65 +6,74 @@ rigor mode 1, branchEA 0.03, dt 2.5e-6, dimers/µm²). **Runner note:** the GPU 
 specialized to (3,1,1)/NDOF=19 and correctly REFUSES L60 (Ms=5/NDOF=25); the dimension-generic CPU object solver
 runs it. A full 40k-step grid is infeasible on CPU (~50 min/cell at ρ1500), so this is the user-approved
 **reduced representative grid**: 4 ρ {150,400,700,1500} × 2 seeds × {L40,L60}, **10000 steps**, paired.
-Data: `RUN_LOGS/l60_sensitivity/dimer_cpu/dimer_l60_cells.csv`.
+Data: `RUN_LOGS/l60_sensitivity/dimer_cpu/dimer_l60_cells.csv`. **Scope: this reduced arm is a QUALITATIVE STRESS
+TEST, not a definitive ensemble fit** — its quantitative saturation parameters are NOT freeze-grade (see §Health
+and §Fits).
 
-## Health (Part D4)
-**16/16 cells complete, 0 invalid states, 0 solver failures in every cell** (both L40 and L60). No hard
-numerical pathology (**NOT Outcome 4**). **Flag (numerical, honest):** the L60 dimer — longer Ms=5 shared S2 at
-the canonical branchEA=0.03 — exhibits the known **branch-excursion tail** (maxGap up to ~3700 nm, peakBrF up to
-~2.2e4 pN) at ρ ≥ 400 (vs L40 where branchEA=0.03 keeps it clean until ρ3000; `BRANCHEA_CALIBRATION_FINDINGS.md`).
-The solve **recovers every time (0 invalid/solver)**, but the excursions add variance to the reduced-grid
-velocities. Per the hard constraints, **branchEA is NOT changed**; a definitive L60 dimer Vmax/ρ½ would need the
-cross-bridge substep (or a re-specialized GPU kernel) + more seeds — a flagged follow-up, not this task.
+## Health — numerical completion vs physical admissibility (Part C)
+Two distinct notions must not be conflated:
+- **Numerical completion — YES.** 16/16 cells completed with **0 invalid states, 0 solver failures** (both L40 and
+  L60); the solver **recovered** in every cell. No hard solver pathology (**NOT Outcome 4**).
+- **Physical admissibility — VIOLATED in several L60 cells.** The L60 dimer (longer Ms=5 shared S2 at the canonical
+  branchEA=0.03) drives a **branch-excursion tail** with **maxGap up to ~3735 nm and peak branch force up to
+  ~2.2e4 pN** (ρ ≥ 400). These magnitudes are **outside plausible HMM geometry and force** — a 3.7 µm joint gap and
+  a ~22 nN branch force are not physically admissible for a ~10 nm S1–S2 fork. The solver tolerates and recovers
+  from them (0 invalid/solver), but the **velocity estimates in the affected cells are physically contaminated /
+  variance-inflated** — these are geometric/force excursions, not merely stochastic "noise."
+
+Consequence: the reduced L60 dimer sweep is a **qualitative stress test** of the L60 dimer geometry, **not a
+definitive ensemble fit.** Per the hard constraints, **branchEA is NOT changed**; a physically-admissible L60
+dimer (cross-bridge substep, or a re-specialized NDOF=25 GPU kernel + more seeds) is the flagged follow-up.
+(At L40, branchEA=0.03 keeps the excursions suppressed until ρ3000 — `BRANCHEA_CALIBRATION_FINDINGS.md`.)
 
 ## Density response (productive speed µm/s; 2 seeds/cell)
 
-| ρ (dimers/µm²) | v_L40 (s101,s102) | v_L40 mean | v_L60 (s101,s102) | v_L60 mean | bound_L40 | bound_L60 | two-head frac |
-|---:|---|---:|---|---:|---:|---:|---:|
-| 150 | 1.95, 1.23 | 1.59 | 0.87, 0.97 | 0.92 | 1.63 | 1.44 | ~0.0002 |
-| 400 | 2.04, 1.81 | 1.92 | 1.06, 1.92 | 1.49 | 3.82 | 3.92 | ~0.0002 |
-| 700 | 2.26, 2.92 | 2.59 | 2.61, 2.74 | 2.67 | 6.25 | 5.97 | ~0.0002 |
-| 1500 | 2.51, 2.54 | 2.53 | 2.99, 3.52 | 3.26 | 12.55 | 12.22 | ~0.0002 |
+| ρ (dimers/µm²) | v_L40 (s101,s102) | v_L40 mean | v_L60 (s101,s102) | v_L60 mean | bound_L40 | bound_L60 | two-head frac | L60 maxGap (nm) |
+|---:|---|---:|---|---:|---:|---:|---:|---:|
+| 150 | 1.95, 1.23 | 1.59 | 0.87, 0.97 | 0.92 | 1.63 | 1.44 | ~0.0002 | 45–85 |
+| 400 | 2.04, 1.81 | 1.92 | 1.06, 1.92 | 1.49 | 3.82 | 3.92 | ~0.0002 | 98 / **3736** |
+| 700 | 2.26, 2.92 | 2.59 | 2.61, 2.74 | 2.67 | 6.25 | 5.97 | ~0.0002 | 192 / **3736** |
+| 1500 | 2.51, 2.54 | 2.53 | 2.99, 3.52 | 3.26 | 12.55 | 12.22 | ~0.0002 | **2010 / 3736** |
 
-## Density-response fits (Part F1/F2) — NOISE-LIMITED, report with caution
+The bold maxGap values (≫ the 10 nm branch length) mark the physically-inadmissible branch excursions — the
+velocity in those cells is contaminated.
 
-| curve | Vmax | ρ½ | R² | Hill n |
-|---|---:|---:|---:|---:|
-| L40 dimer | 2.80 ± 0.26 [CI 2.44–3.18] | 124 ± 53 | 0.862 | 0.84 ± 1.19 |
-| L60 dimer | 4.93 ± 0.96 [CI 3.96–6.88] | 726 ± 303 | 0.959 | 1.09 ± 0.75 |
+## Density-response fits (Part F1/F2) — NOT FREEZE-GRADE (report only as fit artifacts)
 
-**The 4-point / 2-seed / 10k-step fits are under-constrained** (large CIs; L40 ρ½=124 extrapolates below the data
-range; the printed Vmax ratio 1.76 and ρ½ ratio 5.84 are FIT ARTIFACTS, not reliable quantities). What the RAW
-curves robustly show: **the L60 dimer curve is right-shifted vs L40** (rises later, keeps climbing to ρ1500 where
-L40 has plateaued) — the **same direction** as the single-head L-effect (softer beam ⇒ higher ρ½). Both saturate
-or approach saturation. Hill n ≈ 1 (near-hyperbolic).
+| curve | Vmax | ρ½ | R² | Hill n | status |
+|---|---:|---:|---:|---:|---|
+| L40 dimer | 2.80 ± 0.26 | 124 ± 53 | 0.862 | 0.84 ± 1.19 | under-constrained (4 pts, 2 seeds) |
+| L60 dimer | 4.93 ± 0.96 | 726 ± 303 | 0.959 | 1.09 ± 0.75 | under-constrained + excursion-contaminated |
 
-## Dimer slowdown vs single-head (Part F3, G3)
+**The 4-point / 2-seed / 10k-step fits are under-constrained AND (L60) excursion-contaminated.** The printed
+**hyperbolic Vmax ratio 1.76 and ρ½ ratio 5.84 are FIT ARTIFACTS — they are NOT reliable biological quantities and
+must not be quoted as results** except to state explicitly that they are artifacts (e.g. L40 ρ½=124 extrapolates
+below the data range; the L60 curve is still climbing at ρ1500 so its Vmax is an unconstrained extrapolation
+inflated by the excursion cells). **Dimer Vmax and ρ½ are UNRESOLVED QUANTITATIVELY / NOT FREEZE-GRADE.**
 
-| architecture comparison | Vmax | dimer/single |
-|---|---:|---:|
-| single-head L40 | 4.77 | — |
-| dimer L40 | ~2.8 | **~0.59** |
-| single-head L60 | 4.90 | — |
-| dimer L60 (per-density ratio 0.67–0.95, mean ~0.8) | ~3.3 (rising) | **~0.7–0.8** |
-
-- **Dimer Vmax remains BELOW single-head Vmax at BOTH L** (L40 ~0.59×; L60 ~0.7–0.8× by per-density ratio) —
-  **the dimer slowdown is PRESERVED at L60.** (Cross-architecture caveat: dimer is 10k-step CPU vs single 40k-step
-  GPU; the qualitative dimer<single holds across the noise.)
-- **Two-head-bound fraction ≈ 0.0002 at every density and both L** — the dimer operates essentially
-  single-head-bound; the slowdown is the **fork-opposition / internal-load Vmax effect on the singly-bound
-  dimer**, NOT a two-head cooperativity — mechanism **unchanged** at L60.
-- **Not a filament-length artifact** — the frozen matched-length control (dimer 11-seg vs single 12-seg,
-  ratio 1.034) already established this; unchanged here.
+## What the raw curves DO support (qualitative)
+- **Dimer remains slower than single-head — SUPPORTED.** Dimer productive speed is below the single-head speed at
+  every measured density (dimer/single per-density 0.67–0.95; L40 Vmax-level ratio ~0.59). (Cross-architecture
+  caveat: dimer is 10k-step CPU vs single 40k-step GPU.)
+- **Dimer slowdown at L60 — QUALITATIVELY SUPPORTED.** The dimer stays slower than single-head at L60; two-head
+  fraction ≈0.0002 at every density and both L ⇒ the slowdown is the **single-head-bound fork-opposition Vmax
+  effect**, not a two-head cooperativity — mechanism **not qualitatively changed** at L60.
+- **Dimer right-shift tendency — SUGGESTIVE / DIRECTIONALLY SUPPORTED.** The L60 curve rises later than L40 (same
+  direction as the single-head +20 % ρ½ shift), but the magnitude is not quantifiable from this reduced,
+  excursion-affected grid.
+- **Dimer saturation — SATURATING TENDENCY SUPPORTED, NOT QUANTITATIVELY DEMONSTRATED.** Both L approach saturation;
+  the L60 curve had not clearly plateaued by ρ1500.
+- **Not a filament-length artifact** — the frozen matched-length control (dimer 11-seg vs single 12-seg, ratio
+  1.034) already established this; unchanged here.
 
 ## Decision (dimer arm)
-- **G1 saturation — SUPPORTED** (both L saturate / approach saturation; no high-density decline; 0 invalid).
-- **G3 dimer architecture robustness — SUPPORTED (qualitatively; quantitatively noise-limited).** Dimer Vmax <
-  single-head Vmax at L60 (slowdown preserved), not a length artifact, ρ½ right-shifted like single-head, effect
-  remains a translational-efficiency (Vmax) loss via fork opposition — NOT a recruitment-regime change or a
-  two-head mechanism. **NOT Outcome 3** (no qualitative change in the dimer slowdown or saturation mechanism).
-- **Caveats (honest):** the reduced 4×2×10k CPU grid + the L60 branch-excursion tail (numerically stable but
-  velocity-noising) limit quantitative precision — the dimer Vmax/ρ½ ratios are directional, not exact.
-- **Verdict: consistent with Outcome 1** (quantitative rescaling; dimer slowdown preserved, no qualitative
-  change), with a flagged numerical follow-up (substep / GPU-NDOF25 kernel + more seeds) for a definitive dimer
-  L60 Vmax/ρ½. **L40 stays canonical.**
+- **Dimer slowdown preserved at L60 — QUALITATIVELY SUPPORTED** (not a length artifact; mechanism = fork-opposition
+  Vmax effect; two-head negligible). **NOT Outcome 3** (no qualitative change in the dimer slowdown or the
+  single-head-bound saturation mechanism).
+- **Dimer Vmax / ρ½ — UNRESOLVED QUANTITATIVELY / NOT FREEZE-GRADE** (limited sampling + physically implausible
+  branch excursions). The fitted ratios are artifacts.
+- **Verdict: the reduced L60 dimer study qualitatively supports Outcome 1** (dimer slowdown preserved, saturating
+  tendency, right-shift direction) **but contributes no freeze-grade dimer ensemble parameters.** It is retained as
+  **qualitative supporting evidence.** **L40 stays canonical.** Flagged follow-up (paper-strengthening,
+  non-blocking): physically-admissible longer dimer runs (substep / NDOF=25 GPU kernel) + more seeds; head-resolved
+  telemetry.

@@ -52,10 +52,11 @@ Buckling: Euler critical ∝ 1/L² (71→2.0 pN); at L60 compression buckles cle
 asymmetry, emergent); at L40 the beam is on the compressed-straight branch. The decoupling (search-mobile
 transverse + stiff axial) **emerges for L ≥ 40**; L < 40 is the (correct) strongly-supported regime.
 
-## 4. Demonstrated vs predicted (the honest evidence split — corrected)
+## 4. Evidence classification (demonstrated / supported / suggestive / unresolved)
 
-Production gliding was run **only at L40** through canon v2, so the ensemble-level S2-length conclusions were
-**predicted from the L-robust mechanics, not directly demonstrated at L60 ensemble scale.** Separating them:
+Before the declared L60 sensitivity study, production gliding had been run only at L40, so the ensemble-level
+S2-length conclusions were predicted from the L-robust beam mechanics. **The completed L60 study now permits the
+following evidence reclassification** (single-head demonstrated; dimer qualitative). Separating the layers:
 
 ### 4a. Already demonstrated across L (beam / single-molecule)
 - contour conservation;
@@ -70,20 +71,35 @@ Production gliding was run **only at L40** through canon v2, so the ensemble-lev
 The L60 single-head (52-cell GPU full grid) + HMM-dimer (16-cell reduced CPU) sweeps were run
 (`L40_VS_L60_GLIDING_COMPARISON.md`). Reclassification — **Outcome 1 (quantitative rescaling only)**:
 
-| conclusion | verdict | evidence |
+| conclusion | classification | evidence |
 |---|---|---|
-| hyperbolic density saturation | **DEMONSTRATED** | single-head hyperbolic R²0.99 at both L; dimer approaches saturation; no high-density decline |
-| ρ½ (half-saturation density) | **DEMONSTRATED to shift modestly** | single-head ρ½ 418→500 (+20 %, a recruitment-scale right-shift via mechanical accessibility); dimer right-shifts same direction |
-| modest change in Vmax | **DEMONSTRATED** | single-head Vmax ratio 1.026 (+2.6 %, CIs overlap) — negligible |
-| bound-head recruitment beyond velocity saturation | **DEMONSTRATED** | recruitment continues at high ρ (bound heads keep rising past the velocity plateau) at both L |
-| dimer slowdown | **SUPPORTED** (dimer arm noise-limited) | dimer Vmax < single-head Vmax at L60 (~0.7–0.8×); preserved |
-| dimer/single-head velocity ratio | **SUPPORTED** | dimer/single ~0.59 (L40) → ~0.7–0.8 (L60); dimer stays slower |
-| cooperativity interpretation | **DEMONSTRATED robust** | saturation + dimer-Vmax-effect + near-hyperbolic (n≈1) all persist; the exposed-length⇒ρ½ dependence is a causal sensitivity result, not a reinterpretation |
+| single-head hyperbolic saturation | **DEMONSTRATED** | single-head hyperbolic R²0.99; no high-density decline |
+| single-head ρ½ shift | **DEMONSTRATED modest geometry-dependent recruitment-scale shift** | ρ½ 418→500 (+20 %, mechanical accessibility) |
+| single-head Vmax robustness | **DEMONSTRATED negligible** | Vmax ratio 1.026 (+2.6 %, CIs overlap) |
+| single-head continued recruitment | **DEMONSTRATED** | bound heads keep rising past the velocity plateau |
+| dimer remains slower than single-head | **QUALITATIVELY SUPPORTED** | dimer/single 0.67–0.95 per-density; ~0.59 Vmax-level at L40 |
+| dimer slowdown at L60 | **QUALITATIVELY SUPPORTED** | two-head frac ~0.0002 ⇒ fork-opposition Vmax effect, mechanism not qualitatively changed |
+| dimer ρ½ right-shift | **SUGGESTIVE / DIRECTIONAL** | same direction as single-head; magnitude UNRESOLVED |
+| dimer saturation | **SATURATING TENDENCY SUPPORTED, not quantitatively demonstrated** | reduced, excursion-affected grid |
+| dimer Vmax and ρ½ values | **UNRESOLVED QUANTITATIVELY / not freeze-grade** | fitted ratios 1.76 / 5.84 are artifacts, not results |
+| increased buckling-prone mechanics | **DEMONSTRATED AT BEAM LEVEL** | preflight kComp 105→0.68, buckle 4.4→2.0 |
+| increased buckled-head population | **PREDICTED, NOT COUNTED** | head-resolved taut/buckled not instrumented |
+| reduced internal opposition | **MECHANISTICALLY CONSISTENT INFERENCE** | preserved velocity vs lower occupancy/ATP; not measured head-resolved |
+| cooperativity interpretation | **DEMONSTRATED (single-head); QUALITATIVELY SUPPORTED (dimer)** | saturation + Vmax-effect + n≈1 persist |
 
-**Status of 4b: RESOLVED — robust to exposed S2 length (Outcome 1).** L40 stays canonical; L60 is a supporting
-§6.2 causal-sensitivity result. The dimer quantitative precision is noise-limited (reduced CPU grid + the L60
-branch-excursion tail at branchEA=0.03) — a flagged optional follow-up (substep / NDOF=25 GPU kernel + seeds),
-not a freeze blocker.
+**Status of 4b: single-head robustness DEMONSTRATED; dimer arm QUALITATIVE supporting evidence (Outcome 1).**
+L40 stays canonical; L60 is a supporting §6.2 causal-sensitivity result. The **dimer Vmax/ρ½ are NOT freeze-grade**
+— the reduced CPU grid (4 ρ × 2 seeds × 10k) is quantitatively under-constrained, and several L60 dimer cells show
+**physically-inadmissible branch excursions** (maxGap ~3700 nm, peak branch force ~2.2e4 pN; the solver recovered,
+0 invalid/solver, but the affected velocities are physically contaminated) — making the reduced dimer arm a
+**qualitative stress test, not a definitive ensemble fit** (`L60_HMM_DIMER_DENSITY_SWEEP_FINDINGS.md`). Flagged
+follow-ups (paper-strengthening, non-blocking): physically-admissible longer dimer runs (substep / NDOF=25 GPU
+kernel + seeds), head-resolved telemetry, and the L40-comparator provenance reconciliation (Part F).
+
+**Rigor-mode provenance:** the historical L40 baseline is `rupture_mode=0`; the L60 sweep is `rupture_mode=1`
+(canonical); the validated negligible, non-reshaping mode difference permits the mode-0 baseline as the canon-v2
+comparison without re-running it. Mode 1 is canonical; mode 0 is only the immutable historical baseline /
+legacy-disable, NOT canonical.
 
 ## 5. Freeze decision
 

@@ -16,7 +16,7 @@ completed validations that must rerun if changed.
 > AMK-2008 0.008–0.012 band; `S2_MD_PROVENANCE_CORRECTION.md`); **branchEA** is RESOLVED to 0.03 (NUMERICAL
 > COMPLIANCE — CALIBRATED BY CONSTRAINT; `BRANCHEA_CALIBRATION_FINDINGS.md`); the **chemistry + force-dependent
 > release** (rigor rupture now the canonical default ON) and the **GPU production governance** are frozen
-> (`CANONICAL_FREEZE_CLOSURE_FINDINGS.md`). The S2 **exposed length** is CONDITIONALLY FROZEN at L40 (Gate A);
+> (`CANONICAL_FREEZE_CLOSURE_FINDINGS.md`). The S2 **exposed length** is CONDITIONALLY FROZEN at L40, L60 sensitivity COMPLETED (Outcome 1);
 > §1 below is retained as the flagship structural sensitivity (exposed contour length + boundary condition,
 > material frozen — the paper's §6.2 target).
 
@@ -38,10 +38,11 @@ completed validations that must rerun if changed.
   2.0 pN); the load-bearing-vs-bending head fraction (explicit ≈67% taut at L40); gliding Vmax (amplitude).
 - **Evidence split (L60 sweep COMPLETE 2026-07-23 — Outcome 1).** *Demonstrated across L* (beam/single-molecule):
   stroke L-robust; axial/bending/buckling scale as MD predicts; contour conserved; decoupling holds for L≥40.
-  *Ensemble (now tested)*: hyperbolic saturation, modest Vmax (+2.6 % single-head), recruitment beyond
-  saturation, near-hyperbolic response = **DEMONSTRATED** robust; ρ½ +20 % right-shift (mechanical accessibility)
-  demonstrated; dimer slowdown + dimer/single ratio = **SUPPORTED** (dimer arm noise-limited). L40 stays
-  canonical; L60 is a supporting §6.2 sensitivity result (`L40_VS_L60_GLIDING_COMPARISON.md`). Do NOT run a
+  *Ensemble (now tested)* — **single-head DEMONSTRATED**: hyperbolic saturation, negligible Vmax (+2.6 %),
+  recruitment beyond saturation, near-hyperbolic response robust; ρ½ +20 % right-shift (mechanical accessibility)
+  demonstrated. **Dimer QUALITATIVELY SUPPORTED** (slowdown preserved) but **Vmax/ρ½ UNRESOLVED / not freeze-grade**
+  — the reduced-CPU dimer arm is a qualitative stress test with physically-inadmissible L60 branch excursions.
+  L40 stays canonical; L60 is a supporting §6.2 sensitivity result (`L40_VS_L60_GLIDING_COMPARISON.md`). Do NOT run a
   material-stiffness study; the only optional follow-up is a tighter dimer L60 (substep / NDOF=25 GPU + seeds).
 - **Reruns if the exposed length is changed.** Dimer + single-head gliding density sweeps, the calibrated
   surrogate re-fit at the new L (kAxTension), GPU/CPU spot-check. (Step-size / force-clamp are L-robust in stroke.)
