@@ -19,11 +19,29 @@ package softbox;
  */
 public final class ExplicitHmmDimerGpuParams {
 
-    // ---------------- promotion gate (task §1, §19) ----------------
-    /** Master gate. FALSE until ALL mandatory validation gates pass. Do NOT flip as a side effect. */
+    // ---------------- promotion gate (task §1, §19; per-assay-class since canon v2, 2026-07-22) ----------------
+    /** Legacy master gate. Retained for the FULL-timestep / unvalidated classes; per-assay-class
+     *  {@link #productionValidated} now supersedes it for the validated forked-dimer gliding class. */
     public static final boolean DEVICE_VALIDATED = false;
-    /** Experimental escape hatch: allows -backend gpu while un-validated (explicit, opt-in). Never a default. */
+    /** Experimental escape hatch: forces an UNVALIDATED device class (explicit, opt-in). Never a default;
+     *  no longer required for the validated forked-dimer gliding production class (see below). */
     public static boolean EXPERIMENTAL_OVERRIDE = false;
+
+    /**
+     * Per-assay-class production validation (canon v2 governance, 2026-07-22 — replaces the blanket
+     * DEVICE_VALIDATED refusal for the validated class). The explicit-S2 / HMM-dimer forked-dimer gliding
+     * MECHANICS class ({@link Backend#GPU} / {@link Backend#GPU_MECH}) is validated for normal GPU production
+     * and runs device-resident WITHOUT the {@code -gpu-experimental} override, on the evidence base of the
+     * deterministic fixtures V1–V8, moving-actin, binding + chemistry CPU↔GPU bit-identity, and 0 invalid /
+     * 0 solver across every completed production cell (the assay class is chaotic-ensemble ⇒ the standard is
+     * aggregate-statistical, not bit-identical trajectories — {@code docs/CPU_GPU_VALIDATION_POLICY.md},
+     * {@code docs/canonical_freeze/GPU_CANONICAL_PRODUCTION_SIGNOFF.md}). The FULL experimental single-graph
+     * device timestep ({@link Backend#GPU_FULL_EXPERIMENTAL}) is NOT validated and still hard-fails. Never a
+     * silent fallback; the standing-config self-check ({@link #assertStandingConfig}) still aborts on any drift.
+     */
+    public static boolean productionValidated(Backend b) {
+        return b == Backend.GPU || b == Backend.GPU_MECH;
+    }
 
     // ---------------- runtime backend selector (task §1/§22) ----------------
     public enum Backend {
@@ -121,11 +139,14 @@ public final class ExplicitHmmDimerGpuParams {
      */
     public static void requireUsable(Backend b) {
         boolean deviceProd = b == Backend.GPU || b == Backend.GPU_MECH || b == Backend.GPU_FULL_EXPERIMENTAL;
-        if (deviceProd && !(DEVICE_VALIDATED || EXPERIMENTAL_OVERRIDE)) {
-            throw new IllegalStateException(
-                "-backend " + b + " refused: ExplicitHmmDimerGpuParams.DEVICE_VALIDATED=false. " +
-                "Use -backend gpu-validate to cross-check, or -gpu-experimental to force the un-validated device path.");
-        }
+        if (!deviceProd) return;                 // CPU and GPU_VALIDATE (cross-check) are always allowed
+        if (productionValidated(b)) return;      // per-assay-class VALIDATED ⇒ normal GPU production, no override
+        if (DEVICE_VALIDATED || EXPERIMENTAL_OVERRIDE) return;  // unvalidated class: master gate or explicit override
+        throw new IllegalStateException(
+            "-backend " + b + " refused: assay class '" + b + "' is NOT validated for production. " +
+            "The forked-dimer gliding mechanics class (GPU / GPU_MECH) is validated and runs device-resident " +
+            "WITHOUT an override; the full experimental single-graph device timestep (GPU_FULL_EXPERIMENTAL) " +
+            "remains unvalidated. Use -backend gpu-validate to cross-check, or -gpu-experimental to force it.");
     }
 
     /**

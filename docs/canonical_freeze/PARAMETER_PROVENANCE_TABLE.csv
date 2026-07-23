@@ -1,0 +1,89 @@
+parameter,value,units,code_location,harnesses,provenance_class,source,independently_validated,changing_invalidates,freeze_status,notes
+atpOn,2.0e4,per_s,MotorStore.java:457,"explicit-s2/HMM/SM4/lumped (all cycleLymnTaylor)",B,"Lymn & Taylor 1971 (rabbit skel HMM ~20C); via Howard 2001 T14-2; pseudo-first-order saturating [ATP]",partial (SM4 rigor arm k0 recovered),"gliding V0, rigor lifetime, all cycling",FROZEN,"sole LT release clock; 2e4 is an order-of-magnitude lower-bound"
+onATP_hydrolysis_onfil,100,per_s,MotorStore.java:458,all,B,"Lymn & Taylor 1971 / White & Taylor 1976 (~20C)",no,"cycle dwell, duty",FROZEN,ATP->ADPPi
+offATP_hydrolysis_offfil,100,per_s,MotorStore.java:459,all,B,"as onATP; sets ~10ms detached recovery",no,"detached recovery time, duty",FROZEN,
+onPi_powerstroke_onfil,1.0e4,per_s,MotorStore.java:460,all,B,"White & Taylor 1976 / Howard T14-2 (~20C)",no,"stroke timing, duty",FROZEN,Pi release = power stroke
+offPi_offfil,0,per_s,MotorStore.java:461,all,D,"v1 choice (absorbing; Env.java:851 //0.1)",no,"off-fil priming",CONDITIONALLY_FROZEN,disabled off-fil Pi release
+onADP_release_onfil,1.0e3,per_s,MotorStore.java:462,all,B,"Siemankowski Wiseman & White 1985 (rabbit skel S1 ~15C, >=500/s); already ~25C-equiv",yes (SM4 ADP arm compliant fixture),"gliding V0 (velocity-limiting), force-dependent lifetime",FROZEN,"catch-slip-modulated; carries the model load dependence"
+offADP_release_offfil,1.0e3,per_s,MotorStore.java:463,all,B,"as onADP",no,"free-head detach",FROZEN,
+alphaCatch,0.92,dimensionless,MotorStore.java:290,all,B,"Guo & Guilford 2006 (rat skel HMM room temp)",yes (SM4 blind),"force-dependent lifetime, catch peak, gliding",FROZEN,g(0)=aCatch+aSlip=1.000000
+alphaSlip,0.08,dimensionless,MotorStore.java:291,all,B,"Guo & Guilford 2006",yes (SM4 blind),"force-dependent lifetime, gliding",FROZEN,
+xCatch,2.5,nm,MotorStore.java:292,all,B,"Guo & Guilford 2006 (Veigel d~2.7nm cross-check)",yes (SM4 blind ADP fixture recovered 2.50 exact),"force-dependent lifetime, gliding V0",FROZEN,not a gliding knob
+xSlip,0.4,nm,MotorStore.java:293,all,B,"Guo & Guilford 2006",yes (SM4 blind),"force-dependent lifetime",FROZEN,
+kT_catch,4.116e-21,J,MotorStore.java:294,all,A,"Constants.kT tempK=298.15 (25C explicit)",yes (defined),"all exp(F x/kT) and Brownian",FROZEN,PINNED thermodynamic
+kOff,100,per_s,MotorStore.java:289,legacy catchSlipRelease only,H,"v1 Env.java:822 duty anchor",n/a,none (dormant),DEPRECATED,not read on canonical LT path
+kOn,0,per_um_s,MotorStore.java:316,none (unused),E,"geometric bind-on-contact default",n/a,none,DEPRECATED,canonical bind is deterministic gate
+MYO_REBIND_TIME,1.0e-5,s,MotorStore.java:153,all,H,"v1 Env.myoRebindTime Env.java:832",no,"post-release refractory (=1 step at prod dt)",CONDITIONALLY_FROZEN,numerical
+refractoryBlockProb,1.0,probability,MotorStore.java:310,all,E,"deterministic 1-step; 0.31 v1-GPU oracle variant",no,"rebind timing",CONDITIONALLY_FROZEN,0.31 variant is OPTIONAL
+pDtCap,0.2,dimensionless,MotorStore.java:353,SM4/rupture,E,"rate*dt small-limit guard",n/a,none (flag only),FROZEN_NUMERICAL,never clips; flags
+myosinBreakForce,12,pN,MotorStore.java:306,contractile/gliding (faithfulrelease),D,"v1 Env.java:799 stiffness safety valve",no,"avgBound if enabled (7.6->6.5)",OPTIONAL_NONCANONICAL,default OFF (kinParams[12]=0)
+rigor_k0,140,per_s,MotorStore.java setRigorRupture,Sm4/HMM (rigor rupture),B,"Guo & Guilford 2006 Table-2 rigor fit",yes (SM4 blind STRONG),"rigor force-lifetime",FROZEN,params frozen; pathway PROMOTED to canonical default ON (canon v2)
+rigor_aCatch,0.9071,dimensionless,MotorStore.java setRigorRupture,Sm4/HMM,B,"Guo & Guilford 2006 Table-2 rigor",yes (SM4 blind),"rigor lifetime",FROZEN,pathway default ON (canon v2)
+rigor_xCatch,1.5,nm,MotorStore.java setRigorRupture,Sm4/HMM,B,"Guo & Guilford 2006 Table-2 rigor (recovered blind 1.51)",yes (SM4 blind),"rigor lifetime",FROZEN,pathway default ON (canon v2)
+rigor_aSlip,0.0929,dimensionless,MotorStore.java setRigorRupture,Sm4/HMM,B,"Guo & Guilford 2006 Table-2 rigor",yes,"rigor lifetime",FROZEN,
+rigor_xSlip,0.5,nm,MotorStore.java setRigorRupture,Sm4/HMM,B,"Guo & Guilford 2006 Table-2 rigor",yes,"rigor lifetime",FROZEN,
+rupture_mode,1,enum,"single-head/HMM-dimer/GPU-production ~647/975/1768; Sm4 apparatus default 0",single-head/HMM/SM4,D,"SM4 blind STRONG for rigor; ATP-free ADP restored ADP>rigor ordering with frozen params; gliding impact negligible +0.33%",rigor STRONG (xCatch 1.5 peak 7pN); ADP ATP-free PASS (1.17x 32.6ms/6.7pN),"gliding negligible (immutable baselines); -no-rupture = byte-identical legacy",CANONICAL_DEFAULT_ON,"PROMOTED to canonical default ON (canon v2, 2026-07-22); double-counting guard satisfied without recalibration; -no-rupture restores legacy"
+adpRupture_k0,191,per_s,MotorStore.java setAdpRupture,Sm4 (allrupture),B,"Guo & Guilford 2006 Table-2 ADP fit",rejected (worsened ADP; changed gliding),n/a,OPTIONAL_NONCANONICAL,"mode 2 all-strong-bound; rejected structural alternative"
+hmm_rupture_thresholds,"20/10/1.0/40/50",nm_or_pN,ExplicitHmmDimerGpuParams.java:97-103,HMM GPU,E,"numerical-stability failsafe; no derivation",no,none (default R0 off),OPTIONAL_NONCANONICAL,threshold promotion pending sweep
+myoSpring_F8,1.0,pN/nm,CrossBridgeSystem.java:120,all motor paths,D,"v1 gliding-match (unpublished conference poster); lit bracket 0.3-2 (Veigel; Kaya&Higuchi ~1.8)",partial (gliding-constrained; sharply peaked at 1.0),"gliding velocity+avgBound, step-size, force-clamp",CONDITIONALLY_FROZEN,GENERIC_BUT_ACCEPTED; not a gliding knob
+lever_len,8,nm,TwoBodyConverterMotor.java:1185; MotorStore.java:45,all,F,"v1 geometry Env.java:776-778",indirect (emergent stroke validated),"step-size (stroke)",CONDITIONALLY_FROZEN,
+powerstroke_swing,60,deg,"TwoBodyConverterMotor.java:2164,2472",all explicit,F,"modeling geometry; Exp 3D/3E validated",indirect,"step-size (stroke)",CONDITIONALLY_FROZEN,PRESTROKE -30 to ADP +30
+working_stroke_emergent,~7,nm,measured,step-size assay,C,"validation vs Finer 1994 / Molloy 1995 / Norstrom 2010 (5-8 nm)",yes (PINNED metric),n/a,FROZEN,PINNED validation observable not a knob
+kconv,128,pN_nm_per_rad2,TwoBodyConverterMotor.java:6297,explicit/HMM,G,"no in-code provenance; mid-sweep KCONV_3C",no,"converter compliance -> stroke, binding energy gate",CONDITIONALLY_FROZEN,eligible for sec6.2 compliance study
+kbind,512,pN_nm_per_rad2,TwoBodyConverterMotor.java:6297,explicit/HMM,G,"no in-code provenance; sweep KBIND_3C",no,"bound-head orientation, binding energy gate",CONDITIONALLY_FROZEN,eligible for sec6.2 study
+S2_EA,4.2e-9,N,TwoBodyConverterMotor.java:6268,explicit-s2/HMM,B,"AMK-2008; Brizendine 2021 (MD); kAxRef 70 mid-band (lit 60-80)",indirect,"tension transmission, k_ax=105, surrogate fit",CONDITIONALLY_FROZEN_MD_LITERATURE,frozen material constant
+S2_EI,7.2e-28,N_m2,TwoBodyConverterMotor.java:6269,explicit-s2/HMM,B,"Adamovic 2008 (MD); kLatRef 0.01 DEAD-CENTER in lit 0.008-0.012; Lp~175 in MD-implied 140-210",indirect,"buckling F_crit, Lp, transverse reaction",CONDITIONALLY_FROZEN_MD_LITERATURE,"CORRECTED rev2: MD-constrained, not unknown"
+S2_length_L,40,nm,TwoBodyConverterMotor.java:6270,explicit-s2/HMM/force-clamp FXB,F,"exposed contour length / surface boundary choice; L in {10,20,40,60} built",L-robust (all conclusions robust across 40-60nm),"k_ax, buckling, dimer geometry, surrogate, gliding (amplitude only)",CONDITIONALLY_FROZEN_GEOMETRY,"CLOSURE Gate A: L40 canonical reference geometry; material frozen; exposed length conditionally frozen; optional L60 gliding = section6.2 structural sensitivity, not required"
+S2_k_ax_derived,105,pN/nm,MotorModel.java:321,explicit/calibrated,B,"= EA/L at L40 (derived)",indirect,"axial reaction, surrogate kAxTension",CONDITIONALLY_FROZEN,inherits L and EA
+S2_Lp,175,nm,MotorModel.java:322,explicit/HMM,B,"= EI/kT; in MD-implied 140-210 band",indirect,"bending compliance",CONDITIONALLY_FROZEN_MD_LITERATURE,inherits EI (MD-constrained)
+S2_l0_segment,10,nm,TwoBodyConverterMotor.java:6266,explicit/HMM,E,"discretization",yes (convergence),"beam resolution",FROZEN_NUMERICAL,
+S2_Rnode_drag,5,nm,TwoBodyConverterMotor.java:6267,explicit/HMM,E,"lumps 10nm segment; stability",yes,"bending-explicit stability",FROZEN_NUMERICAL,
+HMM_branchLen,10,nm,ExplicitHmmDimerGlidingHarness.java:75,HMM,F,"fork-relaxation study; no citation",no,"dimer mechanics",OPEN_BIOPHYSICAL,
+HMM_sharedLen,30,nm,ExplicitHmmDimer.java:142,HMM,F,"= TOTAL - branchLen",no,"dimer mechanics",OPEN_BIOPHYSICAL,derived
+HMM_SPLAY,16,deg,ExplicitHmmDimerGlidingHarness.java:75,HMM,F,"geometry; no citation",no,"head spacing, dimer recruitment",OPEN_BIOPHYSICAL,
+HMM_ALPHA,10,deg,ExplicitHmmDimerGlidingHarness.java:75,HMM,F,"fork rest half-angle energy; no citation",no,"fork rest, dimer mechanics",OPEN_BIOPHYSICAL,
+HMM_BREI,0.25,multiplier,ExplicitHmmDimerGlidingHarness.java:75,HMM,F,"branch bending softening; compliance study",no,"dimer buckling/compliance",OPEN_BIOPHYSICAL,
+HMM_branchEA,0.03,multiplier,"single source of truth ExplicitHmmDimerGpuParams.java:81; harness default references it",HMM,E,"CONFIRMED from run metadata (every cell 0.03); stability/geometry-calibrated; velocity flat = not gliding-fit",yes (compliance sweep + production sweep),"dimer gliding, joint-gap stability",NUMERICAL_COMPLIANCE_CALIBRATED_BY_CONSTRAINT,"RESOLVED rev2: 0.03 confirmed; 0.3 was rejected; split eliminated"
+HMM_EXCL,5.4,nm,ExplicitHmmDimerGlidingHarness.java:72,HMM,F,"same-fil site occupancy exclusion",no,"two-head binding geometry",CONDITIONALLY_FROZEN,
+calib_kAxTension,105,pN/nm,MotorModel.java:353,calibrated-s2-l40,C,"Exp 4I fit to EXPLICIT_S2_L40; = EA/L exact",yes (4G spot-checks),"surrogate axial force, gliding",CONDITIONALLY_FROZEN,re-fit not edit
+calib_kTr,0.026,pN/nm,MotorModel.java:356,calibrated-s2-l40,C,"Exp 4I fit; ~3EI/L3",yes,"surrogate transverse reaction, search",CONDITIONALLY_FROZEN,
+fixed_anchor,rigid,n/a,MotorModel.java:36-55,tweezers/regression,C,"strongly-supported assay fixture (3A-3F,4H)",yes (blinded tweezers),"tweezers baseline, FXA force-clamp",CONDITIONALLY_FROZEN,infinitely stiff limit
+bindP0_distance,3.0,nm,TwoBodyConverterMotor.java:2167,explicit,F,"named heuristic; not tuned to a rate",yes (sensitivity: no-op),none (inert),CONDITIONALLY_FROZEN,preload always tighter
+bindP1_psi,25,deg,TwoBodyConverterMotor.java:2167,explicit,F,"named heuristic",yes (sensitivity: non-limiting +/-7%),"recruitment (negligible)",CONDITIONALLY_FROZEN,flat plateau
+bindP2_phi,25,deg,TwoBodyConverterMotor.java:2167,explicit,F,"named heuristic",yes (sensitivity),"recruitment (negligible)",CONDITIONALLY_FROZEN,flat plateau
+bindP3_theta,20,deg,TwoBodyConverterMotor.java:2167,explicit,F,"named heuristic",yes (sensitivity),"recruitment (negligible)",CONDITIONALLY_FROZEN,flat plateau
+bindP4_preload,2.0,pN,TwoBodyConverterMotor.java:2167,explicit,F,"named heuristic; recruitment bottleneck",yes (sensitivity: at optimum),"recruitment, bound-head count",CONDITIONALLY_FROZEN,at recruitment peak+best onset quality
+bindP5_energy,15,kT,TwoBodyConverterMotor.java:2167,explicit,F,"named heuristic",no,"binding admission",CONDITIONALLY_FROZEN,
+bindP10_margin,1e-6,um,TwoBodyConverterMotor.java:4529,explicit,F,"canonical half-open ownership (2026-07-18)",yes (rollout: preserves plateau),"recruitment, density curve shift",FROZEN,segmentation-invariant limit
+bindP12_ownership,0,enum,TwoBodyConverterMotor.java:4528,explicit,D,"canonical half-open; LEGACY=1 regression-only",yes,"binding ownership",FROZEN,
+LEGACY_MARGIN,0.05,um,TwoBodyConverterMotor.java:4530,regression-only,H,"no derivation; masked ownership-handoff gap (commit e17b5a4)",no,none,DEPRECATED,UNKNOWN provenance; 50nm segment-end exclusion
+myoColTol,6,nm,GlidingHarness.java:135; BindingDetectionSystem.java:77,lumped only,D,"NEUTRAL PLACEHOLDER (GlidingHarness.java:133)",n/a,none on explicit path,DEPRECATED,not read by explicit gate
+azimuthal_gate,45,deg,BindingDetectionSystem.java:404,lumped experimental,G,"experimental; under-restrictive",rejected (no saturation),n/a,OPTIONAL_NONCANONICAL,default OFF
+density_convention_singlehead,heads/um2,um-2,TwoBodyConverterMotor.java:4447,explicit single-head,D,"one head per motor",yes,"density axis of all gliding curves",FROZEN,definition
+density_convention_dimer,dimers/um2,um-2,ExplicitHmmDimerGlidingHarness.java:194,HMM,D,"molecular density; heads=2x",yes,"density axis, single-vs-dimer comparison",FROZEN,definition
+surface_kz,2.0,pN/nm,TwoBodyConverterMotor.java:4418,gliding,E,"coverslip normal confinement",yes,"filament z-confinement",FROZEN,assay fixture; surface height OPEN
+motor_anchor_z,-0.05,um,LaserTrapHarness.java:1014,gliding,F,"v1 fixedMyosinZValue",no,"surface height",CONDITIONALLY_FROZEN,idealized coverslip
+filament_gap,2.0,nm,ExplicitHmmDimerGlidingHarness.java:199,dimer gliding,F,"filament floats above heads",no,"binding reach geometry",CONDITIONALLY_FROZEN,
+seg_length,0.17550,um,TwoBodyConverterMotor.java:4459,gliding,E,"= (64+1)*actinMonoRadius; 64 mono/seg",yes,"actin discretization",FROZEN_NUMERICAL,
+nseg_singlehead,12,count,TwoBodyConverterMotor.java:4416,single-head gliding,E,"contour 2.106 um",yes (11-seg control ratio 1.034),"filament length",FROZEN,assay config
+nseg_dimer,11,count,ExplicitHmmDimerGlidingHarness.java:198,dimer gliding,E,"contour 1.931 um",yes (matched-length control),"filament length",FROZEN,assay config
+persistence_length,15,um,Constants.java:45,gliding,B,"v1 Env.java:572; phalloidin actin 10-18 um",no,"filament bending",CONDITIONALLY_FROZEN,note comment says ~17um (doc mismatch)
+chain_PAIRS,"0.5/0.1/0.265",dimensionless,FilamentStore.java:345-349,gliding,H,"v1 PAIRS port (dt-robust damping)",no,"actin chain mechanics",CONDITIONALLY_FROZEN,
+rod_drag_fit,"-0.20/0.84/-0.662",dimensionless,Constants.java:49-51,all,B,"v1 FilSegment.java:89-91 (FDT-validated)",yes (FDT),"filament drag/diffusion",FROZEN,
+aeta,0.1,Pa_s,Constants.java:33,all,E,"v1 Env.java:404; ~100x water (numerical)",n/a,"absolute glide um/s (not V0=step*rate)",CONDITIONALLY_FROZEN_NUMERICAL,carry ~100x caveat
+BTransCoeff,1.0,dimensionless,Constants.java:57,all,H,"v1 amplitude tuning",yes (FDT),"thermal amplitude",CONDITIONALLY_FROZEN,
+BRotCoeff,0.5,dimensionless,Constants.java:58,all,H,"v1 Lp-tuning knob (not FDT)",no,"rotational thermal (interior frozen)",CONDITIONALLY_FROZEN,
+brownian_amplitude,sqrt(2kT/dt),N,Constants.java:65-67,all,A,"FDT (v1 GPUMoveThing:6789)",yes (FDT),"thermal forcing",FROZEN,
+dt_explicit,2.5e-6,s,MotorModel.java:329,explicit/HMM/SM4,E,"bending-stability-gated; abort-checked",partial (binding under-samples <=12% conv by dt/2),"all explicit dynamics",FROZEN_NUMERICAL,residual OPEN_NUMERICAL
+dt_lumped,1e-5,s,GlidingHarness.java:119,lumped gliding,E,"hard accuracy ceiling no headroom",no (not converged),"lumped gliding numbers",OPEN_NUMERICAL,substep is the open lever
+integrator,linearly-implicit-XB+implicit-beam,n/a,TwoBodyConverterMotor.java:1342,all,E,"overdamped Langevin + backward-Euler XB + implicit beam/Newton",yes,"all dynamics",FROZEN_NUMERICAL,
+RNG,wang-hash-counter,n/a,BrownianForceSystem.java:35,all,E,"counter-based keyed (entity,step,seed)",yes (bit-identical CPU-GPU),"all stochastic; CPU=GPU by construction",FROZEN_NUMERICAL,
+GPU_precision,float32,n/a,ExplicitHmmDimerGpuParams.java:88,GPU paths,E,"single precision (scaled units)",CPU-GPU bit-identical fixtures + chemistry,"GPU numbers (canonical production)",FROZEN_NUMERICAL,GPU is the canonical production path (per-assay-class validation)
+gpu_production_gate_hmm,productionValidated=true,boolean,ExplicitHmmDimerGpuParams.productionValidated/requireUsable,HMM/single-head,E,"per-assay-class validation (canon v2): forked-dimer/explicit-S2 gliding class validated; runs device-resident without -gpu-experimental",V1-V8 + moving-actin + binding + chemistry bit-identical CPU-GPU; 0 inv/sf all cells,"future kernel change re-triggers runG4d equivalence suite",PRODUCTION_PATH_GOVERNANCE,"CLOSURE canon v2: GPU is the NORMAL canonical production path for the validated gliding class; no override needed"
+gpu_gate_full_experimental,productionValidated=false,boolean,ExplicitHmmDimerGpuParams.Backend.GPU_FULL_EXPERIMENTAL,HMM,E,"unvalidated full single-graph device timestep",n/a,"needs -gpu-experimental or a future validation",PRODUCTION_PATH_GOVERNANCE,"hard-fails without explicit override (no silent fallback)"
+gpu_gate_motor_twobody,DEVICE_VALIDATED=false,boolean,MotorGpuParams.java:27,two-body,E,"un-ported two-body GPU models (fixed/calibrated/explicit)",n/a,"CPU-only / hard-closed gate",PRODUCTION_PATH_GOVERNANCE,"hard-fails GPU (never silent fallback); CPU is the path for these models"
+velocity_estimator,LS-slope-centroid,n/a,ExplicitCompleteMatHarness.java:845,gliding,C,"whole-window LS slope on filament axis; equil=0",yes,"all reported velocities",FROZEN,never longWindowSpeedXY
+trap_stiffness_lasertrap,0.05,pN/nm,LaserTrapHarness.java:64,step-size,C,"assay fixture; bracket {0.02,0.05,0.10}",yes (7 gates),"step-size observable",FROZEN,assay config
+force_ladder_sm4,"0,3,6,10",pN,Sm4ForceLifetimeHarness.java:192,force-clamp,C,"assay force ladder +/-dir; blind 0-25",yes,"force-lifetime curve",FROZEN,assay config
+censoring_horizon,20,ms,Sm4ForceLifetimeHarness.java,force-clamp,C,"maxDwell; blind honest right-censoring",yes,"survival analysis",FROZEN,assay config
+run_duration_matsoa,0.1,s,sweep scripts,gliding,C,"40000 steps x 2.5e-6",yes (converged vs short-window artifact),"steady-state density curve",FROZEN,assay config

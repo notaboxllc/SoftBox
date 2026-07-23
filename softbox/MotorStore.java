@@ -125,6 +125,14 @@ public final class MotorStore {
     //   ruptureStats[2m]   = # mechanical rigor ruptures this motor fired
     //   ruptureStats[2m+1] = # steps where (pAtp+pRig) exceeded pDtCap (rate·dt-not-small warning → substep/abort)
     public final IntArray   ruptureStats;  // 2*nMotors
+    // ALL-STRONG-BOUND rupture (mode 2): DIRECT mechanical rupture from bound NUC_ADP. Own params, SEPARATE from
+    // the ADP→NONE release kinetics (kinParams) and from the rigor rupture (rigorParams). Same layout as rigorParams:
+    //   adpRuptureParams[0]=enabled [1]=model(0 two-path/1 Bell) [2]=k0 [3]=aCatch [4]=xCatch(m) [5]=aSlip
+    //   [6]=xSlip(m) [7]=kT(J) [8]=dt(s) [9]=pDtCap. Default [0]=0 ⇒ OFF ⇒ cycleLymnTaylorRuptureAll ≡ cycleLymnTaylorRigor.
+    public final FloatArray adpRuptureParams;  // 12
+    //   adpRuptureStats[2m]   = # DIRECT ADP mechanical ruptures this motor fired
+    //   adpRuptureStats[2m+1] = # steps where (pRel+pRup) exceeded pDtCap (rate·dt-not-small warning)
+    public final IntArray   adpRuptureStats;   // 2*nMotors
 
     // ---- Kernel scalar params ----
     // kinParams (float): [0]=kOff [1]=alphaCatch [2]=alphaSlip [3]=xCatch [4]=xSlip
@@ -229,6 +237,8 @@ public final class MotorStore {
         capStats = new IntArray(nMotors);          // §6.10 break-force release fires per motor (measurement only)
         rigorParams  = new FloatArray(12); rigorParams.init(0f);   // [0]=0 ⇒ rigor rupture OFF (byte-identical default)
         ruptureStats = new IntArray(2 * nMotors); ruptureStats.init(0);
+        adpRuptureParams = new FloatArray(12); adpRuptureParams.init(0f);   // [0]=0 ⇒ ADP direct rupture OFF (default)
+        adpRuptureStats  = new IntArray(2 * nMotors); adpRuptureStats.init(0);
         kinParams = new FloatArray(28);   // [0..17] kinetics; [18]=F_ext (N, measurement); [19]=-nobind; [20]=-adppibind (ADP·Pi bind-gate)
         // AZIMUTHAL (Inc 2): [22]=cos(Δ accept), [23]=twistRate rad/µm (signed, LEFT-handed), [24]=monomer spacing µm, [25]=azGate(0/1). Default 0 ⇒ gate off ⇒ byte-identical.
         // AZIMUTHAL (Inc 3): [26]=falloff steepness n (graded orientational affinity a=b^n, b=max_s (1−headU·n̂)/2). n=0 ⇒ a≡1 ⇒ baseline.
@@ -344,6 +354,23 @@ public final class MotorStore {
     }
     /** Turn the rigor mechanical-rupture pathway OFF (restores byte-identical production behavior). */
     public void disableRigorRupture() { rigorParams.set(0, 0f); }
+
+    /** ALL-STRONG-BOUND mode 2: install the DIRECT ADP mechanical-rupture params (own storage, SEPARATE from the
+     *  ADP→NONE release kinetics and from rigorParams). k0 in s^-1; xCatch/xSlip in nm. Default off ([0]=0). */
+    public void setAdpRupture(boolean on, int model, double k0Adp,
+                              double aCatch, double xCatchNm, double aSlip, double xSlipNm) {
+        adpRuptureParams.set(0, on ? 1f : 0f);
+        adpRuptureParams.set(1, (float) model);
+        adpRuptureParams.set(2, (float) k0Adp);
+        adpRuptureParams.set(3, (float) aCatch);
+        adpRuptureParams.set(4, (float) (xCatchNm * 1.0e-9));
+        adpRuptureParams.set(5, (float) aSlip);
+        adpRuptureParams.set(6, (float) (xSlipNm * 1.0e-9));
+        adpRuptureParams.set(7, (float) Constants.kT);
+        adpRuptureParams.set(8, kinParams.get(6));   // dt as installed by setKinParams
+        adpRuptureParams.set(9, 0.2f);               // rate·dt small-limit guard threshold
+    }
+    public void disableAdpRupture() { adpRuptureParams.set(0, 0f); }
     /** PHASE-2 step-4b: override the catch distance parameter xCatch (the model's d, in nm) — calibrate the
      *  force-sensitivity to Veigel d≈2.7 nm ("1 pN resisting halves detachment"). v1 default 2.5 nm. */
     public void setXCatch(double nm) { kinParams.set(3, (float) (nm * 1.0e-9)); }

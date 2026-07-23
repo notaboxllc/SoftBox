@@ -1703,14 +1703,22 @@ public final class ExplicitHmmDimerGpuValidation {
         G4cGpu gg = new G4cGpu(); G4cState g = g4cInit(density); gg.g = g; gg.brownOn = true;
         g.rp.set(0, 0f); g.rp.set(6, 0f);   // §1 hard-enforce R0 + emergency OFF (in-graph rupture task no-ops)
         TwoBodyConverterMotor.Glide2D G = g.sc.G; MotorStore mot = G.mot; FilamentStore f = G.fil;
+        // CHEMISTRY-RUPTURE MODE (distinct from the §1 strain/emergency failsafe above): install the flag-gated
+        // catch-slip rupture params on the device motor store (mode 1 rigor-only, mode 2 all-strong-bound).
+        ExplicitHmmDimerGlidingHarness.installRigor(mot);
+        int rmode = CHEM_RUPTURE_MODE;   // 0 off / 1 rigor-only / 2 all-strong-bound
         TaskGraph tg = new TaskGraph("hmmProd")
             .transferToDevice(DataTransferMode.FIRST_EXECUTION, g.D, g.sp, g.mechScr, g.topo, g.cum, g.gp, g.conf, g.bindCounts, g.g4bCounts, g.mechStatus, g.rp, g.rcCounts, g.active, g.cullP)
             .transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.body.coord, mot.body.uVec, mot.body.yVec, mot.body.bRotGam, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, G.xbParams, G.segCount, G.segOff, G.segMyo, G.bondData)
             .transferToDevice(DataTransferMode.FIRST_EXECUTION, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.chainParams, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide)
-            .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, f.counts, g.mechCounts)
-            .task("bind", ExplicitHmmDimerGpuKernel::dimerBindGate, g.D, f.coord, f.uVec, f.segLength, g.cum, mot.boundSeg, mot.bindArc, mot.nucleotideState, g.gp, g.bindCounts)
-            .task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts)
-            .task("cockPlace", ExplicitHmmDimerGpuKernel::cockAndPlaceFromD, g.D, mot.body.coord, mot.body.uVec, mot.body.yVec, mot.nucleotideState, g.g4bCounts)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, mot.counts, f.counts, g.mechCounts);
+        if (rmode >= 1) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.rigorParams, mot.ruptureStats);
+        if (rmode == 2) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.adpRuptureParams, mot.adpRuptureStats);
+        tg.task("bind", ExplicitHmmDimerGpuKernel::dimerBindGate, g.D, f.coord, f.uVec, f.segLength, g.cum, mot.boundSeg, mot.bindArc, mot.nucleotideState, g.gp, g.bindCounts);
+        if (rmode == 2)      tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRuptureAll, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats, mot.adpRuptureParams, mot.adpRuptureStats);
+        else if (rmode == 1) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRigor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
+        else                 tg.task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+        tg.task("cockPlace", ExplicitHmmDimerGpuKernel::cockAndPlaceFromD, g.D, mot.body.coord, mot.body.uVec, mot.body.yVec, mot.nucleotideState, g.g4bCounts)
             .task("bond", CrossBridgeSystem::bondForces, mot.body.coord, mot.body.uVec, mot.body.yVec, mot.body.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams)
             .task("feedback", ExplicitHmmDimerGpuKernel::bondDataToD, G.bondData, g.D, mot.boundSeg, mot.forceDotFil, g.g4bCounts)
             .task("zero", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
@@ -1728,6 +1736,8 @@ public final class ExplicitHmmDimerGpuValidation {
             .task("cull", ExplicitHmmDimerGpuKernel::cullDimers, g.D, f.coord, f.uVec, f.segLength, g.active, g.cullP, g.bindCounts)
             .task("mech", ExplicitHmmDimerGpuKernel::solveGuarded, g.D, g.sp, g.mechScr, g.topo, g.mechCounts, g.mechStatus, g.active)
             .transferToHost(DataTransferMode.UNDER_DEMAND, g.D, g.events, g.mechStatus, g.active, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, f.coord, f.uVec);
+        if (rmode >= 1) tg.transferToHost(DataTransferMode.UNDER_DEMAND, mot.ruptureStats);
+        if (rmode == 2) tg.transferToHost(DataTransferMode.UNDER_DEMAND, mot.adpRuptureStats);
         GridScheduler gs = new GridScheduler();
         for (String t : new String[]{ "bind", "cockPlace", "feedback", "rupture", "cull", "mech" }) gs.addWorkerGrid("hmmProd." + t, grid(g.nDim));
         for (String t : new String[]{ "chem", "bond" }) gs.addWorkerGrid("hmmProd." + t, grid(g.N));
@@ -1737,13 +1747,28 @@ public final class ExplicitHmmDimerGpuValidation {
         return gg;
     }
 
+    /** Chemistry catch-slip rupture mode for the production GPU cell (0 off / 1 rigor-only / 2 all-strong-bound).
+     *  DISTINCT from ExplicitHmmDimerGpuParams.RUPTURE_MODE (the strain/emergency failsafe, forced 0 here). */
+    static int CHEM_RUPTURE_MODE = 0;
+
     /** Run ONE production cell (density×seed) on the GPU device engine; write an atomic JSON + .done marker.
-     *  Entry: -production-cell -density D -seed S [-steps M -outdir DIR -rev SHA -healthStride K]. */
+     *  Entry: -production-cell -density D -seed S [-steps M -outdir DIR -rev SHA -healthStride K -rupture-mode N]. */
     static int runProductionCell(String[] args) throws IOException {
         // ---- §1 FROZEN CONFIG (force + verify + print; abort on any violation) ----
         ExplicitHmmDimerGlidingHarness.CFG_EA = 0.03; ExplicitHmmDimerGlidingHarness.CFG_EI = 1.0; ExplicitHmmDimerGlidingHarness.CFG_FORK = 1.0;
         ExplicitHmmDimerGlidingHarness.DT = 2.5e-6;
         ExplicitHmmDimerGpuParams.RUPTURE_MODE = 0; ExplicitHmmDimerGpuParams.EMERGENCY_ON = false;
+        // CHEMISTRY catch-slip rupture mode (separate from the strain failsafe above).
+        // CANONICAL DEFAULT = 1 (rigor-only rupture ON on the device production path, promoted 2026-07-22, canon v2).
+        // -no-rupture / -legacy-disable ⇒ mode 0 (pre-v2 legacy); -allrupture ⇒ 2; the device kernel dispatches
+        // cycleLymnTaylorRigor for mode 1 (see buildProductionGpu chem task) — CPU/GPU parameter-identical.
+        boolean hasAll = false, hasLegacy = false;
+        for (String a : args) { if (a.equals("-allrupture")) hasAll = true;
+            if (a.equals("-no-rupture") || a.equals("-legacy-disable")) hasLegacy = true; }
+        CHEM_RUPTURE_MODE = argInt(args, "-rupture-mode", hasAll ? 2 : hasLegacy ? 0 : 1);
+        ExplicitHmmDimerGlidingHarness.RUPTURE_MODE = CHEM_RUPTURE_MODE;
+        ExplicitHmmDimerGlidingHarness.RIGOR_ON = CHEM_RUPTURE_MODE >= 1;
+        ExplicitHmmDimerGlidingHarness.ADP_RUP_ON = CHEM_RUPTURE_MODE == 2;
         int density = argInt(args, "-density", 500), seed = argInt(args, "-seed", 101), steps = argInt(args, "-steps", 5000);
         int healthStride = argInt(args, "-healthStride", 10);
         String outdir = argStr(args, "-outdir", "RUN_LOGS/hmm_density_sweep"); new File(outdir).mkdirs();
@@ -1758,7 +1783,8 @@ public final class ExplicitHmmDimerGpuValidation {
         else if (ExplicitHmmDimerGpuParams.EMERGENCY_ON) abort = "emergency rupture is ON";
 
         System.out.println("=== HMM-DIMER PRODUCTION CELL — FROZEN CONFIG ===");
-        System.out.printf(Locale.US, "  backend=%s (device-resident=%b) | DEVICE_VALIDATED=%b (experimental override)%n", ExplicitHmmDimerGlidingHarness.BACKEND, deviceBackend, ExplicitHmmDimerGpuParams.DEVICE_VALIDATED);
+        System.out.printf(Locale.US, "  backend=%s (device-resident=%b) | forked-dimer gliding assay class production-validated=%b (canonical GPU path; aggregate-statistical CPU↔GPU equivalence; no CPU fallback)%n",
+                ExplicitHmmDimerGlidingHarness.BACKEND, deviceBackend, ExplicitHmmDimerGpuParams.productionValidated(ExplicitHmmDimerGlidingHarness.BACKEND));
         System.out.printf(Locale.US, "  topology Ms=%d Ma=%d Mb=%d (%d DOF) | branchEA=%.4g (eff ~12.6 pN/nm) | branchEI standing | forkK=%.2g%n", ExplicitHmmDimerGpuParams.MS, ExplicitHmmDimerGpuParams.MA, ExplicitHmmDimerGpuParams.MB, ExplicitHmmDimerGpuParams.NDOF, ExplicitHmmDimerGlidingHarness.CFG_EA, ExplicitHmmDimerGlidingHarness.CFG_FORK);
         System.out.printf(Locale.US, "  D0 (dirMech=0) | 5.4nm occupancy exclusion ON | dt=%.3g s | production chem+catch-slip+binding-gate ON%n", dt);
         System.out.printf(Locale.US, "  actin Brownian ON | dimer-mechanics Brownian ON | GPU cullDimers ON | solveGuarded active-only ON%n");
@@ -1808,6 +1834,23 @@ public final class ExplicitHmmDimerGpuValidation {
                 o.fwdSecond, o.bwdSecond, o.maxGap, o.gapP999, o.exc50, o.exc100, o.peakBranchF, o.peakF8, o.invalidStates, o.solverFailures);
         System.out.printf(Locale.US, "         meanActive=%.1f (%.1f%%) | ATPturn=%d | wall=%.1fs | %.1f steps/s | status=%s%n",
                 o.meanActive, 100.0 * o.meanActive / Math.max(1, nDim), o.atpTurnover, wallS, status.equals("ok") ? (steps / wallS) : Double.NaN, status);
+
+        // ---- CHEMISTRY-RUPTURE cause counts (device counters, read UNDER_DEMAND at end) + PARTCROW ----
+        long rigRup = 0, adpRup = 0;
+        if (CHEM_RUPTURE_MODE >= 1 && status.equals("ok")) {
+            try {
+                gg.lastRes.transferToHost(mot.ruptureStats);
+                if (CHEM_RUPTURE_MODE == 2) gg.lastRes.transferToHost(mot.adpRuptureStats);
+                for (int m = 0; m < N; m++) { rigRup += mot.ruptureStats.get(2 * m); if (CHEM_RUPTURE_MODE == 2) adpRup += mot.adpRuptureStats.get(2 * m); }
+            } catch (Throwable ig) { /* counters best-effort */ }
+        }
+        double nd = Math.max(1, o.nucSteps);
+        if (CHEM_RUPTURE_MODE > 0) System.out.printf(Locale.US, "         CHEM-RUPTURE mode=%d: rigor=%d ADP=%d%n", CHEM_RUPTURE_MODE, rigRup, adpRup);
+        System.out.printf(Locale.US, "PARTCROW,%d,%d,%d,%d,%d,%.5f,%.5f,%.4f,%.4f,%d,%d,%d,%.5f,%.5f,%.5f,%.5f,%d,%d,%s,%.5f,%.5f,%.4f%n",
+                CHEM_RUPTURE_MODE, density, seed, N, steps, o.velProd, o.velFullRun, o.meanBoundHeads, 0.0, o.atpTurnover,
+                rigRup, adpRup, o.nucOcc[MotorStore.NUC_NONE] / nd, o.nucOcc[MotorStore.NUC_ATP] / nd,
+                o.nucOcc[MotorStore.NUC_ADPPI] / nd, o.nucOcc[MotorStore.NUC_ADP] / nd, o.nucSteps, o.invalidStates, status,
+                o.twoFracAmongBound, o.continuity, o.meanBoundDimers);   // dimer-specific: two-head fraction, run continuity, bound dimers
 
         // ---- atomic JSON write ----
         String base = String.format(Locale.US, "cell_d%d_s%d", density, seed);

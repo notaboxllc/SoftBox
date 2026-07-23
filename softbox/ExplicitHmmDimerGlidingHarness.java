@@ -55,9 +55,14 @@ public final class ExplicitHmmDimerGlidingHarness {
     // ---- RIGOR MECHANICAL RUPTURE (flag-gated, default OFF ⇒ chem == cycleLymnTaylor, dimer gliding byte-identical) ----
     static boolean RIGOR_ON = false; static int RIGOR_MODEL = 0;
     static double RIGOR_K0 = 140.0, RIGOR_AC = 0.9071, RIGOR_XC = 1.5, RIGOR_AS = 0.0929, RIGOR_XS = 0.5;
+    // RUPTURE_MODE: 0 off, 1 rigor-only (RIGOR_ON=true), 2 all-strong-bound (+ direct ADP rupture, G&G ADP Table-2).
+    static int RUPTURE_MODE = 0; static boolean ADP_RUP_ON = false;
+    static double ADP_K0 = 191.0, ADP_AC = 0.92147, ADP_XC = 2.5, ADP_AS = 0.07853, ADP_XS = 0.4;
     static void installRigor(MotorStore mot) {
         if (RIGOR_ON) mot.setRigorRupture(true, RIGOR_MODEL, RIGOR_K0, RIGOR_AC, RIGOR_XC, RIGOR_AS, RIGOR_XS);
         else mot.disableRigorRupture();
+        if (ADP_RUP_ON) mot.setAdpRupture(true, 0, ADP_K0, ADP_AC, ADP_XC, ADP_AS, ADP_XS);
+        else mot.disableAdpRupture();
     }
     static long sumRateCap(MotorStore mot) { long w = 0; for (int m = 0; m < mot.nMotors; m++) w += mot.ruptureStats.get(2 * m + 1); return w; }
     static final double PRE  = TwoBodyConverterMotor.PRESTROKE_THETAS;
@@ -72,8 +77,13 @@ public final class ExplicitHmmDimerGlidingHarness {
     //  -branchEA m ⇒ branch axial/stretch stiffness × m (reference = BREA·420 pN/nm)
     //  -branchEI m ⇒ branch bending stiffness × m (reference = BREI·EI = 0.25·EI, i.e. m relative to the CURRENT 0.25)
     //  -forkK   m ⇒ the two fork-root angular-coupling hinges × m (on top of branchEI; new selectable term)
-    // All default 1.0 ⇒ the build call is byte-identical to the reference dimer.
-    static double CFG_EA = 1.0, CFG_EI = 1.0, CFG_FORK = 1.0;
+    // SINGLE SOURCE OF TRUTH (2026-07-22 freeze reconciliation, Part B): the CANONICAL production branch axial
+    //  multiplier is ExplicitHmmDimerGpuParams.STANDING_BRANCH_EA = 0.03 (eff. 12.6 pN/nm), the value the
+    //  completed GPU density sweeps actually used (confirmed from run metadata: every cell_d*_s*.json carries
+    //  "branchEA":0.03) and the value the GPU standing-config self-check enforces. Both runners now default to it;
+    //  the old CPU convenience default of 1.0 (raw 420 pN/nm reference) is the explicit reference-stiffness
+    //  DIAGNOSTIC, selected by `-branchEA 1.0` (the compliance-study byte-identity fixtures pass it explicitly).
+    static double CFG_EA = ExplicitHmmDimerGpuParams.STANDING_BRANCH_EA, CFG_EI = 1.0, CFG_FORK = 1.0;
     // GPU-backend selector (task §1). Default CPU (the permanent oracle); gpu refused until DEVICE_VALIDATED.
     static ExplicitHmmDimerGpuParams.Backend BACKEND = ExplicitHmmDimerGpuParams.Backend.CPU;
     static Dimer buildRefDimer() {
@@ -311,6 +321,7 @@ public final class ExplicitHmmDimerGlidingHarness {
         long propFwd_moveFwd = 0, propBwd_moveFwd = 0, propFwd_moveBwd = 0, propBwd_moveBwd = 0, propFwd_still = 0, propBwd_still = 0;
         // RIGOR MECHANICAL RUPTURE cause accounting (distinct detachment cause; per-motor ruptureStats delta)
         long rigorRuptures = 0, rateCapWarn = 0; double rupForceSum = 0, rupForceMax = Double.NEGATIVE_INFINITY, rupForceMin = Double.POSITIVE_INFINITY; int[] prevRup = null;
+        long adpRuptures = 0; int[] prevAdpRup = null;   // DIRECT ADP mechanical rupture count (mode 2)
     }
 
     // ============================ one step ============================
@@ -358,7 +369,8 @@ public final class ExplicitHmmDimerGlidingHarness {
         }
         // 2. chemistry + 3. thetaS
         mot.setCounts(t, seed, G.nSeg);
-        if (RIGOR_ON) NucleotideCycleSystem.cycleLymnTaylorRigor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
+        if (ADP_RUP_ON) NucleotideCycleSystem.cycleLymnTaylorRuptureAll(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats, mot.adpRuptureParams, mot.adpRuptureStats);
+        else if (RIGOR_ON) NucleotideCycleSystem.cycleLymnTaylorRigor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
         else          NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
         if (RIGOR_ON) {   // distinct mechanical-rupture cause: per-motor ruptureStats delta + realized force-at-rupture
             if (o.prevRup == null) o.prevRup = new int[N];
@@ -366,6 +378,11 @@ public final class ExplicitHmmDimerGlidingHarness {
                 if (rr > o.prevRup[m]) { o.rigorRuptures++; double fr = mot.forceDotFil.get(m) * 1e12;
                     if (Double.isFinite(fr)) { o.rupForceSum += fr; o.rupForceMax = Math.max(o.rupForceMax, fr); o.rupForceMin = Math.min(o.rupForceMin, fr); } }
                 o.prevRup[m] = rr; }
+        }
+        if (ADP_RUP_ON) {   // DIRECT ADP rupture count (distinct cause; adpRuptureStats delta)
+            if (o.prevAdpRup == null) o.prevAdpRup = new int[N];
+            for (int m = 0; m < N; m++) { int ar = mot.adpRuptureStats.get(2 * m);
+                if (ar > o.prevAdpRup[m]) o.adpRuptures++; o.prevAdpRup[m] = ar; }
         }
         for (int m = 0; m < N; m++) G.thetaS[m] = TwoBodyConverterMotor.thetaS4a(mot.nucleotideState.get(m));
         // 4. place + bond forces
@@ -557,7 +574,7 @@ public final class ExplicitHmmDimerGlidingHarness {
         double gapP50, gapP99, gapP999; int exc4, exc10, exc50, exc100;
         double peakBranchF, maxBranchExt, meanBranchExt;
         int excSecondBind, excStroke, excDetach, excFilMotion, excOther;
-        long rigorRuptures, rateCapWarn; double rupForceMean, rupForceMin, rupForceMax; double ruptureFracOfDetach;
+        long rigorRuptures, adpRuptures, rateCapWarn; double rupForceMean, rupForceMin, rupForceMax; double ruptureFracOfDetach;
     }
     static Summary summarize(EScene sc, Obs o, int steps) {
         Summary s = new Summary();
@@ -600,6 +617,7 @@ public final class ExplicitHmmDimerGlidingHarness {
         s.propBiasMoveBwd = frac(o.propFwd_moveBwd, o.propBwd_moveBwd);
         // RIGOR RUPTURE cause accounting: total ruptures, cap warnings, force-at-rupture, fraction of all detachments
         s.rigorRuptures = o.rigorRuptures;
+        s.adpRuptures = o.adpRuptures;
         s.rateCapWarn = RIGOR_ON ? sumRateCap(sc.G.mot) : 0;
         s.rupForceMean = o.rigorRuptures > 0 ? o.rupForceSum / o.rigorRuptures : 0;
         s.rupForceMin = o.rigorRuptures > 0 ? o.rupForceMin : 0; s.rupForceMax = o.rigorRuptures > 0 ? o.rupForceMax : 0;
@@ -620,15 +638,25 @@ public final class ExplicitHmmDimerGlidingHarness {
         double gap = argD(args, "-gap", 8);
         int assay = has(args, "-assayB") ? 1 : 0;
         // dimer-only compliance multipliers (this study; default 1.0 ⇒ reference dimer byte-identical)
-        CFG_EA = argD(args, "-branchEA", 1.0); CFG_EI = argD(args, "-branchEI", 1.0); CFG_FORK = argD(args, "-forkK", 1.0);
+        // Canonical default = STANDING_BRANCH_EA (0.03), the single source of truth (Part B split-default fix).
+        // Pass `-branchEA 1.0` for the raw reference-stiffness diagnostic; the GPU standing-config check still enforces 0.03.
+        CFG_EA = argD(args, "-branchEA", ExplicitHmmDimerGpuParams.STANDING_BRANCH_EA); CFG_EI = argD(args, "-branchEI", 1.0); CFG_FORK = argD(args, "-forkK", 1.0);
         DT = argD(args, "-dt", 2.5e-6);   // timestep override (mat sensitivity study); default byte-identical
         // ---- RIGOR MECHANICAL RUPTURE (chemistry pathway; DISTINCT from the -ruptureMode HMM-dimer strain failsafe) ----
-        RIGOR_ON = has(args, "-rigor-rupture");
+        // RUPTURE_MODE: 0 off / 1 rigor-only / 2 all-strong-bound. CANONICAL DEFAULT = 1 (rigor-only rupture ON,
+        // promoted 2026-07-22, canon v2). -no-rupture / -legacy-disable ⇒ mode 0 (the pre-v2 legacy default);
+        // -allrupture ⇒ 2; -rigor-rupture is an explicit mode-1 selector (now the default, kept for back-compat).
+        RUPTURE_MODE = (int) argD(args, "-rupture-mode", has(args, "-allrupture") ? 2
+                : (has(args, "-no-rupture") || has(args, "-legacy-disable")) ? 0 : 1);
+        RIGOR_ON = RUPTURE_MODE >= 1; ADP_RUP_ON = RUPTURE_MODE == 2;
         RIGOR_MODEL = (int) argD(args, "-rigor-model", 0);
         RIGOR_K0 = argD(args, "-rk0", 140.0); RIGOR_AC = argD(args, "-raC", 0.9071); RIGOR_XC = argD(args, "-rxC", 1.5);
         RIGOR_AS = argD(args, "-raS", 0.0929); RIGOR_XS = argD(args, "-rxS", 0.5);
-        if (RIGOR_ON) System.out.printf(Locale.US, "  [RIGOR MECHANICAL RUPTURE: ON (chem=cycleLymnTaylorRigor) model=%d k0=%.4g/s aCatch=%.4g xCatch=%.4g nm aSlip=%.4g xSlip=%.4g nm; rare competing channel at saturating ATP]%n",
-                RIGOR_MODEL, RIGOR_K0, RIGOR_AC, RIGOR_XC, RIGOR_AS, RIGOR_XS);
+        ADP_K0 = argD(args, "-ark0", 191.0); ADP_AC = argD(args, "-araC", 0.92147); ADP_XC = argD(args, "-arxC", 2.5);
+        ADP_AS = argD(args, "-araS", 0.07853); ADP_XS = argD(args, "-arxS", 0.4);
+        if (RUPTURE_MODE > 0) System.out.printf(Locale.US, "  [MECHANICAL RUPTURE mode=%d (%s): rigor k0=%.4g xC=%.4g xS=%.4g nm%s]%n",
+                RUPTURE_MODE, RUPTURE_MODE == 2 ? "all-strong-bound" : "rigor-only", RIGOR_K0, RIGOR_XC, RIGOR_XS,
+                ADP_RUP_ON ? String.format(Locale.US, " | ADP-rupture k0=%.4g xC=%.4g xS=%.4g nm", ADP_K0, ADP_XC, ADP_XS) : "");
         // ---- GPU-backend selector (task §1/§22): default CPU; gpu refused until DEVICE_VALIDATED (never silent fallback) ----
         if (has(args, "-gpu-experimental")) ExplicitHmmDimerGpuParams.EXPERIMENTAL_OVERRIDE = true;
         BACKEND = ExplicitHmmDimerGpuParams.Backend.parse(argStr(args, "-backend", "cpu"));
@@ -704,13 +732,16 @@ public final class ExplicitHmmDimerGlidingHarness {
         String kernelVariant = deviceResident
                 ? (ExplicitHmmDimerGpuParams.DEFAULT_TANGENT == ExplicitHmmDimerGpuParams.Tangent.FINITE_DIFFERENCE ? "gpu-fd" : "gpu-analytic")
                 : "cpu-object-solver";
+        boolean classValidated = ExplicitHmmDimerGpuParams.productionValidated(BACKEND);
         System.out.printf(Locale.US,
-                "=== HMM-DIMER BACKEND: %s | DEVICE_VALIDATED=%b | precision=%s | kernel=%s | topology Ms=%d,Ma=%d,Mb=%d (%d DOF) | branchEA=%.4g | dt=%.3g | device-resident=%b ===%n",
-                BACKEND, ExplicitHmmDimerGpuParams.DEVICE_VALIDATED, ExplicitHmmDimerGpuParams.DEFAULT_PRECISION,
+                "=== HMM-DIMER BACKEND: %s | production-validated(class)=%b | precision=%s | kernel=%s | topology Ms=%d,Ma=%d,Mb=%d (%d DOF) | branchEA=%.4g | dt=%.3g | device-resident=%b ===%n",
+                BACKEND, classValidated, ExplicitHmmDimerGpuParams.DEFAULT_PRECISION,
                 kernelVariant, ExplicitHmmDimerGpuParams.MS, ExplicitHmmDimerGpuParams.MA, ExplicitHmmDimerGpuParams.MB,
                 ExplicitHmmDimerGpuParams.NDOF, CFG_EA, DT, deviceResident);
-        if (deviceResident && !ExplicitHmmDimerGpuParams.DEVICE_VALIDATED)
-            System.out.println("  [experimental override active — device path is UN-VALIDATED; results not for production]");
+        if (deviceResident && classValidated)
+            System.out.println("  [GPU canonical production path — forked-dimer gliding class validated (aggregate-statistical CPU↔GPU equivalence); no CPU fallback]");
+        else if (deviceResident && ExplicitHmmDimerGpuParams.EXPERIMENTAL_OVERRIDE)
+            System.out.println("  [experimental override active — UNVALIDATED device class; results not for production]");
     }
 
     // ---- DOUBLE-HEAD MAT: single cell (one density × mode × seed) — emits a MATROW CSV line for parallel drives ----
@@ -725,12 +756,12 @@ public final class ExplicitHmmDimerGlidingHarness {
                 -s.velFwd, s.velFwd, s.meanBoundHeads, s.continuity, s.meanActive, s.twoFrac, s.netFwdForce, s.forcePerHead, s.fwd, s.bwd, wall);
         System.out.printf(Locale.US, "  GAP maxGap=%.2f p999=%.2f p99=%.2f p50=%.3f nm | exc>4/10/50/100=%d/%d/%d/%d | peakBrF=%.1f pN maxBrExt=%.2f nm meanBrExt=%.3f nm | trig 2nd/stroke/detach/filmo=%d/%d/%d/%d | inv=%d sf=%d%n",
                 s.maxGap, s.gapP999, s.gapP99, s.gapP50, s.exc4, s.exc10, s.exc50, s.exc100, s.peakBranchF, s.maxBranchExt, s.meanBranchExt, s.excSecondBind, s.excStroke, s.excDetach, s.excFilMotion, s.invalid, s.solverFail);
-        if (RIGOR_ON) System.out.printf(Locale.US, "  RIGOR RUPTURE: %d ruptures (%.4f of detachments) | force@rupture mean %.2f pN [%.2f,%.2f] | rateCapWarn=%d%n",
-                s.rigorRuptures, s.ruptureFracOfDetach, s.rupForceMean, s.rupForceMin, s.rupForceMax, s.rateCapWarn);
-        // RIGORROW,density,seed,nDim,heads,steps,rigorOn,velProd,meanBoundHeads,ruptures,ruptureFracOfDetach,rupForceMean,rupForceMin,rupForceMax,rateCapWarn,twoFrac,cont
-        System.out.printf(Locale.US, "RIGORROW,%.0f,%d,%d,%d,%d,%b,%.5f,%.4f,%d,%.6f,%.3f,%.3f,%.3f,%d,%.5f,%.5f%n",
-                density, seed, sc.nDim, 2 * sc.nDim, steps, RIGOR_ON, s.velFwd, s.meanBoundHeads,
-                s.rigorRuptures, s.ruptureFracOfDetach, s.rupForceMean, s.rupForceMin, s.rupForceMax, s.rateCapWarn, s.twoFrac, s.continuity);
+        if (RUPTURE_MODE > 0) System.out.printf(Locale.US, "  RUPTURE mode=%d: rigor %d, ADP %d (frac-of-detach %.4f) | force@rupture mean %.2f pN [%.2f,%.2f] | rateCapWarn=%d%n",
+                RUPTURE_MODE, s.rigorRuptures, s.adpRuptures, s.ruptureFracOfDetach, s.rupForceMean, s.rupForceMin, s.rupForceMax, s.rateCapWarn);
+        // RUPROW,mode,density,seed,nDim,heads,steps,velProd,meanBoundHeads,rigorRup,adpRup,ruptureFracOfDetach,rupForceMean,rateCapWarn,twoFrac,cont
+        System.out.printf(Locale.US, "RUPROW,%d,%.0f,%d,%d,%d,%d,%.5f,%.4f,%d,%d,%.6f,%.3f,%d,%.5f,%.5f%n",
+                RUPTURE_MODE, density, seed, sc.nDim, 2 * sc.nDim, steps, s.velFwd, s.meanBoundHeads,
+                s.rigorRuptures, s.adpRuptures, s.ruptureFracOfDetach, s.rupForceMean, s.rateCapWarn, s.twoFrac, s.continuity);
         // MATROW,dmode,density,nDim,heads,seed,velRaw,velProd,meanBound,cont,activeDim,twoFrac,netF,Fhead,fwd,bwd,reversalHz,fracFwdT,maxGap,invalid,sf,   (f1..f21)
         //        branchEA,branchEI,forkK,gapP999,gapP99,gapP50,exc4,exc10,exc50,exc100,peakBrF,maxBrExt,meanBrExt,exc2nd,excStroke,excDetach,excFilmo,peakF, (f22..f39)
         //        startupMs,meanBoundDim,oneFrac,dblDwell,attachLife,fracFwdT2,velMed,velSd,cullR_nm,filLen_um  (f40..f49)

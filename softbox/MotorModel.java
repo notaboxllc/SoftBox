@@ -98,8 +98,10 @@ public enum MotorModel {
           + "Retain a distinct L60 fixture for exposed long-tail assays."},
         new String[]{"-exp4f", "-twobody-supported-s2-tail", "-exp4i", "-twobody-s2-surrogate-calibration"});
 
-    /** Canonicalization schema version (bump on any frozen-parameter or provenance change). */
-    public static final int CANON_VERSION = 1;
+    /** Canonicalization schema version (bump on any frozen-parameter or provenance change).
+     *  v2 (2026-07-22): rigor-only mechanical rupture promoted to the canonical production default
+     *  (rupture_mode=1; -no-rupture restores the v1 legacy default). Chemistry/release params unchanged. */
+    public static final int CANON_VERSION = 2;
 
     // ------------------------------------------------------------------ instance state
     private final String id;
