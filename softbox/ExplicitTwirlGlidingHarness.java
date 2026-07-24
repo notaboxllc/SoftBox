@@ -29,6 +29,8 @@ public final class ExplicitTwirlGlidingHarness {
     static double R_NM = 3.5, EXCL_NM = 5.5;
 
     public static void main(String[] args) {
+        // GPU crash lifecycle trace (diagnostic; OFF unless -gpu-crash-trace / SOFTBOX_GPU_CRASH_TRACE=1).
+        TornadoCrashDiagnostic.init("explicit-s2-twirl", args);
         boolean fixtures = false, equiv = false, campaign = false, all = false; String jsDir = null;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -50,8 +52,14 @@ public final class ExplicitTwirlGlidingHarness {
         System.out.printf(Locale.US, "dt=%.2e  density=%.0f heads/µm²  seed=%d  steps=%d  Ractin=%.2f nm  exclusion=%.2f nm%n",
                 DT, DENSITY, SEED, STEPS, R_NM, EXCL_NM);
 
+        TornadoCrashDiagnostic.simDt(DT);
+        TornadoCrashDiagnostic.context("campaignArm", all ? "all" : equiv ? "equiv" : campaign ? "campaign" : fixtures ? "fixtures" : "fixtures");
+        TornadoCrashDiagnostic.context("seed", SEED);
+        TornadoCrashDiagnostic.context("density", DENSITY);
+        TornadoCrashDiagnostic.context("steps", STEPS);
+
         boolean ok = true;
-        if (jsDir != null) { makeMovies(jsDir); return; }
+        if (jsDir != null) { makeMovies(jsDir); TornadoCrashDiagnostic.normalMainReturn("mode=3js dir=" + jsDir); return; }
         if (all) { ok &= runFixtures(); ok &= runEquiv(); runCampaign(); }
         else if (fixtures) ok = runFixtures();
         else if (equiv) ok = runEquiv();
@@ -59,6 +67,7 @@ public final class ExplicitTwirlGlidingHarness {
         else ok = runFixtures();
         System.out.println("====================================================================================================");
         if (fixtures || equiv || all) System.out.println(ok ? "ALL GATED CHECKS PASS" : "*** SOME CHECKS FAILED ***");
+        TornadoCrashDiagnostic.normalMainReturn("ok=" + ok);
         if (!ok) System.exit(1);
     }
 
@@ -332,24 +341,34 @@ public final class ExplicitTwirlGlidingHarness {
         var ec = ExplicitCompleteMatHarness.packExMat(Gc, 1);
         var ed = ExplicitCompleteMatHarness.packExMat(Gd, 1);
         TornadoExecutionPlan plan;
+        TornadoCrashDiagnostic.planConstructionBegin("graph=buildGlidingGraph(surface-ON) arm=equiv-full-graph");
         try { plan = ExplicitCompleteMatHarness.buildGlidingGraph(ed, false); }
-        catch (Throwable ex) { System.out.println("  FULL surface-ON graph did NOT lower: " + oneLine(root(ex).getMessage())
+        catch (Throwable ex) { TornadoCrashDiagnostic.planConstructionThrew(ex);
+                System.out.println("  FULL surface-ON graph did NOT lower: " + oneLine(root(ex).getMessage())
                 + "  (need -Dtornado.enable.fma=false ?)"); return false; }
         int K = 200, firstDiv = -1; double maxFil = 0; boolean lowered = true;
+        TornadoCrashDiagnostic.planConstructionEnd(plan, "arm=equiv-full-graph");
+        TornadoCrashDiagnostic.executeLoopBegin("glide", 0, K - 1, "arm=equiv-full-graph executeCallsPlanned=" + K);
         for (int t = 0; t < K; t++) {
             ed.matc.set(0, t); ed.matc.set(1, 101); Gd.mot.setCounts(t, 101, Gd.nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, 101);
-            try { plan.execute(); } catch (Throwable ex) { lowered = false; System.out.println("  device execute FAILED @t=" + t + ": " + oneLine(root(ex).getMessage())); break; }
+            try { TornadoCrashDiagnostic.beforeExecute(t); plan.execute(); TornadoCrashDiagnostic.afterExecute(t); }
+            catch (Throwable ex) { TornadoCrashDiagnostic.executeThrew(ex); lowered = false; System.out.println("  device execute FAILED @t=" + t + ": " + oneLine(root(ex).getMessage())); break; }
             ExplicitCompleteMatHarness.stepGlidingCPU(ec, t, 101);
             double dFil = 0; for (int i = 0; i < 3 * Gc.nSeg; i++) dFil = Math.max(dFil, Math.abs(Gc.fil.coord.get(i) - Gd.fil.coord.get(i)));
             maxFil = Math.max(maxFil, dFil); if (firstDiv < 0 && dFil > 1e-6) firstDiv = t;
         }
-        if (!lowered) return false;
+        TornadoCrashDiagnostic.executeLoopEnd("arm=equiv-full-graph lowered=" + lowered);
+        if (!lowered) { TornadoCrashDiagnostic.closePlan(plan, "graph=glide arm=equiv-full-graph status=execute-failed"); return false; }
+        TornadoCrashDiagnostic.resultProcessingBegin("arm=equiv-full-graph");
         int nbC = 0, nbD = 0; boolean fin = true;
         for (int m = 0; m < Gc.N; m++) { if (Gc.mot.boundSeg.get(m) >= 0) nbC++; if (Gd.mot.boundSeg.get(m) >= 0) nbD++; }
         for (int i = 0; i < 3 * Gc.nSeg; i++) if (!Float.isFinite(Gd.fil.coord.get(i))) fin = false;
         boolean ok = lowered && fin && maxFil < 1e-1 && Double.isFinite(maxFil);
         System.out.printf(Locale.US, "  %d device-resident steps (surface ON): max|ΔfilCoord|=%.2e µm ; first FP divergence: %s ; bound CPU=%d GPU=%d ; finite=%b ⇒ %s%n",
                 K, maxFil, firstDiv < 0 ? "none (bit-close)" : ("t=" + firstDiv + " (chaotic float op-order — expected)"), nbC, nbD, fin, ok ? "PASS (lowered, no fallback)" : "*FAIL*");
+        TornadoCrashDiagnostic.resultProcessingEnd("arm=equiv-full-graph ok=" + ok);
+        TornadoCrashDiagnostic.gpuWorkDeclaredFinished("arm=equiv-full-graph");
+        TornadoCrashDiagnostic.closePlan(plan, "graph=glide arm=equiv-full-graph");   // no-op unless tracing enabled
         return ok;
     }
     /** Deterministic bit-identity of the two NEW kernels (matSurfaceAzim + matSurfaceStericPrune). */
@@ -368,6 +387,7 @@ public final class ExplicitTwirlGlidingHarness {
         TwoBodyBeamAnalyticGpu.matSurfaceStericPrune(Gc.mot.boundSeg, ec.justBound, ec.prevBound, Gc.mot.bindArc, Gc.mot.bindAzim, Gc.fil.coord, Gc.fil.uVec, Gc.fil.yVec, Gc.fil.segLength, ec.segFilId, ec.stericP, ec.occStats, ec.exCounts);
         // GPU eval (minimal 2-task graph over identical inputs)
         boolean gpuOk;
+        TornadoExecutionPlan kplan = null;
         try {
             var tg = new uk.ac.manchester.tornado.api.TaskGraph("surfEq")
                 .transferToDevice(uk.ac.manchester.tornado.api.enums.DataTransferMode.FIRST_EXECUTION,
@@ -379,10 +399,23 @@ public final class ExplicitTwirlGlidingHarness {
             var sch = new uk.ac.manchester.tornado.api.GridScheduler();
             var wa = new uk.ac.manchester.tornado.api.WorkerGrid1D(((N + 63) / 64) * 64); wa.setLocalWork(64, 1, 1); sch.addWorkerGrid("surfEq.azim", wa);
             var wp = new uk.ac.manchester.tornado.api.WorkerGrid1D(1); wp.setLocalWork(1, 1, 1); sch.addWorkerGrid("surfEq.prune", wp);
-            var plan = new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(sch);
-            plan.execute().transferToHost(Gd.mot.boundSeg, Gd.mot.bindAzim, ed.occStats);
+            TornadoCrashDiagnostic.planConstructionBegin("graph=surfEq arm=equiv-kernels");
+            kplan = new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(sch);
+            TornadoCrashDiagnostic.planConstructionEnd(kplan, "arm=equiv-kernels");
+            TornadoCrashDiagnostic.executeLoopBegin("surfEq", 0, 0, "arm=equiv-kernels executeCallsPlanned=1");
+            TornadoCrashDiagnostic.beforeExecute(0);
+            var res = kplan.execute();
+            TornadoCrashDiagnostic.afterExecute(0);
+            TornadoCrashDiagnostic.executeLoopEnd("arm=equiv-kernels");
+            // This graph declares its copy-out UNDER_DEMAND, so the transferToHost below IS the explicit, normally
+            // required device→host synchronisation for this arm (unlike the EVERY_EXECUTION gliding graph).
+            TornadoCrashDiagnostic.mark("DEVICE_SYNC_BEGIN", "op=transferToHost(UNDER_DEMAND) arrays=boundSeg,bindAzim,occStats");
+            res.transferToHost(Gd.mot.boundSeg, Gd.mot.bindAzim, ed.occStats);
+            TornadoCrashDiagnostic.mark("DEVICE_SYNC_END", "op=transferToHost(UNDER_DEMAND)");
             gpuOk = true;
-        } catch (Throwable ex) { System.out.println("  GPU minimal graph did NOT lower: " + oneLine(root(ex).getMessage()) + " (CPU-only disclosed)"); gpuOk = false; }
+        } catch (Throwable ex) { TornadoCrashDiagnostic.executeThrew(ex); System.out.println("  GPU minimal graph did NOT lower: " + oneLine(root(ex).getMessage()) + " (CPU-only disclosed)"); gpuOk = false; }
+        TornadoCrashDiagnostic.gpuWorkDeclaredFinished("arm=equiv-kernels gpuOk=" + gpuOk);
+        TornadoCrashDiagnostic.closePlan(kplan, "graph=surfEq arm=equiv-kernels");   // no-op unless tracing enabled
         if (!gpuOk) return true;   // GPU-unavailable disclosed; not a failure of the kernels' logic
         int dBound = 0; double dAz = 0; int dStat = 0;
         for (int m = 0; m < N; m++) { if (Gc.mot.boundSeg.get(m) != Gd.mot.boundSeg.get(m)) dBound++; dAz = Math.max(dAz, Math.abs(Gc.mot.bindAzim.get(m) - Gd.mot.bindAzim.get(m))); }

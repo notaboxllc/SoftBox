@@ -26,6 +26,9 @@ public final class ExplicitCompleteMatHarness {
     static final String OUT = "RUN_LOGS/explicit_completemat";
 
     public static void main(String[] args) {
+        // GPU crash lifecycle trace (diagnostic; OFF unless -gpu-crash-trace / SOFTBOX_GPU_CRASH_TRACE=1). First
+        // statement in main so PROGRAM_START precedes every other action and the shutdown hook is registered early.
+        TornadoCrashDiagnostic.init("explicit-s2-singlehead", args);
         try { Files.createDirectories(Path.of(OUT)); } catch (IOException e) { throw new UncheckedIOException(e); }
         if (!"false".equals(System.getProperty("tornado.recover.bailout"))) System.out.println("!! run with -Dtornado.recover.bailout=false");
         boolean traj = false, bench = false, stroke = false, gliding = false, throughput = false, quick = false;
@@ -37,7 +40,7 @@ public final class ExplicitCompleteMatHarness {
         // Single-head LONG-run density-sweep PRODUCTION CELL (one density×seed → per-cell JSON), matched to the
         // HMM-dimer campaign. Harness-only: reuses the validated buildS2Mat + buildGlidingGraph explicit-s2-l40 path
         // unchanged; adds only per-step science readback + the per-cell JSON/accumulator. Exits directly.
-        for (String a : args) if (a.equals("-production-cell")) { System.exit(runProductionCell(args)); }
+        for (String a : args) if (a.equals("-production-cell")) { int rc = runProductionCell(args); TornadoCrashDiagnostic.exit(rc); }
         if (sweep)      { log.append("# Explicit density-saturation sweep (Phase C) — GPU gliding velocity, explicit vs calibrated\n\n"); ok = sweepMode(log, quick, args); fn = "COMPLETEMAT_SWEEP.md"; }
         else if (throughputCal) { log.append("# Calibrated (calibrated-s2-l40) GENUINE FREE-BINDING NO-CULL throughput (Phase B arm) — CPU vs GPU, N=600–9000\n\n"); ok = throughputCalMode(log, quick); fn = "COMPLETEMAT_THROUGHPUT_CAL.md"; }
         else if (throughput) { log.append("# Explicit GENUINE FREE-BINDING NO-CULL throughput (Phase A) — CPU-analytic vs GPU-analytic, N=600–9000\n\n"); ok = throughputMode(log, quick); fn = "COMPLETEMAT_THROUGHPUT.md"; }
@@ -49,7 +52,7 @@ public final class ExplicitCompleteMatHarness {
         try { Files.writeString(Path.of(OUT, fn), log.toString()); } catch (IOException e) { throw new UncheckedIOException(e); }
         System.out.println("# report: " + Path.of(OUT, fn).toAbsolutePath());
         System.out.println(ok ? "=== COMPLETE-MAT GATE: PASS ===" : "=== COMPLETE-MAT GATE: REVIEW ===");
-        System.exit(ok ? 0 : 1);
+        TornadoCrashDiagnostic.exit(ok ? 0 : 1);
     }
 
     // =============================================================== §7/§8 complete explicit mat trajectory
@@ -1144,21 +1147,40 @@ public final class ExplicitCompleteMatHarness {
         SingleHeadObs o = new SingleHeadObs(N, steps, dt);
         String status = "ok", err = ""; double warmMs = 0;
         boolean prevSci = PROD_SCI; PROD_SCI = true;   // enable per-step nucleotideState readback for this cell
+        TornadoExecutionPlan plan = null;              // hoisted so the teardown window can close it EXPLICITLY
+        TornadoCrashDiagnostic.simDt(dt);
+        TornadoCrashDiagnostic.context("campaignArm", "single-head-production-cell");
+        TornadoCrashDiagnostic.context("density", density);
+        TornadoCrashDiagnostic.context("seed", seed);
+        TornadoCrashDiagnostic.context("steps", steps);
+        TornadoCrashDiagnostic.context("N", N);
+        TornadoCrashDiagnostic.context("nSeg", nSeg);
+        TornadoCrashDiagnostic.context("rev", rev);
+        TornadoCrashDiagnostic.context("outdir", outdir);
         try {
-            TornadoExecutionPlan plan = buildGlidingGraph(ed, true);
+            TornadoCrashDiagnostic.planConstructionBegin("graph=buildGlidingGraph(prod) model=" + modelId + " beamL=" + beamL);
+            try { plan = buildGlidingGraph(ed, true); }
+            catch (Throwable ce) { TornadoCrashDiagnostic.planConstructionThrew(ce); throw ce; }
+            TornadoCrashDiagnostic.planConstructionEnd(plan, "M=" + ed.M);
+            TornadoCrashDiagnostic.executeLoopBegin("glide", 0, steps - 1, "executeCallsPlanned=" + steps);
             long w0 = System.nanoTime();
-            setCounters(0, ed, null, Gd, 0, seed, nSeg); plan.execute();
+            setCounters(0, ed, null, Gd, 0, seed, nSeg);
+            TornadoCrashDiagnostic.beforeExecute(0); plan.execute(); TornadoCrashDiagnostic.afterExecute(0);
             warmMs = (System.nanoTime() - w0) / 1e6;
             o.observe(0, ed, Gd, bhat, nSeg);
             for (int t = 1; t < steps; t++) {
-                setCounters(0, ed, null, Gd, t, seed, nSeg); plan.execute();
+                setCounters(0, ed, null, Gd, t, seed, nSeg);
+                TornadoCrashDiagnostic.beforeExecute(t); plan.execute(); TornadoCrashDiagnostic.afterExecute(t);
                 o.observe(t, ed, Gd, bhat, nSeg);
             }
+            TornadoCrashDiagnostic.executeLoopEnd("warmMs=" + String.format(Locale.US, "%.0f", warmMs));
         } catch (Throwable e) {
+            if (plan != null) TornadoCrashDiagnostic.executeThrew(e);
             status = "error"; err = e.getClass().getSimpleName() + ": " + oneLine(e.getMessage());
             System.out.printf("  *** RUNTIME ERROR at cell ρ%d s%d: %s ***%n", density, seed, err);
         } finally { PROD_SCI = prevSci; }
         long endMs = System.currentTimeMillis(); double wallS = (endMs - startMs) / 1e3;
+        TornadoCrashDiagnostic.resultProcessingBegin("status=" + status);
         o.finish();
         if (RIGOR_ON && status.equals("ok")) {
             o.finishRigor(Gd.mot);
@@ -1193,6 +1215,12 @@ public final class ExplicitCompleteMatHarness {
             if (status.equals("ok")) Files.writeString(new File(outdir, base + ".done").toPath(), fin.getFileName().toString() + "\n");
             System.out.printf("  wrote %s (%s)%n", fin, status);
         } catch (IOException e) { throw new UncheckedIOException(e); }
+        TornadoCrashDiagnostic.resultProcessingEnd("wrote=" + base + ".json status=" + status);
+        // All device→host readback is done and the cell JSON is durable on disk. execute() is blocking and the
+        // graph declares its copy-outs EVERY_EXECUTION, so result consumption above IS the device synchronisation
+        // (no extra sync added — that would change execution semantics/cost).
+        TornadoCrashDiagnostic.gpuWorkDeclaredFinished("status=" + status + " wallS=" + String.format(Locale.US, "%.1f", wallS));
+        TornadoCrashDiagnostic.closePlan(plan, "graph=glide");   // no-op unless the crash trace is enabled
         TwoBodyConverterMotor.G4_NSEG_RUN = savedNseg;   // restore (hygiene; each cell is a fresh JVM anyway)
         return status.equals("ok") ? 0 : 1;
     }

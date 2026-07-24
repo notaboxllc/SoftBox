@@ -1,0 +1,20 @@
+[Unit]
+Description=SoftBox GPU crash recorder (kernel journal + NVIDIA telemetry + memory/PCIe state)
+Documentation=file://%h/Code/SoftBox/docs/TORNADOVM_GPU_CRASH_MONITORING_IMPLEMENTATION.md
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/Code/SoftBox/scripts/gpu-crash-recorder.sh
+# Purely observational: no GPU reset, no privileged action, writes only under the user's home.
+Environment=GPU_CRASH_RECORD_ROOT=%h/gpu-crash-records
+Restart=on-failure
+RestartSec=10
+# Do NOT kill the recorder's children abruptly on stop — let its own trap flush and clean up.
+KillMode=mixed
+TimeoutStopSec=20
+StandardOutput=append:%h/gpu-crash-records/service.log
+StandardError=append:%h/gpu-crash-records/service.log
+
+[Install]
+WantedBy=default.target
