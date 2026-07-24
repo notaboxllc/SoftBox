@@ -214,6 +214,41 @@ package. Two helper scripts:
 ./scripts/run_gpu.sh [N [M_trans]] # java @tornado-argfile … softbox.DiffusionHarness   (FDT validation)
 ```
 
+## Mandatory GPU crash monitoring
+
+Until the TornadoVM/NVIDIA hard-freeze issue is diagnosed and explicitly retired, every SoftBox GPU run launched by Claude Code must be monitored.
+
+Before the first GPU run in any task, verify that the external recorder is active:
+
+```bash
+./scripts/gpu-crash-recorder.sh --status
+```
+
+If the recorder is not running, do not launch GPU work. Stop and report the condition.
+
+Launch every GPU validation, fixture, pilot, campaign, sweep, timestep study, equivalence check, or 3js generation run through:
+
+```bash
+./scripts/run_gpu_monitored.sh <existing GPU launcher> <arguments...>
+```
+
+The monitored wrapper must be the outermost launcher. Do not invoke GPU launchers directly.
+
+Preserve all existing launcher arguments and required TornadoVM JVM flags. Do not duplicate or replace launcher logic inside the wrapper.
+
+For any new Java GPU entry point or harness, confirm that `TornadoCrashDiagnostic` lifecycle tracing is integrated before relying on it for campaign work. The external recorder alone is not sufficient for localizing `plan.execute()`, result handling, `plan.close()`, and JVM-shutdown windows.
+
+Do not disable monitoring for convenience or performance. The measured overhead is negligible.
+
+After any hard freeze and reboot, collect the evidence before resuming GPU work:
+
+```bash
+./scripts/collect_gpu_crash_case.sh
+```
+
+This rule remains in effect until the crash cause is diagnosed and a deliberate repository change removes or revises it.
+
+
 **CPU validation runner (`-cpu`).** Any harness mode accepts `-cpu`, which runs the *same* system
 methods sequentially over the host SoA arrays — no TaskGraph, no device transfers (the `@Parallel`
 loops execute as plain Java for-loops when called directly). This is the device-agnostic invariant

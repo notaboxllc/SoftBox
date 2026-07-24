@@ -1,5 +1,59 @@
 # Soft Box Project Journal
 
+### 2026-07-24 — ALWAYS-ON TORNADOVM/GPU CRASH MONITORING (diagnostic instrumentation; default-OFF, no physics change)
+
+Built low-overhead monitoring that stays enabled during ORDINARY GPU campaigns until the next naturally occurring
+hard freeze supplies evidence. **No stress rig, no crash reproduction, no automatic GPU recovery.** After a freeze
+the last durable marker localises the failure to GPU execution / result handling / `plan.close()` / delayed
+post-close cleanup / JVM shutdown / an unrelated period. **It cannot show root cause** — Xid 79 is equally
+consistent with the driver/GSP firmware, PCIe, power delivery, motherboard or GPU hardware.
+- **Layer 1 (Java).** `CrashTrace` = durable append-only phase log: **ONE** append `FileChannel` for BOTH
+  `write()` and `force(true)` (the handoff's BufferedWriter+second-channel sketch is rejected — two buffers, two
+  positions, force can flush nothing), mirrored to stderr, idempotent close. Fields: UTC ts, `seq`, **trace-relative**
+  `elapsedMs` (NOT "uptime"), pid, thread, phase, details. `TornadoCrashDiagnostic` owns the trace, the shutdown hook
+  (registered before any GPU work; trace closed only at the END of the hook so `SHUTDOWN_HOOK_*` write through a live
+  channel), a 5 s daemon heartbeat, explicit `plan.close()`, the optional pauses and the close policy. **All no-ops
+  when tracing is off.**
+- **Integration is NARROW** — `ExplicitCompleteMatHarness` (`run_singlehead_gpu.sh`) + `ExplicitTwirlGlidingHarness`
+  (`run_explicit_twirl.sh`), both device plans in the latter. There is **no common plan-construction path** (47 files
+  build their own), so a repo-wide edit was rejected. **Plan-close ownership audited: NO instrumented harness ever
+  called `plan.close()`** (only `FullSystemDemoHarness:2309`) ⇒ the constructing method owns it; explicit close is
+  added **only when tracing is on**, after the cell JSON + `.done` are durable.
+- **Repeated execute:** `PLAN_EXECUTE_BEGIN/END` bracket the loop; `EXECUTE_CALL_BEGIN/END` are durable for the
+  FIRST + FINAL call (and every Nth with `-gpu-crash-execute-every`), carrying executeIndex/step/simulationTime/
+  graphName/seed/density/arm. In-memory counters ride the heartbeat. **No per-timestep disk forcing** (26 markers for
+  a 2000-step cell). **Sync audit:** `execute()` is blocking and the graph declares `EVERY_EXECUTION` copy-outs
+  consumed on the next line ⇒ result consumption IS the sync; no sync added. The one real explicit sync
+  (`runEquivKernels`' `UNDER_DEMAND` `transferToHost`) got `DEVICE_SYNC_BEGIN/END`.
+- **Launch-config check:** logs + WARNS (never changes) on `tornado.enable.fma=false`, `recover.bailout=false`,
+  `maxbytecodesize>=65536` (the `EXPLICIT_S2_GPU_LOWERING_REGRESSION` flags). Device identity logged at
+  `PLAN_CONSTRUCTION_END` (`PTX -- NVIDIA GeForce RTX 5070`) — after the plan exists, so runtime init order is unchanged.
+- **Layer 2 (Linux).** `scripts/gpu-crash-recorder.sh` — kernel journal follow, ~1 s nvidia-smi telemetry (+`rc=`),
+  5 s `/proc/meminfo`, 60 s extended NVIDIA + **sysfs PCIe link state + AER counters** (readable unprivileged; `lspci`
+  detail and `nvidia-smi -q -d PCIE` are NOT on this box/driver), recorder health + status; PID lock, clean trap
+  (`sleep & wait` so `--stop` is immediate), capability probes that report rather than fail, 14-day retention.
+  Optional **user-level** systemd unit + installer (nothing privileged/system-wide). `run_gpu_monitored.sh` wraps an
+  existing launcher unchanged (env-based trace enable, tee'd evidence dir, command+env recorded, **child exit status
+  preserved**). `collect_gpu_crash_case.sh` → one `~/gpu-crash-case-*.tar.gz` + the marker→window interpretation table.
+- **VALIDATED (no crash attempted).** Logger gates 7/7 PASS (`run_crashtrace_validate.sh`, emit+verify in 2 JVMs).
+  Monitored real GPU cell: trace unique/ordered/survives shutdown, `PLAN_CLOSE_BEGIN→END` 7 ms, device-resident, no
+  fallback, `invalid=0`. **Scientific output IDENTICAL to an uninstrumented control** — all 92 cell-JSON keys equal
+  (only wall-clock keys differ), `PARTCROW` line character-identical; twirl `-equiv` gates unchanged. **Overhead
+  ≈0.13 %, below run-to-run noise** (10k-step cells: control 422.0/382.3 vs traced 413.9/451.8 steps/s). Journald
+  mirror (`-t tornado-teardown`) puts Java + kernel on one clock. Collector correctly extracted the REAL previous-boot
+  evidence: **Xid 79 + 154, 40 GSP/heartbeat lines**.
+- New: `softbox/{CrashTrace,TornadoCrashDiagnostic,CrashTraceValidationHarness}.java`,
+  `scripts/{gpu-crash-recorder,run_gpu_monitored,collect_gpu_crash_case,run_crashtrace_validate,install_gpu_crash_recorder_user_service}.sh`,
+  `scripts/systemd/softbox-gpu-crash-recorder.service`. Report:
+  `docs/TORNADOVM_GPU_CRASH_MONITORING_IMPLEMENTATION.md` (the single authoritative doc).
+  **Pending user action:** `systemctl --user enable --now softbox-gpu-crash-recorder.service` (installed, validated,
+  left disabled); optional `sudo loginctl enable-linger` for logout survival.
+- **POLICY (2026-07-24, CLAUDE.md "Mandatory GPU crash monitoring"):** the implementation is validated and suitable
+  for routine campaigns ⇒ monitored GPU execution is now **mandatory project policy** — verify
+  `./scripts/gpu-crash-recorder.sh --status` before the first GPU run and launch every GPU run through
+  `./scripts/run_gpu_monitored.sh <launcher> <args>` as the outermost launcher, until the crash cause is diagnosed
+  and the rule is deliberately revised.
+
 ### 2026-07-24 — VILFAN-STYLE STEREOSPECIFIC TARGET-ZONE BINDING in explicit-S2 gliding (noncanonical, default-off; Stage A = A2)
 
 Tested whether a continuous, stereospecific actomyosin orientation constraint — Vilfan's moving-target-zone
