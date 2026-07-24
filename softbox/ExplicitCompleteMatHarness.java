@@ -97,6 +97,39 @@ public final class ExplicitCompleteMatHarness {
      *  Adds NO kernel and NO physics — only transfers. Default false ⇒ production sweeps byte-unchanged. */
     static boolean TELEMETRY = false;
     static boolean telemetryOn() { return TZ_ON || TELEMETRY; }
+
+    // ---------------------------------------------------------------------------------------------------------
+    // BROWNIAN-NOISE ABLATION (noncanonical, DEFAULT-OFF, byte-identical when off). A diagnostic instrument for
+    // the target-zone phase-coherence question: which Brownian forcing channels destroy the moving-target-zone
+    // phase? Controlled by (1) physical body/subsystem, (2) MOTOR BINDING STATE, (3) force vs torque channel.
+    // NOTHING here adds a force, a torque, a spring, a rate, or a fitted parameter — it only SCALES the existing
+    // stochastic thermal terms. Defaults reproduce the canonical model exactly:
+    //   BR_FIL_* = 1 ⇒ brownChannelMask is never wired      ⇒ the filament Brownian path is byte-unchanged;
+    //   BR_MOT_* = true ⇒ matc[3] = 0                       ⇒ matS2SolveStep is arithmetically bit-identical.
+    // Filament channels are in the INTEGRATOR's body frame (0 = along uVec = axial, 1/2 = transverse; torque 0 =
+    // roll about the body-fixed axial direction, 1/2 = tumble/bend). See BrownianForceSystem.brownChannelMask.
+    static boolean BR_FIL_AXIAL = true;      // -filament-brownian-axial on|off
+    static boolean BR_FIL_TRANS = true;      // -filament-brownian-transverse on|off
+    static boolean BR_FIL_ROLL  = true;      // -filament-brownian-roll on|off
+    static boolean BR_FIL_OTHROT = true;     // -filament-brownian-other-rotation on|off
+    static boolean BR_MOT_UNBOUND = true;    // -motor-brownian-unbound on|off
+    static boolean BR_MOT_BOUND   = true;    // -motor-brownian-bound on|off
+    /** true iff any filament Brownian channel is masked ⇒ the (additive) mask task is wired. */
+    static boolean brownChanOn() { return !(BR_FIL_AXIAL && BR_FIL_TRANS && BR_FIL_ROLL && BR_FIL_OTHROT); }
+    /** matc[3]: bit0 ⇒ bound-motor Brownian OFF, bit1 ⇒ unbound-motor Brownian OFF. 0 = canonical. */
+    static int motorBrownPolicy() { return (BR_MOT_BOUND ? 0 : 1) | (BR_MOT_UNBOUND ? 0 : 2); }
+    static void setBrownianPolicy(boolean filAx, boolean filTr, boolean filRoll, boolean filOth,
+                                  boolean motUnbound, boolean motBound) {
+        BR_FIL_AXIAL = filAx; BR_FIL_TRANS = filTr; BR_FIL_ROLL = filRoll; BR_FIL_OTHROT = filOth;
+        BR_MOT_UNBOUND = motUnbound; BR_MOT_BOUND = motBound;
+    }
+    static void resetBrownianPolicy() { setBrownianPolicy(true, true, true, true, true, true); }
+    static String brownianPolicyString() {
+        return String.format("filament[axial=%s transverse=%s roll=%s otherRot=%s] motor[unbound=%s bound=%s] (matc[3]=%d)",
+                BR_FIL_AXIAL ? "ON" : "OFF", BR_FIL_TRANS ? "ON" : "OFF", BR_FIL_ROLL ? "ON" : "OFF",
+                BR_FIL_OTHROT ? "ON" : "OFF", BR_MOT_UNBOUND ? "ON" : "OFF", BR_MOT_BOUND ? "ON" : "OFF",
+                motorBrownPolicy());
+    }
     /** The explicit complete-mat state: the beam SoA + CSR/reduce scratch, over the shared G (fil/mot/body/bondData). */
     static final class ExMat {
         Glide2D G; int N, M, nSeg, numRedBlk;
@@ -108,6 +141,8 @@ public final class ExplicitCompleteMatHarness {
         IntArray prevBound, justBound; DoubleArray surfP, stericP; FloatArray xbParamsSurf;
         // Vilfan target-zone binding (noncanonical, default-off): hazard params + per-candidate diagnostics
         DoubleArray tzP; FloatArray tzDiag;
+        // Brownian-noise ablation (noncanonical, default-off): per-channel filament Brownian mask
+        FloatArray brChan;
     }
     static ExMat packExMat(Glide2D G, int brownOn) {
         ExMat e = new ExMat(); e.G = G; int N = G.N, M = G.g4M, nSeg = G.nSeg; e.N = N; e.M = M; e.nSeg = nSeg;
@@ -126,7 +161,7 @@ public final class ExplicitCompleteMatHarness {
             int bs = G.mot.boundSeg.get(m); e.boundSeg.set(m, bs); e.active.set(m, bs >= 0 ? 1 : 0);
         }
         e.exCounts = IntArray.fromElements(N, 1, M, nSeg);
-        e.matc = IntArray.fromElements(0, 0, brownOn);
+        e.matc = IntArray.fromElements(0, 0, brownOn, motorBrownPolicy());   // [3] = binding-state Brownian mask (0 = canonical)
         e.eupP = DoubleArray.fromElements(G.eup[0], G.eup[1], G.eup[2]);
         e.noBind = new IntArray(N); for (int m = 0; m < N; m++) e.noBind.set(m, G.noBind[m] ? 1 : 0);
         // bind gate thresholds (Tol defaults) + constants — the DETERMINISTIC 8-gate contract.
@@ -163,6 +198,10 @@ public final class ExplicitCompleteMatHarness {
         e.tzP = DoubleArray.fromElements(twist, TZ_ALPHA, TZ_HARD_RAD, TZ_DIAG ? 1.0 : 0.0);
         e.tzDiag = new FloatArray(4 * N); e.tzDiag.init(0f);
         G.mot.bindPsi0.init(0f);
+        // per-channel filament Brownian mask (all 1.0f ⇒ an IEEE identity multiply; the task is only WIRED when
+        // brownChanOn(), so the default path is byte-identical)
+        e.brChan = FloatArray.fromElements(BR_FIL_AXIAL ? 1f : 0f, BR_FIL_TRANS ? 1f : 0f,
+                                           BR_FIL_ROLL ? 1f : 0f, BR_FIL_OTHROT ? 1f : 0f);
         return e;
     }
     /** CPU-runner = the complete explicit mat step as plain-Java kernel calls (pre-bound, chemistry fixed, no bind search). */
@@ -347,6 +386,8 @@ public final class ExplicitCompleteMatHarness {
         if (!G.rigid) ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
         MatSoaSlice.matZConfine(f.coord, f.forceSum, e.zP, e.exCounts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        if (brownChanOn())   // per-channel filament Brownian ablation mask (noncanonical; not wired when all channels ON)
+            BrownianForceSystem.brownChannelMask(f.randForce, f.randTorque, e.brChan, f.counts);
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
@@ -372,6 +413,7 @@ public final class ExplicitCompleteMatHarness {
         if (occOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.candInt, e.candArc, e.segCumArc, e.segFilId, e.occP, e.occStats);
         if (surfOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.prevBound, e.justBound, e.surfP, e.stericP, e.xbParamsSurf, e.segFilId, e.occStats, mot.bindAzim);
         if (tzOn())   tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.prevBound, e.justBound, e.tzP, e.tzDiag, mot.bindAzim, mot.bindPsi0);
+        if (brownChanOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.brChan);
         if (RIGOR_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.rigorParams, mot.ruptureStats);
         if (ADP_RUP_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.adpRuptureParams, mot.adpRuptureStats);
         tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.matc, mot.counts, f.counts);
@@ -409,7 +451,10 @@ public final class ExplicitCompleteMatHarness {
           .task("segGather", CrossBridgeSystem::segGather, G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts)
           .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
           .task("zconf", MatSoaSlice::matZConfine, f.coord, f.forceSum, e.zP, e.exCounts)
-          .task("brown", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
+          .task("brown", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        if (brownChanOn())   // per-channel filament Brownian ablation mask (noncanonical; absent when all channels ON)
+            tg.task("brChan", BrownianForceSystem::brownChannelMask, f.randForce, f.randTorque, e.brChan, f.counts);
+        tg
           .task("integ", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
           .task("orthoY", DerivedGeometrySystem::orthogonalizeY, f.uVec, f.yVec, f.counts)
           .task("derive", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
@@ -441,6 +486,7 @@ public final class ExplicitCompleteMatHarness {
         if (occOn()) { addW(glSched, "glide.gateOnly", pn); addW(glSched, "glide.occResolve", 64); }   // gate parallel; resolve single-thread (gid<1)
         if (surfOn()) { if (!tzOn()) addW(glSched, "glide.surfAzim", pn); addW(glSched, "glide.surfPrune", 64); }   // azim parallel; prune single-thread (gid<1)
         if (tzOn()) addW(glSched, "glide.tzone", pn);   // target-zone hazard: parallel over motors
+        if (brownChanOn()) addW(glSched, "glide.brChan", ps);   // per-channel filament Brownian mask: parallel over segments
         addW(glSched, "glide.csrZero", ((Math.max(1, nCh * nSeg) + 63) / 64) * 64);
         addW(glSched, "glide.csrHist", ((nCh + 63) / 64) * 64); addW(glSched, "glide.csrScatter", ((nCh + 63) / 64) * 64);
         addW(glSched, "glide.csrScan", 64); addW(glSched, "glide.redBlk", ((e.numRedBlk + 63) / 64) * 64); addW(glSched, "glide.redFin", 64);

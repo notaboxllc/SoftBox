@@ -892,7 +892,9 @@ public final class TwoBodyBeamAnalyticGpu {
      * {@code TwoBodyConverterMotor.s2SolveM}. F8h comes from the shared cross-bridge stage: {@code bondData}
      * ({@code m·STRIDE+0..2}) when {@code boundSeg[m]≥0}, else 0.
      *
-     * <p>{@code matc}: [t, seed, brownOn]. {@code counts}: [nM, maxIt, M, _] (maxIt=1 for a single production step).
+     * <p>{@code matc}: [t, seed, brownOn, motorBrownPolicy]. {@code motorBrownPolicy} (noncanonical, default 0 ⇒
+     * bit-identical) is a binding-state-dependent Brownian mask: bit0 zeroes the Brownian RHS of every BOUND motor,
+     * bit1 of every UNBOUND motor. {@code counts}: [nM, maxIt, M, _] (maxIt=1 for a single production step).
      * Layout identical to beamRelaxAnalytic (nodes/frame/q/params/sys/outGeom). STRIDE = 13 (CrossBridgeSystem).
      */
     public static void matS2SolveStep(DoubleArray nodes, DoubleArray frame, DoubleArray q, FloatArray bondData,
@@ -903,6 +905,13 @@ public final class TwoBodyBeamAnalyticGpu {
         int nF = 3 * M, n = nF + 2, W = n + 1;
         double tol = 3e-7;
         long tt = matc.get(0), seed = matc.get(1); int brownOn = matc.get(2);
+        // NONCANONICAL, default-0 BINDING-STATE-DEPENDENT Brownian mask (the minimal motor Brownian ablation mask;
+        // matc[3]: bit0 ⇒ a BOUND motor gets zero Brownian, bit1 ⇒ an UNBOUND motor gets zero Brownian). It gates
+        // ONLY the three stochastic RHS terms below (S2 beam-node force, generalized phi torque, generalized psi
+        // torque) — every deterministic term, the Hessian, the drag diagonal, the F8 reaction, the solve and the
+        // writeback are untouched, so a masked bound motor still relaxes elastically, strokes, bears load and
+        // detaches. matc[3] == 0 ⇒ brownM == brownOn ⇒ arithmetic bit-identical to the canonical path.
+        int mPolicy = matc.get(3);
         for (@Parallel int m = 0; m < nM; m++) {
             double bx = frame.get(m), by = frame.get(nM + m), bz = frame.get(2 * nM + m);
             double ex = frame.get(3 * nM + m), ey = frame.get(4 * nM + m), ez = frame.get(5 * nM + m);
@@ -917,6 +926,11 @@ public final class TwoBodyBeamAnalyticGpu {
             double floorZ = params.get(14 * nM + m), kfloor = params.get(15 * nM + m), gNode = params.get(16 * nM + m);
             double l0m = l0um * 1e-6, aN = gNode / dt, aphi = gPhi / dt, apsi = gPsi / dt;
             int bs = boundSeg.get(m); boolean bnd = bs >= 0; int dB = m * STRIDE;
+            // binding-state-dependent Brownian gate — takes effect on the SAME step as the FREE→bound transition
+            // (boundSeg already carries this step's bind/target-zone/chemistry decisions when s2solve runs).
+            int brownM = brownOn;
+            if (bnd) { if ((mPolicy & 1) != 0) brownM = 0; }
+            else     { if ((mPolicy & 2) != 0) brownM = 0; }
             double f8x = bnd ? bondData.get(dB) : 0.0, f8y = bnd ? bondData.get(dB + 1) : 0.0, f8z = bnd ? bondData.get(dB + 2) : 0.0;
             double phi = q.get(m), psi = q.get(nM + m), thetaS = q.get(2 * nM + m), psiActin = q.get(3 * nM + m);
             int base = m * (n * W);   // per-item scratch = n*(n+1), M-generic (=210 at M=4 [L40], =420 at M=6 [L60])
@@ -1028,7 +1042,7 @@ public final class TwoBodyBeamAnalyticGpu {
                 }
                 // node drag diagonal + node Brownian RHS
                 for (int r=0;r<nF;r++) addK(sys,base,W, r, r, aN);
-                if (brownOn != 0) for (int j=1;j<=M;j++){ int fb=(j-1)*3;
+                if (brownM != 0) for (int j=1;j<=M;j++){ int fb=(j-1)*3;
                     for (int k=0;k<3;k++){ long salt = 0x4811L + ((long)m*1009 + (long)j*131 + k)*7919L;
                         addF(sys,base,W,n, fb+k, brownTorqueD(gNode, dt, seed, tt, salt)); } }
                 // F8 / converter / bind block
@@ -1058,7 +1072,7 @@ public final class TwoBodyBeamAnalyticGpu {
                 addF(sys,base,W,n, pB+0, f8x); addF(sys,base,W,n, pB+1, f8y); addF(sys,base,W,n, pB+2, f8z);
                 addF(sys,base,W,n, iPhi, QphiF8 + kc*(th2-thetaS));
                 addF(sys,base,W,n, iPsi, QpsiF8 - kc*(th2-thetaS) - kbnd*(psi-psiActin));
-                if (brownOn != 0) { addF(sys,base,W,n, iPhi, brownTorqueD(gPhi, dt, seed, tt, 0x4841L + (long)m*7919L));
+                if (brownM != 0) { addF(sys,base,W,n, iPhi, brownTorqueD(gPhi, dt, seed, tt, 0x4841L + (long)m*7919L));
                                     addF(sys,base,W,n, iPsi, brownTorqueD(gPsi, dt, seed, tt, 0x4842L + (long)m*7919L)); }
                 // solve (Gauss–Jordan)
                 for (int c=0;c<n;c++){

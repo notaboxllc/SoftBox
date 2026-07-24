@@ -1,5 +1,74 @@
 # Soft Box Project Journal
 
+### 2026-07-24 — STAGED BROWNIAN-NOISE ABLATION of the Vilfan target-zone mechanism (noncanonical, default-off)
+
+Asked which Brownian forcing channels destroy the target-zone phase coherence, by ablating them one physical
+subsystem / one motor binding state / one force-vs-torque channel at a time. **All additive; feature-off
+bit-identical; no new force law, torsional registry, roll spring, lateral stroke, binding-axis preference, axial
+confinement spring or fitted parameter; no chemistry/S2/stroke/dt/RNG/CANON_VERSION change; nothing tuned.**
+Executes the prior entry's §19 next step ("attribute the axial phase-coherence budget to a *body*").
+- **Brownian-source audit (§2).** The step has exactly FIVE RNG-bearing kernels; three are Brownian. Filament
+  force + torque (`brownianForce`, body frame: comp 0 = AXIAL / ROLL, 1-2 = transverse / tumble-bend); motor S2
+  beam-node force + generalized `phi`/`psi` torques (inside `matS2SolveStep`, salts 0x4811/0x4841/0x4842). **The
+  motor sub-bodies are NOT Brownian-integrated at all** (`matPlaceHeadExplicit` overwrites their pose from the
+  beam solve) and the **tail anchor is pinned** ⇒ there is no separate head/neck/converter/tail channel to mask.
+  `matBindExplicit` contains **no RNG** — the canonical bind is purely geometric.
+- **Masks.** (a) NEW `BrownianForceSystem.brownChannelMask` task between `brown` and `integ` scales the four
+  body-frame filament channels — `brownianForce` byte-unchanged, no second RNG, no second physics impl, task only
+  wired when a channel is off. (b) 3-line binding-state mask in `matS2SolveStep` via `matc[3]` (bit0 bound-off,
+  bit1 unbound-off) replacing `brownOn` at the THREE stochastic RHS sites only; `matc[3]=0` ⇒ bit-identical.
+  A masked bound motor still relaxes, strokes, bears load, and detaches — nothing pinned/zeroed/bypassed.
+  **Draws are SKIPPED, provably stream-neutral** (every RNG here is counter-based/stateless).
+- **Fixtures 12/12 PASS**, incl. a per-step per-motor audit over a real 400-step trajectory: a BOUND head is
+  bit-identical to Brownian-off while an UNBOUND head is bit-identical to canonical, with FREE→bound and
+  bound→FREE transitions inside the window ⇒ switching timing verified.
+- **GPU: device-resident under every policy, no fallback** (`bailout=false`), attachment events + accept decisions
+  EXACTLY CPU≡GPU. Bonus: the quiet arms are **bit-close for all 200 steps** (maxΔfil 5.96e-08 µm) where the
+  canonical arm decorrelates at t=181 ⇒ the documented explicit-S2 chaos is thermally driven.
+- **RESULT — the primary hypothesis FAILS. Arm B (filament Brownian off + bound-motor Brownian off, unbound
+  search retained) restores NOTHING**: `leadAcc−leadCand = -0.0188±0.0139` (1.4σ, WRONG sign), `⟨Δψ⟩acc
+  +0.0104±0.0085` (1.2σ), and the noise/drift ratio gets **WORSE, 122 → 184** (the glide halves, so the drift
+  falls faster than the noise). Arms C/D also null.
+- **ATTRIBUTION (the real finding), from the B↔E single-channel contrast + the G/H/I decomposition:** the phase
+  jitter of the candidate coordinate is **≈72% UNBOUND-motor Brownian, ≈27% filament AXIAL translation, ≈3%
+  filament transverse+bend, ≈0% filament ROLL, ≈0% BOUND-motor** (median|Δarc| 0.903 nm A → 0.656 B → 0.005 E;
+  re-enabling ONLY the filament axial channel, arm G, restores 0.897 nm ≈ A). **Bound-motor noise cannot matter
+  structurally — a persisting target-zone candidate is BY CONSTRUCTION an unbound head**, so the phase the
+  mechanism must track belongs to a head that has to be noisy to bind at all. The axial channel is 99.98% of the
+  budget in every arm; sign convention verified (resid(A) 0.017-0.069 vs resid(B) 1.43-1.56).
+- **Arm E (all Brownian off) DOES restore coherence** — ⟨|ΔΔψ|⟩ 0.0085 vs drift 0.00097 (ratio 8.8 vs 122-187),
+  ac1 +0.68, residence 508 steps, the only arm where residence reaches `t_c` — **but the flux endpoint is STILL
+  unresolved** (`leadAcc−leadCand +0.0475±0.0687`). Its eye-catching `⟨Δψ⟩acc = -0.299±0.046` is NOT a signal: the
+  candidate pool is itself at -0.417 (69.5% leading, matching the 69.2% of accepts), and the α=0 control proves
+  the skew is **hazard-induced persistence, not geometry** (α=0 candidate histogram FLAT, every run exactly 1 step
+  long, vs 172/352 runs ≥8 steps at α=6 — rejected heads get stuck and re-counted). **Arm E buys coherence at the
+  cost of ergodicity** (avgBound 0.65, accFrac 0.004); the two are inseparable.
+- **TORQUE — two N5 caveats, both flagged, neither claimed.** (i) Arm B gives the first net axial torque resolved
+  in this lineage (-8.9e-22±2.4e-22 N·m, 3.7σ, 9/10 seeds, cancel 9.5) — **but its α=0 control F2 has the SAME
+  sign** and the target-zone increment is 1.5σ; every bound-quiet arm shows it (G 10/10, H 8/10, I 9/10) and arm D
+  washes it out ⇒ it tracks "is the bound complex quiet?", not "is the target zone on?". (ii) Arm E α=6 vs α=0 IS
+  a resolved target-zone-dependent torque (+1.35e-22±3.3e-23, 9/10, 3.4σ vs control) — but it is **azimuth
+  concentration** (accepted-azimuth peaked vs flat; cancel 3.2 vs 24.0) at avgBound 0.65, i.e. the torque of the
+  occasional single head, and is confounded by **all motors sharing one base frame**. **NO twirling anywhere**:
+  roll is incoherent along the filament in every arm (|mean|/SD = 0.16-0.52) and arm B's turns (-0.10±0.15) are
+  0.7σ and OPPOSITE in sign to its own torque.
+- **Verdict: N3 with its diagnosis completed + N4's stated conclusion on the coherence question + an ACTIVE N5
+  caveat.** Not N1, not N2. N3's four candidates: unbound search noise CONFIRMED dominant; candidate-definition
+  site persistence EXCLUDED (same-site frac 0.991-1.000); short residence a SYMPTOM; deterministic solver motion
+  EXCLUDED (0.0085 vs 0.850 rad/step).
+- **Regression:** canonical explicit-S2 device gate `-gliding` (`mism=0, binds=11 detach=10, firstDiv=t=4,
+  invalid=0`, GATE PASS) and `-traj` PASS, Stage-A fixtures 16/16, legacy helical-surface 28/28 — all with the
+  pre-increment numbers; **arms A and F1 reproduce the whole 10-seed Stage-A campaign digit-for-digit** (incl. the
+  12-bin histogram). `BoA-v1ref` byte-clean; production untouched.
+- **Next smallest step (a SCENE change, not physics): give each motor an independent random base azimuth and
+  re-run arms B / F2 / E unchanged** — the cheapest discriminator for both N5 torque confounds. Until then no
+  quiet-scene torque can be interpreted. The kinetic target-zone route is closed at biological drag/temperature;
+  the mechanical (Stage B) route stays blocked on a head rotational DOF about the bond.
+- **3js:** `threejs_vilfan_brown{A,B}` (151 frames, identical but for the Brownian policy). New:
+  `BrownianForceSystem.brownChannelMask` + the ablation modes in `VilfanTargetZoneHarness`
+  (`-brownian-fixtures` / `-brownian-equiv` / `-ablation` / `-decompose` / `-brownian-policy`). Report:
+  `docs/VILFAN_BROWNIAN_NOISE_ABLATION_FINDINGS.md`; logs `RUN_LOGS/vilfan_brownian/`.
+
 ### 2026-07-24 — ALWAYS-ON TORNADOVM/GPU CRASH MONITORING (diagnostic instrumentation; default-OFF, no physics change)
 
 Built low-overhead monitoring that stays enabled during ORDINARY GPU campaigns until the next naturally occurring

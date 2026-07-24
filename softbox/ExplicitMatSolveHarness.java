@@ -71,7 +71,7 @@ public final class ExplicitMatSolveHarness {
         DoubleArray sys = new DoubleArray(TwoBodyBeamAnalyticGpu.SYS_STRIDE * K), outGeom = new DoubleArray(9 * K);
         FloatArray bond = new FloatArray(13 * K), forceDotFil = new FloatArray(K), forceMag = new FloatArray(K);
         IntArray boundSeg = new IntArray(K), status = new IntArray(K), iters = new IntArray(K);
-        IntArray matc = IntArray.fromElements(t, seed, 1), counts = IntArray.fromElements(K, 1, M, 0);
+        IntArray matc = IntArray.fromElements(t, seed, 1, 0), counts = IntArray.fromElements(K, 1, M, 0);   // matc[3]=motor-Brownian policy (0 = canonical)
         sys.init(0.0);
         double[] pr = paramArr(G);
         for (int m = 0; m < K; m++) {

@@ -112,4 +112,42 @@ public final class BrownianForceSystem {
             randTorque.set(iz, rS * brownianForceMag * (float) Math.sqrt(bRotGam.get(iz)) * gtz);
         }
     }
+
+    /**
+     * PER-CHANNEL Brownian mask (NONCANONICAL, default-off, additive — a diagnostic ABLATION instrument, never a
+     * production path). Scales the already-generated body-frame Brownian force/torque components written by
+     * {@link #brownianForce}, so it introduces NO second RNG, NO second physics implementation, and does not touch
+     * that kernel at all: it is a separate task inserted between {@code brown} and {@code integ}.
+     *
+     * <p>The body frame here is exactly the one {@link RigidRodLangevinIntegrationSystem#integrate} consumes:
+     * component 0 is along {@code uVec} (the local filament tangent), components 1/2 are along {@code yVec}/
+     * {@code zVec}. Hence
+     * <ul>
+     *   <li>{@code randForce[0]}   = AXIAL translational Brownian force (along the local tangent),</li>
+     *   <li>{@code randForce[1,2]} = TRANSVERSE translational Brownian force,</li>
+     *   <li>{@code randTorque[0]}  = ROLL Brownian torque about the body-fixed axial direction (it drives the
+     *       {@code yVec} rotation about {@code uVec}, i.e. the material-frame roll),</li>
+     *   <li>{@code randTorque[1,2]}= the OTHER rotational (tumble/bend) Brownian torque.</li>
+     * </ul>
+     *
+     * <p>{@code chanMask}: [0]=axial force, [1]=transverse force, [2]=roll torque, [3]=other rotational torque.
+     * A mask of exactly 1.0f is an IEEE-754 identity multiply, so wiring this task with an all-ones mask is
+     * bit-identical to not wiring it (fixture-verified). Deterministic forces, drag, chemistry and the RNG streams
+     * are untouched — only the stochastic thermal term is scaled.
+     */
+    public static void brownChannelMask(FloatArray randForce, FloatArray randTorque,
+                                        FloatArray chanMask, IntArray counts) {
+        int N = randForce.getSize() / 3;
+        float mAx = chanMask.get(0), mTr = chanMask.get(1), mRoll = chanMask.get(2), mOth = chanMask.get(3);
+        for (@Parallel int i = 0; i < N; i++) {
+            int iy = N + i;
+            int iz = 2 * N + i;
+            randForce.set(i,   randForce.get(i)   * mAx);
+            randForce.set(iy,  randForce.get(iy)  * mTr);
+            randForce.set(iz,  randForce.get(iz)  * mTr);
+            randTorque.set(i,  randTorque.get(i)  * mRoll);
+            randTorque.set(iy, randTorque.get(iy) * mOth);
+            randTorque.set(iz, randTorque.get(iz) * mOth);
+        }
+    }
 }

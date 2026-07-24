@@ -42,6 +42,7 @@ public final class VilfanTargetZoneHarness {
 
     public static void main(String[] args) {
         boolean fixtures = false, equiv = false, stageA = false, dtChk = false, all = false; String jsDir = null;
+        boolean brFix = false, brEq = false, ablation = false; String policyName = null;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-fixtures" -> fixtures = true;
@@ -59,12 +60,34 @@ public final class VilfanTargetZoneHarness {
                 case "-stride" -> STRIDE = Integer.parseInt(args[++i]);
                 case "-actin-bind-radius-nm" -> R_NM = Double.parseDouble(args[++i]);
                 case "-surface-exclusion-nm" -> EXCL_NM = Double.parseDouble(args[++i]);
+                // ---- Brownian-noise ablation (noncanonical, default-off) ----
+                case "-brownian-fixtures" -> brFix = true;
+                case "-brownian-equiv" -> brEq = true;
+                case "-ablation" -> ablation = true;
+                case "-decompose" -> { ablation = true; DECOMPOSE = true; }
+                case "-brownian-policy" -> policyName = args[++i];
+                case "-filament-brownian-axial" -> OV_FAX = onOff(args[++i]);
+                case "-filament-brownian-transverse" -> OV_FTR = onOff(args[++i]);
+                case "-filament-brownian-roll" -> OV_FROLL = onOff(args[++i]);
+                case "-filament-brownian-other-rotation" -> OV_FOTH = onOff(args[++i]);
+                case "-motor-brownian-unbound" -> OV_MUNB = onOff(args[++i]);
+                case "-motor-brownian-bound" -> OV_MBND = onOff(args[++i]);
                 default -> { }
             }
         }
         System.out.println("######## Vilfan target-zone stereospecific binding — explicit-S2 gliding (noncanonical, default-off) ########");
         System.out.printf(Locale.US, "dt=%.2e  density=%.0f heads/µm²  seed=%d  steps=%d  seeds=%d  Ractin=%.2f nm  excl=%.2f nm  twistRate=%.1f rad/µm%n",
                 DT, DENSITY, SEED, STEPS, NSEEDS, R_NM, EXCL_NM, TWIST);
+        // A named policy expands into EXPLICIT channel settings, which are logged; explicit flags override it.
+        Pol single = null;
+        if (policyName != null || OV_FAX != null || OV_FTR != null || OV_FROLL != null || OV_FOTH != null || OV_MUNB != null || OV_MBND != null) {
+            single = applyOverrides(policyName == null ? POL_FULL : namedPolicy(policyName));
+            System.out.printf("BROWNIAN POLICY '%s' expands to: %s%n", single.name(), single.spec());
+            applyPolicy(single);
+            System.out.println("   ⇒ " + ExplicitCompleteMatHarness.brownianPolicyString());
+            ExplicitCompleteMatHarness.resetBrownianPolicy();
+            CLI_POL = single;
+        }
         boolean ok = true;
         if (jsDir != null) { makeMovies(jsDir); return; }
         if (all)          { ok &= runFixtures(); ok &= runEquiv(); runStageA(); runDtCheck(); }
@@ -72,10 +95,25 @@ public final class VilfanTargetZoneHarness {
         else if (equiv)    ok = runEquiv();
         else if (stageA)   runStageA();
         else if (dtChk)    runDtCheck();
+        else if (brFix)    ok = runBrFixtures();
+        else if (brEq)     ok = runBrEquiv();
+        else if (ablation) { if (single != null) runSinglePolicy(single); else runAblation(); }
         else               ok = runFixtures();
         System.out.println("====================================================================================================");
-        if (fixtures || equiv || all) System.out.println(ok ? "ALL GATED CHECKS PASS" : "*** SOME CHECKS FAILED ***");
+        if (fixtures || equiv || all || brFix || brEq) System.out.println(ok ? "ALL GATED CHECKS PASS" : "*** SOME CHECKS FAILED ***");
         if (!ok) System.exit(1);
+    }
+    static Boolean onOff(String s) {
+        if (s.equalsIgnoreCase("on") || s.equals("1") || s.equalsIgnoreCase("true")) return Boolean.TRUE;
+        if (s.equalsIgnoreCase("off") || s.equals("0") || s.equalsIgnoreCase("false")) return Boolean.FALSE;
+        throw new IllegalArgumentException("expected on|off, got " + s);
+    }
+    /** A single explicitly-specified Brownian policy (for spot runs / one-off arms). */
+    static void runSinglePolicy(Pol pol) {
+        System.out.printf("\n--- SINGLE BROWNIAN POLICY ARM (%s runner) ---%n", USE_GPU ? "GPU device-resident" : "CPU sequential");
+        int[] seeds = new int[NSEEDS]; for (int i = 0; i < NSEEDS; i++) seeds[i] = SEED + 101*i;
+        BrArm a = meanBr("single: " + pol.name(), pol, ALPHA, seeds, STEPS);
+        brRow(a); brPhaseRow(a); brHists(a);
     }
 
     // ================================================================= configuration helpers
@@ -799,6 +837,7 @@ public final class VilfanTargetZoneHarness {
     }
     static void writeMovie(String dir, boolean tzOn, double alpha, boolean surface) {
         setTZ(tzOn, alpha); setSurface(surface, R_NM, false, 0);
+        if (CLI_POL != null) applyPolicy(CLI_POL);   // render under the selected Brownian policy (default: canonical)
         Glide2D G = build(SEED); var e = ExplicitCompleteMatHarness.packExMat(G, 1);
         new java.io.File(dir).mkdirs();
         double R = R_NM*1e-3; int frames = 0;
@@ -806,7 +845,9 @@ public final class VilfanTargetZoneHarness {
             if (t % STRIDE == 0) writeFrame(dir, frames++, t*DT, G, e, R, surface);
             if (t < STEPS) ExplicitCompleteMatHarness.stepGlidingCPU(e, t, SEED);
         }
-        System.out.printf("  %-40s wrote %d frames%n", dir, frames);
+        System.out.printf("  %-40s wrote %d frames%s%n", dir, frames,
+                CLI_POL == null ? "" : ("  [Brownian policy: " + CLI_POL.spec() + "]"));
+        ExplicitCompleteMatHarness.resetBrownianPolicy();
         setTZ(false, 0); setSurface(false, R_NM, false, 0);
     }
     /** v1-viewer-schema frame: actin + material-frame roll ticks + the local actin surface-normal marker at each
@@ -865,6 +906,600 @@ public final class VilfanTargetZoneHarness {
         try { java.nio.file.Files.writeString(java.nio.file.Path.of(dir, String.format(Locale.US, "frame_%06d.json", frame)), sb.toString()); }
         catch (java.io.IOException ex) { throw new java.io.UncheckedIOException(ex); }
     }
+    // ================================================================= BROWNIAN-NOISE ABLATION (noncanonical)
+    // Which Brownian forcing channels destroy the moving-target-zone phase coherence? Controlled by (1) physical
+    // body/subsystem, (2) MOTOR BINDING STATE, (3) force vs torque channel. NO new force law, torsional registry,
+    // roll spring, lateral stroke, binding-axis preference, axial confinement spring, or fitted parameter is added:
+    // the ONLY change is that named stochastic thermal terms are scaled to zero. See
+    // docs/VILFAN_BROWNIAN_NOISE_ABLATION_FINDINGS.md.
+
+    /** An explicit Brownian policy: four filament channels (body frame) + two motor binding-state channels. */
+    record Pol(String name, boolean fAx, boolean fTr, boolean fRoll, boolean fOth, boolean mUnb, boolean mBnd) {
+        String spec() {
+            return String.format("fil[ax=%s tr=%s roll=%s othRot=%s] mot[unbound=%s bound=%s]",
+                    fAx?"on":"off", fTr?"on":"off", fRoll?"on":"off", fOth?"on":"off", mUnb?"on":"off", mBnd?"on":"off");
+        }
+    }
+    static final Pol POL_FULL      = new Pol("full",                true,  true,  true,  true,  true,  true);
+    static final Pol POL_FILOFF    = new Pol("filament-off",        false, false, false, false, true,  true);
+    static final Pol POL_SEARCHONLY= new Pol("unbound-search-only", false, false, false, false, true,  false);
+    static final Pol POL_BOUNDQUIET= new Pol("bound-motor-quiet",   true,  true,  true,  true,  true,  false);
+    static final Pol POL_ALLOFF    = new Pol("all-off",             false, false, false, false, false, false);
+    static final Pol POL_FIL_AXIAL = new Pol("fil-axial-only",      true,  false, false, false, true,  false);
+    static final Pol POL_FIL_ROLL  = new Pol("fil-roll-only",       false, false, true,  false, true,  false);
+    static final Pol POL_FIL_OTHER = new Pol("fil-transverse-bend", false, true,  false, true,  true,  false);
+
+    static Pol namedPolicy(String s) {
+        return switch (s) {
+            case "full" -> POL_FULL;
+            case "filament-off" -> POL_FILOFF;
+            case "unbound-search-only" -> POL_SEARCHONLY;
+            case "bound-motor-quiet" -> POL_BOUNDQUIET;
+            case "all-off" -> POL_ALLOFF;
+            default -> throw new IllegalArgumentException("unknown -brownian-policy " + s
+                    + " (full | filament-off | unbound-search-only | bound-motor-quiet | all-off)");
+        };
+    }
+    /** Command-line overrides applied ON TOP of a named policy (null = not specified). */
+    static Boolean OV_FAX, OV_FTR, OV_FROLL, OV_FOTH, OV_MUNB, OV_MBND;
+    static Pol applyOverrides(Pol p) {
+        return new Pol(p.name(), OV_FAX == null ? p.fAx() : OV_FAX, OV_FTR == null ? p.fTr() : OV_FTR,
+                OV_FROLL == null ? p.fRoll() : OV_FROLL, OV_FOTH == null ? p.fOth() : OV_FOTH,
+                OV_MUNB == null ? p.mUnb() : OV_MUNB, OV_MBND == null ? p.mBnd() : OV_MBND);
+    }
+    static void applyPolicy(Pol p) {
+        ExplicitCompleteMatHarness.setBrownianPolicy(p.fAx(), p.fTr(), p.fRoll(), p.fOth(), p.mUnb(), p.mBnd());
+    }
+
+    static final int NRES = 8;   // candidate-residence histogram bins (1,2,3,4,5,6,7,>=8 steps)
+    /** A consecutive-candidate pair counts as the SAME attachment site if its bindArc moved less than this.
+     *  20 nm ≫ the ~1 nm/step thermal wander and ≪ the ~87 nm jump produced when the candidate's nearest-segment /
+     *  perpendicular-foot ownership switches — so it separates "the same target zone was tracked" from "a
+     *  different site was sampled" without tuning anything physical. */
+    static final double ARC_SITE_UM = 0.020;
+
+    /** One arm's full observable set (phase coherence + attachment flux + torque/twirl + health). */
+    static final class BrArm {
+        String label; Pol pol; double alpha; int nSeeds;
+        double glide, semGlide, avgBound, detachRate, accFrac;
+        double meanTurns, semTurns, turnsSpread, coherentRoll, turnsPerUm, semTpu;
+        double meanDpsi, semDpsi, meanDpsiCand, leadAcc, leadCand, bias, semBias; int nSignAgree;
+        long cand, acc, leadN, trailN, detach;
+        int[] binCand = new int[NB], binAcc = new int[NB]; double[] binW = new double[NB];
+        int[] azHist = new int[8];
+        double sgnD;
+        double tauNet, semTau, tauAbs, cancel, fracHeadPos; int nTauSignAgree;
+        // phase coherence budget — "all" = every consecutive-candidate pair (comparable to the Stage-A report);
+        // "site" = the subset that stayed on the SAME attachment site (|Δ bindArc| < ARC_SITE_UM), i.e. excluding
+        // the pairs where the candidate's nearest-segment/perpendicular-foot ownership jumped.
+        double driftStep, phAbs, phRms, phSigned, phAxial, phRoll, phResid, phResidAlt, ac1;
+        double phAbsS, phRmsS, phSignedS, phAxialS, phRollS, phResidS;
+        long phasePairs, phasePairsSite;
+        long[] residHist = new long[NRES]; long residRuns; double residMean;
+        double dAxial, dAxialMed, arcMedian, siteFrac, tCohSteps, residOverTcoh, driftOverRms, pMono;
+        long monoRuns, monoOk;
+        long invalid;
+    }
+
+    /**
+     * One dynamic gliding arm under an explicit Brownian policy, with the full phase-coherence budget.
+     * Physics identical to {@link #runArm} apart from the Brownian masks; all extra output is measurement-only.
+     */
+    static BrArm runBrArm(Pol pol, double alpha, int seed, int steps) {
+        applyPolicy(pol);
+        setTZ(true, alpha); setSurface(true, R_NM, false, EXCL_NM);
+        ExplicitCompleteMatHarness.TELEMETRY = true;
+        BrArm o = new BrArm(); o.pol = pol; o.alpha = alpha; o.nSeeds = 1;
+        Glide2D G = build(seed); FilamentStore f = G.fil; int nSeg = G.nSeg; int N = G.N;
+        var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+        e.matc.set(3, ExplicitCompleteMatHarness.motorBrownPolicy());
+        double twistEff = TWIST;
+        if (TWIST_OVERRIDE != 0) { twistEff = TWIST_OVERRIDE; e.tzP.set(0, twistEff); e.surfP.set(1, twistEff); }
+        double[] bhat = G.bhat;
+        TornadoExecutionPlan plan = null;
+        if (USE_GPU) {
+            try { plan = ExplicitCompleteMatHarness.buildGlidingGraph(e, true); }
+            catch (Throwable ex) { ExplicitCompleteMatHarness.resetBrownianPolicy(); setTZ(false,0); setSurface(false,R_NM,false,0);
+                throw new IllegalStateException("GPU graph did not lower (fallback NOT permitted): " + oneLine(root(ex).getMessage()), ex); }
+        }
+        double[] prevD = new double[N], prevArc = new double[N];
+        boolean[] prevCand = new boolean[N], prevBound = new boolean[N];
+        int[] runLen = new int[N]; int[] runSign = new int[N]; boolean[] runMono = new boolean[N];
+        double[] segRoll = new double[nSeg], prevRoll = new double[nSeg];
+        for (int s = 0; s < nSeg; s++) prevRoll[s] = rollAngle(f, s, bhat);
+        double phAbs = 0, phSq = 0, phSigned = 0, phAx = 0, phRoll = 0, residA = 0, residB = 0;
+        double phAbsS = 0, phSqS = 0, phSignedS = 0, phAxS = 0, phRollS = 0, residAS = 0;
+        double[] prevInc = new double[N]; boolean[] hasPrevInc = new boolean[N];   // PER-MOTOR lag-1 autocorrelation
+        double acNum = 0, acDen = 0;
+        double arcSq = 0, arcSqS = 0; long phaseN = 0, phaseNS = 0;
+        java.util.ArrayList<Double> arcMag = new java.util.ArrayList<>();
+        double sT = 0, sY = 0, sTT = 0, sTY = 0; long nS = 0;
+        double boundSum = 0; int boundN = 0;
+        double tauNetAcc = 0, tauAbsAcc = 0; long tauSamp = 0, headPos = 0, headTot = 0;
+        for (int t = 0; t < steps; t++) {
+            if (plan != null) {
+                e.matc.set(0, t); e.matc.set(1, seed); e.matc.set(3, ExplicitCompleteMatHarness.motorBrownPolicy());
+                G.mot.setCounts(t, seed, nSeg); f.counts.set(1, t); f.counts.set(2, seed);
+                plan.execute();
+            } else ExplicitCompleteMatHarness.stepGlidingCPU(e, t, seed);
+            // whole-filament material-frame roll increment (the roll channel of the phase budget)
+            double rollInc = 0;
+            for (int s = 0; s < nSeg; s++) { double r = rollAngle(f, s, bhat); double dr = wrapPi(r - prevRoll[s]);
+                segRoll[s] += dr; rollInc += dr; prevRoll[s] = r; }
+            rollInc /= nSeg;
+            if (t % 10 == 0) { double y = centroidDot(f, bhat), x = t*DT; sT += x; sY += y; sTT += x*x; sTY += x*y; nS++; }
+            for (int m = 0; m < N; m++) {
+                boolean isCand = e.tzDiag.get(4*m+3) == 1f;
+                if (isCand) {
+                    double d = e.tzDiag.get(4*m), arc = G.mot.bindArc.get(m);
+                    int b = bin(d);
+                    o.cand++; o.binCand[b]++; o.binW[b] += e.tzDiag.get(4*m+1); o.meanDpsiCand += d;
+                    if (e.tzDiag.get(4*m+2) == 1f) { o.acc++; o.binAcc[b]++; o.meanDpsi += d; }
+                    if (prevCand[m]) {
+                        double dd = wrapPi(d - prevD[m]);
+                        double dArc = arc - prevArc[m];
+                        double ax = -twistEff*dArc;       // axial contribution under sign convention A (verified below)
+                        double ro = -rollInc;             // roll contribution under the same convention
+                        phAbs += Math.abs(dd); phSq += dd*dd; phSigned += dd;
+                        phAx += Math.abs(wrapPi(twistEff*dArc)); phRoll += Math.abs(ro);
+                        residA += Math.abs(wrapPi(dd - ax - ro));
+                        residB += Math.abs(wrapPi(dd + ax + ro));
+                        arcSq += dArc*dArc; phaseN++; arcMag.add(Math.abs(dArc));
+                        if (Math.abs(dArc) < ARC_SITE_UM) {   // SAME attachment site (no ownership jump)
+                            phAbsS += Math.abs(dd); phSqS += dd*dd; phSignedS += dd;
+                            phAxS += Math.abs(wrapPi(twistEff*dArc)); phRollS += Math.abs(ro);
+                            residAS += Math.abs(wrapPi(dd - ax - ro));
+                            arcSqS += dArc*dArc; phaseNS++;
+                        }
+                        if (hasPrevInc[m]) { acNum += dd*prevInc[m]; acDen += prevInc[m]*prevInc[m]; }
+                        prevInc[m] = dd; hasPrevInc[m] = true;
+                        int sg = dd > 0 ? 1 : (dd < 0 ? -1 : 0);
+                        if (runLen[m] == 1) runSign[m] = sg; else if (sg != runSign[m]) runMono[m] = false;
+                        runLen[m]++;
+                    } else { runLen[m] = 1; runMono[m] = true; runSign[m] = 0; hasPrevInc[m] = false; }
+                    prevD[m] = d; prevArc[m] = arc;
+                } else if (prevCand[m]) {
+                    closeRun(o, runLen[m], runMono[m]); runLen[m] = 0; hasPrevInc[m] = false;
+                }
+                prevCand[m] = isCand;
+            }
+            double stepNet = 0, stepAbs = 0; boolean any = false;
+            for (int m = 0; m < N; m++) {
+                int s = G.mot.boundSeg.get(m);
+                boolean nowBound = s >= 0;
+                if (prevBound[m] && !nowBound) o.detach++;
+                prevBound[m] = nowBound;
+                if (!nowBound) continue;
+                any = true;
+                double ux = f.uVec.get(s), uy = f.uVec.get(nSeg+s), uz = f.uVec.get(2*nSeg+s);
+                int d = m*CrossBridgeSystem.STRIDE;
+                double tau = G.bondData.get(d+9)*ux + G.bondData.get(d+10)*uy + G.bondData.get(d+11)*uz;
+                stepNet += tau; stepAbs += Math.abs(tau);
+                headTot++; if (tau > 0) headPos++;
+                if (t % 5 == 0) { int b = (int) ((wrapPi(G.mot.bindAzim.get(m)) + Math.PI)/(2*Math.PI)*8); o.azHist[Math.max(0, Math.min(7, b))]++; }
+            }
+            if (any) { tauNetAcc += stepNet; tauAbsAcc += stepAbs; tauSamp++; }
+            if ((t+1) % 200 == 0) { int b = 0; for (int m = 0; m < N; m++) if (G.mot.boundSeg.get(m) >= 0) b++; boundSum += b; boundN++; }
+        }
+        for (int m = 0; m < N; m++) if (runLen[m] > 0) closeRun(o, runLen[m], runMono[m]);
+        for (int i = 0; i < 3*nSeg; i++) if (!Float.isFinite(f.coord.get(i))) { o.invalid++; break; }
+        double den = nS*sTT - sT*sT;
+        o.glide = den != 0 ? (nS*sTY - sT*sY)/den : 0;
+        double sum = 0; for (double v : segRoll) sum += v; double mean = sum/nSeg;
+        double var = 0; for (double v : segRoll) var += (v-mean)*(v-mean); var /= nSeg;
+        o.meanTurns = mean/(2*Math.PI); o.turnsSpread = Math.sqrt(var)/(2*Math.PI);
+        o.coherentRoll = o.turnsSpread > 1e-12 ? Math.abs(o.meanTurns)/o.turnsSpread : 0;
+        double glideUm = o.glide*steps*DT;
+        o.turnsPerUm = Math.abs(glideUm) > 1e-6 ? o.meanTurns/glideUm : 0;
+        o.avgBound = boundN > 0 ? boundSum/boundN : 0;
+        o.detachRate = o.detach/(double) steps;
+        o.tauNet = tauSamp > 0 ? tauNetAcc/tauSamp : 0;
+        o.tauAbs = tauSamp > 0 ? tauAbsAcc/tauSamp : 0;
+        o.cancel = Math.abs(o.tauNet) > 1e-30 ? o.tauAbs/Math.abs(o.tauNet) : 0;
+        o.fracHeadPos = headTot > 0 ? (double) headPos/headTot : 0;
+        o.meanDpsi = o.acc > 0 ? o.meanDpsi/o.acc : 0;
+        o.meanDpsiCand = o.cand > 0 ? o.meanDpsiCand/o.cand : 0;
+        o.accFrac = o.cand > 0 ? (double) o.acc/o.cand : 0;
+        double D = twistEff*o.glide; o.sgnD = D > 0 ? 1 : (D < 0 ? -1 : 0);
+        long lead = 0, trail = 0, leadC = 0, trailC = 0;
+        for (int b = 0; b < NB; b++) { double c = binCentre(b);
+            if (o.sgnD*c < 0) { lead += o.binAcc[b]; leadC += o.binCand[b]; } else { trail += o.binAcc[b]; trailC += o.binCand[b]; } }
+        o.leadN = lead; o.trailN = trail;
+        o.leadAcc = (lead + trail) > 0 ? (double) lead/(lead + trail) : 0;
+        o.leadCand = (leadC + trailC) > 0 ? (double) leadC/(leadC + trailC) : 0;
+        o.bias = o.leadAcc - o.leadCand;
+        o.phasePairs = phaseN;
+        o.driftStep = Math.abs(twistEff*o.glide)*DT;
+        o.phasePairsSite = phaseNS;
+        if (phaseN > 0) {
+            o.phAbs = phAbs/phaseN; o.phRms = Math.sqrt(phSq/phaseN); o.phSigned = phSigned/phaseN;
+            o.phAxial = phAx/phaseN; o.phRoll = phRoll/phaseN;
+            o.phResid = residA/phaseN; o.phResidAlt = residB/phaseN;
+            o.ac1 = acDen > 0 ? acNum/acDen : 0;
+            o.siteFrac = (double) phaseNS/phaseN;
+            java.util.Collections.sort(arcMag);
+            o.arcMedian = arcMag.get(arcMag.size()/2);
+            // ROBUST axial diffusivity: for a Gaussian increment, median|Δ| = 0.6745·σ ⇒ σ = median/0.6745.
+            // The mean-square estimate below is reported too, but it is dominated by the rare attachment-site
+            // ownership jumps (|Δarc| ~ half a segment), so the median form is the one to read.
+            double sig = o.arcMedian/0.6744897501960817;
+            o.dAxialMed = sig*sig/(2*DT);
+            double v2 = o.glide*o.glide;
+            o.tCohSteps = v2 > 1e-12 ? (2*o.dAxialMed/v2)/DT : Double.POSITIVE_INFINITY;
+            o.driftOverRms = o.phRms > 1e-12 ? o.driftStep/o.phRms : 0;
+        }
+        if (phaseNS > 0) {
+            o.phAbsS = phAbsS/phaseNS; o.phRmsS = Math.sqrt(phSqS/phaseNS); o.phSignedS = phSignedS/phaseNS;
+            o.phAxialS = phAxS/phaseNS; o.phRollS = phRollS/phaseNS; o.phResidS = residAS/phaseNS;
+            o.dAxial = (arcSqS/phaseNS)/(2*DT);                     // same-site mean-square estimate
+        }
+        if (o.residRuns > 0) { o.residMean /= o.residRuns; o.residOverTcoh = o.tCohSteps > 0 ? o.residMean/o.tCohSteps : 0; }
+        o.pMono = o.monoRuns > 0 ? (double) o.monoOk/o.monoRuns : 0;
+        ExplicitCompleteMatHarness.TELEMETRY = false;
+        ExplicitCompleteMatHarness.resetBrownianPolicy();
+        setTZ(false, 0); setSurface(false, R_NM, false, 0);
+        return o;
+    }
+    static void closeRun(BrArm o, int len, boolean mono) {
+        if (len <= 0) return;
+        o.residRuns++; o.residMean += len;
+        o.residHist[Math.min(NRES-1, len-1)]++;
+        if (len >= 3) { o.monoRuns++; if (mono) o.monoOk++; }
+    }
+
+    /** Seed-ensemble mean + SEM of an arm. */
+    static BrArm meanBr(String label, Pol pol, double alpha, int[] seeds, int steps) {
+        int n = seeds.length;
+        BrArm a = new BrArm(); a.label = label; a.pol = pol; a.alpha = alpha; a.nSeeds = n;
+        double[] vD = new double[n], vB = new double[n], vT = new double[n], vG = new double[n], vTu = new double[n], vTp = new double[n];
+        int i = 0;
+        for (int s : seeds) {
+            BrArm o = runBrArm(pol, alpha, s, steps);
+            vD[i] = o.meanDpsi; vB[i] = o.bias; vT[i] = o.tauNet; vG[i] = o.glide; vTu[i] = o.meanTurns; vTp[i] = o.turnsPerUm; i++;
+            if (VERBOSE) System.out.printf(Locale.US, "      seed %-5d glide=%+7.3f avgB=%5.2f cand=%6d acc=%6d accF=%.3f ⟨Δψ⟩acc=%+.4f lead−cand=%+.4f τnet=%+.2e turns=%+.4f |ΔΔψ|=%.4f pairs=%d%n",
+                    s, o.glide, o.avgBound, o.cand, o.acc, o.accFrac, o.meanDpsi, o.bias, o.tauNet, o.meanTurns, o.phAbs, o.phasePairs);
+            a.glide += o.glide/n; a.avgBound += o.avgBound/n; a.accFrac += o.accFrac/n; a.detachRate += o.detachRate/n;
+            a.meanTurns += o.meanTurns/n; a.turnsSpread += o.turnsSpread/n; a.coherentRoll += o.coherentRoll/n;
+            a.turnsPerUm += o.turnsPerUm/n; a.meanDpsi += o.meanDpsi/n; a.meanDpsiCand += o.meanDpsiCand/n;
+            a.leadAcc += o.leadAcc/n; a.leadCand += o.leadCand/n;
+            a.tauNet += o.tauNet/n; a.tauAbs += o.tauAbs/n; a.fracHeadPos += o.fracHeadPos/n;
+            a.cand += o.cand; a.acc += o.acc; a.leadN += o.leadN; a.trailN += o.trailN; a.detach += o.detach;
+            a.sgnD = o.sgnD; a.invalid += o.invalid;
+            a.driftStep += o.driftStep/n; a.phAbs += o.phAbs/n; a.phRms += o.phRms/n; a.phSigned += o.phSigned/n;
+            a.phAxial += o.phAxial/n; a.phRoll += o.phRoll/n; a.phResid += o.phResid/n; a.phResidAlt += o.phResidAlt/n;
+            a.ac1 += o.ac1/n; a.phasePairs += o.phasePairs; a.dAxial += o.dAxial/n;
+            a.phAbsS += o.phAbsS/n; a.phRmsS += o.phRmsS/n; a.phSignedS += o.phSignedS/n;
+            a.phAxialS += o.phAxialS/n; a.phRollS += o.phRollS/n; a.phResidS += o.phResidS/n;
+            a.phasePairsSite += o.phasePairsSite; a.dAxialMed += o.dAxialMed/n;
+            a.arcMedian += o.arcMedian/n; a.siteFrac += o.siteFrac/n;
+            a.tCohSteps += o.tCohSteps/n; a.driftOverRms += o.driftOverRms/n;
+            a.residMean += o.residMean/n; a.residRuns += o.residRuns; a.residOverTcoh += o.residOverTcoh/n;
+            a.pMono += o.pMono/n; a.monoRuns += o.monoRuns; a.monoOk += o.monoOk;
+            for (int b = 0; b < NB; b++) { a.binCand[b] += o.binCand[b]; a.binAcc[b] += o.binAcc[b]; a.binW[b] += o.binW[b]; }
+            for (int b = 0; b < 8; b++) a.azHist[b] += o.azHist[b];
+            for (int b = 0; b < NRES; b++) a.residHist[b] += o.residHist[b];
+        }
+        a.cancel = Math.abs(a.tauNet) > 1e-30 ? a.tauAbs/Math.abs(a.tauNet) : 0;
+        a.semDpsi = sem(vD); a.semBias = sem(vB); a.semTau = sem(vT); a.semGlide = sem(vG);
+        a.semTurns = sem(vTu); a.semTpu = sem(vTp);
+        a.bias = 0; for (double v : vB) a.bias += v/n;
+        int agree = 0; for (double v : vB) if (a.bias != 0 && v*a.bias > 0) agree++;
+        a.nSignAgree = agree;
+        int tAgree = 0; for (double v : vT) if (a.tauNet != 0 && v*a.tauNet > 0) tAgree++;
+        a.nTauSignAgree = tAgree;
+        return a;
+    }
+
+    static void brRow(BrArm a) {
+        System.out.printf(Locale.US, "%-34s %-46s a=%.0f | glide %+7.3f±%.3f | avgB %5.2f | detach/step %.3f | accF %.3f | ⟨Δψ⟩acc %+.4f±%.4f | ⟨Δψ⟩cand %+.4f | leadAcc−leadCand %+.4f±%.4f (%d/%d) | lead/trail %d/%d | τnet %+.2e±%.1e (%d/%d) | cancel %.1f | turns %+.4f±%.4f | inv %d%n",
+                a.label, a.pol.spec(), a.alpha, a.glide, a.semGlide, a.avgBound, a.detachRate, a.accFrac,
+                a.meanDpsi, a.semDpsi, a.meanDpsiCand, a.bias, a.semBias, a.nSignAgree, a.nSeeds,
+                a.leadN, a.trailN, a.tauNet, a.semTau, a.nTauSignAgree, a.nSeeds, a.cancel,
+                a.meanTurns, a.semTurns, a.invalid);
+    }
+    static void brPhaseRow(BrArm a) {
+        System.out.printf(Locale.US, "%-34s ALL  drift %.5f | ⟨|ΔΔψ|⟩ %.5f | RMS %.5f | signed %+.5f | axial %.5f | roll %.5f | resid(A) %.5f | resid(B) %.5f | ac1(per-motor lag1) %+.3f | drift/RMS %.5f | pairs %d | same-site frac %.3f%n",
+                a.label, a.driftStep, a.phAbs, a.phRms, a.phSigned, a.phAxial, a.phRoll, a.phResid, a.phResidAlt,
+                a.ac1, a.driftOverRms, a.phasePairs, a.siteFrac);
+        System.out.printf(Locale.US, "%-34s SITE ⟨|ΔΔψ|⟩ %.5f | RMS %.5f | signed %+.5f | axial %.5f | roll %.5f | resid(A) %.5f | median|Δarc| %.4f nm | D_ax(med) %.3e µm²/s | D_ax(ms,site) %.3e | t_c %.1f steps | ⟨residence⟩ %.2f steps | res/t_c %.4f | P(mono) %.3f | drift/⟨|ΔΔψ|⟩ %.4f | pairs %d runs %d%n",
+                "", a.phAbsS, a.phRmsS, a.phSignedS, a.phAxialS, a.phRollS, a.phResidS, a.arcMedian*1e3,
+                a.dAxialMed, a.dAxial, a.tCohSteps, a.residMean, a.residOverTcoh, a.pMono,
+                a.phAbsS > 1e-12 ? a.driftStep/a.phAbsS : 0, a.phasePairsSite, a.residRuns);
+    }
+    static void brHists(BrArm a) {
+        System.out.printf(Locale.US, "    %-34s mismatch/weight histogram (Δψ bins over (−π,π]):%n", a.label);
+        System.out.printf(Locale.US, "    %8s %11s %10s %10s %10s%n", "Δψ bin", "candidates", "mean w", "accepted", "lead/trail");
+        for (int b = 0; b < NB; b++) System.out.printf(Locale.US, "    %+8.2f %11d %10.4f %10d %10s%n",
+                binCentre(b), a.binCand[b], a.binCand[b] > 0 ? a.binW[b]/a.binCand[b] : 0, a.binAcc[b],
+                a.sgnD*binCentre(b) < 0 ? "LEAD" : "TRAIL");
+        System.out.printf(Locale.US, "    accepted-azimuth histogram (8 bins): %s%n", java.util.Arrays.toString(a.azHist));
+        System.out.printf(Locale.US, "    candidate-residence histogram (1..7,>=8 steps): %s%n", java.util.Arrays.toString(a.residHist));
+    }
+
+    // ---------------- deterministic Brownian-mask fixtures ----------------
+    static DoubleArray cpD(DoubleArray a) { DoubleArray b = new DoubleArray(a.getSize()); for (int i = 0; i < a.getSize(); i++) b.set(i, a.get(i)); return b; }
+    static FloatArray  cpF(FloatArray a)  { FloatArray  b = new FloatArray(a.getSize());  for (int i = 0; i < a.getSize(); i++) b.set(i, a.get(i)); return b; }
+    static IntArray    cpI(IntArray a)    { IntArray    b = new IntArray(a.getSize());    for (int i = 0; i < a.getSize(); i++) b.set(i, a.get(i)); return b; }
+
+    /** Run matS2SolveStep on private copies with a given (brownOn, policy); return the per-motor state hash inputs. */
+    static double[][] s2Replay(ExplicitCompleteMatHarness.ExMat e, Glide2D G, int t, int seed, int brownOn, int policy) {
+        DoubleArray nodes = cpD(e.nodes), q = cpD(e.q), sys = cpD(e.sys), outGeom = cpD(e.outGeom);
+        FloatArray fdf = cpF(G.mot.forceDotFil), fm = cpF(G.mot.forceMag);
+        IntArray matc = IntArray.fromElements(t, seed, brownOn, policy);
+        TwoBodyBeamAnalyticGpu.matS2SolveStep(nodes, e.frame, q, G.bondData, G.mot.boundSeg, e.params, sys, outGeom, fdf, fm, matc, e.exCounts);
+        int N = e.N;
+        double[][] out = new double[N][3];
+        for (int m = 0; m < N; m++) { out[m][0] = q.get(m); out[m][1] = q.get(N+m); out[m][2] = nodes.get(m) + nodes.get(3*N+m) + nodes.get((3*e.M)*N+m); }
+        return out;
+    }
+    static boolean sameRow(double[] a, double[] b) { return a[0] == b[0] && a[1] == b[1] && a[2] == b[2]; }
+
+    static boolean runBrFixtures() {
+        passN = failN = 0;
+        System.out.println("\n--- BROWNIAN-ABLATION DETERMINISTIC FIXTURES ---");
+
+        // BR1 — the filament channel-mask kernel is an exact identity at mask = (1,1,1,1), and exactly zeroes a
+        // disabled channel while leaving the enabled ones bit-unchanged.
+        int NB0 = 37;
+        FloatArray rf0 = new FloatArray(3*NB0), rt0 = new FloatArray(3*NB0);
+        for (int i = 0; i < 3*NB0; i++) { rf0.set(i, (float) Math.sin(0.7*i + 0.3)); rt0.set(i, (float) Math.cos(0.11*i - 1.1)); }
+        IntArray cn = IntArray.fromElements(NB0, 0, 0, NB0);
+        FloatArray rf = cpF(rf0), rt = cpF(rt0);
+        BrownianForceSystem.brownChannelMask(rf, rt, FloatArray.fromElements(1f,1f,1f,1f), cn);
+        boolean id = true; for (int i = 0; i < 3*NB0; i++) if (rf.get(i) != rf0.get(i) || rt.get(i) != rt0.get(i)) id = false;
+        ck(101, "mask (1,1,1,1) is an EXACT identity on randForce/randTorque", id);
+        // selective: axial force only
+        rf = cpF(rf0); rt = cpF(rt0);
+        BrownianForceSystem.brownChannelMask(rf, rt, FloatArray.fromElements(1f,0f,0f,0f), cn);
+        boolean sel = true;
+        for (int i = 0; i < NB0; i++) {
+            if (rf.get(i) != rf0.get(i)) sel = false;                                  // axial force retained exactly
+            if (rf.get(NB0+i) != 0f || rf.get(2*NB0+i) != 0f) sel = false;              // transverse force exactly 0
+            if (rt.get(i) != 0f || rt.get(NB0+i) != 0f || rt.get(2*NB0+i) != 0f) sel = false;   // all torque exactly 0
+        }
+        ck(102, "mask (1,0,0,0): axial force bit-unchanged, every other channel EXACTLY zero", sel);
+        // selective: roll torque only
+        rf = cpF(rf0); rt = cpF(rt0);
+        BrownianForceSystem.brownChannelMask(rf, rt, FloatArray.fromElements(0f,0f,1f,0f), cn);
+        boolean sel2 = true;
+        for (int i = 0; i < NB0; i++) {
+            if (rf.get(i) != 0f || rf.get(NB0+i) != 0f || rf.get(2*NB0+i) != 0f) sel2 = false;
+            if (rt.get(i) != rt0.get(i)) sel2 = false;
+            if (rt.get(NB0+i) != 0f || rt.get(2*NB0+i) != 0f) sel2 = false;
+        }
+        ck(103, "mask (0,0,1,0): body-axial ROLL torque bit-unchanged, every other channel EXACTLY zero", sel2);
+
+        // BR2 — policy-off identity: the FULL Brownian policy reproduces the canonical trajectory bit-for-bit.
+        applyPolicy(POL_FULL);
+        double[] hRef = trajHash(true, 6.0, true, 200);
+        applyPolicy(POL_FULL);
+        double[] hSame = trajHash(true, 6.0, true, 200);
+        ExplicitCompleteMatHarness.resetBrownianPolicy();
+        double[] hCanon = trajHash(true, 6.0, true, 200);
+        ck(104, "policy 'full' ⇒ trajectory bit-identical to the canonical (unmasked) path",
+                hRef[0] == hCanon[0] && hRef[1] == hCanon[1] && hRef[3] == hCanon[3] && hSame[0] == hCanon[0]);
+
+        // BR3/BR4 — the binding-state motor mask, audited at EVERY step of a real trajectory.
+        boolean okState = motorMaskStateAudit();
+
+        // BR5 — Arm-B integrity: filament Brownian exactly zero, deterministic mechanics/chemistry/hazard alive.
+        boolean okArmB = armBIntegrity();
+
+        System.out.printf("Brownian-ablation fixtures: %d PASS, %d FAIL%n", passN, failN);
+        return failN == 0 && okState && okArmB;
+    }
+
+    /**
+     * Per-step audit of the binding-state-dependent motor Brownian mask over a REAL trajectory. At every step,
+     * matS2SolveStep is replayed on private copies three ways from the identical post-step state:
+     *   (i) brownOn=1, policy=0 (canonical) | (ii) brownOn=1, policy=1 (bound-motor Brownian off) | (iii) brownOn=0.
+     * Requirements, checked per motor per step: a BOUND motor must satisfy (ii) == (iii) EXACTLY and (ii) != (i);
+     * an UNBOUND motor must satisfy (ii) == (i) EXACTLY and (ii) != (iii). Because boundSeg at replay time is the
+     * one the real solver saw in that same step, this also fixes the TRANSITION TIMING: the step on which a head
+     * goes FREE→bound is itself audited, as is the step on which it detaches.
+     */
+    static boolean motorMaskStateAudit() {
+        applyPolicy(POL_SEARCHONLY);   // Arm-B policy, so the audited trajectory is the primary arm's
+        setTZ(true, 6.0); setSurface(true, R_NM, false, EXCL_NM);
+        ExplicitCompleteMatHarness.TELEMETRY = true;
+        int seed = 101, K = 400;
+        Glide2D G = build(seed);
+        var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+        e.matc.set(3, ExplicitCompleteMatHarness.motorBrownPolicy());
+        int N = e.N;
+        long boundChecked = 0, unboundChecked = 0, bad = 0, binds = 0, detaches = 0, noiseSeenBound = 0, noiseSeenUnbound = 0;
+        boolean[] wasBound = new boolean[N];
+        for (int t = 0; t < K; t++) {
+            ExplicitCompleteMatHarness.stepGlidingCPU(e, t, seed);
+            double[][] rCanon = s2Replay(e, G, t, seed, 1, 0);
+            double[][] rMask  = s2Replay(e, G, t, seed, 1, 1);
+            double[][] rNone  = s2Replay(e, G, t, seed, 0, 0);
+            for (int m = 0; m < N; m++) {
+                boolean b = G.mot.boundSeg.get(m) >= 0;
+                if (b && !wasBound[m]) binds++;
+                if (!b && wasBound[m]) detaches++;
+                wasBound[m] = b;
+                if (b) {
+                    boundChecked++;
+                    if (!sameRow(rMask[m], rNone[m])) bad++;                 // masked bound motor MUST equal no-Brownian
+                    if (!sameRow(rCanon[m], rNone[m])) noiseSeenBound++;     // and the canonical one MUST differ (noise present)
+                } else {
+                    unboundChecked++;
+                    if (!sameRow(rMask[m], rCanon[m])) bad++;                // unbound motor MUST keep its search noise
+                    if (!sameRow(rCanon[m], rNone[m])) noiseSeenUnbound++;
+                }
+            }
+        }
+        ExplicitCompleteMatHarness.TELEMETRY = false;
+        ExplicitCompleteMatHarness.resetBrownianPolicy(); setTZ(false, 0); setSurface(false, R_NM, false, 0);
+        System.out.printf(Locale.US, "       (per-step mask audit over %d steps, N=%d: bound-motor samples %d, unbound %d, "
+                + "FREE→bound transitions %d, bound→FREE %d; canonical-noise detected on %d/%d bound and %d/%d unbound samples)%n",
+                K, N, boundChecked, unboundChecked, binds, detaches, noiseSeenBound, boundChecked, noiseSeenUnbound, unboundChecked);
+        ck(105, "BOUND motor gets EXACTLY zero Brownian; UNBOUND motor keeps it (every step, every motor)", bad == 0);
+        ck(106, "the mask is not vacuous: canonical Brownian measurably perturbs both bound and unbound motors",
+                noiseSeenBound == boundChecked && noiseSeenUnbound == unboundChecked && boundChecked > 0 && unboundChecked > 0);
+        ck(107, "FREE→bound and bound→FREE transitions occur inside the audited window (timing covered)",
+                binds > 0 && detaches > 0);
+        return bad == 0 && binds > 0 && detaches > 0;
+    }
+
+    /** Arm-B integrity: the stochastic thermal terms are gone, everything deterministic still runs. */
+    static boolean armBIntegrity() {
+        applyPolicy(POL_SEARCHONLY);
+        setTZ(true, 6.0); setSurface(true, R_NM, false, EXCL_NM);
+        ExplicitCompleteMatHarness.TELEMETRY = true;
+        int seed = 101, K = 400;
+        Glide2D G = build(seed); FilamentStore f = G.fil;
+        var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+        e.matc.set(3, ExplicitCompleteMatHarness.motorBrownPolicy());
+        int N = e.N, nSeg = G.nSeg;
+        double maxRand = 0, maxForce = 0, maxBond = 0; long chemChanges = 0, cand = 0, rej = 0, bound = 0;
+        int[] prevNuc = new int[N]; for (int m = 0; m < N; m++) prevNuc[m] = G.mot.nucleotideState.get(m);
+        for (int t = 0; t < K; t++) {
+            ExplicitCompleteMatHarness.stepGlidingCPU(e, t, seed);
+            for (int i = 0; i < 3*nSeg; i++) { maxRand = Math.max(maxRand, Math.abs(f.randForce.get(i)));
+                                               maxRand = Math.max(maxRand, Math.abs(f.randTorque.get(i)));
+                                               maxForce = Math.max(maxForce, Math.abs(f.forceSum.get(i))); }
+            for (int m = 0; m < N; m++) {
+                int nu = G.mot.nucleotideState.get(m); if (nu != prevNuc[m]) chemChanges++; prevNuc[m] = nu;
+                if (e.tzDiag.get(4*m+3) == 1f) { cand++; if (e.tzDiag.get(4*m+2) != 1f) rej++; }
+                if (G.mot.boundSeg.get(m) >= 0) { bound++;
+                    for (int c = 0; c < 3; c++) maxBond = Math.max(maxBond, Math.abs(G.bondData.get(m*CrossBridgeSystem.STRIDE+c))); }
+            }
+        }
+        ExplicitCompleteMatHarness.TELEMETRY = false;
+        ExplicitCompleteMatHarness.resetBrownianPolicy(); setTZ(false, 0); setSurface(false, R_NM, false, 0);
+        System.out.printf(Locale.US, "       (Arm-B %d steps: max|randForce|,|randTorque| = %.3e ; max|filament forceSum| = %.3e N ;"
+                + " max|F8| = %.3e N ; chemistry transitions = %d ; candidates = %d (rejected %d) ; bound-motor samples = %d)%n",
+                K, maxRand, maxForce, maxBond, chemChanges, cand, rej, bound);
+        ck(108, "Arm B: filament Brownian force AND torque are EXACTLY zero on every segment, every step", maxRand == 0.0);
+        ck(109, "Arm B: deterministic filament force and cross-bridge force remain nonzero", maxForce > 0 && maxBond > 0);
+        ck(110, "Arm B: chemistry (Lymn–Taylor) continues to fire", chemChanges > 0);
+        ck(111, "Arm B: the target-zone hazard continues to run (candidates offered AND rejected)", cand > 0 && rej > 0);
+        // alphaPsi = 0 remains canonical with respect to the target-zone path under the ablation policy
+        applyPolicy(POL_SEARCHONLY);
+        BrArm a0 = runBrArm(POL_SEARCHONLY, 0.0, 101, 600);
+        ck(112, String.format(Locale.US, "Arm B with alphaPsi=0: every canonical bind is kept (accFrac=%.4f)", a0.accFrac),
+                a0.cand > 0 && a0.accFrac == 1.0);
+        return maxRand == 0.0 && maxForce > 0 && chemChanges > 0 && cand > 0 && rej > 0;
+    }
+
+    /** Device residency + CPU/GPU equivalence for a given Brownian policy (the FULL target-zone gliding graph). */
+    static boolean brEquiv(Pol pol, double alpha) {
+        applyPolicy(pol);
+        setTZ(true, alpha); setSurface(true, R_NM, true, EXCL_NM);
+        Glide2D Gc = build(101), Gd = build(101);
+        var ec = ExplicitCompleteMatHarness.packExMat(Gc, 1);
+        var ed = ExplicitCompleteMatHarness.packExMat(Gd, 1);
+        ec.matc.set(3, ExplicitCompleteMatHarness.motorBrownPolicy());
+        ed.matc.set(3, ExplicitCompleteMatHarness.motorBrownPolicy());
+        TornadoExecutionPlan plan;
+        try { plan = ExplicitCompleteMatHarness.buildGlidingGraph(ed, false); }
+        catch (Throwable ex) { System.out.println("  " + pol.name() + ": graph did NOT lower: " + oneLine(root(ex).getMessage()));
+            ExplicitCompleteMatHarness.resetBrownianPolicy(); setTZ(false,0); setSurface(false,R_NM,false,0); return false; }
+        int K = 200, firstDiv = -1, bindMism = 0, accMism = 0; double maxFil = 0, maxPsi = 0, maxRand = 0;
+        for (int t = 0; t < K; t++) {
+            ed.matc.set(0, t); ed.matc.set(1, 101); ed.matc.set(3, ExplicitCompleteMatHarness.motorBrownPolicy());
+            Gd.mot.setCounts(t, 101, Gd.nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, 101);
+            try { plan.execute(); }
+            catch (Throwable ex) { System.out.println("  " + pol.name() + ": device execute FAILED @t=" + t + ": " + oneLine(root(ex).getMessage()));
+                ExplicitCompleteMatHarness.resetBrownianPolicy(); setTZ(false,0); setSurface(false,R_NM,false,0); return false; }
+            ExplicitCompleteMatHarness.stepGlidingCPU(ec, t, 101);
+            double dFil = 0; for (int i = 0; i < 3*Gc.nSeg; i++) dFil = Math.max(dFil, Math.abs(Gc.fil.coord.get(i) - Gd.fil.coord.get(i)));
+            if (firstDiv < 0 && dFil > 1e-6) firstDiv = t;
+            maxFil = Math.max(maxFil, dFil);
+            for (int i = 0; i < 3*Gc.nSeg; i++) { if (!pol.fAx() && !pol.fTr()) maxRand = Math.max(maxRand, Math.abs(Gc.fil.randForce.get(i)));
+                                                  if (!pol.fRoll() && !pol.fOth()) maxRand = Math.max(maxRand, Math.abs(Gc.fil.randTorque.get(i))); }
+            if (firstDiv < 0) for (int m = 0; m < Gc.N; m++) {
+                if (Gc.mot.boundSeg.get(m) != Gd.mot.boundSeg.get(m)) bindMism++;
+                if (ec.tzDiag.get(4*m+2) != ed.tzDiag.get(4*m+2)) accMism++;
+                maxPsi = Math.max(maxPsi, Math.abs(Gc.mot.bindPsi0.get(m) - Gd.mot.bindPsi0.get(m)));
+            }
+        }
+        boolean fin = true; for (int i = 0; i < 3*Gc.nSeg; i++) if (!Float.isFinite(Gd.fil.coord.get(i))) fin = false;
+        int nbC = 0, nbD = 0; for (int m = 0; m < Gc.N; m++) { if (Gc.mot.boundSeg.get(m) >= 0) nbC++; if (Gd.mot.boundSeg.get(m) >= 0) nbD++; }
+        boolean ok = fin && bindMism == 0 && accMism == 0 && maxPsi < 1e-5 && Double.isFinite(maxFil) && maxRand == 0.0;
+        System.out.printf(Locale.US, "  %-22s alpha=%.0f  %d device-resident steps: bindMism=%d acceptMism=%d max|Δpsi0|=%.1e ;"
+                + " max|ΔfilCoord|=%.2e µm ; masked-channel |rand|=%.1e ; firstDiv=%s ; bound CPU=%d GPU=%d ⇒ %s%n",
+                pol.name(), alpha, K, bindMism, accMism, maxPsi, maxFil, maxRand,
+                firstDiv < 0 ? "none (bit-close)" : ("t=" + firstDiv + " (chaotic float op-order)"), nbC, nbD, ok ? "PASS" : "*FAIL*");
+        ExplicitCompleteMatHarness.resetBrownianPolicy(); setTZ(false, 0); setSurface(false, R_NM, false, 0);
+        return ok;
+    }
+
+    static boolean runBrEquiv() {
+        System.out.println("\n--- BROWNIAN-ABLATION: FULL GLIDING GRAPH DEVICE RESIDENCY + CPU/GPU EQUIVALENCE ---");
+        System.out.println("  (-Dtornado.enable.fma=false, -Dtornado.recover.bailout=false ⇒ a lowering failure THROWS; no silent fallback)");
+        boolean ok = true;
+        ok &= brEquiv(POL_FULL, ALPHA);
+        ok &= brEquiv(POL_SEARCHONLY, ALPHA);
+        ok &= brEquiv(POL_FILOFF, ALPHA);
+        ok &= brEquiv(POL_ALLOFF, ALPHA);
+        return ok;
+    }
+
+    // ---------------- the ablation campaign ----------------
+    static boolean DECOMPOSE = false;
+    static void runAblation() {
+        System.out.printf("\n--- BROWNIAN-NOISE ABLATION CAMPAIGN (%s runner) — alphaPsi=%.0f, density=%.0f, %d seeds × %d steps ---%n",
+                USE_GPU ? "GPU device-resident" : "CPU sequential", ALPHA, DENSITY, NSEEDS, STEPS);
+        int[] seeds = new int[NSEEDS]; for (int i = 0; i < NSEEDS; i++) seeds[i] = SEED + 101*i;
+        java.util.List<BrArm> arms = new java.util.ArrayList<>();
+        arms.add(meanBr("A  full Brownian baseline",  POL_FULL,       ALPHA, seeds, STEPS));
+        arms.add(meanBr("B  PRIMARY clean test",      POL_SEARCHONLY, ALPHA, seeds, STEPS));
+        arms.add(meanBr("C  filament off, motors on", POL_FILOFF,     ALPHA, seeds, STEPS));
+        arms.add(meanBr("D  bound quiet, filament on",POL_BOUNDQUIET, ALPHA, seeds, STEPS));
+        arms.add(meanBr("E  fully deterministic",     POL_ALLOFF,     ALPHA, seeds, STEPS));
+        arms.add(meanBr("F1 target-zone OFF (arm A)", POL_FULL,       0.0,   seeds, STEPS));
+        arms.add(meanBr("F2 target-zone OFF (arm B)", POL_SEARCHONLY, 0.0,   seeds, STEPS));
+        if (DECOMPOSE) {
+            arms.add(meanBr("G  filament AXIAL noise only", POL_FIL_AXIAL, ALPHA, seeds, STEPS));
+            arms.add(meanBr("H  filament ROLL noise only",  POL_FIL_ROLL,  ALPHA, seeds, STEPS));
+            arms.add(meanBr("I  filament transverse+bend",  POL_FIL_OTHER, ALPHA, seeds, STEPS));
+        }
+        System.out.println("\n  ===== ATTACHMENT-FLUX / ENGAGEMENT / TORQUE (mean ± SEM over seeds) =====");
+        for (BrArm a : arms) brRow(a);
+        System.out.println("\n  ===== PHASE-COHERENCE BUDGET (per-step motion of a persisting candidate's target-zone phase, rad/step) =====");
+        System.out.println("  (resid(A) uses  ΔΔψ − [−twistRate·ΔbindArc] − [−Δroll] ; resid(B) the opposite sign convention;");
+        System.out.println("   the SMALLER of the two identifies the correct convention — do not read the larger one)");
+        for (BrArm a : arms) brPhaseRow(a);
+        System.out.println("\n  ===== TORQUE / TWIRL DIAGNOSTICS =====");
+        for (BrArm a : arms) System.out.printf(Locale.US,
+                "%-34s τnet %+.3e±%.1e N·m (%d/%d seeds same sign) | Σ|τ| %.3e | cancel %.1f | frac heads τ>0 %.4f | turns %+.4f±%.4f | per-seg roll SD %.4f turns | coherentRoll |mean|/SD %.3f | turns/µm %+.2f±%.2f | glide %+.3f µm/s%n",
+                a.label, a.tauNet, a.semTau, a.nTauSignAgree, a.nSeeds, a.tauAbs, a.cancel, a.fracHeadPos,
+                a.meanTurns, a.semTurns, a.turnsSpread, a.coherentRoll, a.turnsPerUm, a.semTpu, a.glide);
+        System.out.println("\n  ===== HISTOGRAMS =====");
+        for (BrArm a : arms) if (a.label.startsWith("A ") || a.label.startsWith("B ")) brHists(a);
+        System.out.println("\n  ===== SYMMETRY CONTROLS on the primary arm (B) =====");
+        brSymmetry(seeds[0]);
+    }
+
+    /** Mirrored-handedness + no-translation + alpha=0 controls on the primary (Arm-B) policy. */
+    static void brSymmetry(int seed) {
+        int st = Math.min(STEPS, 3000);
+        double save = ExplicitCompleteMatHarness.TWIST_PER_MON_DEG;
+        BrArm nor = runBrArmTwist(POL_SEARCHONLY, ALPHA, seed, st, save);
+        BrArm mir = runBrArmTwist(POL_SEARCHONLY, ALPHA, seed, st, -save);
+        System.out.printf(Locale.US, "    helix LEFT (canonical)   : ⟨Δψ⟩acc=%+.4f leadAcc=%.3f leadCand=%.3f τnet=%+.2e cand=%d acc=%d%n",
+                nor.meanDpsi, nor.leadAcc, nor.leadCand, nor.tauNet, nor.cand, nor.acc);
+        System.out.printf(Locale.US, "    helix MIRRORED           : ⟨Δψ⟩acc=%+.4f leadAcc=%.3f leadCand=%.3f τnet=%+.2e cand=%d acc=%d%n",
+                mir.meanDpsi, mir.leadAcc, mir.leadCand, mir.tauNet, mir.cand, mir.acc);
+        double[] z = kinematicRun(0.0, ALPHA, true, 40000, 64);
+        double[] p = kinematicRun(+2.5, ALPHA, true, 40000, 64);
+        double[] m = kinematicRun(-2.5, ALPHA, true, 40000, 64);
+        System.out.printf(Locale.US, "    kinematic v=0 / +v / −v  : ⟨Δψ⟩ = %+.4f / %+.4f / %+.4f rad (leading frac %.3f / %.3f / %.3f)%n",
+                z[0], p[0], m[0], z[1], p[1], m[1]);
+        System.out.println("    (polarity reversal, rigid lab rotation and mirroring are exact deterministic fixtures 5/7/8/13 —");
+        System.out.println("     unchanged by this increment, since matTargetZone is byte-unchanged)");
+    }
+    static BrArm runBrArmTwist(Pol pol, double alpha, int seed, int steps, double twistPerMonDeg) {
+        TWIST_OVERRIDE = twistPerMonDeg*Math.PI/180.0/Constants.actinMonoRadius;
+        try { return runBrArm(pol, alpha, seed, steps); } finally { TWIST_OVERRIDE = 0; }
+    }
+    static double TWIST_OVERRIDE = 0;
+    /** The Brownian policy selected on the command line, applied to -3js renders (null ⇒ canonical). */
+    static Pol CLI_POL = null;
+
     static double[] reconSite(FilamentStore f, int s, double arc, double azim, double R) {
         int n = f.n;
         double cx = f.coord.get(s), cy = f.coord.get(n+s), cz = f.coord.get(2*n+s);
