@@ -1,5 +1,33 @@
 # Soft Box Project Journal
 
+### 2026-07-23 — EXPLICIT-S2 GPU LOWERING "regression" ROOT-CAUSED: a missing `-Dtornado.enable.fma=false` (launch flag, not source)
+
+The twirling report's §18 claim — "the full explicit-S2 gliding device graph does not lower on this machine, a
+PRE-EXISTING `matS2SolveStep` PTX fault" — **was WRONG**. Root cause: a **launch-flag regression**. `matS2SolveStep`
+FMA-lowers to an `ArithmeticLIRLowerable` NPE on the PTX backend when `tornado.enable.fma` is left at its default
+TRUE; every validated device-resident explicit-S2 GPU run in this project disables it. `scripts/run_explicit_twirl.sh`
+(and the prior hand-run commands) **omitted `-Dtornado.enable.fma=false`** and used `maxbytecodesize=16384` instead
+of the known-good `65536`. **No source, physics, chemistry, S2, dt, or numerics changed.**
+- **Known-good baseline:** `scripts/run_singlehead_gpu.sh` (`ExplicitCompleteMatHarness -production-cell`) —
+  `-Xmx8G -Dtornado.recover.bailout=false -Dtornado.enable.fma=false -Dtornado.tvm.maxbytecodesize=65536`. (Sibling
+  `run_hmm_gpu.sh` uses the same FMA-off + `fullInlining` for the larger dimer solver.)
+- **Matrix (clean rebuild, RTX 5070 / driver 595.71.05, JDK 21.0.11, TornadoVM 4.0.1-dev PTX):** isolated solver
+  (`-traj`) FMA-off **PASS** (§8 300 steps firstDiv=none); canonical surface-OFF (`-gliding`) FMA-off **PASS**
+  (mism=0, binds=11, invalid=0) but FMA-**ON FAIL** (the exact NPE at `matS2SolveStep`/`PTXLIRGenerationPhase`);
+  surface-ON full graph FMA-off **PASS** device-resident (200 steps, finite, no fallback). ⇒ interpretation-matrix
+  row "fail only with FMA on" = **known FMA lowering defect / environment regression**; NOT the new surface tasks,
+  NOT graph composition (the ISOLATED solver flips on the same switch).
+- **Fix:** `scripts/run_explicit_twirl.sh` now carries the known-good flags; `ExplicitTwirlGlidingHarness.runEquiv`
+  restored to test the FULL surface-ON graph device-resident (plus the isolated-kernel bit-identity).
+- **Gates:** G1 surface-OFF device execution PASS (invalid=0, no fallback); G2 scientific identity PASS
+  (bind-identity mism=0; the maxΔfil 1.3e-1 from firstDiv t=4 is chaotic float op-order, the documented standard);
+  G3 surface-ON PASS (new tasks device-resident; azimuth/steric decisions bit-identical CPU↔GPU); G4 3/3 fresh
+  processes identical (no compiler-cache dependence); G5 the SCRIPT propagates the flags (full graph lowers through
+  it — impossible with FMA on).
+- **Remaining limitation:** the device path requires FMA off (upstream TornadoVM PTX defect), now encoded in all
+  launchers. **Twirling report §18 corrected + superseded.** Report:
+  `docs/EXPLICIT_S2_GPU_LOWERING_REGRESSION_FINDINGS.md`. **Azimuthal-gate work may safely resume.**
+
 ### 2026-07-23 — EXPLICIT-S2 GLIDING port of helical surface binding + TWIRLING probe (noncanonical, default-off; Category D)
 
 Ported the validated off-axis surface-binding drive into the **explicit-s2-l40 single-head DYNAMIC gliding assay**

@@ -316,16 +316,45 @@ public final class ExplicitTwirlGlidingHarness {
     static double sq(double x) { return x * x; }
 
     // ================================================================= CPU/GPU equivalence
-    // The full 20-task explicit-S2 gliding DEVICE graph does NOT lower on this machine — a PRE-EXISTING TornadoVM
-    // PTX-backend fault in matS2SolveStep (ArithmeticLIRLowerable NPE), reproduced identically by the CANONICAL
-    // (surface-OFF) gliding graph, i.e. UNRELATED to this port. So the dynamic campaign runs CPU-only (disclosed),
-    // and here we isolate the TWO NEW hot kernels (matSurfaceAzim + matSurfaceStericPrune) in a MINIMAL device
-    // graph — which DOES lower — and prove bit-identical CPU↔GPU decisions on a constructed bound-state fixture.
-    // Run with -Dtornado.recover.bailout=false so any lowering failure THROWS (no silent sequential fallback).
+    // Two parts: (1) the FULL surface-ON explicit-S2 gliding DEVICE graph lowers + runs device-resident vs the CPU
+    // runner (G3); (2) the two new kernels' decisions are bit-identical CPU↔GPU on a deterministic fixture.
+    // REQUIRES -Dtornado.enable.fma=false (the matS2SolveStep FMA-lowering defect) + bailout=false (no silent
+    // fallback) — supplied by scripts/run_explicit_twirl.sh. See docs/EXPLICIT_S2_GPU_LOWERING_REGRESSION_FINDINGS.md.
     static boolean runEquiv() {
-        System.out.println("\n--- CPU/GPU EQUIVALENCE (isolated new kernels: matSurfaceAzim + matSurfaceStericPrune) ---");
-        System.out.println("  NOTE: the FULL explicit-S2 gliding device graph does not lower here (pre-existing matS2SolveStep");
-        System.out.println("  PTX fault, reproduced by the CANONICAL surface-OFF graph) ⇒ dynamic campaign is CPU-only (disclosed).");
+        boolean ok = runEquivFullGraph() & runEquivKernels();
+        return ok;
+    }
+    /** G3: the FULL surface-ON gliding graph lowers + runs device-resident vs the CPU runner (bit-close window). */
+    static boolean runEquivFullGraph() {
+        System.out.println("\n--- CPU/GPU EQUIVALENCE — FULL surface-ON explicit-S2 gliding graph (device-resident) ---");
+        setSurface(true, R_NM, true, EXCL_NM);
+        Glide2D Gc = build(101), Gd = build(101);
+        var ec = ExplicitCompleteMatHarness.packExMat(Gc, 1);
+        var ed = ExplicitCompleteMatHarness.packExMat(Gd, 1);
+        TornadoExecutionPlan plan;
+        try { plan = ExplicitCompleteMatHarness.buildGlidingGraph(ed, false); }
+        catch (Throwable ex) { System.out.println("  FULL surface-ON graph did NOT lower: " + oneLine(root(ex).getMessage())
+                + "  (need -Dtornado.enable.fma=false ?)"); return false; }
+        int K = 200, firstDiv = -1; double maxFil = 0; boolean lowered = true;
+        for (int t = 0; t < K; t++) {
+            ed.matc.set(0, t); ed.matc.set(1, 101); Gd.mot.setCounts(t, 101, Gd.nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, 101);
+            try { plan.execute(); } catch (Throwable ex) { lowered = false; System.out.println("  device execute FAILED @t=" + t + ": " + oneLine(root(ex).getMessage())); break; }
+            ExplicitCompleteMatHarness.stepGlidingCPU(ec, t, 101);
+            double dFil = 0; for (int i = 0; i < 3 * Gc.nSeg; i++) dFil = Math.max(dFil, Math.abs(Gc.fil.coord.get(i) - Gd.fil.coord.get(i)));
+            maxFil = Math.max(maxFil, dFil); if (firstDiv < 0 && dFil > 1e-6) firstDiv = t;
+        }
+        if (!lowered) return false;
+        int nbC = 0, nbD = 0; boolean fin = true;
+        for (int m = 0; m < Gc.N; m++) { if (Gc.mot.boundSeg.get(m) >= 0) nbC++; if (Gd.mot.boundSeg.get(m) >= 0) nbD++; }
+        for (int i = 0; i < 3 * Gc.nSeg; i++) if (!Float.isFinite(Gd.fil.coord.get(i))) fin = false;
+        boolean ok = lowered && fin && maxFil < 1e-1 && Double.isFinite(maxFil);
+        System.out.printf(Locale.US, "  %d device-resident steps (surface ON): max|ΔfilCoord|=%.2e µm ; first FP divergence: %s ; bound CPU=%d GPU=%d ; finite=%b ⇒ %s%n",
+                K, maxFil, firstDiv < 0 ? "none (bit-close)" : ("t=" + firstDiv + " (chaotic float op-order — expected)"), nbC, nbD, fin, ok ? "PASS (lowered, no fallback)" : "*FAIL*");
+        return ok;
+    }
+    /** Deterministic bit-identity of the two NEW kernels (matSurfaceAzim + matSurfaceStericPrune). */
+    static boolean runEquivKernels() {
+        System.out.println("--- CPU/GPU EQUIVALENCE — isolated new kernels (matSurfaceAzim + matSurfaceStericPrune) ---");
         setSurface(true, R_NM, true, EXCL_NM);
         // Two identical scenes; fill outGeom (xF8) via matBeamGeom; pre-bind a handful of heads at controlled sites.
         Glide2D Gc = build(101), Gd = build(101);

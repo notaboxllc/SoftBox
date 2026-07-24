@@ -26,10 +26,11 @@ ordering, or `MotorModel.CANON_VERSION` changed.** No parameter was tuned to pro
 ## 2. Runner and hardware
 
 - **aorus**, Java 21 + TornadoVM 4.0.1-dev PTX, **NVIDIA GeForce RTX 5070**.
-- **Port fixtures + dynamic campaign:** CPU sequential runner (disclosed — see §10 for why the full device graph
-  is unavailable here).
-- **CPU/GPU equivalence:** the two new hot kernels run **device-resident** in a minimal TaskGraph (bailout
-  disabled → no silent fallback).
+- **Port fixtures + dynamic campaign:** CPU sequential runner (disclosed). *(The campaign was run under the old,
+  flag-broken launch; the full device graph is now available — §18 — so it may be re-run device-resident.)*
+- **CPU/GPU equivalence:** the two new hot kernels run **device-resident** in a minimal TaskGraph, and the **full**
+  surface-ON gliding graph also runs device-resident with the corrected flags (bailout disabled → no silent
+  fallback). Requires `-Dtornado.enable.fma=false` (§18).
 
 ## 3. Binding-path port (before → after)
 
@@ -239,15 +240,22 @@ Entirely noncanonical, flag-gated, default-off, byte-identical when disabled. No
 chemistry/S2/stroke/dt/RNG/manifest/`CANON_VERSION` change. The canonical explicit-S2 production path is
 untouched.
 
-## 18. Full-device-graph limitation (disclosed)
+## 18. Full-device-graph limitation — **RESOLVED (superseded)**
 
-The full 20-task explicit-S2 gliding **device** graph does **not lower on this machine** — a TornadoVM PTX-backend
-`ArithmeticLIRLowerable` NPE in **`matS2SolveStep`**, reproduced **identically by the canonical (surface-OFF)
-graph** (verified: `ExplicitCompleteMatHarness -gliding` bails the same way). It is therefore a **pre-existing
-toolchain state unrelated to this port**. Consequence: the dynamic campaign runs on the CPU sequential runner
-(disclosed), and the CPU/GPU equivalence is established on the isolated new kernels (§8). When the environment's
-`matS2SolveStep` lowering is restored, the surface graph should run device-resident with no further code change
-(the surface tasks lower independently, §8).
+> **CORRECTION.** This section originally reported that the full explicit-S2 gliding device graph "does not lower
+> on this machine — a pre-existing `matS2SolveStep` PTX fault." **That diagnosis was wrong.** The graph lowers and
+> runs device-resident; the failure was a **launch-flag regression** — the run command omitted
+> `-Dtornado.enable.fma=false` (a TornadoVM PTX-backend FMA lowering defect in `matS2SolveStep`; FMA on ⇒
+> `ArithmeticLIRLowerable` NPE, FMA off ⇒ lowers cleanly). Root cause, matrix, fix, and G1–G5 validation:
+> **`docs/EXPLICIT_S2_GPU_LOWERING_REGRESSION_FINDINGS.md`**.
+
+With the corrected flags (`-Dtornado.recover.bailout=false -Dtornado.enable.fma=false
+-Dtornado.tvm.maxbytecodesize=65536`, now in `scripts/run_explicit_twirl.sh`), BOTH the canonical surface-OFF and
+the surface-ON gliding graphs lower and execute **device-resident with no fallback** (verified over 3 fresh
+processes; `invalid=0`). The dynamic campaign reported in §10 was run on the **CPU** runner under the *old*
+(flag-broken) launch — its physics/conclusions are unaffected (the CPU runner is the same one physics
+implementation), but it **may now be re-run device-resident** for speed. The isolated new-kernel equivalence (§8)
+stands, and is now supplemented by full-graph device-resident CPU/GPU agreement.
 
 ## 19. Exact next smallest step
 
@@ -274,7 +282,9 @@ azimuthal-bias → roll-spring, then revisit engagement (density) and a dt-decou
 - **Flags:** `-helical-surface-bind` (via the harness; sets `ExplicitCompleteMatHarness.SURFACE_ON`),
   `-actin-bind-radius-nm 3.5`, `-surface-exclusion-nm 5.5`, `-no-surface-exclusion`, `-density/-seed/-steps/-stride`.
 - **OFF-path identity:** bit-identical (fixtures 1–2). **CPU/GPU:** new kernels device-resident bit-identical
-  (§8); full gliding device graph blocked by a pre-existing `matS2SolveStep` PTX fault (§18).
+  (§8); the full gliding device graph (surface OFF **and** ON) also lowers + runs device-resident once
+  `-Dtornado.enable.fma=false` is supplied — the earlier "does not lower" claim was a launch-flag regression, since
+  fixed (§18; `docs/EXPLICIT_S2_GPU_LOWERING_REGRESSION_FINDINGS.md`).
 - **Dynamic twirling: Category D** (qualified B) — per-head axial torque is real (fixture 10, 1.9e-21 N·m) but the
   torques **dynamically cancel** (Σ|τ|/|Στ| = 7.2; heads bind at ALL azimuths — uniform histogram) and the net roll
   is **not robust across density** (surface > control at ρ120, < control at ρ200); the roll is also incoherent
