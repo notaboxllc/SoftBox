@@ -77,6 +77,23 @@ public final class ExplicitCompleteMatHarness {
     static boolean SURF_STERIC = true;                 // -no-surface-exclusion clears (twirl mechanics vs sterics)
     static final double TWIST_PER_MON_DEG = -166.5;    // actin 13/6, LEFT-handed (RollSpringHarness convention)
     static boolean surfOn() { return SURFACE_ON; }
+
+    // VILFAN-STYLE STEREOSPECIFIC TARGET-ZONE BINDING (noncanonical, default-off; Stage A).
+    // TZ_ON=false ⇒ matTargetZone is never wired ⇒ byte-identical to the canonical/legacy-surface path.
+    // TZ_ALPHA = alphaPsi = Kpsi/kB T (dimensionless; literature-scale values 4/6/8 — none canonical).
+    // TZ_HARD_RAD > 0 ⇒ the OPTIONAL binary |deltaPsi| cutoff diagnostic instead of the graded hazard.
+    // The target-zone kernel REPLACES matSurfaceAzim (it selects + retains the azimuth itself, at the true
+    // attachment arc) — the legacy matSurfaceAzim scan path stays byte-unchanged for the legacy surface arm.
+    static boolean TZ_ON = false;                      // -target-zone
+    static double  TZ_ALPHA = 0.0;                     // -target-zone-alpha
+    static double  TZ_HARD_RAD = 0.0;                  // -target-zone-hard-rad (diagnostic only)
+    static boolean TZ_DIAG = true;                     // per-candidate diagnostics into ExMat.tzDiag
+    static boolean tzOn() { return TZ_ON; }
+    /** Measurement-only: force the per-step host readback of the filament material frame + bond reactions in
+     *  PRODUCTION residency, so a device-resident arm carries the same twirl observables as the CPU runner.
+     *  Adds NO kernel and NO physics — only transfers. Default false ⇒ production sweeps byte-unchanged. */
+    static boolean TELEMETRY = false;
+    static boolean telemetryOn() { return TZ_ON || TELEMETRY; }
     /** The explicit complete-mat state: the beam SoA + CSR/reduce scratch, over the shared G (fil/mot/body/bondData). */
     static final class ExMat {
         Glide2D G; int N, M, nSeg, numRedBlk;
@@ -86,6 +103,8 @@ public final class ExplicitCompleteMatHarness {
         IntArray candInt, segFilId, occStats; DoubleArray candArc, occP; FloatArray segCumArc;
         // helical surface binding (noncanonical, default-off): fresh-bind tracking + params + surface xbParams
         IntArray prevBound, justBound; DoubleArray surfP, stericP; FloatArray xbParamsSurf;
+        // Vilfan target-zone binding (noncanonical, default-off): hazard params + per-candidate diagnostics
+        DoubleArray tzP; FloatArray tzDiag;
     }
     static ExMat packExMat(Glide2D G, int brownOn) {
         ExMat e = new ExMat(); e.G = G; int N = G.N, M = G.g4M, nSeg = G.nSeg; e.N = N; e.M = M; e.nSeg = nSeg;
@@ -137,6 +156,10 @@ public final class ExplicitCompleteMatHarness {
         e.xbParamsSurf = FloatArray.fromElements(G.xbParams.get(0), G.xbParams.get(1), G.xbParams.get(2),
                 G.xbParams.get(3), G.xbParams.get(4), G.xbParams.get(5), (float) Ract, 0f);
         G.mot.bindAzim.init(0f);
+        // Vilfan target-zone binding scratch/params (noncanonical, default-off ⇒ never wired ⇒ byte-identical)
+        e.tzP = DoubleArray.fromElements(twist, TZ_ALPHA, TZ_HARD_RAD, TZ_DIAG ? 1.0 : 0.0);
+        e.tzDiag = new FloatArray(4 * N); e.tzDiag.init(0f);
+        G.mot.bindPsi0.init(0f);
         return e;
     }
     /** CPU-runner = the complete explicit mat step as plain-Java kernel calls (pre-bound, chemistry fixed, no bind search). */
@@ -295,11 +318,14 @@ public final class ExplicitCompleteMatHarness {
             TwoBodyBeamAnalyticGpu.matOccupancyResolve(e.candInt, e.candArc, mot.boundSeg, mot.bindArc, e.segCumArc, e.segFilId, e.occP, e.occStats, e.exCounts);
         } else
             TwoBodyBeamAnalyticGpu.matBindExplicit(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
+        if (tzOn())   // Vilfan target-zone angular hazard — applied to the geometric candidate BEFORE it persists
+            TwoBodyBeamAnalyticGpu.matTargetZone(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, mot.bindPsi0, e.tzP, e.tzDiag, e.matc, e.exCounts);
         if (ADP_RUP_ON) NucleotideCycleSystem.cycleLymnTaylorRuptureAll(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats, mot.adpRuptureParams, mot.adpRuptureStats);
         else if (RIGOR_ON) NucleotideCycleSystem.cycleLymnTaylorRigor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
         else          NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
         if (surfOn()) {   // select+retain the material azimuth at the bind transition (canonical bindArc kept), then 3D steric
-            TwoBodyBeamAnalyticGpu.matSurfaceAzim(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, e.surfP, e.exCounts);
+            if (!tzOn())  // target-zone mode selects + retains the azimuth itself (at the true attachment arc)
+                TwoBodyBeamAnalyticGpu.matSurfaceAzim(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, e.surfP, e.exCounts);
             TwoBodyBeamAnalyticGpu.matSurfaceStericPrune(mot.boundSeg, e.justBound, e.prevBound, mot.bindArc, mot.bindAzim, f.coord, f.uVec, f.yVec, f.segLength, e.segFilId, e.stericP, e.occStats, e.exCounts);
         }
         MatSoaSlice.matCock(mot.nucleotideState, e.q, e.cockP, e.exCounts);
@@ -342,6 +368,7 @@ public final class ExplicitCompleteMatHarness {
         if (prod) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
         if (occOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.candInt, e.candArc, e.segCumArc, e.segFilId, e.occP, e.occStats);
         if (surfOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.prevBound, e.justBound, e.surfP, e.stericP, e.xbParamsSurf, e.segFilId, e.occStats, mot.bindAzim);
+        if (tzOn())   tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.prevBound, e.justBound, e.tzP, e.tzDiag, mot.bindAzim, mot.bindPsi0);
         if (RIGOR_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.rigorParams, mot.ruptureStats);
         if (ADP_RUP_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.adpRuptureParams, mot.adpRuptureStats);
         tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.matc, mot.counts, f.counts);
@@ -352,9 +379,12 @@ public final class ExplicitCompleteMatHarness {
               .task("occResolve", TwoBodyBeamAnalyticGpu::matOccupancyResolve, e.candInt, e.candArc, mot.boundSeg, mot.bindArc, e.segCumArc, e.segFilId, e.occP, e.occStats, e.exCounts);
         } else
             tg.task("bind", TwoBodyBeamAnalyticGpu::matBindExplicit, e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
+        if (tzOn())   // Vilfan target-zone angular hazard — immediately after the canonical bind, before it persists
+            tg.task("tzone", TwoBodyBeamAnalyticGpu::matTargetZone, mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, mot.bindPsi0, e.tzP, e.tzDiag, e.matc, e.exCounts);
         if (surfOn()) {   // helical surface binding: azimuth-select at bind (parallel) → 3D steric prune (single-thread serial)
-            tg.task("surfAzim", TwoBodyBeamAnalyticGpu::matSurfaceAzim, mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, e.surfP, e.exCounts)
-              .task("surfPrune", TwoBodyBeamAnalyticGpu::matSurfaceStericPrune, mot.boundSeg, e.justBound, e.prevBound, mot.bindArc, mot.bindAzim, f.coord, f.uVec, f.yVec, f.segLength, e.segFilId, e.stericP, e.occStats, e.exCounts);
+            if (!tzOn())
+                tg.task("surfAzim", TwoBodyBeamAnalyticGpu::matSurfaceAzim, mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, e.surfP, e.exCounts);
+            tg.task("surfPrune", TwoBodyBeamAnalyticGpu::matSurfaceStericPrune, mot.boundSeg, e.justBound, e.prevBound, mot.bindArc, mot.bindAzim, f.coord, f.uVec, f.yVec, f.segLength, e.segFilId, e.stericP, e.occStats, e.exCounts);
         }
         if (ADP_RUP_ON) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRuptureAll, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats, mot.adpRuptureParams, mot.adpRuptureStats);
         else if (RIGOR_ON) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRigor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
@@ -390,18 +420,24 @@ public final class ExplicitCompleteMatHarness {
             if (PROD_SCI) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg, mot.nucleotideState);
             else          tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg);
             if (occOn())  tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.occStats);   // per-step occupancy telemetry
+            // Target-zone telemetry: the per-candidate diagnostics + the filament material frame (uVec/yVec) and the
+            // bond reactions the twirl observables need. Gated on tzOn() ⇒ the canonical production path is unchanged.
+            if (telemetryOn()) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.tzDiag, mot.bindAzim, mot.bindPsi0,
+                                            f.uVec, f.yVec, f.coord, G.bondData, mot.bindArc);
             // RIGOR RUPTURE: read the per-motor rupture/cap accumulators + the realized load each step (cause count + force-at-rupture).
             if (RIGOR_ON) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, mot.ruptureStats, mot.forceDotFil);
             if (ADP_RUP_ON) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, mot.adpRuptureStats);
         }
         else {    tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.nodes, e.q, e.redOut, f.coord, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, G.bondData);
-                  if (occOn()) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.occStats); }   // occupancy telemetry (validation)
+                  if (occOn()) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.occStats);
+                  if (tzOn())  tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.tzDiag, mot.bindAzim, mot.bindPsi0); }   // telemetry (validation)
         int pn = ((N + 63) / 64) * 64, ps = ((nSeg + 63) / 64) * 64, nCh = e.csrChunkParams.get(1);
         glSched = new GridScheduler();
         for (String nm : new String[]{ "beamGeom", "bind", "chem", "cock", "place", "bond", "s2solve" }) addW(glSched, "glide." + nm, pn);
         for (String nm : new String[]{ "zeroAcc", "segGather", "chain", "zconf", "brown", "integ", "orthoY", "derive", "csrReduce" }) addW(glSched, "glide." + nm, ps);
         if (occOn()) { addW(glSched, "glide.gateOnly", pn); addW(glSched, "glide.occResolve", 64); }   // gate parallel; resolve single-thread (gid<1)
-        if (surfOn()) { addW(glSched, "glide.surfAzim", pn); addW(glSched, "glide.surfPrune", 64); }    // azim parallel; prune single-thread (gid<1)
+        if (surfOn()) { if (!tzOn()) addW(glSched, "glide.surfAzim", pn); addW(glSched, "glide.surfPrune", 64); }   // azim parallel; prune single-thread (gid<1)
+        if (tzOn()) addW(glSched, "glide.tzone", pn);   // target-zone hazard: parallel over motors
         addW(glSched, "glide.csrZero", ((Math.max(1, nCh * nSeg) + 63) / 64) * 64);
         addW(glSched, "glide.csrHist", ((nCh + 63) / 64) * 64); addW(glSched, "glide.csrScatter", ((nCh + 63) / 64) * 64);
         addW(glSched, "glide.csrScan", 64); addW(glSched, "glide.redBlk", ((e.numRedBlk + 63) / 64) * 64); addW(glSched, "glide.redFin", 64);

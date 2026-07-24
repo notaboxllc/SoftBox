@@ -736,6 +736,144 @@ public final class TwoBodyBeamAnalyticGpu {
         }
     }
 
+    // ===============================================================================================
+    // VILFAN-STYLE STEREOSPECIFIC TARGET-ZONE BINDING (noncanonical, flag-gated, default-off).
+    // Layered ON TOP of the canonical bind (matBindExplicit is UNCHANGED ⇒ the 8-gate geometric candidate set +
+    // the axial bindArc are byte-identical); this kernel applies a CONTINUOUS angular-compatibility hazard to the
+    // candidate BEFORE the attachment is allowed to persist, and retains the registry state Stage B needs.
+    // NOT a discrete site lattice, NOT a monomer index, NOT an absolute-azimuth preference.
+    //
+    // LOCAL ACTIN BINDING FRAME (at the canonical attachment arc `bindArc` on segment s):
+    //     uActin = filUVec[s]                                  (pointed→barbed material tangent)
+    //     nActin = cos φ · segY + sin φ · segZ ,  segZ = uActin × segY ,  φ = twistRate·(bindArc − ½segLen)
+    //     tActin = uActin × nActin                             ⇒ (nActin, tActin, uActin) right-handed
+    // nActin is the OUTWARD radial surface normal of the analytic helical presentation actually attached to —
+    // the same φ later retained as `bindAzim`. It translates/bends/rotates/ROLLS with the filament material frame
+    // (segY is the rolling material reference) and flips sign convention correctly under polarity reversal.
+    //
+    // MOTOR BINDING FRAME: the head long axis  eBind = normalize(xF8 − xH)  (both from `outGeom`, i.e. from the
+    // explicit-S2 beam pose — real simulated orientation state, NOT a lab-frame constant). The direction a
+    // compatible actin surface must FACE is  mHat = −eBind  (the outward normal must point back along the head).
+    // LIMITATION (reported, not concealed): the explicit-S2 head has NO free rotational DOF about its own long
+    // axis (matPlaceHeadExplicit synthesises the head yVec from a lab-fixed perpendicular), so a full 3-DOF
+    // stereospecific compatibility is NOT representable. The smallest valid mismatch coordinate is therefore the
+    // ONE-angle azimuthal mismatch in the plane ⊥ uActin; head PITCH (the eBind·uActin component) is not part of it.
+    //
+    // SIGNED ANGULAR MISMATCH (rotationally covariant, material-frame, wrapped to (−π,π]):
+    //     mPerp  = mHat − (mHat·uActin)·uActin , normalised
+    //     deltaPsi = sign( (nActin × mPerp)·uActin ) · acos( clamp(nActin·mPerp) )
+    // deltaPsi = 0 is the PREFERRED (perfectly registered) state. Under a proper rigid rotation of the whole
+    // scene deltaPsi is INVARIANT; under filament polarity reversal or a mirror it changes SIGN. It is NEVER an
+    // absolute actin azimuth. Computed with the hand-rolled `dacos` (PTX-safe; no Math.atan2).
+    //
+    // ATTACHMENT HAZARD:  wPsi = exp(−0.5 · alphaPsi · deltaPsi²)   (alphaPsi = Kpsi/kB T, dimensionless)
+    // The candidate persists iff u < wPsi with u a DEDICATED counter-based wang-hash variate keyed (seed,t,motor)
+    // — a private stream (salt 0x545A4244 "TZBD"), so no existing RNG stream is shifted and CPU↔GPU decisions are
+    // bit-identical by construction. alphaPsi = 0 ⇒ wPsi ≡ 1 ⇒ EVERY canonical bind is kept ⇒ binding decisions
+    // byte-identical to the canonical gate (no renormalisation, no recruitment preservation — a finite alphaPsi
+    // genuinely LOSES binds, and that loss is measured, not hidden).
+    // On REJECT the head is returned to the FREE pool (boundSeg=−1) and may retry next step: that finite
+    // attachment kinetics + pool depletion is exactly what creates the leading/trailing attachment-flux asymmetry.
+    // ===============================================================================================
+    static final long TZ_SALT = 0x545A4244L;   // "TZBD" — private target-zone accept stream
+
+    /** Stable arcsin (Taylor seed + 2 Newton steps) — the ChainBendingForceSystem form; PTX has no Math.asin. */
+    static double tzAsin(double s) {
+        double s2 = s * s;
+        double y = s * (1.0 + s2 * (0.16666666666666666 + s2 * (0.075 + s2 * 0.044642857142857)));
+        double cy = Math.cos(y); if (cy > 1.0e-12) y = y + (s - Math.sin(y)) / cy;
+        cy = Math.cos(y);        if (cy > 1.0e-12) y = y + (s - Math.sin(y)) / cy;
+        return y;
+    }
+    /** Angle between two unit vectors from |cross|² and dot — float32-stable at BOTH ends (verbatim the
+     *  validated {@code ChainBendingForceSystem.angleFromSinCos} form). */
+    static double tzAngle(double sin2, double cos) {
+        double s = Math.sqrt(sin2); double ac = cos < 0.0 ? -cos : cos;
+        if (s <= ac) { double base = tzAsin(s); return cos >= 0.0 ? base : (Math.PI - base); }
+        return dacos(cos);
+    }
+
+    /** PTX-safe uniform in (0,1) from the same 64-bit wang hash the Brownian forcing uses (see brownTorqueD). */
+    static double wangU01(long ep, long t, long salt) {
+        long h = ((ep * 2654435761L) ^ (t * 40503L) ^ (salt * 0x9E3779B1L)); h ^= (h >>> 13); h *= 0x9E3779B1L; h ^= (h >>> 16);
+        return ((h & 0xFFFFFF) + 1) / 16777217.0;
+    }
+
+    /**
+     * Stage A — graded target-zone attachment hazard + retained registry. Runs immediately after the canonical
+     * bind, over every motor. For a FRESHLY bound head (boundSeg≥0 && prevBound&lt;0) it builds the local actin
+     * binding frame at the canonical attachment arc, forms the signed mismatch deltaPsi against the motor binding
+     * frame, weights the attachment by wPsi, and either KEEPS the bind (retaining bindAzim=φ and bindPsi0=deltaPsi)
+     * or RELEASES it. Established bonds are untouched. Race-free: motor m writes only its own slots.
+     *
+     * <p>{@code tzP}: [0]=twistRate (rad/µm, signed, LEFT-handed) [1]=alphaPsi (dimensionless) [2]=hardGateRad
+     * (&gt;0 ⇒ an OPTIONAL binary |deltaPsi| cutoff DIAGNOSTIC instead of the graded hazard) [3]=diagOn (≠0 ⇒
+     * write tzDiag).
+     * <p>{@code tzDiag} (stride 4 per motor, fully written every step ⇒ no stale carry): [0]=deltaPsi (rad),
+     * [1]=wPsi, [2]=1 accepted / 0 rejected, [3]=1 iff this motor was a geometric candidate this step.
+     * <p>{@code matc}: [t, seed, brownOn]. {@code counts}: [N,_,_,nSeg].
+     */
+    public static void matTargetZone(IntArray boundSeg, IntArray prevBound, IntArray justBound,
+            DoubleArray outGeom, FloatArray filCoord, FloatArray filUVec, FloatArray filYVec, FloatArray filSegLength,
+            FloatArray bindArc, FloatArray bindAzim, FloatArray bindPsi0, DoubleArray tzP, FloatArray tzDiag,
+            IntArray matc, IntArray counts) {
+        int N = counts.get(0), nSeg = counts.get(3);
+        double twistRate = tzP.get(0), alphaPsi = tzP.get(1), hardGate = tzP.get(2); int diagOn = (int) tzP.get(3);
+        long tt = matc.get(0), seed = matc.get(1);
+        for (@Parallel int m = 0; m < N; m++) {
+            int bs = boundSeg.get(m), pb = prevBound.get(m);
+            int jb = 0;
+            if (diagOn != 0) { tzDiag.set(4*m, 0f); tzDiag.set(4*m+1, 0f); tzDiag.set(4*m+2, 0f); tzDiag.set(4*m+3, 0f); }
+            if (bs >= 0 && pb < 0) {                      // freshly bound this step = a geometric candidate
+                int s = bs;
+                double cx = filCoord.get(s), cy = filCoord.get(nSeg+s), cz = filCoord.get(2*nSeg+s);
+                double ux = filUVec.get(s), uy = filUVec.get(nSeg+s), uz = filUVec.get(2*nSeg+s);
+                double yx = filYVec.get(s), yy = filYVec.get(nSeg+s), yz = filYVec.get(2*nSeg+s);
+                double zx = uy*yz-uz*yy, zy = uz*yx-ux*yz, zz = ux*yy-uy*yx;
+                double zl = zx*zx+zy*zy+zz*zz; if (zl > 1e-30) { double iz = 1.0/Math.sqrt(zl); zx*=iz; zy*=iz; zz*=iz; }
+                double half = 0.5*filSegLength.get(s);
+                // actin-side local binding frame at the ATTACHMENT arc (no axial search: the target zone is swept
+                // past the fixed motor by relative sliding — the temporal moving-target-zone picture).
+                double phi = twistRate*(bindArc.get(m) - half);
+                double cph = Math.cos(phi), sph = Math.sin(phi);
+                double nx = cph*yx + sph*zx, ny = cph*yy + sph*zy, nz = cph*yz + sph*zz;
+                // motor-side binding direction mHat = −normalize(xF8 − xH)
+                double ex = outGeom.get(6*N+m) - outGeom.get(3*N+m);
+                double ey = outGeom.get(7*N+m) - outGeom.get(4*N+m);
+                double ez = outGeom.get(8*N+m) - outGeom.get(5*N+m);
+                double el = Math.sqrt(ex*ex+ey*ey+ez*ez);
+                double mx = 0, my = 0, mz = 0;
+                if (el > 1e-20) { double ie = -1.0/el; mx = ex*ie; my = ey*ie; mz = ez*ie; }
+                double mu = mx*ux + my*uy + mz*uz;                   // head pitch (discarded — see the limitation)
+                double px = mx - mu*ux, py = my - mu*uy, pz = mz - mu*uz;
+                double pl = Math.sqrt(px*px+py*py+pz*pz);
+                double dpsi = 0.0;
+                if (pl > 1e-12) {
+                    double ip = 1.0/pl; px*=ip; py*=ip; pz*=ip;
+                    double cs = nx*px + ny*py + nz*pz; if (cs > 1) cs = 1; if (cs < -1) cs = -1;
+                    double crx = ny*pz - nz*py, cry = nz*px - nx*pz, crz = nx*py - ny*px;
+                    double sgn = crx*ux + cry*uy + crz*uz;
+                    // float32-stable magnitude: asin(|cross|) near 0/π, acos(dot) mid-range — the project's
+                    // validated angleFromSinCos form. Plain acos(dot) is ill-conditioned at BOTH ends (the
+                    // dacos Newton step divides by sin y → device/host last-bit noise is amplified there).
+                    double mag = tzAngle(crx*crx + cry*cry + crz*crz, cs);
+                    dpsi = sgn < 0 ? -mag : mag;
+                }
+                double w;
+                if (hardGate > 0.0) { double ad = dpsi < 0 ? -dpsi : dpsi; w = ad < hardGate ? 1.0 : 0.0; }
+                else                 w = Math.exp(-0.5*alphaPsi*dpsi*dpsi);
+                boolean keep = true;
+                if (w < 1.0) keep = wangU01(seed, tt, TZ_SALT + (long) m * 7919L) < w;
+                if (keep) { jb = 1; bindAzim.set(m, (float) phi); bindPsi0.set(m, (float) dpsi); }
+                else      { boundSeg.set(m, -1); bs = -1; }
+                if (diagOn != 0) { tzDiag.set(4*m, (float) dpsi); tzDiag.set(4*m+1, (float) w);
+                                   tzDiag.set(4*m+2, keep ? 1f : 0f); tzDiag.set(4*m+3, 1f); }
+            }
+            justBound.set(m, jb);
+            prevBound.set(m, bs);
+        }
+    }
+
     // ============================================================ MAT gliding Stage-10: matS2SolveStep
     /** brownTorque — EXACT 64-bit long wang-hash copy (TwoBodyConverterMotor.brownTorque L2174; the same one
      *  that already lowers on PTX inside MatStep7). Returns the FDT force sqrt(2 kT γ/dt)·g (N). */

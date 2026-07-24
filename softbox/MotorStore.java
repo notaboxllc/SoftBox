@@ -86,6 +86,14 @@ public final class MotorStore {
     // (no recompute-from-world after bind). Default path never touches it ⇒ allocating it is byte-identical for
     // every existing harness. See CONTINUOUS_HELICAL_SURFACE_BINDING_AND_TWIRLING_FINDINGS.md.
     public final FloatArray bindAzim; // nMotors; material azimuth (rad, wrapped (−π,π]) of the off-axis site
+    // VILFAN-STYLE STEREOSPECIFIC TARGET-ZONE BINDING (noncanonical, default-off) — the retained bound
+    // angular REGISTRY: the signed angular mismatch deltaPsi (rad, (−π,π]) between the motor binding frame and
+    // the selected local actin binding frame AT THE MOMENT OF ATTACHMENT. Written once at the FREE→bound
+    // transition by TwoBodyBeamAnalyticGpu.matTargetZone; never recomputed while bound; the Stage-B bound
+    // torsional registry measures its CURRENT value against this retained reference. Default 0, read by no
+    // canonical kernel ⇒ allocating it is byte-identical for every existing harness.
+    // See docs/VILFAN_TARGET_ZONE_BINDING_AND_TWIRLING_FINDINGS.md.
+    public final FloatArray bindPsi0; // nMotors; retained signed angular mismatch at attachment (rad)
     // PHASE-2 CANONICAL Version-B binder: per-motor "snap the head along the filament THIS step" flag, set by
     // bindCanonicalTwoPoint on a fresh two-point formation and consumed+cleared by snapCanonicalHead (a SEPARATE
     // small kernel — the head-pose snap is split off the decision kernel because writing the body pose inside the
@@ -239,6 +247,7 @@ public final class MotorStore {
         bindArc  = new FloatArray(nMotors);
         bindArc2 = new FloatArray(nMotors);        // CANONICAL_MOTOR rear-site (default unused)
         bindAzim = new FloatArray(nMotors);        // HELICAL SURFACE BINDING material azimuth (default unused)
+        bindPsi0 = new FloatArray(nMotors);        // VILFAN TARGET ZONE retained bound registry (default unused)
         canonSnap = new IntArray(nMotors);         // PHASE-2 Version-B snap flag (default unused)
         perpRest = new FloatArray(3 * nMotors);    // PHASE-2 PERP-HEAD frozen ⊥ rest (default unused)
         headTiltCS = new FloatArray(3);            // PHASE-2 HEAD-ANGLE SWEEP θ (default unused; setFlag 0)
@@ -260,6 +269,7 @@ public final class MotorStore {
         bindArc.init(0f);
         bindArc2.init(0f);
         bindAzim.init(0f);
+        bindPsi0.init(0f);
         canonSnap.init(0);
         perpRest.init(0f);
         headTiltCS.init(0f);                       // [2]=setFlag 0 ⇒ snapPerpRest uses the plain ⊥ rest path
