@@ -53,6 +53,14 @@ work confirmed the full explicit-S2 graph is device-resident (prior entry).
   a third head rotational DOF inside the frozen canonical `matS2SolveStep`. **Stage C not reached** (no net torque).
 - **Regression:** legacy surface fixtures 10/10 PASS with identical numbers (F8 axial torque 1.921e-21 / 7.527e-24);
   canonical explicit-S2 device gate unchanged (`mism=0, binds=11 detach=10, firstDiv=t=4, invalid=0`, GATE PASS).
+- **Motion endpoints settled by an independent replicate** (6 seeds x 3000 steps, device-resident): every primary
+  null REPRODUCES. **Cumulative turns are NOT a mechanism signal** — the zero-torque baseline (surface OFF ⇒ axial
+  torque exactly 0 by construction) gives −0.44±0.25 turns, comparable in magnitude and OPPOSITE in sign to the
+  target-zone arms (+0.28±0.22 / +0.60±0.48 / +0.04±0.19 at alpha 4/6/8), and the baseline's sign FLIPS to +0.17 in
+  the other campaign; alpha-dependence is non-monotone. **turns/µm is unusable at these durations** (~0.05 µm
+  glided ⇒ +16…−26 ± 6–16). **The cancellation ratio Σ|τ|/|Στ| is ill-conditioned** (divides by a net torque
+  consistent with zero): the SAME azimuth-blind arm gives 114 in one campaign and 301 in the other ⇒ do not trend
+  it (this also qualifies the 7.2 quoted in the prior twirling report).
 - **3js:** `threejs_vilfan_tz_{blind,targetzone}` (151 frames) — roll ticks + cross-bridge lines + the local actin
   surface-NORMAL marker + a motor binding-direction marker coloured by the angular mismatch. New:
   `VilfanTargetZoneHarness`, `scripts/run_vilfan_targetzone.sh`. Report:

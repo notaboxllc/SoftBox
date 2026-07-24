@@ -339,7 +339,53 @@ Per-phase attachment kinetics, `alphaPsi = 6`, pooled over 10 seeds (8875 geomet
 6. **Symmetry reversal:** see §14 — the decisive reversal controls are in the deterministic kinematic rig, where
    they pass cleanly; the dynamic handedness control is consistent with the null and is underpowered.
 
-### 10.3 The root cause: the target-zone phase is thermally re-randomised faster than it drifts
+### 10.3 Independent replicate, and the motion endpoints (cumulative turns, turns per micron)
+
+A second, independent device-resident campaign (6 seeds × 3000 steps, same density; log
+`RUN_LOGS/vilfan_targetzone/stageA_turns_sem.txt`) was run with per-seed SEMs for the motion observables:
+
+```
+arm                     glide µm/s      avgB  accFrac    ⟨Δψ⟩acc ± SEM   leadAcc−leadCand ± SEM   τnet N·m ± SEM   cancel     turns ± SEM       turns/µm ± SEM
+baseline (no surf/no TZ)  -3.706±0.196  8.63    —              —                  —              -5.3e-24±5.3e-24    218   -0.4425±0.2524   +15.98± 9.28
+surface only (blind)      -3.572±0.203  8.34    —              —                  —              +1.5e-22±5.5e-22    301   -0.5493±0.2485   +21.26±10.01
+target zone alphaPsi=0    -3.952±0.133  8.48   1.000   -0.0999 ± 0.1024      +0.0000 ± 0.0000     -1.1e-21±4.4e-22     42   -0.0562±0.1728    +1.96± 6.00
+target zone alphaPsi=4    -4.304±0.199  7.04   0.169   -0.0018 ± 0.0128      -0.0049 ± 0.0225     +3.9e-22±6.9e-22     96   +0.2798±0.2198    -8.45± 6.23
+target zone alphaPsi=6    -4.328±0.303  6.48   0.132   -0.0191 ± 0.0270      +0.0223 ± 0.0363     +7.6e-22±7.3e-22     45   +0.6046±0.4829   -21.41±15.75
+target zone alphaPsi=8    -4.063±0.182  6.64   0.128   -0.0141 ± 0.0220      +0.0081 ± 0.0285     +1.4e-21±6.8e-22     26   +0.0358±0.1855    -0.19± 5.84
+target zone a=6 + steric  -3.881±0.202  6.87   0.143   -0.0048 ± 0.0149      -0.0065 ± 0.0219     +9.7e-22±8.3e-22     38   +0.7482±0.1762   -25.60± 5.85
+```
+
+**The replicate reproduces every primary null** of §10: `⟨Δψ⟩acc` ≲1σ at every `alphaPsi`; `leadAcc − leadCand`
+≲1σ with the sign flipping between `alphaPsi` values; `τnet` ≤2σ with the `alphaPsi = 0` control at
+−1.1e-21 ± 4.4e-22, again of the **opposite** sign; engagement retained (`avgBound` 8.48 → 6.48 = 76 %) and glide
+preserved (−3.95 → −4.33 µm/s).
+
+**Cumulative turns: NOT a resolved mechanism signal.** Three facts settle this.
+
+1. **The no-torque control shows the same magnitude.** The baseline arm has surface binding OFF, so the
+   cross-bridge attaches on the centreline and its axial torque is **exactly zero by construction** — yet it
+   accumulates −0.4425 ± 0.2524 turns, larger in magnitude than four of the five target-zone arms, and of the
+   *opposite* sign. Cumulative roll here is thermal, as expected for the hottest, lowest-drag rotational mode.
+2. **The sign of the control is not reproducible between campaigns.** The 10-seed × 6000-step campaign gave
+   baseline **+0.1655** turns; this 6-seed × 3000-step campaign gives **−0.4425**. A quantity whose zero-torque
+   control flips sign between run sets cannot support a claim about the arms.
+3. **The `alphaPsi` dependence is non-monotone and inconsistent across campaigns.** Here: +0.28 (α=4),
+   +0.60 (α=6), +0.04 (α=8) — the *strongest* constraint gives the *smallest* rotation. In the larger campaign:
+   +0.78, +0.71, +0.43. The one cell that is individually far from zero (α=6 + steric, +0.7482 ± 0.1762) does not
+   replicate its standing in the other campaign, where α=4 exceeds it.
+
+**Turns per micron is not a usable observable at these run lengths** and is reported only for completeness: the
+glide distance in 7.5–15 ms is ~0.05 µm, so dividing a thermally-dominated turn count by it produces the observed
++16 … −26 turns/µm with SEMs of 6–16. No pitch, and no biological pitch, is claimed — as §11 requires.
+
+**The torque-cancellation ratio is ill-conditioned and should not be trended.** `Σ|τ|/|Στ|` divides by a net
+torque that is itself consistent with zero. The *same* azimuth-blind surface arm gives 114 in one campaign and
+301 in the other; the target-zone arms give 67–174 in one and 26–96 in the other. Neither ordering replicates.
+This caveat applies equally to the value 7.2 quoted for a different density in
+`docs/EXPLICIT_GLIDING_HELICAL_SURFACE_TWIRLING_FINDINGS.md` §10, and the correct primary statement is the one in
+§10.2 endpoint 4: **the net axial torque itself is not resolved from zero and has no reproducible sign.**
+
+### 10.4 The root cause: the target-zone phase is thermally re-randomised faster than it drifts
 
 The kinematic rig (§9.1) proves the mechanism *works* when the phase is swept deterministically. The dynamic assay
 does not reproduce it. The reason is quantitative and was measured directly.
@@ -380,7 +426,7 @@ Not A1 (no flux asymmetry, no torque-sign bias). Not A3 (engagement retained at 
 
 **Per the task's instruction, Stage B was therefore NOT entered** ("if angular compatibility only suppresses
 binding without producing a phase or torque bias, stop and diagnose the target-zone implementation before adding
-a torsional spring"). The diagnosis is §10.3, and it is not an implementation defect: the same kernel, driven by
+a torsional spring"). The diagnosis is §10.4, and it is not an implementation defect: the same kernel, driven by
 a deterministic sweep in the kinematic rig, produces the predicted asymmetry with the correct sign, the correct
 reversal, and the correct depletion dependence (§9.1). The implementation is validated; the *dynamic regime*
 lacks the phase coherence the mechanism needs.
@@ -568,7 +614,7 @@ Off-path identity is **verified, not asserted**:
 ## 19. Exact next smallest step
 
 **Do not add stiffness, torque, or a lateral power stroke to rescue the result.** The Stage-A verdict is A2 and
-the cause is measured (§10.3): the target-zone phase decorrelates ~105× faster than it drifts, because
+the cause is measured (§10.4): the target-zone phase decorrelates ~105× faster than it drifts, because
 `twistRate = 1076 rad/µm` converts ~1 nm of ordinary thermal axial jitter into ~1.1 rad of helical phase.
 
 **The exact next smallest step is a diagnostic, not a new mechanism: measure the axial phase-coherence budget of
@@ -618,9 +664,11 @@ torque exists — there is none today.
   attachment events and accept decisions **exactly** CPU≡GPU; mismatch/weight at float32 last-bit.
 - **Engagement/glide:** `avgBound` 7.13 → 5.89 (83 % retained) and glide −3.56 → −3.39 µm/s (within SEM) at
   `alphaPsi = 6` — the constraint is affordable; it simply does not produce a directional bias.
-- **Cumulative turns / turns per micron:** not reported as a result. There is no reproducible net axial torque
-  (§10.2), no roll spring (§13), and the per-segment roll of this filament is incoherent, so any turns number
-  would be thermal roll scatter. Quoting one would misrepresent a null.
+- **Cumulative turns / turns per micron:** measured with per-seed SEMs and **not resolved as a mechanism signal**
+  (§10.3). Turns at `alphaPsi` = 4/6/8 are +0.28±0.22 / +0.60±0.48 / +0.04±0.19 — but the **zero-torque baseline**
+  (surface OFF, centreline attachment, axial torque exactly zero by construction) gives −0.44±0.25, comparable in
+  magnitude and opposite in sign, and its sign flips to +0.17 in the other campaign. Turns per micron
+  (+16 … −26 ± 6–16) is not a usable observable over the ~0.05 µm glided in these runs. No pitch is claimed.
 - **Exact next smallest step:** §19 — measure the axial phase-coherence budget (`t_c = 2·D_ax/v²` versus the
   candidate residence time) before proposing any new constraint; and treat "give the explicit-S2 head a rotational
   degree of freedom about the bond" as the single highest-value structural change, since it is what unblocks the
