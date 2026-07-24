@@ -6809,7 +6809,22 @@ public final class TwoBodyConverterMotor {
         else { G.mot.forceDotFil.set(m,0f); G.mot.forceMag.set(m,0f); }
     }
     static Glide2D buildS2Mat(double density,double dt,double Lnm,double slackNm,int seed){
-        Glide2D G=buildGlide2D(density,dt,false,seed,true,true);
+        return buildS2Mat(density,dt,Lnm,slackNm,seed,false);
+    }
+    /**
+     * @param rigidFil true ⇒ the actin is ONE rigid mechanical segment of the SAME total contour length as the
+     *   canonical {@code G4_NSEG}-segment chain (the {@code buildGlide2D} rigid branch: monomerCount chosen so
+     *   {@code (mc+1)*actinMonoRadius} equals the chain contour, drag from {@code DragTensorSystem.rodDragSI} at
+     *   that full length ⇒ NOT the drag of one short segment). No bending DOF, no joints, no intersegment torsion,
+     *   so ALL observed roll is rigid-body rotation of the whole filament. Noncanonical diagnostic scene; the
+     *   5-arg form delegates with {@code rigidFil = false} ⇒ every existing caller is byte-unchanged.
+     */
+    static Glide2D buildS2Mat(double density,double dt,double Lnm,double slackNm,int seed,boolean rigidFil){
+        Glide2D G=buildGlide2D(density,dt,rigidFil,seed,true,true);
+        // dt-carrier hygiene (CLAUDE.md single-source-dt): the rigid branch of buildGlide2D does not set chainParams
+        // because it has no chain. chainForces is a no-op at nSeg=1 (both neighbour slots are SENTINEL_NO_NBR), but
+        // the graph wires the task unconditionally, so give it the caller's dt rather than a default.
+        if(rigidFil) G.fil.setChainParams(dt);
         G.cullMode=1; G.queryR=G4_QUERYR + Lnm*1e-3 + 0.01; initMatGrid(G);
         int M=Math.max(1,(int)Math.round(Lnm/EXP4G_L0_NM)); double L=Lnm*1e-3, slack=slackNm*1e-3;
         G.g4On=true; G.g4M=M; G.g4l0=L/M; G.g4ks=EXP4G_EA_SI/(G.g4l0*1e-6); G.g4kb=EXP4G_EI_SI/(G.g4l0*1e-6);

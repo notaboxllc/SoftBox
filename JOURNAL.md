@@ -1,5 +1,128 @@
 # Soft Box Project Journal
 
+### 2026-07-24 — SINGLE-SEGMENT, FILAMENT-BROWNIAN-OFF dynamic twirling assay — **T5: the askew torque does NOT survive dynamically**
+
+Executes the previous entry's §17.4 ("power the dynamic endpoint, do not add mechanism") with the two confounds
+removed at the source: **ONE rigid filament segment** (full contour, no bending/joints/intersegment torsion) and
+**all four filament Brownian channels masked**, motor/S2 + head-roll Brownian untouched. Report: §20 of
+`docs/DISCRETE_ACTIN_SITE_CHIRAL_BINDING_AND_STROKE_FINDINGS.md`. Noncanonical, flag-gated, default-off; no kernel
+edited; no CANON_VERSION bump; `BoA-v1ref` byte-clean.
+- **RESULT — T5.** 24 matched seeds × 20 ms, GPU device-resident: `tauOdd = +2.86e-23 ± 9.9e-23 N·m` — **0.29σ,
+  13/24 seeds same sign (a coin flip)**. The frozen probe re-run **in this exact scene** predicts **−1.82e-21**, so
+  this is an **EXCLUSION at 18.6σ**, not a power failure: ≥9× below the frozen value at 2σ, ~64× below at the central
+  value. `omegaOdd = +0.88 ± 3.1 rad/s`, `turnsOdd = +0.0021 ± 0.0073`. **Mirror does NOT reverse** (native +2.9e-23,
+  mirrored +1.3e-22, both positive, 0.29σ/1.29σ) — the chirality signature that is unmistakable frozen is absent live.
+- **The rotation pathway is VERIFIED, so the null is in the torque.** `Q_omega = omega_measured/(tau/gamma_roll) =
+  **1.000** to four digits in EVERY arm. `gamma_roll = 3.2419e-23 N·m·s` ⇒ 1e-21 N·m would give **30.85 rad/s**. A
+  persistent torque WOULD twirl; there is none to convert. Not T1/T2/T3/T4/T6/T7.
+- **WHY (age-resolved, the T5 sub-question answered AGAINST relaxation).** The odd torque is already absent in the
+  **age-0** bin (+3.4e-23 vs the −9e-22/head the frozen probe implies) — the strain is **never created**, not created
+  and relaxed. Cause is the §7 structural fact: a **zero-rest-length point cross-bridge carries no preferred
+  DIRECTION**. Frozen = an imposed *displacement* of an already-bound head (real strain); dynamic = a head that
+  *binds to* the offset site and inherits no systematic tangential strain.
+- **A MEASUREMENT DEFECT FOUND + CORRECTED (carries back to prior reports).** The `Ractin = 0` control reported
+  **−160 rad/s at zero torque**. Cause: `ExplicitTwirlGlidingHarness.rollAngle` references **b̂ projected ⊥ û**, and
+  this scene builds the filament along **+x = b̂** ⇒ near-degenerate reference tracking the rod's TUMBLE azimuth.
+  Replaced (additively; that harness is **byte-unchanged**) by a **parallel-transport body-fixed** measure, gated by
+  prescribed pure tumble → −2.4e-06 rad (legacy: −2.4981) and prescribed pure spin +0.40 → **0.400000**. ⇒ **the
+  `turns` columns of §13/§14 and of the predecessor twirl/target-zone reports are NOT body-fixed roll**; no published
+  conclusion rested on them, but the numbers are superseded.
+- **Gates.** Twirl audit **10/10 PASS** (one-segment contour 2.1060 µm == the 12-seg chain; **roll drag additive** —
+  one rod 3.241935e-23 == Σ of 12 segments, ratio 1.000000, so it is NOT one short segment's drag; filament Brownian
+  **exactly 0.000e+00** on every channel/step; motor Brownian still moves the beam **3.3e-03 µm** by direct replay,
+  `matc[3]=0` ⇒ no state quieting; `Ractin=0` ⇒ τ and roll both vanish; roll spring / torsion spring / registry all
+  OFF). **CPU/GPU PASS device-resident, no fallback**: `bindMism=0 siteIdMism=0 max|dAzim|=0 max|dHeadTau|=0`,
+  axial-torque agreement **9.2e-05 relative**, `firstDiv=none` for 300 steps, masked `|rand|=0` on BOTH runners.
+- **Brownian ON/OFF:** both null (0.51σ / 0.19σ, SEMs within 1.25×) ⇒ **T4 excluded** — removing filament thermal
+  motion reveals no hidden mechanism. (Sanity: `Q_omega` departs from 1 with Brownian ON, as it must.)
+- **dt/2 at matched simulated time:** `tauOdd` +3.44e-22 → +1.43e-22, a **0.53σ** shift, both consistent with zero,
+  `Q_omega = 1.000` at both, no instability ⇒ the interpretation is not a timestep artifact. (`avgBound` +13 % and
+  glide +38 % at dt/2 — the *pre-existing* production-dt bias, in the EVEN channel only.)
+- **Stopped early, on instruction, at 145/288 (arm, seed) runs** once the primary + mirror blocks were complete at 24
+  seeds. **Open:** shared-base `S±` and multisegment `MS±` at 24 seeds (`S0` done: `avgBound` 2.69 vs 1.68 randomized).
+- **Health:** 0 invalid, 0 solver failures in every arm at both timesteps; gliding −0.6…−1.9 µm/s; balanced
+  bind/detach (~0.006/step, residence ≈ 274 steps ≈ 0.69 ms). 3js: `threejs_twirl_{Rplus,Rminus,RMplus}` (150 frames
+  each) with filament **material roll ticks**, per-head torque-sign colouring, total-torque and accumulated-roll bars.
+- **Regression:** chiral fixtures **24/24 PASS**; canonical explicit-S2 `-gliding` gate **PASS** digit-for-digit
+  (`mism=0`, `binds=11 detach=10 firstDiv=t=4 invalid=0`). `buildS2Mat` gained a 6-arg overload; the 5-arg form
+  delegates ⇒ every existing caller byte-unchanged.
+- **NEXT (a mechanism step, not a statistics step; do NOT power this further, do NOT add a roll spring):** give the
+  F8 cross-bridge a **nonzero rest length / preferred bond direction** behind a default-off flag, and re-run the
+  **frozen** probe FIRST — verify `l0 = 0` is byte-identical and that the eps-odd tangential force survives
+  *re-binding* rather than only *displacement*. Only then is a dynamic ensemble worth running. Cheap prerequisite:
+  finish `S±` at 24 seeds (~19 min GPU).
+
+### 2026-07-24 — DISCRETE ACTIN SITES + a HEAD ROTATIONAL DOF + slightly-ASKEW binding/stroke (noncanonical, default-off)
+
+Tests **mechanical stereospecificity** as the twirling route, after the Vilfan kinetic route closed: strong binding
+registers the head to a DISCRETE local actin-site frame, and a small offset defined in that LOCAL CHIRAL frame gives
+every stroke the same-signed circumferential component regardless of which side of the filament the motor sits on.
+**All additive; every feature independently switchable; feature-off bit-identical; no canonical kernel edited; no
+chemistry/S2/stroke/dt/RNG/CANON_VERSION change; nothing tuned; no torque sign chosen by a parameter.**
+- **Stage 0 audit (§2).** Explicit-S2 solves **14 DOF** (12 beam nodes + `phi` + `psi`), one implicit Newton step/step.
+  `matPlaceHeadExplicit` synthesises the head `yVec` from a **LAB-FIXED perpendicular** ⇒ **no head material frame,
+  no spin coordinate**. F9/F10 are **identically zero** (`j1FMT=0`). The head-side torque slot `bondData[3..5]` is
+  **never read** in this lineage (`matS2SolveStep` takes only the head FORCE; `segGather` only `[6..11]`) ⇒ a couple on
+  the head is representable ONLY via a new integrated coordinate. **Confirmed + corrected** the prior claim: `phi`/`psi`
+  both carry generalized forces about **`eup`** in BOTH twins, while their GEOMETRIC rotations are in the `(eup,bhat)`
+  plane / about `econv` — pre-existing, faithful, frozen, **not touched**, and a further reason to keep the new DOF
+  decoupled. All motors share ONE lab-fixed base frame (the flagged scene artifact).
+- **Stage 1 — the new coordinate.** Head roll about **`eBind = normalize(xF8−xH)`**, stored as a **covariant unit
+  3-vector** `headRef` (never a lab angle), parallel-transported (Gram–Schmidt = discrete rotation-minimizing frame),
+  Brownian on its own stream (salt "HOMG"), drag = the head's own `bRotGam` (2.513e-24 N·m·s). **Both `xF8` and `xH`
+  lie on that axis ⇒ EXACTLY decoupled from the 14×14 solve** — the canonical solver is byte-unchanged and no
+  redesign was needed (this is why the outcome is not M7).
+- **Equal-and-opposite:** registry couple `+tau·eBind` on the coordinate, `−tau·eBind` into the seg-torque slot that
+  the **byte-unchanged `segGather`** sums into `filament.torqueSum` (residual 5.8e-08). Brownian = thermostat, no reaction.
+- **Stage 2 — discrete persistent sites.** Analytic lattice in the filament material frame (bends/rolls/translates with
+  it); site id = filament-global `round(globalArc/rise)`, **latched at attachment, never re-derived**; bounded ±3-site
+  neighbour search (never all-pairs); finite 3D capture (a fresh bind with no site in reach is RELEASED — an honest
+  recruitment loss); exclusive occupancy by the validated serial-resolve pattern. Five lattices: native 2.70 / every3
+  8.10 / every4 10.80 nm (analytic 166.5°/mon helix) + **artificial** stair9-45 / stair9-90 (diagnostic, NOT biology).
+- **Stages 3/4/5.** Registry `U=½K Δω²` (K=0 exactly inert; K parameterised transparently as `kT/target²` — measured
+  RMS mismatch **1.234 rad @ K=2e-21** vs equipartition 1.43, **0.0995 @ K=4.12e-19** vs 0.100). Askew bind = a
+  local-tangent-plane offset of the bound interface; askew stroke = the equivalent **rest-coordinate** advance at
+  ADP·Pi→ADP (once per stroke). **A zero-rest-length point cross-bridge cannot carry a preferred DIRECTION, only a
+  preferred POSITION** — hence the position form; and the axial channel is fed ONLY by tangential FORCE
+  (`T·û = Ractin·F_t` exactly), so an orientational couple about the ≈radial bond axis cannot twirl. Stated up front.
+- **Fixtures 24/24 PASS** (clean-rebuild re-run on the final tree), incl. FDT variance ratio **0.9985**,
+  `tau=Ractin·F_t` per head to **6.8e-08**, closed force pair **0.00e+00**, ±torque symmetric, a 180° reference
+  reversal shifting the registry torque by **exactly `K·π`** (rel 1.7e-08), K=0 exactly inert, all-flags-off
+  **bit-identical**.
+- **CPU/GPU: PASS, full graph device-resident, no fallback.** Site IDs, bind decisions and retained azimuth **EXACTLY**
+  identical; `max|dOmega|=5.4e-06`, `max|dFilCoord|=1.2e-07 µm`, **firstDiv = none over all 200 steps** (the canonical
+  baseline decorrelates at t=4) — quantising the attachment removes the continuously-resampled phase that amplified
+  float op-order divergence. 0 invalid / 0 solver.
+- **RESULT — M2, the first non-cancelling axial torque in this lineage.** The decisive measurement is a
+  **frozen-configuration ε-response** (CPU): advance ONE ε=0 trajectory, then at each sampled step apply ±ε to the bound
+  interfaces, re-run only the bond stage, and read the torque — same heads, same sites, same pose. Every prediction met:
+  **linear in ε to 0.3 % over ±5°**, exactly **odd** in ε, axial (propulsive) force **even** in ε (identical to 4 digits
+  at every ε), and `Σ|τ|/|Στ|` collapses **19.7 → 2.1** (prior attempts: 7.2–301). **The sign is set by the actin
+  lattice in all four control cells** — slope `dtau/deps` (e-21 N·m/deg) = native/shared −0.9525, native/random
+  **−0.7886**, mirror/shared **+0.9460**, mirror/random **+0.5670**. **M5 excluded** (survives randomized motor-base
+  azimuths at 83 %); mirroring the helix reverses it in both base scenes.
+- **HONEST LIMIT — the dynamic ensemble does NOT resolve it.** 22 arm-configs × 6 matched seeds × 4000 steps,
+  device-resident: every paired ε-odd `dtau` is **≤1.9σ** (per-arm SEM 3e-22–2e-21 vs a ~2e-21 signal) ⇒ **under-powered
+  by ~10×**; pairing does not rescue it because ±ε decorrelate chaotically. Signs are nevertheless consistent with the
+  frozen probe, and the mirrored arm flips. **NO twirling claimed, no pitch reported, roll spring left OFF** (per the
+  task's gate: roll coherence only after a resolved torque). The registry alone is NOT the driver (as §7 predicts
+  geometrically); askew-stroke (M3) is implemented + fixture-validated but not separately resolved. The ε=0 baseline
+  torque has **no reproducible sign** across the four control cells ⇒ an attachment-statistics residual, unexplained,
+  and never used for a claim.
+- **Lattices:** all five glide and engage cleanly (−3.5…−4.2 µm/s, avgB 3.8–4.2, 0 invalid); dynamic per-lattice torque
+  differences are NOT resolved ⇒ **no lattice ranking claimed**, and the idealized 9 nm staircases are not promoted.
+- **Regression:** canonical `-gliding` (`mism=0, binds=11 detach=10, firstDiv=t=4, invalid=0`) and `-traj`
+  (`Δnode=1.3e-08, firstDiv=none`) both **GATE PASS** with the pre-increment numbers; legacy helical-surface **10/10**;
+  Vilfan Stage-A **16/16**. `BoA-v1ref` byte-clean; production untouched.
+- **Monitoring:** recorder verified running first; **every** GPU command through `run_gpu_monitored.sh`;
+  `TornadoCrashDiagnostic` lifecycle tracing integrated into the new entry point before campaign use.
+- **Next smallest step (power, don't add mechanism):** `B askew-bind K=0` at **ε=±5°** with **randomized bases**,
+  ~24 matched seeds, longer cells — resolve the ~1e-21 N·m odd torque in a LIVE ensemble. Only then diagnose the ε=0
+  residual, and only then the separately-gated roll-coherence test.
+- **3js:** `threejs_chiral_sites_{C2,Bplus}` (150 frames; bound-site bond lines coloured by axial-torque sign + head
+  material-frame ticks). New: `softbox/{ChiralSiteSystem,ChiralSiteHarness}.java`, `scripts/run_chiral_sites.sh`.
+  Report: `docs/DISCRETE_ACTIN_SITE_CHIRAL_BINDING_AND_STROKE_FINDINGS.md`; logs `RUN_LOGS/chiral_sites/`.
+
 ### 2026-07-24 — STAGED BROWNIAN-NOISE ABLATION of the Vilfan target-zone mechanism (noncanonical, default-off)
 
 Asked which Brownian forcing channels destroy the target-zone phase coherence, by ablating them one physical
