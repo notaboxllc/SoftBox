@@ -555,6 +555,171 @@ public final class BindingDetectionSystem {
     }
 
     // ============================================================================================
+    // HELICAL SURFACE BINDING (noncanonical, flag-gated, default-off) — the twirl-drive bind path.
+    //
+    // Two stages (one implementation, both runners), mirroring the continuous-occupancy gate/resolve split:
+    //   (1) surfaceBindPropose  — PARALLEL over motors. Reuses the EXACT bindNearest reach predicate to pick the
+    //       nearest reachable segment, then reuses the EXISTING continuous helical scan (fixed-bound, PTX-safe,
+    //       analytic φ(s)=twistRate·(arc−½segLen)) to select the presented actin site whose radial n̂(s) best
+    //       agrees GEOMETRICALLY with the head's perpendicular direction p̂ (from the filament axis toward the
+    //       head bind-tip — the F8 head-side anchor the reach predicate already uses). Writes the candidate
+    //       (candSeg, candArc = the selected site arc, candAzim = φ(that arc), material-frame). No commit.
+    //   (2) surfaceStericResolve — SINGLE-THREAD SERIAL (ascending motor id). Reconstructs each candidate's 3D
+    //       actin-surface point and commits it unless another BOUND head on the SAME filament already occupies a
+    //       surface point within (exclusion − tol) Euclidean distance. Deterministic lowest-id-wins on same-step
+    //       conflicts (each commit immediately occupies for later ids). exclusion ≤ 0 ⇒ commit every candidate
+    //       (off-axis only, no steric). No RNG, no occupancy grid, no discrete site index.
+    // ============================================================================================
+
+    /**
+     * Stage 1: PARALLEL propose. For each FREE motor: nearest reachable segment (bindNearest reach) + helical
+     * azimuth selection (best geometric agreement of the presented site n̂(s) with the head's ⊥ direction p̂).
+     * Writes candSeg/candArc/candAzim; candSeg = −1 if no reachable segment. kinParams[23]=twistRate, [24]=monoSp.
+     */
+    public static void surfaceBindPropose(
+            FloatArray head, FloatArray uVec, FloatArray rodUVec,
+            FloatArray segEnd1, FloatArray segEnd2, FloatArray segYVec,
+            IntArray motorCandSeg, IntArray motorCandCount, IntArray boundSeg,
+            IntArray candSeg, FloatArray candArc, FloatArray candAzim,
+            FloatArray kinParams, IntArray counts) {
+        int nM = counts.get(0);
+        int nSeg = segEnd1.getSize() / 3;
+        int MAXC = SpatialGrid.MAX_CAND;
+        float myoColTol = kinParams.get(7), alignTol = kinParams.get(8);
+        float twistRate = (kinParams.getSize() > 23) ? kinParams.get(23) : 0f;   // rad/µm (LEFT-handed ⇒ negative)
+        float monoSp    = (kinParams.getSize() > 24) ? kinParams.get(24) : 1f;   // monomer axial spacing (µm)
+        for (@Parallel int m = 0; m < nM; m++) {
+            candSeg.set(m, -1); candArc.set(m, 0f); candAzim.set(m, 0f);
+            if (boundSeg.get(m) != MotorStore.FREE_BINDABLE) continue;
+            float mx = head.get(m), my = head.get(nM + m), mz = head.get(2 * nM + m);
+            float mux = uVec.get(m), muy = uVec.get(nM + m), muz = uVec.get(2 * nM + m);
+            float rux = rodUVec.get(m), ruy = rodUVec.get(nM + m), ruz = rodUVec.get(2 * nM + m);
+            int cnt = motorCandCount.get(m); if (cnt > MAXC) cnt = MAXC;
+            int bestSeg = -1; float bestD = 1.0e30f; float bestFootArc = 0f;
+            for (int k = 0; k < cnt; k++) {
+                int s = motorCandSeg.get(m * MAXC + k);
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float d = reachTestDistSq(mx, my, mz, mux, muy, muz, rux, ruy, ruz,
+                        e1x, e1y, e1z, e2x, e2y, e2z, myoColTol, alignTol);
+                if (d >= 0f && d < bestD) {
+                    bestD = d; bestSeg = s;
+                    float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                    float denom = r1x * r1x + r1y * r1y + r1z * r1z;
+                    bestFootArc = ((mx - e1x) * r1x + (my - e1y) * r1y + (mz - e1z) * r1z) / (float) Math.sqrt(denom);
+                }
+            }
+            if (bestSeg >= 0) {
+                int s = bestSeg;
+                float e1x = segEnd1.get(s), e1y = segEnd1.get(nSeg + s), e1z = segEnd1.get(2 * nSeg + s);
+                float e2x = segEnd2.get(s), e2y = segEnd2.get(nSeg + s), e2z = segEnd2.get(2 * nSeg + s);
+                float r1x = e2x - e1x, r1y = e2y - e1y, r1z = e2z - e1z;
+                float segLen = (float) Math.sqrt(r1x * r1x + r1y * r1y + r1z * r1z);
+                float invL = 1.0f / segLen;
+                float ux = r1x * invL, uy = r1y * invL, uz = r1z * invL;
+                float yx = segYVec.get(s), yy = segYVec.get(nSeg + s), yz = segYVec.get(2 * nSeg + s);
+                float zx = uy * yz - uz * yy, zy = uz * yx - ux * yz, zz = ux * yy - uy * yx;   // segZ = u × segY
+                // head ⊥ direction p̂ = (head − closest-axis-point), the azimuthal position of the F8 head anchor
+                float cpx = e1x + bestFootArc * ux, cpy = e1y + bestFootArc * uy, cpz = e1z + bestFootArc * uz;
+                float px = mx - cpx, py = my - cpy, pz = mz - cpz;
+                float pl = (float) Math.sqrt(px * px + py * py + pz * pz);
+                if (pl > 1.0e-20f) { px /= pl; py /= pl; pz /= pl; }
+                float halfSeg = 0.5f * segLen;
+                // scan the presented helical sites; pick the accessible one whose n̂(s) best agrees with p̂
+                float bestReg = -2.0f; float selArc = bestFootArc; float selAzim = twistRate * (bestFootArc - halfSeg);
+                for (int j = -AZ_NJMAX; j <= AZ_NJMAX; j++) {
+                    float arc = bestFootArc + j * monoSp;
+                    boolean inWin = (arc >= 0f) && (arc <= segLen);
+                    float phi = twistRate * (arc - halfSeg);
+                    float c = (float) Math.cos(phi), sn = (float) Math.sin(phi);
+                    float nx = c * yx + sn * zx, ny = c * yy + sn * zy, nz = c * yz + sn * zz;   // presented radial n̂(s)
+                    float reg = px * nx + py * ny + pz * nz;                                      // geometric agreement p̂·n̂
+                    if (inWin && reg > bestReg) { bestReg = reg; selArc = arc; selAzim = phi; }
+                }
+                // wrap selAzim to (−π,π]
+                float PI = 3.14159265358979f, TWO_PI = 6.28318530717959f;
+                float wz = selAzim - TWO_PI * (float) Math.floor((selAzim + PI) / TWO_PI);
+                candSeg.set(m, s); candArc.set(m, selArc); candAzim.set(m, wz);
+            }
+        }
+    }
+
+    /**
+     * Stage 2: SINGLE-THREAD SERIAL steric resolve. Commit candidates in ascending id; reject a candidate whose
+     * 3D actin-surface point lies within (exclusion − tol) of any already-bound head on the SAME filament.
+     * surfResolveParams: [0]=Ractin(µm) [1]=exclusionDist(µm; ≤0 ⇒ no steric) [2]=tol(µm). occStats: [0]=candidates
+     * [1]=rejects [2]=accepts [3]=sameStepConflicts. committedThisStep (nMotors scratch) flags this-step commits.
+     */
+    public static void surfaceStericResolve(
+            IntArray candSeg, FloatArray candArc, FloatArray candAzim,
+            IntArray boundSeg, FloatArray bindArc, FloatArray bindAzim,
+            FloatArray filCoord, FloatArray filUVec, FloatArray filYVec, FloatArray filSegLength,
+            IntArray segFilId, IntArray committedThisStep, IntArray occStats,
+            FloatArray surfResolveParams, IntArray counts) {
+        for (@Parallel int gid = 0; gid < 1; gid++) {
+            int nM = counts.get(0);
+            int nSeg = filCoord.getSize() / 3;
+            double Ractin = surfResolveParams.get(0);
+            double excl = surfResolveParams.get(1);
+            double tol = surfResolveParams.get(2);
+            double thr = excl - tol;
+            int cand = 0, rej = 0, acc = 0, conf = 0;
+            for (int m = 0; m < nM; m++) committedThisStep.set(m, 0);
+            for (int m = 0; m < nM; m++) {
+                int cs = candSeg.get(m);
+                if (cs < 0) continue;
+                cand++;
+                float ca = candArc.get(m), cz = candAzim.get(m);
+                // candidate surface point (inline reconstruction; identical convention to bondForcesSurface)
+                double scx = filCoord.get(cs), scy = filCoord.get(nSeg + cs), scz = filCoord.get(2 * nSeg + cs);
+                double sux = filUVec.get(cs), suy = filUVec.get(nSeg + cs), suz = filUVec.get(2 * nSeg + cs);
+                double syx = filYVec.get(cs), syy = filYVec.get(nSeg + cs), syz = filYVec.get(2 * nSeg + cs);
+                double slen = filSegLength.get(cs);
+                double szx = suy * syz - suz * syy, szy = suz * syx - sux * syz, szz = sux * syy - suy * syx;
+                double szl = szx * szx + szy * szy + szz * szz;
+                if (szl > 1.0e-30) { double iz = 1.0 / Math.sqrt(szl); szx *= iz; szy *= iz; szz *= iz; }
+                double aOff = ca - 0.5 * slen;
+                double ccos = Math.cos(cz), csin = Math.sin(cz);
+                double px = scx + aOff * sux + Ractin * (ccos * syx + csin * szx);
+                double py = scy + aOff * suy + Ractin * (ccos * syy + csin * szy);
+                double pz = scz + aOff * suz + Ractin * (ccos * syz + csin * szz);
+                int candFil = segFilId.get(cs);
+                boolean reject = false; boolean conflictPartner = false;
+                if (excl > 0.0) {
+                    for (int b = 0; b < nM; b++) {
+                        if (b == m) continue;
+                        int bs = boundSeg.get(b);
+                        if (bs < 0) continue;                       // free head — not occupying
+                        if (segFilId.get(bs) != candFil) continue;  // different filament — never excludes
+                        float ba = bindArc.get(b), bz = bindAzim.get(b);
+                        double bscx = filCoord.get(bs), bscy = filCoord.get(nSeg + bs), bscz = filCoord.get(2 * nSeg + bs);
+                        double bsux = filUVec.get(bs), bsuy = filUVec.get(nSeg + bs), bsuz = filUVec.get(2 * nSeg + bs);
+                        double bsyx = filYVec.get(bs), bsyy = filYVec.get(nSeg + bs), bsyz = filYVec.get(2 * nSeg + bs);
+                        double bslen = filSegLength.get(bs);
+                        double bszx = bsuy * bsyz - bsuz * bsyy, bszy = bsuz * bsyx - bsux * bsyz, bszz = bsux * bsyy - bsuy * bsyx;
+                        double bszl = bszx * bszx + bszy * bszy + bszz * bszz;
+                        if (bszl > 1.0e-30) { double iz = 1.0 / Math.sqrt(bszl); bszx *= iz; bszy *= iz; bszz *= iz; }
+                        double baOff = ba - 0.5 * bslen;
+                        double bcos = Math.cos(bz), bsin = Math.sin(bz);
+                        double qx = bscx + baOff * bsux + Ractin * (bcos * bsyx + bsin * bszx);
+                        double qy = bscy + baOff * bsuy + Ractin * (bcos * bsyy + bsin * bszy);
+                        double qz = bscz + baOff * bsuz + Ractin * (bcos * bsyz + bsin * bszz);
+                        double dxx = px - qx, dyy = py - qy, dzz = pz - qz;
+                        double sep = Math.sqrt(dxx * dxx + dyy * dyy + dzz * dzz);
+                        if (sep < thr) { reject = true; if (committedThisStep.get(b) == 1) conflictPartner = true; }
+                    }
+                }
+                if (reject) { rej++; if (conflictPartner) conf++; }
+                else {
+                    boundSeg.set(m, cs); bindArc.set(m, ca); bindAzim.set(m, cz);
+                    committedThisStep.set(m, 1); acc++;
+                }
+            }
+            occStats.set(0, cand); occStats.set(1, rej); occStats.set(2, acc); occStats.set(3, conf);
+        }
+    }
+
+    // ============================================================================================
     // PHASE-2 CANONICAL VERSION-B TWO-POINT BINDER (flag-gated, default-off; the -canonical gliding path).
     // The single-point tip search is RETAINED VERBATIM (the same reachTestDistSq gates as bindNearest —
     // α-foot, conDist<myoColTol, motDotFil≥alignTol, rodDotFil≥0). The second (rear/J1-pivot) anchor is a

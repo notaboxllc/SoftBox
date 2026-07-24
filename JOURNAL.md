@@ -1,5 +1,71 @@
 # Soft Box Project Journal
 
+### 2026-07-23 — EXPLICIT-S2 GLIDING port of helical surface binding + TWIRLING probe (noncanonical, default-off; Category D)
+
+Ported the validated off-axis surface-binding drive into the **explicit-s2-l40 single-head DYNAMIC gliding assay**
+(`ExplicitCompleteMatHarness`) and asked whether the filament twirls during bind–stroke–release gliding. **Additive
+(+106 lines, 0 deletions in `TwoBodyBeamAnalyticGpu`; +48/−3 wiring in `ExplicitCompleteMatHarness`); feature-off +
+R=0 byte-identical to canonical; no chemistry/S2/stroke/dt/RNG/CANON_VERSION change.** The port is SMALL because the
+explicit gliding step already uses the lumped `CrossBridgeSystem.bondForces` over a full rigid-rod `FilamentStore`
+whose roll DOF is integrated every step, and the model is **pure-F8 (align OFF ⇒ no F9/F10 contamination)**.
+- **New kernels (both runners):** `matSurfaceAzim` (retain the material azimuth at the FREE→bound transition;
+  reference point = **xF8**, audited; reuses the helical scan; KEEPS canonical `bindArc` ⇒ gliding translation
+  unchanged; stored UNWRAPPED since consumed via cos/sin — avoids `Math.floor`, which doesn't lower on PTX) +
+  `matSurfaceStericPrune` (3D actin-surface 5.5 nm steric, single-thread serial, lowest-id). Bond swapped to
+  `bondForcesSurface` (flag-gated). Retained state = `MotorStore.bindAzim` (prototype).
+- **Gates:** 10/10 port fixtures PASS (feature-off≡canonical; R=0≡canonical bit-identical; R=3.5 surface radius;
+  azimuth material-latched; 3D steric coincident/threshold/opposite-side/lowest-id; off-axis→**net F8 axial torque
+  1.9e-21 N·m** vs 7.5e-24 at R=0). **CPU≡GPU device-resident** on the two new kernels (Δboundseg/Δbindazim/Δoccstats
+  = 0, `-Dtornado.recover.bailout=false` ⇒ no silent fallback). 0 invalid/solver.
+- **Twirl result — Category D (torques cancel).** Per-head off-axis F8 axial torque is REAL (fixture 10, 1.9e-21
+  N·m) but the torques **dynamically CANCEL**: the accepted-azimuth histogram is spread across ALL sides of the thin
+  filament (`[69 251 149 0 326 78 272 66]`) ⇒ `Σ|τ_i|/|Στ_i| = 7.2`, and the net roll is **NOT robust across
+  density** (surface −1.28 vs control −0.55 turns @ ρ120, but surface −0.29 vs control −0.50 @ ρ200 — the ρ120
+  "excess" does not replicate). Roll is also **incoherent** (per-segment spread 2.5–3.9 ≫ mean; no roll spring).
+  Gliding PRESERVED @ρ120 (−2.28 vs −2.29), ~19% slower @ρ200 (small rotational load); steric near-inert.
+- **Best-supported missing pieces:** (1) **no stereospecific azimuthal binding bias** — the gate records the azimuth
+  but accepts a head at ANY side ⇒ torques cancel (PRIMARY, H2/H1); off-axis point placement ALONE is insufficient.
+  (2) **no roll-coherence spring** (H3). **Next step:** make the bind gate azimuth-dependent (reuse
+  `bindNearestAzim`/`bindNearestFalloff`), THEN add `RollSpringSystem` to the explicit filament.
+- **Full explicit-S2 gliding DEVICE graph does not lower on this box** — a PRE-EXISTING TornadoVM PTX fault in
+  `matS2SolveStep`, reproduced identically by the CANONICAL (surface-off) graph ⇒ unrelated to the port; the campaign
+  is CPU (disclosed), equivalence isolated to the new kernels.
+- **3js movies:** `threejs_explicit_twirl_{control,surface,surface_steric}` (151 frames) — actin + per-segment
+  material-frame roll-tick markers + off-axis bond lines + motors. New: `ExplicitTwirlGlidingHarness`,
+  `scripts/run_explicit_twirl.sh`. Report: `docs/EXPLICIT_GLIDING_HELICAL_SURFACE_TWIRLING_FINDINGS.md`.
+
+### 2026-07-23 — CONTINUOUS HELICAL SURFACE BINDING + minimal TWIRLING DRIVE (noncanonical, default-off; Outcome A)
+
+The audit §11-B twirl DRIVE: place the actin-side cross-bridge attachment on the physical filament SURFACE at a
+retained MATERIAL azimuth (instead of the centerline), so the existing F8 reaction gains a ‖û_seg torque and
+mechanically drives filament twirling — NO new force law, NO artificial torque. Prototyped in the lumped/gliding
+lineage + a dedicated harness. **All additive (298 insertions, 0 deletions in existing files) ⇒ every existing path
+byte-identical (`run_xbridge` regression unchanged); no canonical/chemistry/dt/RNG/CANON_VERSION change.**
+- **Retained state:** `MotorStore.bindAzim` (one scalar/motor, material-frame ψ; never recomputed from world pose;
+  default 0 ⇒ byte-identical). **Off-axis bond:** `CrossBridgeSystem.bondForcesSurface`, `xSite = axis +
+  Ractin·(cosψ·segY + sinψ·segZ)`; F stays collinear with (xSite−htip) ⇒ the F8 head/seg couple is CLOSED ⇒
+  conservation preserved by construction, independent of xSite. R=0 ⇒ byte-identical to `bondForces`. **Bind:**
+  `surfaceBindPropose` (reuses the reach predicate + the existing helical scan to pick ψ by best geometric agreement
+  with the head bind-tip = F8 anchor) + `surfaceStericResolve` (3D surface-point exclusion, 5.5 nm, single-thread
+  serial, deterministic lowest-id, no RNG/grid/site-index). Ractin default = `Constants.radius` = 3.5 nm.
+- **Gates:** 28/28 deterministic fixtures PASS (geometry/material-latching under translate/bend/labrotate/roll/
+  re-orthogonalize; 3D steric incl. opposite-side accept + same-step conflict; mechanics incl. analytic R·F_tan
+  torque, action-reaction + torque closure < 1e-24 N·m, roll-integrator sign, roll-frozen/force-off/symmetry
+  controls). **CPU≡GPU** device-resident: bondForcesSurface+gather last-bit (ΔF 4.3e-19 N); surfaceStericResolve
+  **bit-identical** decisions (3 accept/1 reject/1 conflict). 0 invalid/solver.
+- **Twirl (campaign, CPU):** off-axis bond → measured axial torque → gathered filament torque → nonzero roll rate →
+  signed coherent cumulative turns; **R=0 control = exactly 0**; roll spring gives whole-filament (6-seg) coherence;
+  Brownian-directed (−0.40±0.23 turns); translation↔rotation coupled (same bonds drive ΣF·û AND ΣT·û). **G8 = A
+  (complete mechanical loop demonstrated)**, honestly qualified: the STATIC bed yields a bounded driven-roll
+  DISPLACEMENT (~0.1 turn to a spring equilibrium), NOT sustained rotation — sustained many-turn twirling needs the
+  dynamic bind/stroke/release cycle (the deferred next step). ~20% dt-sensitivity = documented XB dt-convergence,
+  not instability.
+- **Canonical port: NOT done (deferred with a concrete map).** The explicit-S2/HMM cross-bridge is a separate physics
+  impl + production hot path ⇒ port is a real increment (thread filYVec into the bind gate, add bindAzim, off-axis
+  xSite in the explicit bond, roll DOF on the production path, fresh CPU/GPU equiv + per-assay-class sign-off, then
+  demonstrate SUSTAINED ω in the dynamic assay). New: `HelicalSurfaceTwirlHarness`, `scripts/run_helical_twirl.sh`.
+  Report: `docs/CONTINUOUS_HELICAL_SURFACE_BINDING_AND_TWIRLING_FINDINGS.md`; log `RUN_LOGS/helical_surface_twirl_all.txt`.
+
 ### 2026-07-23 — L60 exposed-S2 gliding SENSITIVITY (declared structural study; L40 stays canonical)
 
 Part A refined the freeze docs (Q9 corrected to the real §6 studies; L40 standardized as CONDITIONALLY FROZEN —

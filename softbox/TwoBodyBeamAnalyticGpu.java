@@ -630,6 +630,112 @@ public final class TwoBodyBeamAnalyticGpu {
         for (int s = 0; s < nSeg; s++) if (segFilId.get(s) < 0) { segFilId.set(s, fid++); segCumArc.set(s, 0f); }
     }
 
+    // ===============================================================================================
+    // HELICAL SURFACE BINDING (noncanonical, flag-gated, default-off) — the explicit-S2 gliding port.
+    // Two kernels layered ON TOP of the canonical bind (matBindExplicit is UNCHANGED, so binding DECISIONS +
+    // the axial bindArc are byte-identical): (1) matSurfaceAzim selects+retains a material-frame azimuth at the
+    // bind transition; (2) matSurfaceStericPrune optionally enforces the 3D actin-surface steric rule.
+    // ===============================================================================================
+    static final int SURF_NJ = 4;   // fixed ±4-monomer helical scan half-width (PTX-safe, NOT a discrete site index)
+
+    /** Select + retain the material-frame azimuth ψ at the bind transition (FREE→bound). Reference point = xF8
+     *  (outGeom[6N..8N], the F8 head-side anchor the bind gate uses). Reuses the continuous helical scan: among the
+     *  presented sites n̂(s)=cosφ·segY+sinφ·segZ at arcs footArc+j·monoSp (φ=twistRate·(arc−½segLen)), pick the one
+     *  best agreeing with the head's ⊥ direction p̂=(xF8−axis). Keeps the CANONICAL axial bindArc (gliding
+     *  translation unchanged); only ADDS the azimuth. justBound[m]=1 on the fresh bind (for the steric prune).
+     *  surfP: [0]=Ractin(µm) [1]=twistRate(rad/µm, LEFT-handed) [2]=monoSp(µm). One implementation, both runners. */
+    public static void matSurfaceAzim(IntArray boundSeg, IntArray prevBound, IntArray justBound,
+            DoubleArray outGeom, FloatArray filCoord, FloatArray filUVec, FloatArray filYVec, FloatArray filSegLength,
+            FloatArray bindArc, FloatArray bindAzim, DoubleArray surfP, IntArray counts) {
+        int N = counts.get(0), nSeg = counts.get(3);
+        double twistRate = surfP.get(1), monoSp = surfP.get(2);
+        for (@Parallel int m = 0; m < N; m++) {
+            int bs = boundSeg.get(m), pb = prevBound.get(m);
+            int jb = 0;
+            if (bs >= 0 && pb < 0) {          // freshly bound this step
+                jb = 1; int s = bs;
+                double fx = outGeom.get(6*N+m), fy = outGeom.get(7*N+m), fz = outGeom.get(8*N+m);   // xF8
+                double cx = filCoord.get(s), cy = filCoord.get(nSeg+s), cz = filCoord.get(2*nSeg+s);
+                double ux = filUVec.get(s), uy = filUVec.get(nSeg+s), uz = filUVec.get(2*nSeg+s);
+                double yx = filYVec.get(s), yy = filYVec.get(nSeg+s), yz = filYVec.get(2*nSeg+s);
+                double zx = uy*yz-uz*yy, zy = uz*yx-ux*yz, zz = ux*yy-uy*yx;
+                double zl = zx*zx+zy*zy+zz*zz; if (zl > 1e-30) { double iz = 1.0/Math.sqrt(zl); zx*=iz; zy*=iz; zz*=iz; }
+                double half = 0.5*filSegLength.get(s);
+                double dxx = fx-cx, dyy = fy-cy, dzz = fz-cz;
+                double foot = dxx*ux + dyy*uy + dzz*uz;
+                double px = dxx-foot*ux, py = dyy-foot*uy, pz = dzz-foot*uz;
+                double pl = Math.sqrt(px*px+py*py+pz*pz); if (pl > 1e-20) { px/=pl; py/=pl; pz/=pl; }
+                double footArc = bindArc.get(m);                       // CANONICAL axial arc (from end1, ∈[0,2·half])
+                double bestReg = -2.0, selAzim = twistRate*(footArc-half);
+                for (int j = -SURF_NJ; j <= SURF_NJ; j++) {
+                    double arc = footArc + j*monoSp;
+                    boolean inWin = (arc >= 0.0) && (arc <= 2.0*half);
+                    double phi = twistRate*(arc-half);
+                    double c = Math.cos(phi), sn = Math.sin(phi);
+                    double nx = c*yx+sn*zx, ny = c*yy+sn*zy, nz = c*yz+sn*zz;
+                    double reg = px*nx + py*ny + pz*nz;
+                    if (inWin && reg > bestReg) { bestReg = reg; selAzim = phi; }
+                }
+                // store UNWRAPPED (consumed only via cos/sin ⇒ periodic; avoids Math.floor which doesn't lower on PTX)
+                bindAzim.set(m, (float) selAzim);
+            }
+            justBound.set(m, jb);
+            prevBound.set(m, bs);
+        }
+    }
+
+    /** 3D actin-surface steric prune (single-thread serial, ascending id, lowest-id wins). A FRESHLY-bound head is
+     *  UNBOUND if its reconstructed surface point lies within (exclusion − tol) of another bound head's surface
+     *  point on the SAME filament. Established bonds are untouched; a higher-id fresh head never blocks a lower-id
+     *  one. stericP: [0]=Ractin(µm) [1]=exclusion(µm; ≤0 ⇒ no steric) [2]=tol(µm). occStats:[cand,rej,acc,conf]. */
+    public static void matSurfaceStericPrune(IntArray boundSeg, IntArray justBound, IntArray prevBound, FloatArray bindArc, FloatArray bindAzim,
+            FloatArray filCoord, FloatArray filUVec, FloatArray filYVec, FloatArray filSegLength, IntArray segFilId,
+            DoubleArray stericP, IntArray occStats, IntArray counts) {
+        int N = counts.get(0), nSeg = counts.get(3);
+        double Ractin = stericP.get(0), excl = stericP.get(1), tol = stericP.get(2), thr = excl - tol;
+        for (@Parallel int gid = 0; gid < 1; gid++) {
+            int cand = 0, rej = 0, conf = 0;
+            for (int m = 0; m < N; m++) {
+                if (justBound.get(m) != 1) continue;
+                int s = boundSeg.get(m); if (s < 0) continue;
+                cand++;
+                // surface point of m
+                double scx = filCoord.get(s), scy = filCoord.get(nSeg+s), scz = filCoord.get(2*nSeg+s);
+                double sux = filUVec.get(s), suy = filUVec.get(nSeg+s), suz = filUVec.get(2*nSeg+s);
+                double syx = filYVec.get(s), syy = filYVec.get(nSeg+s), syz = filYVec.get(2*nSeg+s);
+                double szx = suy*syz-suz*syy, szy = suz*syx-sux*syz, szz = sux*syy-suy*syx;
+                double szl = szx*szx+szy*szy+szz*szz; if (szl > 1e-30) { double iz = 1.0/Math.sqrt(szl); szx*=iz; szy*=iz; szz*=iz; }
+                double aOff = bindArc.get(m) - 0.5*filSegLength.get(s);
+                double az = bindAzim.get(m); double cc = Math.cos(az), ss = Math.sin(az);
+                double px = scx + aOff*sux + Ractin*(cc*syx+ss*szx);
+                double py = scy + aOff*suy + Ractin*(cc*syy+ss*szy);
+                double pz = scz + aOff*suz + Ractin*(cc*syz+ss*szz);
+                int candFil = segFilId.get(s);
+                boolean reject = false, byFresh = false;
+                for (int b = 0; b < N; b++) {
+                    if (b == m) continue;
+                    int bsg = boundSeg.get(b); if (bsg < 0) continue;
+                    if (justBound.get(b) == 1 && b > m) continue;                  // higher-id fresh doesn't block lower-id
+                    if (segFilId.get(bsg) != candFil) continue;
+                    double bcx = filCoord.get(bsg), bcy = filCoord.get(nSeg+bsg), bcz = filCoord.get(2*nSeg+bsg);
+                    double bux = filUVec.get(bsg), buy = filUVec.get(nSeg+bsg), buz = filUVec.get(2*nSeg+bsg);
+                    double byx = filYVec.get(bsg), byy = filYVec.get(nSeg+bsg), byz = filYVec.get(2*nSeg+bsg);
+                    double bzx = buy*byz-buz*byy, bzy = buz*byx-bux*byz, bzz = bux*byy-buy*byx;
+                    double bzl = bzx*bzx+bzy*bzy+bzz*bzz; if (bzl > 1e-30) { double iz = 1.0/Math.sqrt(bzl); bzx*=iz; bzy*=iz; bzz*=iz; }
+                    double baOff = bindArc.get(b) - 0.5*filSegLength.get(bsg);
+                    double bz2 = bindAzim.get(b); double bc = Math.cos(bz2), bs2 = Math.sin(bz2);
+                    double qx = bcx + baOff*bux + Ractin*(bc*byx+bs2*bzx);
+                    double qy = bcy + baOff*buy + Ractin*(bc*byy+bs2*bzy);
+                    double qz = bcz + baOff*buz + Ractin*(bc*byz+bs2*bzz);
+                    double dx = px-qx, dy = py-qy, dz = pz-qz; double sep = Math.sqrt(dx*dx+dy*dy+dz*dz);
+                    if (sep < thr) { reject = true; if (justBound.get(b) == 1) byFresh = true; }
+                }
+                if (reject) { boundSeg.set(m, -1); prevBound.set(m, -1); rej++; if (byFresh) conf++; }   // pruned ⇒ rebinds fresh
+            }
+            occStats.set(0, cand); occStats.set(1, rej); occStats.set(2, cand - rej); occStats.set(3, conf);
+        }
+    }
+
     // ============================================================ MAT gliding Stage-10: matS2SolveStep
     /** brownTorque — EXACT 64-bit long wang-hash copy (TwoBodyConverterMotor.brownTorque L2174; the same one
      *  that already lowers on PTX inside MatStep7). Returns the FDT force sqrt(2 kT γ/dt)·g (N). */

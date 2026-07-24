@@ -65,6 +65,18 @@ public final class ExplicitCompleteMatHarness {
     // multi-step binding trajectory. NEVER set by any production runner ⇒ production default OFF is byte-identical.
     static boolean OCC_FORCE_ON = false;
     static boolean occOn() { return OCC_FORCE_ON || OCC_EXCL_NM > 0.0; }
+
+    // HELICAL SURFACE BINDING (noncanonical, default-off) — the off-axis twirl port into the explicit-S2 gliding
+    // assay. SURFACE_ON=false ⇒ every kernel/task below is bypassed ⇒ byte-identical to the canonical path.
+    // Places the actin-side cross-bridge attachment on the physical actin SURFACE at a retained material azimuth
+    // (matSurfaceAzim) via bondForcesSurface, so the existing pure-F8 reaction (this model's xbParams has align
+    // OFF ⇒ no F9/F10 contamination) generates a ‖û_seg torque that the live roll channel integrates.
+    static boolean SURFACE_ON = false;                 // -helical-surface-bind
+    static double  R_ACTIN_NM = 3.5;                   // -actin-bind-radius-nm (default = Constants.radius = 3.5 nm)
+    static double  SURF_EXCL_NM = 5.5;                 // -surface-exclusion-nm (3D actin-surface steric)
+    static boolean SURF_STERIC = true;                 // -no-surface-exclusion clears (twirl mechanics vs sterics)
+    static final double TWIST_PER_MON_DEG = -166.5;    // actin 13/6, LEFT-handed (RollSpringHarness convention)
+    static boolean surfOn() { return SURFACE_ON; }
     /** The explicit complete-mat state: the beam SoA + CSR/reduce scratch, over the shared G (fil/mot/body/bondData). */
     static final class ExMat {
         Glide2D G; int N, M, nSeg, numRedBlk;
@@ -72,6 +84,8 @@ public final class ExplicitCompleteMatHarness {
         FloatArray zP; IntArray exCounts, boundSeg, active, noBind, matc, redP, csrChunkParams, csrMatrix;
         // continuous local actin co-occupancy exclusion (noncanonical, default-off) scratch/maps + telemetry
         IntArray candInt, segFilId, occStats; DoubleArray candArc, occP; FloatArray segCumArc;
+        // helical surface binding (noncanonical, default-off): fresh-bind tracking + params + surface xbParams
+        IntArray prevBound, justBound; DoubleArray surfP, stericP; FloatArray xbParamsSurf;
     }
     static ExMat packExMat(Glide2D G, int brownOn) {
         ExMat e = new ExMat(); e.G = G; int N = G.N, M = G.g4M, nSeg = G.nSeg; e.N = N; e.M = M; e.nSeg = nSeg;
@@ -112,6 +126,17 @@ public final class ExplicitCompleteMatHarness {
         TwoBodyBeamAnalyticGpu.computeMaterialMaps(G.fil, nSeg, e.segCumArc, e.segFilId);
         e.occP = DoubleArray.fromElements(OCC_EXCL_NM, OCC_TOL_NM);   // exclusion + tol in nm (kernel converts sep µm→nm)
         e.occStats = new IntArray(4); e.occStats.init(0);
+        // helical surface binding scratch/params (noncanonical, default-off ⇒ never wired ⇒ byte-identical)
+        e.prevBound = new IntArray(N); e.prevBound.init(-1);
+        e.justBound = new IntArray(N); e.justBound.init(0);
+        double twist = TWIST_PER_MON_DEG * Math.PI / 180.0 / Constants.actinMonoRadius;   // rad/µm, LEFT-handed
+        double Ract = R_ACTIN_NM * 1e-3;                                                   // µm
+        e.surfP   = DoubleArray.fromElements(Ract, twist, Constants.actinMonoRadius);      // [Ractin, twistRate, monoSp]
+        e.stericP = DoubleArray.fromElements(Ract, SURF_STERIC ? SURF_EXCL_NM * 1e-3 : 0.0, OCC_TOL_NM * 1e-3);
+        // surface xbParams: G.xbParams[0..5] (pure-F8, align OFF) + [6]=Ractin + [7]=segF10Off(0, faithful; F10 already off)
+        e.xbParamsSurf = FloatArray.fromElements(G.xbParams.get(0), G.xbParams.get(1), G.xbParams.get(2),
+                G.xbParams.get(3), G.xbParams.get(4), G.xbParams.get(5), (float) Ract, 0f);
+        G.mot.bindAzim.init(0f);
         return e;
     }
     /** CPU-runner = the complete explicit mat step as plain-Java kernel calls (pre-bound, chemistry fixed, no bind search). */
@@ -273,9 +298,16 @@ public final class ExplicitCompleteMatHarness {
         if (ADP_RUP_ON) NucleotideCycleSystem.cycleLymnTaylorRuptureAll(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats, mot.adpRuptureParams, mot.adpRuptureStats);
         else if (RIGOR_ON) NucleotideCycleSystem.cycleLymnTaylorRigor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
         else          NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+        if (surfOn()) {   // select+retain the material azimuth at the bind transition (canonical bindArc kept), then 3D steric
+            TwoBodyBeamAnalyticGpu.matSurfaceAzim(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, e.surfP, e.exCounts);
+            TwoBodyBeamAnalyticGpu.matSurfaceStericPrune(mot.boundSeg, e.justBound, e.prevBound, mot.bindArc, mot.bindAzim, f.coord, f.uVec, f.yVec, f.segLength, e.segFilId, e.stericP, e.occStats, e.exCounts);
+        }
         MatSoaSlice.matCock(mot.nucleotideState, e.q, e.cockP, e.exCounts);
         TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit(e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec);
-        CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams);
+        if (surfOn())
+            CrossBridgeSystem.bondForcesSurface(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, mot.nucleotideState, G.bondData, e.xbParamsSurf);
+        else
+            CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams);
         ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
         CrossBridgeSystem.csrChunkZero(e.csrChunkParams, mot.counts, e.csrMatrix);
         CrossBridgeSystem.csrChunkHistogram(mot.boundSeg, mot.counts, e.csrChunkParams, e.csrMatrix);
@@ -309,6 +341,7 @@ public final class ExplicitCompleteMatHarness {
                 G.xbParams, G.segCount, G.segOff, G.segMyo);
         if (prod) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
         if (occOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.candInt, e.candArc, e.segCumArc, e.segFilId, e.occP, e.occStats);
+        if (surfOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.prevBound, e.justBound, e.surfP, e.stericP, e.xbParamsSurf, e.segFilId, e.occStats, mot.bindAzim);
         if (RIGOR_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.rigorParams, mot.ruptureStats);
         if (ADP_RUP_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.adpRuptureParams, mot.adpRuptureStats);
         tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.matc, mot.counts, f.counts);
@@ -319,13 +352,21 @@ public final class ExplicitCompleteMatHarness {
               .task("occResolve", TwoBodyBeamAnalyticGpu::matOccupancyResolve, e.candInt, e.candArc, mot.boundSeg, mot.bindArc, e.segCumArc, e.segFilId, e.occP, e.occStats, e.exCounts);
         } else
             tg.task("bind", TwoBodyBeamAnalyticGpu::matBindExplicit, e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
+        if (surfOn()) {   // helical surface binding: azimuth-select at bind (parallel) → 3D steric prune (single-thread serial)
+            tg.task("surfAzim", TwoBodyBeamAnalyticGpu::matSurfaceAzim, mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, e.surfP, e.exCounts)
+              .task("surfPrune", TwoBodyBeamAnalyticGpu::matSurfaceStericPrune, mot.boundSeg, e.justBound, e.prevBound, mot.bindArc, mot.bindAzim, f.coord, f.uVec, f.yVec, f.segLength, e.segFilId, e.stericP, e.occStats, e.exCounts);
+        }
         if (ADP_RUP_ON) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRuptureAll, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats, mot.adpRuptureParams, mot.adpRuptureStats);
         else if (RIGOR_ON) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRigor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
         else          tg.task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
         tg
           .task("cock", MatSoaSlice::matCock, mot.nucleotideState, e.q, e.cockP, e.exCounts)
-          .task("place", TwoBodyBeamAnalyticGpu::matPlaceHeadExplicit, e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec)
-          .task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams)
+          .task("place", TwoBodyBeamAnalyticGpu::matPlaceHeadExplicit, e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec);
+        if (surfOn())
+            tg.task("bond", CrossBridgeSystem::bondForcesSurface, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, mot.nucleotideState, G.bondData, e.xbParamsSurf);
+        else
+            tg.task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams);
+        tg
           .task("zeroAcc", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
           .task("csrZero", CrossBridgeSystem::csrChunkZero, e.csrChunkParams, mot.counts, e.csrMatrix)
           .task("csrHist", CrossBridgeSystem::csrChunkHistogram, mot.boundSeg, mot.counts, e.csrChunkParams, e.csrMatrix)
@@ -360,6 +401,7 @@ public final class ExplicitCompleteMatHarness {
         for (String nm : new String[]{ "beamGeom", "bind", "chem", "cock", "place", "bond", "s2solve" }) addW(glSched, "glide." + nm, pn);
         for (String nm : new String[]{ "zeroAcc", "segGather", "chain", "zconf", "brown", "integ", "orthoY", "derive", "csrReduce" }) addW(glSched, "glide." + nm, ps);
         if (occOn()) { addW(glSched, "glide.gateOnly", pn); addW(glSched, "glide.occResolve", 64); }   // gate parallel; resolve single-thread (gid<1)
+        if (surfOn()) { addW(glSched, "glide.surfAzim", pn); addW(glSched, "glide.surfPrune", 64); }    // azim parallel; prune single-thread (gid<1)
         addW(glSched, "glide.csrZero", ((Math.max(1, nCh * nSeg) + 63) / 64) * 64);
         addW(glSched, "glide.csrHist", ((nCh + 63) / 64) * 64); addW(glSched, "glide.csrScatter", ((nCh + 63) / 64) * 64);
         addW(glSched, "glide.csrScan", 64); addW(glSched, "glide.redBlk", ((e.numRedBlk + 63) / 64) * 64); addW(glSched, "glide.redFin", 64);

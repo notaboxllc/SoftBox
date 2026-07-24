@@ -206,6 +206,129 @@ public final class CrossBridgeSystem {
     }
 
     /**
+     * HELICAL SURFACE BINDING / TWIRLING (noncanonical, flag-gated, default-off). A copy of {@link #bondForces}
+     * whose SOLE physics change is the actin-side attachment point: instead of the filament CENTERLINE
+     * (ap = sc + aOff·su), the bond acts on the physical actin SURFACE at the retained material azimuth ψ:
+     *
+     *   xSite = sc + aOff·su + Ractin·(cosψ·segY + sinψ·segZ) ,   segZ = segU × segY (the rolling material frame)
+     *
+     * This is the missing twirl DRIVE: with the site OFF the axis the segment lever RS = xSite−sc gains a
+     * perpendicular component, so the F8 reaction torque TS = RS×(−F) acquires a nonzero ‖û_seg (roll) component.
+     * The existing seg-side torque slot bondData[d+9..11] carries it unchanged ⇒ segGather + the rigid-rod roll
+     * channel (bwx = torqueSum·u / γ_x) drive filament twirling with NO new force law and NO artificial torque.
+     * The F8 force stays COLLINEAR with (xSite−htip) ⇒ the head/seg F8 pair is a closed couple (net torque 0
+     * about any origin) ⇒ force + torque CONSERVATION is preserved by construction, independent of where xSite is.
+     *
+     * The G5 cross-bridge-axial-torque observable (TS·û_seg — the F8 off-axis couple's ROLL drive) is recovered
+     * host-side from the seg-torque slot bondData[d+9..11]·û: F9 is ⊥û_seg by construction, and with segF10Off=1
+     * the seg-side F10 reaction is zero, so that dot equals the pure F8 axial torque (exact); at Ractin=0 it is 0.
+     *
+     * xbParams (this method's OWN layout, size 8): [0]=myoSpring [1]=(unused) [2]=j1FracMoveTorq [3]=dt
+     * [4]=HEAD_LEN [5]=forcebias [6]=Ractin (µm; 0 ⇒ centerline ⇒ BYTE-IDENTICAL to bondForces) [7]=segF10Off
+     * (0 ⇒ keep the seg-side F10 alignment reaction = byte-identical to bondForces; 1 ⇒ zero it for the CLEAN
+     * twirl isolation so filament roll is driven ONLY by the off-axis F8 lever + the roll spring; the head-side
+     * F10 that orients the head to the actin is UNCHANGED). ONE implementation, both runners. 15 args (device task cap).
+     */
+    public static void bondForcesSurface(
+            FloatArray motorCoord, FloatArray motorUVec, FloatArray motorYVec, FloatArray motorBRotGam,
+            FloatArray filCoord, FloatArray filUVec, FloatArray filYVec, FloatArray filBRotGam, FloatArray filSegLength,
+            IntArray boundSeg, FloatArray bindArc, FloatArray bindAzim, IntArray nucleotideState,
+            FloatArray bondData, FloatArray xbParams) {
+
+        int nB = motorCoord.getSize() / 3;
+        int nSeg = filCoord.getSize() / 3;
+        double myoSpring = xbParams.get(0), j1FMT = xbParams.get(2);
+        double dt = xbParams.get(3), headLen = xbParams.get(4);
+        double xbias = xbParams.get(5);
+        double Ractin = (xbParams.getSize() > 6) ? xbParams.get(6) : 0.0;      // µm — physical actin radius; 0 ⇒ centerline
+        int segF10Off = (xbParams.getSize() > 7) ? (int) xbParams.get(7) : 0;
+        double DEG2RAD = Math.PI / 180.0, RAD2DEG = 180.0 / Math.PI;
+        int nM = nB / 3;
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            int d = m * STRIDE;
+            for (int k = 0; k < STRIDE; k++) bondData.set(d + k, 0f);
+            int s = boundSeg.get(m);
+            if (s < 0) continue;
+
+            int h = 3 * m + 2;
+            double hcx = motorCoord.get(h), hcy = motorCoord.get(nB + h), hcz = motorCoord.get(2 * nB + h);
+            double hux = motorUVec.get(h), huy = motorUVec.get(nB + h), huz = motorUVec.get(2 * nB + h);
+            double hyx = motorYVec.get(h), hyy = motorYVec.get(nB + h), hyz = motorYVec.get(2 * nB + h);
+            double hbRGx = motorBRotGam.get(h), hbRGy = motorBRotGam.get(nB + h);
+            double htipx = hcx + 0.5 * headLen * hux, htipy = hcy + 0.5 * headLen * huy, htipz = hcz + 0.5 * headLen * huz;
+
+            double scx = filCoord.get(s), scy = filCoord.get(nSeg + s), scz = filCoord.get(2 * nSeg + s);
+            double sux = filUVec.get(s), suy = filUVec.get(nSeg + s), suz = filUVec.get(2 * nSeg + s);
+            double syx = filYVec.get(s), syy = filYVec.get(nSeg + s), syz = filYVec.get(2 * nSeg + s);
+            double sbRGx = filBRotGam.get(s), sbRGy = filBRotGam.get(nSeg + s);
+            double slen = filSegLength.get(s);
+            double aOff = bindArc.get(m) - 0.5 * slen;
+            // segment material Z = segU × segY (normalized; the rolling material frame's third axis)
+            double szx = suy * syz - suz * syy, szy = suz * syx - sux * syz, szz = sux * syy - suy * syx;
+            double szl = szx * szx + szy * szy + szz * szz;
+            if (szl > 1.0e-30) { double iz = 1.0 / Math.sqrt(szl); szx *= iz; szy *= iz; szz *= iz; }
+            double psi = bindAzim.get(m);
+            double cps = Math.cos(psi), sps = Math.sin(psi);
+            double radx = Ractin * (cps * syx + sps * szx);
+            double rady = Ractin * (cps * syy + sps * szy);
+            double radz = Ractin * (cps * syz + sps * szz);
+            double apx = scx + aOff * sux + radx, apy = scy + aOff * suy + rady, apz = scz + aOff * suz + radz;
+
+            // F8 spring (toward the OFF-AXIS surface site)
+            double dx = apx - htipx, dy = apy - htipy, dz = apz - htipz;
+            double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            double fmag = myoSpring * dist;
+            double Fx = 0, Fy = 0, Fz = 0;
+            if (dist > 0.0) { double inv = fmag / dist; Fx = inv * dx; Fy = inv * dy; Fz = inv * dz; }
+            double RHx = (htipx - hcx) * 1e-6, RHy = (htipy - hcy) * 1e-6, RHz = (htipz - hcz) * 1e-6;
+            double THx = RHy * Fz - RHz * Fy, THy = RHz * Fx - RHx * Fz, THz = RHx * Fy - RHy * Fx;
+            double RSx = (apx - scx) * 1e-6, RSy = (apy - scy) * 1e-6, RSz = (apz - scz) * 1e-6;
+            double nFx = -Fx, nFy = -Fy, nFz = -Fz;
+            double TSx = RSy * nFz - RSz * nFy, TSy = RSz * nFx - RSx * nFz, TSz = RSx * nFy - RSy * nFx;
+
+            // F9 uVec alignment torque — STATE-DEPENDENT rest angle (the stroke switch), UNCHANGED
+            double restF9 = (nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? 120.0 : 90.0;
+            double t9x = suy * huz - suz * huy, t9y = suz * hux - sux * huz, t9z = sux * huy - suy * hux;
+            double m9 = t9x * t9x + t9y * t9y + t9z * t9z;
+            double T9x = 0, T9y = 0, T9z = 0;
+            if (m9 > 1.0e-30) {
+                double im = 1.0 / Math.sqrt(m9); t9x *= im; t9y *= im; t9z *= im;
+                double dot = sux * hux + suy * huy + suz * huz; if (dot > 1) dot = 1; if (dot < -1) dot = -1;
+                double angD = accurateAcos(dot) * RAD2DEG - restF9;
+                double tm = j1FMT * DEG2RAD * angD / ((1.0 / hbRGy + 1.0 / sbRGy) * dt);
+                T9x = tm * t9x; T9y = tm * t9y; T9z = tm * t9z;
+            }
+            // F10 yVec alignment torque (rest 0): aligns head.yVec → seg.yVec (two-body). head −T10, seg +T10.
+            double t10x = syy * hyz - syz * hyy, t10y = syz * hyx - syx * hyz, t10z = syx * hyy - syy * hyx;
+            double m10 = t10x * t10x + t10y * t10y + t10z * t10z;
+            double T10x = 0, T10y = 0, T10z = 0;
+            if (m10 > 1.0e-30) {
+                double im = 1.0 / Math.sqrt(m10); t10x *= im; t10y *= im; t10z *= im;
+                double dot = syx * hyx + syy * hyy + syz * hyz; if (dot > 1) dot = 1; if (dot < -1) dot = -1;
+                double ang = accurateAcos(dot) * RAD2DEG;
+                double tm = j1FMT * DEG2RAD * ang / ((1.0 / hbRGx + 1.0 / sbRGx) * dt);
+                T10x = tm * t10x; T10y = tm * t10y; T10z = tm * t10z;
+            }
+            double hF10x = -T10x, hF10y = -T10y, hF10z = -T10z;   // head-side alignment to actin — UNCHANGED
+            double sF10x =  T10x, sF10y =  T10y, sF10z =  T10z;
+            if (segF10Off != 0) { sF10x = 0; sF10y = 0; sF10z = 0; }   // CLEAN twirl isolation: drop the seg-side alignment reaction
+
+            // head-side: +F, torque TH − T9 + hF10
+            bondData.set(d,     (float) Fx);  bondData.set(d + 1, (float) Fy);  bondData.set(d + 2, (float) Fz);
+            bondData.set(d + 3, (float) (THx - T9x + hF10x));
+            bondData.set(d + 4, (float) (THy - T9y + hF10y));
+            bondData.set(d + 5, (float) (THz - T9z + hF10z));
+            // seg-side: −F, torque TS + T9 + sF10
+            bondData.set(d + 6, (float) (nFx - xbias)); bondData.set(d + 7, (float) nFy); bondData.set(d + 8, (float) nFz);
+            bondData.set(d + 9,  (float) (TSx + T9x + sF10x));
+            bondData.set(d + 10, (float) (TSy + T9y + sF10y));
+            bondData.set(d + 11, (float) (TSz + T9z + sF10z));
+            bondData.set(d + 12, (float) (Fx * sux + Fy * suy + Fz * suz));
+        }
+    }
+
+    /**
      * DIRECTED power-stroke converter (sphere-head; PHASE-2, 2026-07-01). Replaces the J1 cross(lever,head)
      * converter — whose torsion axis is DEGENERATE at the collinear/straight recovery pose, so each new power
      * stroke picks its swing azimuth from numerical residue and FLIPS direction between cycles (the ill-defined
