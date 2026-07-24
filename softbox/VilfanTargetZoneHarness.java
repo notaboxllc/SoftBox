@@ -462,7 +462,7 @@ public final class VilfanTargetZoneHarness {
         double meanDpsi, leadFrac, accFrac;
         double meanDpsiCand, leadFracCand, meanDpsiHaz;
         double semDpsi, semLead, semBias, bias, semTau, semGlide; int nSignAgree, nSeeds;
-        double phaseStep, phaseAxial, driftStep; long phasePairs;
+        double phaseStep, phaseAxial, driftStep; long phasePairs; double semTurns, semTpu;
         double tauNet, tauAbs, cancel;
         long cand, acc;
         int[] binCand = new int[NB], binAcc = new int[NB];
@@ -622,9 +622,10 @@ public final class VilfanTargetZoneHarness {
         symmetryControls(seeds[0]);
     }
     static void row2(String label, Arm o) {
-        System.out.printf(Locale.US, "%-30s glide %+7.3f±%.3f | avgB %5.2f | accFrac %.3f | ⟨Δψ⟩acc %+.4f±%.4f | ⟨Δψ⟩cand %+.4f | leadAcc−leadCand %+.4f±%.4f (%d/%d seeds agree) | τnet %+.2e±%.1e | cancel %.1f%n",
+        System.out.printf(Locale.US, "%-30s glide %+7.3f±%.3f | avgB %5.2f | accFrac %.3f | ⟨Δψ⟩acc %+.4f±%.4f | ⟨Δψ⟩cand %+.4f | leadAcc−leadCand %+.4f±%.4f (%d/%d seeds agree) | τnet %+.2e±%.1e | cancel %.1f | turns %+.4f±%.4f | turns/µm %+.2f±%.2f%n",
                 label, o.glide, o.semGlide, o.avgBound, o.accFrac, o.meanDpsi, o.semDpsi, o.meanDpsiCand,
-                o.bias, o.semBias, o.nSignAgree, o.nSeeds, o.tauNet, o.semTau, o.cancel);
+                o.bias, o.semBias, o.nSignAgree, o.nSeeds, o.tauNet, o.semTau, o.cancel, o.meanTurns, o.semTurns,
+                o.turnsPerUm, o.semTpu);
     }
     static void row(String label, Arm o) {
         System.out.printf(Locale.US, "%-30s %+10.3f %9.2f %8.3f %+10.4f %+10.4f %9.3f %9.3f %+10.2e %8.1f %+9.4f%n",
@@ -633,13 +634,15 @@ public final class VilfanTargetZoneHarness {
     static Arm mean(int[] seeds, boolean tzOn, double alpha, boolean surface, boolean steric) {
         Arm a = new Arm(); int n = seeds.length; a.nSeeds = n;
         double[] vD = new double[n], vL = new double[n], vB = new double[n], vT = new double[n], vG = new double[n];
+        double[] vTu = new double[n], vTp = new double[n];
         int idx = 0;
         for (int s : seeds) {
             Arm o = runArm(tzOn, alpha, surface, steric, s, STEPS);
             vD[idx] = o.meanDpsi; vL[idx] = o.leadFrac; vB[idx] = o.leadFrac - o.leadFracCand;
-            vT[idx] = o.tauNet; vG[idx] = o.glide; idx++;
+            vT[idx] = o.tauNet; vG[idx] = o.glide; vTu[idx] = o.meanTurns; vTp[idx] = o.turnsPerUm; idx++;
             if (VERBOSE) System.out.printf(Locale.US, "      seed %-5d glide=%+7.3f avgB=%6.2f cand=%6d acc=%6d ⟨Δψ⟩acc=%+.4f ⟨Δψ⟩cand=%+.4f leadAcc=%.4f leadCand=%.4f τnet=%+.2e%n",
-                    s, o.glide, o.avgBound, o.cand, o.acc, o.meanDpsi, o.meanDpsiCand, o.leadFrac, o.leadFracCand, o.tauNet);
+                    s, o.glide, o.avgBound, o.cand, o.acc, o.meanDpsi, o.meanDpsiCand, o.leadFrac, o.leadFracCand, o.tauNet)
+                    ;
             a.glide += o.glide/n; a.avgBound += o.avgBound/n; a.meanTurns += o.meanTurns/n; a.turnsSpread += o.turnsSpread/n;
             a.turnsPerUm += o.turnsPerUm/n; a.meanDpsi += o.meanDpsi/n; a.leadFrac += o.leadFrac/n; a.accFrac += o.accFrac/n;
             a.meanDpsiCand += o.meanDpsiCand/n; a.leadFracCand += o.leadFracCand/n; a.meanDpsiHaz += o.meanDpsiHaz/n;
@@ -650,6 +653,7 @@ public final class VilfanTargetZoneHarness {
         }
         a.cancel = Math.abs(a.tauNet) > 1e-30 ? a.tauAbs/Math.abs(a.tauNet) : 0;
         a.semDpsi = sem(vD); a.semLead = sem(vL); a.semBias = sem(vB); a.semTau = sem(vT); a.semGlide = sem(vG);
+        a.semTurns = sem(vTu); a.semTpu = sem(vTp);
         a.bias = 0; for (double v : vB) a.bias += v/n;
         int agree = 0; double mref = a.bias;
         for (double v : vB) if (mref != 0 && v*mref > 0) agree++;

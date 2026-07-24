@@ -1,5 +1,63 @@
 # Soft Box Project Journal
 
+### 2026-07-24 — VILFAN-STYLE STEREOSPECIFIC TARGET-ZONE BINDING in explicit-S2 gliding (noncanonical, default-off; Stage A = A2)
+
+Tested whether a continuous, stereospecific actomyosin orientation constraint — Vilfan's moving-target-zone
+mechanism — makes the binding kinetics acquire a preferred torque sign during explicit-S2 gliding. Built Stage A
+only (graded angular attachment hazard); Stage B/C deliberately NOT entered. **All additive; feature-off
+bit-identical; no chemistry/S2/stroke/dt/RNG/CANON_VERSION change; nothing tuned.** Ran only after the lowering
+work confirmed the full explicit-S2 graph is device-resident (prior entry).
+- **Frames (audited, reported).** Actin: `uActin = filUVec`, `nActin = cosφ·segY + sinφ·segZ` at
+  `φ = twistRate·(bindArc−½segLen)`, `tActin = uActin×nActin`. Motor: `mHat = −normalize(xF8−xH)` (the head long
+  axis from the beam pose). **Degeneracy disclosed:** the explicit-S2 head has NO rotational DOF about its own
+  long axis (`phi` and `psi` are BOTH parameterised about the single base axis `eup`; `matPlaceHeadExplicit`
+  synthesises the head yVec from a lab-fixed perpendicular) ⇒ only the ONE-angle azimuthal mismatch ⊥`uActin` is
+  definable; head pitch discarded.
+- **New kernel `matTargetZone`** (both runners): signed `deltaPsi` via the project's float32-stable
+  `asin(|cross|)`/`acos` form (PTX has no atan2; raw acos is ill-conditioned at both ends — the stable form cut the
+  CPU/GPU residual 7×), hazard `w = exp(−0.5·alphaPsi·deltaPsi²)` applied to the geometric candidate BEFORE
+  commitment, sampled from a PRIVATE wang-hash stream (salt "TZBD") so no existing RNG stream shifts.
+  `alphaPsi=0` skips the draw ⇒ byte-identical. Rejected head returns to the free pool (the depletion that the
+  mechanism needs). Retains `bindAzim=φ` + new `MotorStore.bindPsi0=deltaPsi`.
+- **Gates: 16/16 fixtures PASS** — alpha=0 bit-identical; aligned⇒0; signed ±; ±π wrap continuous; lab-rotation
+  invariant; roll shifts phase by −δ; polarity and mirror flip sign; weight symmetric + monotone; large alpha
+  narrows without any absolute-lab-azimuth preference; CPU≡GPU decisions EXACT (mismatch/weight last-bit).
+- **FULL target-zone gliding graph DEVICE-RESIDENT** (`bailout=false`, FMA off ⇒ no silent fallback), surface OFF
+  and ON: `bindMism=0 acceptMism=0 max|Δpsi0|≤5.2e-06`; chaotic decorrelation only, as in the canonical baseline.
+- **The mechanism WORKS in a deterministic kinematic rig** (imposed constant translation, 60k steps):
+  `⟨Δψ⟩` = +0.0570 (+v) / −0.0581 (−v) / −0.0003 (v=0) / **+0.0002 with depletion disabled** — a symmetric hazard
+  plus finite kinetics plus pool depletion gives the predicted signed, direction-locked flux asymmetry.
+- **RESULT — Stage A = A2 (target zones narrow binding; NO signed flux bias).** 10 seeds × 6000 steps,
+  device-resident, ρ800: `⟨Δψ⟩acc` = −0.0084±0.0079 / +0.0012±0.0167 / +0.0081±0.0097 at alphaPsi 4/6/8 (all ≲1σ,
+  sign not even consistent); paired `leadAcc−leadCand` = −0.004±0.009 / −0.002±0.023 / −0.008±0.011 (consistent
+  with zero, and NEGATIVE where the mechanism predicts positive); leading attachments 613 vs trailing 626;
+  `τnet` ≤1.6σ with the alpha=0 control of OPPOSITE sign; cancellation 67–174 vs 114 azimuth-blind (**no**
+  improvement). Engagement/glide healthy (avgBound 7.13→5.89 = 83% retained; glide −3.56→−3.39 within SEM;
+  0 invalid/solver) ⇒ NOT A3, NOT A4.
+- **What it DID do:** stereospecificity is real — the accepted-azimuth histogram went sharply peaked
+  (`[10972 22723 18403 8293 2720 1045 1391 4807]`) where the azimuth-blind arm was flat; and the candidate
+  histogram shows the **pool-depletion notch** at registry. Concentrating the azimuth did NOT stop the torques
+  cancelling.
+- **ROOT CAUSE, measured (the real finding).** `twistRate = 1076 rad/µm` ⇒ **1 nm of axial head motion = 1.08 rad
+  of target-zone phase** (helical repeat only 5.84 nm of arc). For heads that are candidates on consecutive steps:
+  observed **|ΔΔψ| = 1.15 rad/step vs a deterministic sliding drift of 0.011 rad/step — a factor ~105** — and the
+  `twistRate·Δ(bindArc)` term accounts for essentially ALL of it (1.159 of 1.156). Successive attachment attempts
+  sample an UNCORRELATED phase, so no leading/trailing asymmetry can survive. **dt-robust the way that matters:
+  the ratio gets WORSE at finer dt (88.7 → 204.8), because drift/step ∝ dt while thermal phase jitter ∝ √dt** ⇒
+  refining dt cannot recover the mechanism.
+- **Stage B NOT ENTERED — gate not met AND separately BLOCKED.** Torque-coverage audit: F9/F10 are identically
+  zero here (`j1FMT=0`); the `kbnd·(psi−psiActin)` bind spring is the only angular analogue and is orthogonal with
+  no filament reaction ⇒ no double-count. But a registry couple about `uActin` projects onto the motor's
+  generalized coordinates as **exactly zero** (`uActin ⊥ eup`), and `bondData[3..5]` (head torque) is never
+  consumed in this lineage ⇒ it would be the world-frame torsional anchor the task forbids. Faithful Stage B needs
+  a third head rotational DOF inside the frozen canonical `matS2SolveStep`. **Stage C not reached** (no net torque).
+- **Regression:** legacy surface fixtures 10/10 PASS with identical numbers (F8 axial torque 1.921e-21 / 7.527e-24);
+  canonical explicit-S2 device gate unchanged (`mism=0, binds=11 detach=10, firstDiv=t=4, invalid=0`, GATE PASS).
+- **3js:** `threejs_vilfan_tz_{blind,targetzone}` (151 frames) — roll ticks + cross-bridge lines + the local actin
+  surface-NORMAL marker + a motor binding-direction marker coloured by the angular mismatch. New:
+  `VilfanTargetZoneHarness`, `scripts/run_vilfan_targetzone.sh`. Report:
+  `docs/VILFAN_TARGET_ZONE_BINDING_AND_TWIRLING_FINDINGS.md`; logs `RUN_LOGS/vilfan_targetzone/`.
+
 ### 2026-07-23 — EXPLICIT-S2 GPU LOWERING "regression" ROOT-CAUSED: a missing `-Dtornado.enable.fma=false` (launch flag, not source)
 
 The twirling report's §18 claim — "the full explicit-S2 gliding device graph does not lower on this machine, a
