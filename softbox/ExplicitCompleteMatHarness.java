@@ -54,11 +54,24 @@ public final class ExplicitCompleteMatHarness {
 
     // =============================================================== §7/§8 complete explicit mat trajectory
     static final int SYS = TwoBodyBeamAnalyticGpu.SYS_STRIDE, RED_BLK = 128;
+    // CONTINUOUS LOCAL ACTIN CO-OCCUPANCY EXCLUSION (named noncanonical experimental extension; default OFF).
+    // OCC_EXCL_NM = 0 ⇒ OFF ⇒ the canonical bind kernel (matBindExplicit) runs unchanged ⇒ byte-identical.
+    // > 0 ⇒ the gate-only + serial-resolve pair replaces the bind task. See docs/helical_binding/
+    // CONTINUOUS_OCCUPANCY_EXCLUSION_FINDINGS.md. tol convention matches the legacy veto (reject iff sep < excl−tol).
+    static double OCC_EXCL_NM = 0.0;
+    static final double OCC_TOL_NM = 1e-3;
+    // Test-only hook (ContinuousOccupancyExclusionHarness §5 test 12): force the gate-only→serial-resolve pipeline
+    // even at exclusion 0, so the OFF-path IDENTITY (resolve(0) ≡ canonical matBindExplicit) is checkable over a real
+    // multi-step binding trajectory. NEVER set by any production runner ⇒ production default OFF is byte-identical.
+    static boolean OCC_FORCE_ON = false;
+    static boolean occOn() { return OCC_FORCE_ON || OCC_EXCL_NM > 0.0; }
     /** The explicit complete-mat state: the beam SoA + CSR/reduce scratch, over the shared G (fil/mot/body/bondData). */
     static final class ExMat {
         Glide2D G; int N, M, nSeg, numRedBlk;
         DoubleArray nodes, frame, params, sys, outGeom, q, redOut, redBlk, eupP, bindP, cockP;
         FloatArray zP; IntArray exCounts, boundSeg, active, noBind, matc, redP, csrChunkParams, csrMatrix;
+        // continuous local actin co-occupancy exclusion (noncanonical, default-off) scratch/maps + telemetry
+        IntArray candInt, segFilId, occStats; DoubleArray candArc, occP; FloatArray segCumArc;
     }
     static ExMat packExMat(Glide2D G, int brownOn) {
         ExMat e = new ExMat(); e.G = G; int N = G.N, M = G.g4M, nSeg = G.nSeg; e.N = N; e.M = M; e.nSeg = nSeg;
@@ -93,6 +106,12 @@ public final class ExplicitCompleteMatHarness {
         e.numRedBlk = Math.max(1, (N + RED_BLK - 1) / RED_BLK);
         e.redP = IntArray.fromElements(RED_BLK, e.numRedBlk); e.redBlk = new DoubleArray(3 * e.numRedBlk); e.redBlk.init(0.0);
         e.redOut = new DoubleArray(6);
+        // occupancy-exclusion scratch + static material maps + telemetry (allocated always; wired only when occOn()).
+        e.candInt = new IntArray(2 * N); e.candInt.init(0); e.candArc = new DoubleArray(N); e.candArc.init(0.0);
+        e.segCumArc = new FloatArray(nSeg); e.segFilId = new IntArray(nSeg);
+        TwoBodyBeamAnalyticGpu.computeMaterialMaps(G.fil, nSeg, e.segCumArc, e.segFilId);
+        e.occP = DoubleArray.fromElements(OCC_EXCL_NM, OCC_TOL_NM);   // exclusion + tol in nm (kernel converts sep µm→nm)
+        e.occStats = new IntArray(4); e.occStats.init(0);
         return e;
     }
     /** CPU-runner = the complete explicit mat step as plain-Java kernel calls (pre-bound, chemistry fixed, no bind search). */
@@ -246,7 +265,11 @@ public final class ExplicitCompleteMatHarness {
         e.matc.set(0, t); e.matc.set(1, seed); mot.setCounts(t, seed, e.nSeg); f.counts.set(1, t); f.counts.set(2, seed);
         for (int m = 0; m < N; m++) e.active.set(m, 1);   // no-cull smoke (physically identical; far motors fail the gate)
         TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom);
-        TwoBodyBeamAnalyticGpu.matBindExplicit(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
+        if (occOn()) {   // continuous local actin co-occupancy exclusion (gate-only → serial resolve); OFF path below is byte-identical
+            TwoBodyBeamAnalyticGpu.matBindGateOnly(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, e.candInt, e.candArc, e.exCounts);
+            TwoBodyBeamAnalyticGpu.matOccupancyResolve(e.candInt, e.candArc, mot.boundSeg, mot.bindArc, e.segCumArc, e.segFilId, e.occP, e.occStats, e.exCounts);
+        } else
+            TwoBodyBeamAnalyticGpu.matBindExplicit(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
         if (ADP_RUP_ON) NucleotideCycleSystem.cycleLymnTaylorRuptureAll(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats, mot.adpRuptureParams, mot.adpRuptureStats);
         else if (RIGOR_ON) NucleotideCycleSystem.cycleLymnTaylorRigor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
         else          NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
@@ -285,13 +308,17 @@ public final class ExplicitCompleteMatHarness {
                 mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.forceMag,
                 G.xbParams, G.segCount, G.segOff, G.segMyo);
         if (prod) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
+        if (occOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.candInt, e.candArc, e.segCumArc, e.segFilId, e.occP, e.occStats);
         if (RIGOR_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.rigorParams, mot.ruptureStats);
         if (ADP_RUP_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.adpRuptureParams, mot.adpRuptureStats);
         tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.matc, mot.counts, f.counts);
         if (!prod) tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
-        tg.task("beamGeom", TwoBodyBeamAnalyticGpu::matBeamGeom, e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom)
-          .task("bind", TwoBodyBeamAnalyticGpu::matBindExplicit, e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts)
-          ;
+        tg.task("beamGeom", TwoBodyBeamAnalyticGpu::matBeamGeom, e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom);
+        if (occOn()) {   // continuous local actin co-occupancy exclusion: parallel gate-only → single-thread serial resolve
+            tg.task("gateOnly", TwoBodyBeamAnalyticGpu::matBindGateOnly, e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, e.candInt, e.candArc, e.exCounts)
+              .task("occResolve", TwoBodyBeamAnalyticGpu::matOccupancyResolve, e.candInt, e.candArc, mot.boundSeg, mot.bindArc, e.segCumArc, e.segFilId, e.occP, e.occStats, e.exCounts);
+        } else
+            tg.task("bind", TwoBodyBeamAnalyticGpu::matBindExplicit, e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
         if (ADP_RUP_ON) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRuptureAll, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats, mot.adpRuptureParams, mot.adpRuptureStats);
         else if (RIGOR_ON) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRigor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
         else          tg.task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
@@ -321,15 +348,18 @@ public final class ExplicitCompleteMatHarness {
             // buffer the `chem` task already writes on device. Default false ⇒ the -sweep/-throughput paths are byte-unchanged.
             if (PROD_SCI) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg, mot.nucleotideState);
             else          tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg);
+            if (occOn())  tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.occStats);   // per-step occupancy telemetry
             // RIGOR RUPTURE: read the per-motor rupture/cap accumulators + the realized load each step (cause count + force-at-rupture).
             if (RIGOR_ON) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, mot.ruptureStats, mot.forceDotFil);
             if (ADP_RUP_ON) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, mot.adpRuptureStats);
         }
-        else      tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.nodes, e.q, e.redOut, f.coord, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, G.bondData);
+        else {    tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.nodes, e.q, e.redOut, f.coord, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, G.bondData);
+                  if (occOn()) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.occStats); }   // occupancy telemetry (validation)
         int pn = ((N + 63) / 64) * 64, ps = ((nSeg + 63) / 64) * 64, nCh = e.csrChunkParams.get(1);
         glSched = new GridScheduler();
         for (String nm : new String[]{ "beamGeom", "bind", "chem", "cock", "place", "bond", "s2solve" }) addW(glSched, "glide." + nm, pn);
         for (String nm : new String[]{ "zeroAcc", "segGather", "chain", "zconf", "brown", "integ", "orthoY", "derive", "csrReduce" }) addW(glSched, "glide." + nm, ps);
+        if (occOn()) { addW(glSched, "glide.gateOnly", pn); addW(glSched, "glide.occResolve", 64); }   // gate parallel; resolve single-thread (gid<1)
         addW(glSched, "glide.csrZero", ((Math.max(1, nCh * nSeg) + 63) / 64) * 64);
         addW(glSched, "glide.csrHist", ((nCh + 63) / 64) * 64); addW(glSched, "glide.csrScatter", ((nCh + 63) / 64) * 64);
         addW(glSched, "glide.csrScan", 64); addW(glSched, "glide.redBlk", ((e.numRedBlk + 63) / 64) * 64); addW(glSched, "glide.redFin", 64);
@@ -962,6 +992,10 @@ public final class ExplicitCompleteMatHarness {
         int steps = argI(args, "-steps", 40000);
         String outdir = argS(args, "-outdir", "RUN_LOGS/single_head_density_sweep_long");
         String rev = argS(args, "-rev", "unknown");
+        // CONTINUOUS LOCAL ACTIN CO-OCCUPANCY EXCLUSION (noncanonical experimental; default OFF = 0 = canonical path).
+        // Explicit opt-in flag; value in nm (canonical study value 5.4). Must be parsed BEFORE packExMat/buildGlidingGraph.
+        OCC_EXCL_NM = argD(args, "-occupancy-exclusion-nm", 0.0);
+        if (OCC_EXCL_NM < 0) OCC_EXCL_NM = 0.0;   // negative ⇒ OFF (recover the exact canonical path)
         double slack = TwoBodyConverterMotor.EXPLICIT_GLIDE_SLACK_NM;   // 1.5 nm
         // Exposed S2 contour length. CANONICAL = 40 nm (explicit-s2-l40). -L 60 selects the DECLARED L60 structural
         // sensitivity (explicit-s2-l60): SAME MD material moduli EA/EI, only the exposed length + M=round(L/10) change
@@ -1001,7 +1035,10 @@ public final class ExplicitCompleteMatHarness {
             System.out.printf(Locale.US, "  model=%s | GPU device-resident TaskGraph (buildGlidingGraph prod) | single-head gliding assay class VALIDATED for production (canonical GPU path; aggregate-statistical CPU↔GPU equivalence; no CPU fallback)%n", modelId);
         else
             System.out.printf(Locale.US, "  model=%s | GPU device-resident TaskGraph (buildGlidingGraph prod) | DECLARED STRUCTURAL SENSITIVITY vs canonical L40 (EA/EI unchanged; only exposed length L=%.0f nm ⇒ M=%d; NOT a competing tuned baseline; L40 stays canonical)%n", modelId, beamL, (int) Math.round(beamL / 10.0));
-        System.out.printf(Locale.US, "  S2 beam L=%.0f nm | initial slack=%.2f nm | dt=%.3g s | free binding (matBindExplicit each step), NO cull, NO occupancy exclusion%n", beamL, slack, dt);
+        if (occOn())
+            System.out.printf(Locale.US, "  S2 beam L=%.0f nm | initial slack=%.2f nm | dt=%.3g s | free binding | *** CONTINUOUS LOCAL ACTIN CO-OCCUPANCY EXCLUSION ON: %.2f nm (noncanonical experimental; gate-only→serial-resolve; global across all bound heads on the same filament) ***%n", beamL, slack, dt, OCC_EXCL_NM);
+        else
+            System.out.printf(Locale.US, "  S2 beam L=%.0f nm | initial slack=%.2f nm | dt=%.3g s | free binding (matBindExplicit each step), NO cull, NO occupancy exclusion (canonical)%n", beamL, slack, dt);
         System.out.printf(Locale.US, "  actin: %d-seg flexible chain (%d mono/seg, contour≈%.3f µm) | actin Brownian ON | motor-body Brownian ON | z-confine %.1f pN/nm coverslip%n",
                 TwoBodyConverterMotor.G4_NSEG_RUN, TwoBodyConverterMotor.G4_MONO, TwoBodyConverterMotor.G4_NSEG_RUN * (TwoBodyConverterMotor.G4_MONO + 1) * Constants.actinMonoRadius, TwoBodyConverterMotor.G4_KZ);
         System.out.printf(Locale.US, "  chemistry: Lymn–Taylor nucleotide cycle ON | canonical half-open segment ownership | bhat=+x, negative vel = pointed-first = productive%n");
@@ -1099,6 +1136,8 @@ public final class ExplicitCompleteMatHarness {
         final int[] prevAdpRup; long adpRuptures;   // DIRECT ADP mechanical rupture count (mode 2)
         int[] rupForceHist = new int[0];
         double meanBoundHeads, continuity;
+        // continuous local actin co-occupancy exclusion telemetry (accumulated per step from ed.occStats when ON)
+        long occGeomCandidates, occRejects, occAccepted, occConflicts;
         // reversal helper (block-averaged displacement, thermal-robust) — mirrors the dimer
         double blockDispAccum; int blockLen, blockSign; final int BLOCK = 100;
         // lifetimes
@@ -1149,6 +1188,8 @@ public final class ExplicitCompleteMatHarness {
                 }
                 if (ADP_RUP_ON) { int ar = mot.adpRuptureStats.get(2 * m); if (ar > prevAdpRup[m]) adpRuptures++; prevAdpRup[m] = ar; }
             }
+            if (occOn()) { occGeomCandidates += ed.occStats.get(0); occRejects += ed.occStats.get(1);
+                occAccepted += ed.occStats.get(2); occConflicts += ed.occStats.get(3); }
             nucInit = true; nucSteps++;
         }
 
@@ -1187,7 +1228,7 @@ public final class ExplicitCompleteMatHarness {
             kv(b, "mat_x_um", TwoBodyConverterMotor.G4_MATX); kv(b, "mat_y_um", TwoBodyConverterMotor.G4_MATY);
             kv(b, "area_um2", TwoBodyConverterMotor.G4_MATX * TwoBodyConverterMotor.G4_MATY);
             kv(b, "fil_contour_um", nSeg * (TwoBodyConverterMotor.G4_MONO + 1) * Constants.actinMonoRadius);
-            kv(b, "cullR_nm", cullR * 1e3); kv(b, "free_binding", true); kv(b, "occupancy_exclusion", false);
+            kv(b, "cullR_nm", cullR * 1e3); kv(b, "free_binding", true); kv(b, "occupancy_exclusion", occOn());
             kv(b, "code_rev", q(rev)); kv(b, "start_ms", startMs); kv(b, "end_ms", endMs); kv(b, "wall_s", wallS);
             kv(b, "warm_compile_ms", warmMs); kv(b, "status", q(status)); kv(b, "error", q(err));
             kv(b, "steps_per_s", status.equals("ok") ? steps / wallS : 0.0);
@@ -1221,6 +1262,17 @@ public final class ExplicitCompleteMatHarness {
             kv(b, "force_at_rupture_sd_pn", rigorRuptures > 1 ? Math.sqrt(Math.max(0, rupForceSq / rigorRuptures - (rupForceSum / rigorRuptures) * (rupForceSum / rigorRuptures))) : 0.0);
             kv(b, "force_at_rupture_min_pn", rigorRuptures > 0 ? rupForceMin : 0.0);
             kv(b, "force_at_rupture_max_pn", rigorRuptures > 0 ? rupForceMax : 0.0);
+            // CONTINUOUS LOCAL ACTIN CO-OCCUPANCY EXCLUSION (noncanonical experimental; default OFF)
+            kv(b, "occupancy_exclusion_on", occOn());
+            kv(b, "occupancy_exclusion_nm", OCC_EXCL_NM);
+            kv(b, "occupancy_exclusion_tol_nm", OCC_TOL_NM);
+            kv(b, "occupancy_geometric_candidates", occGeomCandidates);
+            kv(b, "occupancy_rejects", occRejects);
+            kv(b, "occupancy_accepted", occAccepted);
+            kv(b, "occupancy_same_step_conflicts", occConflicts);
+            kv(b, "occupancy_rejection_fraction", occGeomCandidates > 0 ? (double) occRejects / occGeomCandidates : 0.0);
+            kv(b, "occupancy_mean_local_regions", meanBoundHeads);   // occupied local regions ≈ currently bound heads
+            kv(b, "occupancy_max_local_regions", (long) maxBound);
             // health
             kv(b, "net_force_pn", netForcePn); kv(b, "peak_load_pn", peakLoadPn);
             kv(b, "invalid_states", invalidStates); kv(b, "solver_failures", invalidStates);

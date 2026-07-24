@@ -1,0 +1,64 @@
+{
+  "feature": "continuous-local-actin-co-occupancy-exclusion",
+  "kind": "named noncanonical experimental extension",
+  "default": "OFF",
+  "not": ["discrete-site model", "monomer lattice", "13/6 helical-site model", "azimuthal binding", "off-axis attachment", "twirling"],
+  "description": "Continuous minimum-separation rule |s_candidate - s_bound| < exclusionDistance on the filament-GLOBAL material coordinate, comparing a candidate against every already-bound head on the SAME filament (GLOBAL rule). Ported from the sister-head-only diagnostic veto into the canonical explicit-S2 single-head gliding path (CPU + GPU) and the CPU HMM-dimer path.",
+  "exclusion_distance_nm": 5.4,
+  "exclusion_provenance": "experimental continuous steric-separation rule from the existing diagnostic ExplicitHmmDimer3jsHarness.STANDING_EXCLUSION_NM (~one actin-monomer axial spacing). NOT a claim of biological truth.",
+  "boundary_convention": "reject iff separation < exclusion - tol (tol = 1e-3 nm); exactly 5.4 nm is ALLOWED",
+  "same_step_conflict_rule": "deterministic sequential accept in ascending head-id order; lowest head-id wins; each accepted head becomes occupied for later same-step candidates; no RNG / no lottery",
+  "sister_head_semantics": "INCLUDED in the global rule (a bound sister is just a bound head on the same filament). This DIFFERS from the pre-existing sister-only veto (global superset-of sister); the sister-only veto is preserved unchanged as the named regression path.",
+  "flags": {
+    "single_head": "-occupancy-exclusion-nm <nm>  (0 or omitted = OFF = exact canonical path)",
+    "hmm_dimer_cpu": "-occupancy-global [-occupancy-exclusion-nm <nm>]  (default OFF = sister-only regression path)"
+  },
+  "canonical_invariants_unchanged": {
+    "MotorModel.CANON_VERSION": 2,
+    "canonical_manifest": "unchanged",
+    "canonical_defaults": "unchanged",
+    "chemistry": "unchanged (Lymn-Taylor + rigor mode 1)",
+    "mechanics": "unchanged",
+    "Constants.java": "untouched",
+    "ExplicitHmmDimerGpuParams.java": "untouched",
+    "STANDING_EXCLUSION_NM": "untouched (5.4 nm; the diagnostic sister-only constant reused as the study value)"
+  },
+  "off_path_identity": "byte/event-identical: the OFF single-head production cell PARTCROW is bit-identical to the git-HEAD baseline; the resolve(exclusion=0) pipeline reproduces canonical matBindExplicit binding decisions bit-identically over a 600-step trajectory",
+  "kernels": {
+    "matBindGateOnly": "parallel gate-only twin of matBindExplicit (writes candidate scratch, defers commit)",
+    "matOccupancyResolve": "single-thread serial commit with global exclusion + lowest-id same-step conflict resolution",
+    "computeMaterialMaps": "host precompute of segCumArc (cumulative arc, um) + segFilId (connected-component filament id)"
+  },
+  "cpu_gpu_equivalence": "deterministic resolve kernel bit-identical CPU<->GPU on a constructed fixture (2 rejects incl 1 same-step conflict, 2 accepts; boundSeg + occStats 0 mismatches); real-pipeline binding events bit-identical CPU<->GPU while the microstate is bit-close (occStat divergences 0), then chaotic float32 decorrelation (expected, not tested)",
+  "implementation_order": ["CPU explicit-S2 single-head", "GPU explicit-S2 single-head", "CPU HMM dimer (global)"],
+  "deferred": "dimer GPU kernel (later task, if warranted)",
+  "files_changed": [
+    "softbox/TwoBodyBeamAnalyticGpu.java (matBindGateOnly, matOccupancyResolve, computeMaterialMaps)",
+    "softbox/ExplicitCompleteMatHarness.java (flag -occupancy-exclusion-nm, ExMat scratch/maps/telemetry, gate-only->resolve wiring CPU+GPU, JSON telemetry, OCC_FORCE_ON test hook)",
+    "softbox/ExplicitHmmDimerGlidingHarness.java (-occupancy-global GLOBAL rule; sister-only preserved as regression)",
+    "softbox/ContinuousOccupancyExclusionHarness.java (NEW: 12 deterministic tests + CPU/GPU equivalence)",
+    "scripts/run_occupancy_exclusion.sh (NEW)",
+    "scripts/run_occupancy_density_experiment.sh (NEW)",
+    "scripts/occupancy_exclusion_analysis.py (NEW)"
+  ],
+  "experiment": {
+    "path": "single-head explicit-s2-l40, GPU device-resident, rigor mode 1, dt 2.5e-6, whole-window LS velocity",
+    "densities_um2": [150, 400, 700, 1500, 3000],
+    "seeds": [101, 102, 103, 104],
+    "steps": 40000,
+    "conditions": ["OFF (exclusion 0)", "ON (exclusion 5.4 nm)"],
+    "note": "5-density PAIRED diagnostic, NOT a replacement canonical sweep; any Vmax/rho_half fit is diagnostic-only",
+    "result": {
+      "decision_category": "A",
+      "decision_label": "No measurable effect (numerically active, behaviorally inert)",
+      "occupancy_rejection_fraction_by_density": {"150": 0.011, "400": 0.097, "700": 0.124, "1500": 0.233, "3000": 0.381},
+      "avgBound_off_to_on_by_density": {"150": [1.09, 1.04], "400": [2.85, 2.87], "700": [4.98, 4.93], "1500": [10.44, 10.50], "3000": [20.43, 19.69]},
+      "velProd_off_to_on_by_density": {"150": [1.198, 1.145], "400": [2.493, 2.363], "700": [2.800, 3.038], "1500": [3.601, 3.749], "3000": [4.005, 4.010]},
+      "paired_delta_vel_all_within_1p4_SE": true,
+      "same_step_conflicts_total_across_20_ON_cells": 5,
+      "health": {"invalid_states": 0, "solver_failures": 0, "cells": 40},
+      "interpretation": "Continuous 5.4 nm exclusion fires hard at high density (38% rejection at rho3000) but does not cap recruitment or change velocity/saturation, because the filament is far from 5.4-nm-saturated (~100 nm mean head spacing >> 5.4 nm). Informative null; not tuned away.",
+      "smallest_next_step": "exclusion-DISTANCE sweep {5.4,11,22,36} nm at rho in {1500,3000}; NOT a discrete-site/13-6 lattice"
+    }
+  }
+}

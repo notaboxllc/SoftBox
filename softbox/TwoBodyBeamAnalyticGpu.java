@@ -475,6 +475,161 @@ public final class TwoBodyBeamAnalyticGpu {
         }
     }
 
+    // ============================================================ CONTINUOUS LOCAL ACTIN CO-OCCUPANCY EXCLUSION
+    // Named noncanonical experimental extension (docs/helical_binding/CONTINUOUS_OCCUPANCY_EXCLUSION_FINDINGS.md).
+    // DEFAULT OFF ⇒ the canonical single-head path never invokes these two kernels ⇒ byte-identical. NOT a discrete-
+    // site model, NOT a monomer lattice, NOT a helical-site model: a continuous minimum-separation rule on the
+    // filament-GLOBAL material coordinate. See §3 of the findings for the exact semantics.
+    //
+    // Two-stage split (both runners identical): (1) matBindGateOnly = the EXACT matBindExplicit 8-gate contract,
+    // but DEFERS commit — it writes the geometric candidate to scratch (candInt/candArc) instead of boundSeg; then
+    // (2) matOccupancyResolve = a single-thread SERIAL pass that commits candidates in ascending head-id order,
+    // treating each committed head as occupied for later candidates in the SAME step (the PREFERRED deterministic
+    // sequential rule ⇒ exactly one of two same-region same-step candidates binds; lowest head-id wins).
+
+    /**
+     * GATE-ONLY twin of {@link #matBindExplicit} for the occupancy-exclusion path. IDENTICAL 8-gate arithmetic —
+     * <b>KEEP IN SYNC with {@code matBindExplicit}</b> — but instead of committing {@code boundSeg}/{@code bindArc}
+     * it writes the geometric candidate to scratch: {@code candInt[m]}=candidate segment (−1 if none),
+     * {@code candInt[N+m]}=accept flag (0/1 = passed all 8 gates AND eligible), {@code candArc[m]}=candidate arc
+     * ({@code bindArc}, µm). The subsequent {@link #matOccupancyResolve} decides which candidates actually bind.
+     * Race-free (each motor writes only its own two candInt slots + candArc slot). {@code candInt} is fully
+     * written for every m (no stale carry) so it needs no per-step clear.
+     */
+    public static void matBindGateOnly(IntArray active, IntArray noBind, IntArray boundSeg, IntArray nuc,
+                                       DoubleArray outGeom, DoubleArray q, FloatArray filCoord, FloatArray filUVec,
+                                       FloatArray filSegLength, DoubleArray params, DoubleArray bindP, DoubleArray eupP,
+                                       IntArray candInt, DoubleArray candArc, IntArray counts) {
+        int N = counts.get(0), nSeg = counts.get(3);
+        double dBindNm = bindP.get(0), psiDeg = bindP.get(1), phiDeg = bindP.get(2), thetaDeg = bindP.get(3);
+        double preloadPn = bindP.get(4), energyKt = bindP.get(5), FIL_R = bindP.get(6), PHI_PRE = bindP.get(7);
+        double aSemiZ = bindP.get(8), kT = bindP.get(9), margin = bindP.get(10); int orientOn = (int) bindP.get(11);
+        boolean halfOpen = bindP.get(12) < 0.5; double eps = margin;
+        double eupx = eupP.get(0), eupy = eupP.get(1), eupz = eupP.get(2), DEG = 180.0 / Math.PI;
+        for (@Parallel int m = 0; m < N; m++) {
+            candInt.set(m, -1); candInt.set(N + m, 0);                              // default: no candidate this step
+            if (active.get(m) != 1 || noBind.get(m) == 1 || boundSeg.get(m) != -1 || nuc.get(m) != 2) continue;
+            double xF8x = outGeom.get(6*N+m), xF8y = outGeom.get(7*N+m), xF8z = outGeom.get(8*N+m);
+            double xHx = outGeom.get(3*N+m), xHy = outGeom.get(4*N+m), xHz = outGeom.get(5*N+m);
+            int best = -1; double bd = 1e9;
+            for (int s = 0; s < nSeg; s++) {
+                double half = 0.5 * filSegLength.get(s);
+                double cx = filCoord.get(s), cy = filCoord.get(nSeg+s), cz = filCoord.get(2*nSeg+s);
+                double ux = filUVec.get(s), uy = filUVec.get(nSeg+s), uz = filUVec.get(2*nSeg+s);
+                double dx = xF8x-cx, dy = xF8y-cy, dz = xF8z-cz; double foot = dx*ux+dy*uy+dz*uz;
+                double d2;
+                if (halfOpen) {
+                    double footC = foot < -half ? -half : (foot > half ? half : foot);
+                    double qx = dx-footC*ux, qy = dy-footC*uy, qz = dz-footC*uz; d2 = qx*qx+qy*qy+qz*qz;
+                } else {
+                    if (foot > half+0.02 || foot < -(half+0.02)) continue;
+                    double px = dx-foot*ux, py = dy-foot*uy, pz = dz-foot*uz; d2 = px*px+py*py+pz*pz;
+                }
+                if (d2 < bd) { bd = d2; best = s; }
+            }
+            if (best < 0) continue;
+            int s = best; double half = 0.5 * filSegLength.get(s);
+            double cx = filCoord.get(s), cy = filCoord.get(nSeg+s), cz = filCoord.get(2*nSeg+s);
+            double ux = filUVec.get(s), uy = filUVec.get(nSeg+s), uz = filUVec.get(2*nSeg+s);
+            double e1x = cx-half*ux, e1y = cy-half*uy, e1z = cz-half*uz;
+            double dx = xF8x-cx, dy = xF8y-cy, dz = xF8z-cz; double foot = dx*ux+dy*uy+dz*uz;
+            double footC = halfOpen ? (foot < -half ? -half : (foot > half ? half : foot)) : foot;
+            double axx = cx+footC*ux, axy = cy+footC*uy, axz = cz+footC*uz;
+            double conDist = Math.sqrt((xF8x-axx)*(xF8x-axx)+(xF8y-axy)*(xF8y-axy)+(xF8z-axz)*(xF8z-axz));
+            double bindArcV = halfOpen ? (footC+half) : ((xF8x-e1x)*ux+(xF8y-e1y)*uy+(xF8z-e1z)*uz);
+            double surf = (conDist - FIL_R) * 1e3;
+            double phi = q.get(m), psi = q.get(N+m), thetaS = q.get(2*N+m), psiActin = q.get(3*N+m);
+            double psiErr = Math.abs(psi-psiActin)*DEG, phiErr = Math.abs(phi-PHI_PRE)*DEG, thetaErr = Math.abs((psi-phi)-thetaS)*DEG;
+            double kF8 = params.get(5*N+m), kconv = params.get(6*N+m), kbind = params.get(7*N+m);
+            double preload = kF8 * conDist * 1e12;
+            double dth = (psi-phi)-thetaS, dpa = psi-psiActin;
+            double eKt = (0.5*kconv*dth*dth + 0.5*kbind*dpa*dpa) / kT;
+            double headSide = ((xHx-cx)*eupx+(xHy-cy)*eupy+(xHz-cz)*eupz)*1e3;
+            boolean g0 = surf < dBindNm;
+            boolean g1 = orientOn == 0 || psiErr < psiDeg;
+            boolean g2 = orientOn == 0 || phiErr < phiDeg;
+            boolean g3 = orientOn == 0 || thetaErr < thetaDeg;
+            boolean g4 = preload < preloadPn;
+            boolean g5 = orientOn == 0 || eKt < energyKt;
+            boolean g6 = headSide < aSemiZ * 1e3;
+            boolean g7 = bindArcV > eps && bindArcV < 2*half - eps;
+            if (g0 && g1 && g2 && g3 && g4 && g5 && g6 && g7) { candInt.set(m, s); candInt.set(N + m, 1); candArc.set(m, bindArcV); }
+        }
+    }
+
+    /**
+     * SERIAL (single-thread) resolve pass for the continuous local co-occupancy exclusion. Commits the geometric
+     * candidates from {@link #matBindGateOnly} in ascending head-id order. A candidate at filament-global material
+     * coordinate {@code s_candidate} is REJECTED iff another eligible bound head on the SAME filament occupies
+     * {@code s_bound} with {@code |s_candidate − s_bound| < exclusion − tol} (boundary = exactly exclusion is
+     * ALLOWED). "Bound heads on the same filament" = every head already committed (from prior steps AND from
+     * earlier-id candidates accepted THIS pass) whose segment maps to the same filament id; the candidate excludes
+     * itself. Sister heads of a dimer participate (they are just bound heads on the same filament). Deterministic:
+     * lowest head-id wins a same-step conflict; no RNG, no lottery.
+     *
+     * <p>{@code candInt}: candSeg=[m], candAccept=[N+m] (from gate-only). {@code candArc}: candidate arc (µm).
+     * {@code boundSeg}/{@code bindArc}: the authoritative bond state (READ existing + WRITE new binds).
+     * {@code segCumArc[s]}: filament-global cumulative arc offset at the pointed-end of segment s (µm, static).
+     * {@code segFilId[s]}: connected-component filament id of segment s (static). {@code occP}: [exclNm, tolNm].
+     * {@code occStats} (zeroed at start): [0]=geometric candidates, [1]=occupancy rejects, [2]=accepted,
+     * [3]=same-step conflicts (rejects caused by a lower-id head that bound THIS step). counts=[N,_,_,nSeg].
+     */
+    public static void matOccupancyResolve(IntArray candInt, DoubleArray candArc, IntArray boundSeg, FloatArray bindArc,
+                                           FloatArray segCumArc, IntArray segFilId, DoubleArray occP, IntArray occStats,
+                                           IntArray counts) {
+        int N = counts.get(0);
+        double exclNm = occP.get(0), tolNm = occP.get(1);
+        for (@Parallel int gid = 0; gid < 1; gid++) {
+            int geomCand = 0, occRej = 0, accepted = 0, conflicts = 0;
+            for (int m = 0; m < N; m++) {
+                if (candInt.get(N + m) != 1) continue;                             // not a gate-passing candidate
+                geomCand++;
+                int cs = candInt.get(m);
+                double candMat = segCumArc.get(cs) + candArc.get(m);
+                int candFil = segFilId.get(cs);
+                boolean veto = false, byNewBind = false;
+                for (int j = 0; j < N; j++) {
+                    if (j == m) continue;                                          // never veto self
+                    int bs = boundSeg.get(j);
+                    if (bs < 0) continue;                                          // j not currently bound
+                    if (segFilId.get(bs) != candFil) continue;                     // different physical filament
+                    double jMat = segCumArc.get(bs) + bindArc.get(j);
+                    double dNm = Math.abs(candMat - jMat) * 1e3;
+                    if (dNm < exclNm - tolNm) { veto = true; byNewBind = candInt.get(N + j) == 1; break; }
+                }
+                if (veto) { occRej++; if (byNewBind) conflicts++; }
+                else { boundSeg.set(m, cs); bindArc.set(m, (float) candArc.get(m)); accepted++; }
+            }
+            occStats.set(0, geomCand); occStats.set(1, occRej); occStats.set(2, accepted); occStats.set(3, conflicts);
+        }
+    }
+
+    /**
+     * HOST precompute (once per build; topology + per-segment length are static in the gliding assay) of the two
+     * static maps the occupancy resolve reads: {@code segCumArc[s]} = filament-global cumulative arc offset at the
+     * pointed end of segment s (µm), and {@code segFilId[s]} = connected-component filament id of segment s. The
+     * material coordinate of a bond (s, bindArc) is then {@code segCumArc[s] + bindArc}, continuous across segment
+     * boundaries and IDENTICAL to {@link ExplicitHmmDimer3jsHarness#filMatCoordUm}'s chain-walk convention (walk
+     * from the pointed terminal end1NbrSlot==SENTINEL via end2NbrSlot). Rings/orphans fall back to index order.
+     */
+    static void computeMaterialMaps(FilamentStore f, int nSeg, FloatArray segCumArc, IntArray segFilId) {
+        for (int s = 0; s < nSeg; s++) { segCumArc.set(s, 0f); segFilId.set(s, -1); }
+        int fid = 0;
+        for (int start = 0; start < nSeg; start++) {
+            if (f.end1NbrSlot.get(start) != FilamentStore.SENTINEL_NO_NBR) continue;   // only chain heads (pointed terminals)
+            double cum = 0; int cur = start, guard = 0;
+            while (cur >= 0 && guard++ <= nSeg) {
+                if (segFilId.get(cur) >= 0) break;                                     // already visited (ring guard)
+                segCumArc.set(cur, (float) cum); segFilId.set(cur, fid);
+                cum += f.segLength.get(cur);
+                int nxt = f.end2NbrSlot.get(cur); cur = (nxt == FilamentStore.SENTINEL_NO_NBR) ? -1 : nxt;
+            }
+            fid++;
+        }
+        // fallback for any segment not reached from a pointed terminal (ring/degenerate): its own filament, arc 0.
+        for (int s = 0; s < nSeg; s++) if (segFilId.get(s) < 0) { segFilId.set(s, fid++); segCumArc.set(s, 0f); }
+    }
+
     // ============================================================ MAT gliding Stage-10: matS2SolveStep
     /** brownTorque — EXACT 64-bit long wang-hash copy (TwoBodyConverterMotor.brownTorque L2174; the same one
      *  that already lowers on PTX inside MatStep7). Returns the FDT force sqrt(2 kT γ/dt)·g (N). */

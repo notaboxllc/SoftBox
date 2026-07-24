@@ -71,6 +71,12 @@ public final class ExplicitHmmDimerGlidingHarness {
     static final double TOL_MOVE = 3e-7;
     static final double EXCL = ExplicitHmmDimer3jsHarness.DEFAULT_EXCLUSION_NM;    // 5.4 nm
     static final double EXCL_TOL_NM = 1e-3;
+    // CONTINUOUS LOCAL ACTIN CO-OCCUPANCY EXCLUSION — GLOBAL rule (across ALL bound heads on the same filament),
+    // the dimension-generic HMM-dimer analogue of the single-head kernel. Default OFF ⇒ the pre-existing SISTER-only
+    // veto (dimer partner p=m^1) is unchanged (the named regression path). -occupancy-global enables the global rule.
+    // Both use the same continuous material coordinate (filMatCoordUm) and the same reject-iff-sep<excl−tol convention.
+    static boolean OCC_GLOBAL = false;
+    static double  OCC_GLOBAL_NM = EXCL;
     // fork geometry inherited from the fork-relaxation studies (the reference dimer)
     static final double ALPHA = 10, BREI = 0.25, BREA = 1.0, BRANCHLEN = 10, SPLAY = 16;
     // ---- dimer-only compliance multipliers (this study), RELATIVE to the reference dimer above ----
@@ -101,6 +107,7 @@ public final class ExplicitHmmDimerGlidingHarness {
         int[] pivOf; Cmot[] headOf;                 // per-motor pivot node index + Cmot head
         double[] emg0X;                             // per-dimer emergence x at build (Assay B slider origin)
         double exclusionNm = EXCL;
+        boolean occGlobal = false;                  // continuous local co-occupancy exclusion: GLOBAL rule (all bound heads on the filament)
         boolean rearVeto = false; double rearPenalty = 1.0;
         int assay = 0;                              // 0 = A mobile actin ; 1 = B mobile assembly
         double asmX = 0, asmGamma = 0;              // Assay B: shared axial slider displacement (µm) + total axial drag
@@ -203,6 +210,7 @@ public final class ExplicitHmmDimerGlidingHarness {
         EScene sc = new EScene();
         sc.nDim = nDim; sc.assay = 0; sc.matMode = true; sc.densityUm2 = density; sc.gapNm = gapNm; sc.filBrown = filBrown;
         sc.cullR = cullR;   // head within cullR (perp) of the filament axis ⇒ active (searches + can bind)
+        sc.occGlobal = OCC_GLOBAL; sc.exclusionNm = OCC_GLOBAL ? OCC_GLOBAL_NM : sc.exclusionNm;   // continuous global co-occupancy exclusion (default OFF)
         int nSeg = Math.max(4, (int) Math.round(filLenUm / SEGLEN)); sc.nSeg = nSeg;   // ≈ filLenUm µm filament
         double zTarget = -(FIL_R + gapNm * 1e-3);
 
@@ -347,9 +355,22 @@ public final class ExplicitHmmDimerGlidingHarness {
             boolean g0 = gm[0] < sc.tol.dBindNm, g1 = gm[2] < sc.tol.psiDeg, g2 = gm[3] < sc.tol.phiDeg, g3 = gm[4] < sc.tol.thetaDeg,
                     g4 = gm[5] < sc.tol.preloadPn, g5 = gm[6] < sc.tol.energyKt, g6 = gm[7] < TwoBodyConverterMotor.A_SEMI[2] * 1e3, g7 = gm[1] > margin && gm[1] < 2 * half - margin;
             if (!(g0 && g1 && g2 && g3 && g4 && g5 && g6 && g7)) continue;
-            int p = m ^ 1;                                   // dimer-partner head
-            boolean partnerBound = mot.boundSeg.get(p) >= 0;
             double candMat = ExplicitHmmDimer3jsHarness.filMatCoordUm(f, G.nSeg, s, gm[1]);
+            // --- GLOBAL continuous local actin co-occupancy exclusion (experimental; default OFF) ---
+            // Reject iff ANY currently-bound head (including the dimer sister; sequential m-order commits ⇒ lowest-id
+            // wins a same-step conflict) on the SAME filament is within exclusion. Single filament ⇒ scan all bound.
+            if (sc.occGlobal) {
+                boolean gveto = false;
+                for (int j = 0; j < N; j++) {
+                    if (j == m) continue; int bs = mot.boundSeg.get(j); if (bs < 0) continue;
+                    double jMat = ExplicitHmmDimer3jsHarness.filMatCoordUm(f, G.nSeg, bs, mot.bindArc.get(j));
+                    if (Math.abs(candMat - jMat) * 1e3 < sc.exclusionNm - EXCL_TOL_NM) { gveto = true; break; }
+                }
+                if (gveto) { o.occupancyRejects++; continue; }
+                mot.boundSeg.set(m, s); mot.bindArc.set(m, (float) gm[1]); if (bindStep[m] < 0) bindStep[m] = t; continue;
+            }
+            int p = m ^ 1;                                   // dimer-partner head (SISTER-only regression path below)
+            boolean partnerBound = mot.boundSeg.get(p) >= 0;
             if (partnerBound) {
                 double partnerMat = ExplicitHmmDimer3jsHarness.filMatCoordUm(f, G.nSeg, mot.boundSeg.get(p), mot.bindArc.get(p));
                 double signedNm = (candMat - partnerMat) * 1e3 * sc.bhatX;   // + toward barbed
@@ -653,6 +674,9 @@ public final class ExplicitHmmDimerGlidingHarness {
         // Pass `-branchEA 1.0` for the raw reference-stiffness diagnostic; the GPU standing-config check still enforces 0.03.
         CFG_EA = argD(args, "-branchEA", ExplicitHmmDimerGpuParams.STANDING_BRANCH_EA); CFG_EI = argD(args, "-branchEI", 1.0); CFG_FORK = argD(args, "-forkK", 1.0);
         DT = argD(args, "-dt", 2.5e-6);   // timestep override (mat sensitivity study); default byte-identical
+        // CONTINUOUS LOCAL ACTIN CO-OCCUPANCY EXCLUSION — GLOBAL rule (noncanonical experimental; default OFF).
+        OCC_GLOBAL = has(args, "-occupancy-global"); OCC_GLOBAL_NM = argD(args, "-occupancy-exclusion-nm", EXCL);
+        if (OCC_GLOBAL) System.out.printf(Locale.US, "  [continuous local actin co-occupancy exclusion: GLOBAL rule ON, %.2f nm (all bound heads on the filament)]%n", OCC_GLOBAL_NM);
         // ---- RIGOR MECHANICAL RUPTURE (chemistry pathway; DISTINCT from the -ruptureMode HMM-dimer strain failsafe) ----
         // RUPTURE_MODE: 0 off / 1 rigor-only / 2 all-strong-bound. CANONICAL DEFAULT = 1 (rigor-only rupture ON,
         // promoted 2026-07-22, canon v2). -no-rupture / -legacy-disable ⇒ mode 0 (the pre-v2 legacy default);
