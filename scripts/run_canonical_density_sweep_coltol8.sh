@@ -13,7 +13,7 @@
 # M=60000 (0.6 s @ dt=1e-5). coltol=8 is a TIGHTER capture radius than the coltol=10 curve ⇒
 # a NEW curve (lower engagement), not an extension. Cheapest (sparsest) density first.
 #
-# CPU basin arbiter: 1 seed at d4000 (a HIGH-density point — the standing GPU-number trust rule,
+# CPU spot check: 1 seed at d4000 (a HIGH-density point — docs/CPU_GPU_VALIDATION_POLICY.md §3/§5,
 # doubly important in the dense collective-load regime). Runs LAST.
 cd /home/jba/Code/SoftBox
 LOG=RUN_LOGS/2026-07-09_canonical_density_sweep_coltol8.txt
@@ -33,9 +33,9 @@ for D in 100 250 500 1000 2000 4000 6000 8000; do
   done
 done
 
-# CPU basin arbiter: 1 seed at d4000 (the standing GPU-number trust rule, dense regime).
+# CPU spot check: 1 seed at d4000 (docs/CPU_GPU_VALIDATION_POLICY.md §3/§5, dense chaotic-ensemble regime).
 echo "[$(date +%H:%M:%S)] SWEEP8 CPU-arbiter d4000 seed0" >> .last_run_status
-echo "== [$(date +%H:%M:%S)] CPU (basin arbiter) d=4000 seed=0 coltol=${COLTOL} steps=${STEPS} ==" >> "$LOG"
+echo "== [$(date +%H:%M:%S)] CPU spot check (policy §3/§5) d=4000 seed=0 coltol=${COLTOL} steps=${STEPS} ==" >> "$LOG"
 scripts/run_gliding.sh -full -grid -coltol $COLTOL -density 4000 -seed 0 $STEPS 2>&1 \
   | grep -E "GRID_ROW|STATS_STEADY_ROW|COV_ROW|NaN|nan|Exception|blow|Infinity" >> "$LOG"
 

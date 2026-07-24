@@ -1,5 +1,8 @@
 #!/bin/bash
-# COLTOL_REGIME_SWEEP CPU basin-arbiter at the EXTREME coltol (decisive point: smallest capture radius, occupancy>1).
+# COLTOL_REGIME_SWEEP CPU cross-check at the EXTREME coltol (smallest capture radius, occupancy>1).
+# POLICY (docs/CPU_GPU_VALIDATION_POLICY.md §3): coltol is a DATA-ONLY scalar (kinParams[7]) — all arms share
+# identical hot-kernel structure, so this is NOT a mandated confirmation. It is retained as an OPT-IN
+# outlier check (§3(7)) justified only by the extreme geometric operating point, not by the sweep itself.
 # 30k to MATCH the GPU sweep window exactly (STATS_STEADY warmup = 0.20s = 20000 steps ⇒ a 20k run has no steady
 # window; velFitX 2nd-half also needs the same M for apples-to-apples). coltol is a scalar (kinParams[7]) ⇒ all
 # sweep arms share identical hot-kernel structure (springs default, no task/transcendental toggle) so the basin-flip

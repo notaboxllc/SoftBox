@@ -239,7 +239,13 @@ The ongoing sweep should provide the direct answer.
 
 ### Runner caveat
 
-The project has documented CPU/GPU basin sensitivity in some gliding configurations. Reported GPU curves require CPU-arbiter spot checks, particularly when code paths differ or high-density trajectories become unstable. Do not mix CPU and GPU values silently in one fitted curve.
+Governed by `docs/CPU_GPU_VALIDATION_POLICY.md` (2026-07-22). Device-path results are **primary** once
+their assay class has passed a CPU/GPU equivalence benchmark at the current revision; deterministic and
+stochastic single-motor assays are bit-/event-identical CPU↔GPU. **Chaotic many-body gliding retains
+targeted CPU spot checks** — documented basin sensitivity is real in that class: required when arms differ
+in hot-kernel structure, for outlier/instability questions, and as one periodic mid-range check per campaign
+reporting an absolute number. A CPU check is **not** required per sweep, per parameter point, or for
+data-only flags. Always report the runner, and **do not mix CPU and GPU values silently in one fitted curve.**
 
 ---
 
@@ -439,7 +445,7 @@ The working skeletal gliding target is around 4 µm/s under a specific low-ionic
 ## 8. Recommended order of work
 
 1. **Finish the ongoing fine-dt free-gliding density sweep.**
-2. **Analyze direct timestep shifts, plateau identifiability, and CPU-arbiter points.**
+2. **Analyze direct timestep shifts, plateau identifiability, and the retained CPU spot-check points** (per `docs/CPU_GPU_VALIDATION_POLICY.md` §3/§5 — chaotic-ensemble outliers and structural A/Bs only).
 3. **Perform the CPU-only binding-gate curve-collapse analysis using existing logs.**
 4. **Perform the xCatch primary-source and reaction-coordinate audit.**
 5. Decide whether either intervention is still motivated after the direct fine-dt gliding result.

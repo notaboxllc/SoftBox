@@ -86,7 +86,9 @@ case "$mode" in
     echo "SPOT4000_DONE" | tee -a "$MAIN/RUN_LOGS/finedt_progress.txt"
     ;;
   arbiter)
-    # CPU basin arbiter (GPU-number trust rule). CPU is ~11x slower than GPU at d2000, so a full CPU
+    # CPU cross-check. RETAINED and JUSTIFIED under docs/CPU_GPU_VALIDATION_POLICY.md §5: this is the arbiter
+    # set that REFUTED a GPU result (d8000 dt=1e-5: CPU 9.93 vs GPU 13.84), changing the conclusion.
+    # CPU is ~11x slower than GPU at d2000, so a full CPU
     # matrix is impossible. LEAN set that resolves the basin at both dt and in the dense regime:
     #   d2000 dt=1e-5 seeds 0,1   (production basin, 2 seeds, full 0.6 s)  ~84 min each
     #   d2000 dt=5e-6 seed 0      (fine-dt basin, full 0.6 s)              ~168 min

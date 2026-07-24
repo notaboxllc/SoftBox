@@ -4,7 +4,8 @@
 #   canonical + -azimbind -azfalloff <n>  (implies the roll spring; density+coltol explicit)
 # A. density-response at STEEP n (16,32) across d1000..d8000 — does avgB flatten (cap) or scale (~baseline×const)?
 # B. n-response at d4000 — the throttle curve vs steepness.
-# C. GPU-vs-CPU cross-check at d4000 n=16 (bind-path change on the bistability-sensitive path).
+# C. GPU-vs-CPU cross-check at d4000 n=16 — REQUIRED by docs/CPU_GPU_VALIDATION_POLICY.md §3(9):
+#    a bind-path change alters hot-kernel structure on a chaotic-ensemble path.
 # Single-seed, 30k (avgB equilibrates in the 2nd-half window; velFitX noisier but the TREND is the question).
 cd /home/jba/Code/SoftBox
 LOG=RUN_LOGS/2026-07-09_azimuthal_falloff_sweep.txt
@@ -31,7 +32,7 @@ for N in 0 1 2 4 8 64; do
     | grep -E "GRID_ROW|STATS_STEADY_ROW" >> "$LOG"
 done
 
-echo "== C. GPU-vs-CPU cross-check at d4000 n=16 (CPU basin arbiter) ==" >> "$LOG"
+echo "== C. GPU-vs-CPU cross-check at d4000 n=16 (policy §3(9): structural bind-path A/B) ==" >> "$LOG"
 echo "[$(date +%H:%M:%S)] FALLOFF CPU-arbiter d4000 n16" >> .last_run_status
 echo "-- [$(date +%H:%M:%S)] CPU n=16 d=4000 seed=0 --" >> "$LOG"
 scripts/run_gliding.sh -azfalloff 16 -full -grid -coltol $COLTOL -density 4000 -seed 0 $STEPS 2>&1 \

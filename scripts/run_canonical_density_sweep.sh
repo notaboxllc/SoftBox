@@ -28,9 +28,11 @@ for D in 100 250 500 1000 2000; do
   done
 done
 
-# CPU basin arbiter: 1 seed at d1000 (the standing GPU-number trust rule).
+# CPU spot check: 1 seed at d1000. RETAINED under docs/CPU_GPU_VALIDATION_POLICY.md §3/§5 as the
+# one periodic mid-range check for a chaotic-ensemble campaign reporting an absolute number.
+# (1 of 15 GPU cells — a spot check, not a duplicate sweep.)
 echo "[$(date +%H:%M:%S)] DENSITY_SWEEP CPU-arbiter d1000 seed0" >> .last_run_status
-echo "== CPU (basin arbiter) d=1000 seed=0 coltol=${COLTOL} steps=${STEPS} ==" >> "$LOG"
+echo "== CPU spot check (policy §3/§5) d=1000 seed=0 coltol=${COLTOL} steps=${STEPS} ==" >> "$LOG"
 scripts/run_gliding.sh -full -grid -coltol $COLTOL -density 1000 -seed 0 $STEPS 2>&1 \
   | grep -E "GRID_ROW|STATS_STEADY_ROW|NaN|nan|Exception|blow|Infinity" >> "$LOG"
 
