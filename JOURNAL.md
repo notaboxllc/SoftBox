@@ -1,5 +1,35 @@
 # Soft Box Project Journal
 
+### 2026-07-24 — REDUCED TWIRLING-MECHANISM ATLAS — the inverse question: smallest chiral coupling that yields nonzero cycle-integrated angular impulse
+
+A parallel, **isolated**, CPU-only atlas over a reduced 3-DOF local-frame motor `q=[x,y,ω]` (overdamped Langevin,
+per-state quadratic energy `½(q−q_s)ᵀK_s(q−q_s)`, full U→P→S→U mechanochemical cycle). New files only
+(`TwirlReducedMotorSystem/Atlas/Harness`, `run_twirl_mechanism_atlas.sh`, `RUN_LOGS/twirl_mechanism_atlas/`); **no**
+dependence on `TwoBodyBeamAnalyticGpu`/`TwoBodyConverterMotor`/explicit-S2/`bindAzim`; no canonical anything touched;
+`BoA-v1ref` byte-clean. Report: `docs/TWIRLING_MECHANISM_ATLAS_FINDINGS.md`. Runner: plain JVM (CPU-first; GPU deferred).
+- **The master accounting identity (verified ≤1e-11):** `J_θ = −R·γ_y·Δy_bound − γ_ω·Δω_bound`. The cycle impulse is
+  set ENTIRELY by the NET chiral-coordinate displacement accrued **while bound**; rectification needs it driven
+  net-nonzero while bound and reset while unbound. Energy closes (cycle returns q→start to machine ε).
+- **R4 winners (resolved + mirror-flips, N=8000):** A1 direct tangential stroke (−10.5σ), A2 oblique stroke
+  (odd-in-ε exact, −4.3σ), A3 finite-rest **binding** registry (−10.6σ), A4 state-dependent **preferred azimuth**
+  (−15.9σ, and the ONLY one surviving R_actin→0 ⇒ a direct couple), A11 handed compliance **+ kinetic truncation**
+  (+12.6σ; deterministically transient, rectified by the duty cycle — needs NO dedicated circumferential stroke),
+  A12 multi-state loop (−18.1σ). A9 torque-dependent detachment = **R4 motor-borne** (−7.0σ; flips under α_τ→−α_τ
+  but NOT under actin mirror — chirality from the rate, not the lattice).
+- **FAILURES:** A5/A6 (off-diagonal compliance alone) = **R1** — large peak τ (1.3–5.7e-20 N·m) but cycle impulse
+  15 orders smaller (≈0). A7/A8 = R0. A10 (strain-gated **achiral** stroke) = R2 null.
+- **This is the askew-attachment failure, generalized + explained.** The zero-rest point-spring askew mechanism is
+  A5/A6 (compliance+offset → transient torque, zero cycle impulse); the atlas reproduces the ~19σ dynamic null and
+  the frozen-vs-cycle discrepancy exactly. Fixes = A1/A4 (drive the coordinate with the nucleotide rest switch) or
+  A3 (bind off-rest) or A11 (keep compliance, exploit the duty cycle).
+- **Minimal gliding assay (Stage 5):** all mechanisms glide identically (~9.7 µm/s); only chiral ones twirl — A0
+  roll consistent with thermal zero (0.17σ), A1 −0.79 rad/µm, A4 −5.9 rad/µm (biological ~1 turn/µm). A4's twirl
+  survives filament Brownian (7σ). Moving-site passage (Stage 3) preserves sign/magnitude for all winners.
+- **Next full-motor test (recommendation):** grade by ⟨J_θ⟩=−Rγ_y⟨Δy_bound⟩, never frozen torque. Priority
+  A1/A2 done as a **driven** stroke (drag the bound F8 anchor tangentially, not re-tether a zero-rest spring) →
+  A4 (but the registry couple must gain an axial-u projection; §7 radial-axis suppression) → A11 (cheapest: a
+  signed `K_xy` in the bound compliance + existing detachment).
+
 ### 2026-07-24 — SINGLE-SEGMENT, FILAMENT-BROWNIAN-OFF dynamic twirling assay — **T5: the askew torque does NOT survive dynamically**
 
 Executes the previous entry's §17.4 ("power the dynamic endpoint, do not add mechanism") with the two confounds
