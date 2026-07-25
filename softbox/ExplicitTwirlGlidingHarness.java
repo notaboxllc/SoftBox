@@ -429,7 +429,7 @@ public final class ExplicitTwirlGlidingHarness {
     static boolean seedBoundState(Glide2D G, ExplicitCompleteMatHarness.ExMat e) {
         for (int t = 0; t < 150; t++) ExplicitCompleteMatHarness.stepGlidingCPU(e, t, 101);
         int nb = 0; for (int m = 0; m < G.N; m++) if (G.mot.boundSeg.get(m) >= 0) { e.prevBound.set(m, -1); e.justBound.set(m, 0); nb++; }
-        TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom);   // refresh xF8
+        TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);   // refresh xF8
         return nb > 0;
     }
     static Throwable root(Throwable t) { while (t.getCause() != null && t.getCause() != t) t = t.getCause(); return t; }

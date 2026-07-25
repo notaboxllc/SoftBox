@@ -370,6 +370,138 @@ public final class ChiralSiteSystem {
     }
 
     // ===================================================================================================
+    // TRUE LOCAL-FRAME ROTATION OF THE CONVERTER POWER STROKE
+    // ===================================================================================================
+    /**
+     * Build the per-motor CONVERTER FRAME: the base triad {@code (bhat, econv, eup)} rotated by the signed
+     * skew {@code epsConv} in the LOCAL actin-site frame of the bound site, plus the gauge offset that puts
+     * the rotation centre at the binding interface.
+     *
+     * <h3>What this is, and what it is NOT</h3>
+     * {@code epsBind} / {@code epsStroke} (§7/§8) are ACTIN-SIDE offsets: they move the attachment azimuth,
+     * i.e. WHICH material point the zero-rest cross-bridge is tethered to. They do not rotate anything on the
+     * motor. THIS kernel changes the motor's own converter kinematics: the plane in which the
+     * nucleotide-driven converter swing happens is rotated, so the stroke DISPLACEMENT ITSELF acquires a
+     * circumferential component. The actin site is untouched — {@code bindArc} and {@code bindAzim} are not
+     * read for anything but the site's radial DIRECTION, and are never written here.
+     *
+     * <h3>The construction</h3>
+     * The whole explicit-S2 converter block is generated from the orthonormal base triad:
+     * <pre>
+     *   uB   = eup*cos(phi) + bhat*sin(phi)          C   = P + lb*uB
+     *   xF8  = C + R_econv(psi) d0                   xH  = C − R_econv(psi) rc
+     *   d0   = bhat*(rF8x−rCx) + eup*(rF8y−rCy)      rc  = bhat*rCx + eup*rCy
+     * </pre>
+     * so the stroke plane is span{bhat, eup} with normal econv, and the arm {@code x̃(phi,psi) = xF8 − P} is an
+     * EQUIVARIANT function of the triad: rotating the triad by R rotates the arm, {@code x̃(phi,psi; R·F) =
+     * R·x̃(phi,psi; F)}. Hence with the triad rotated the stroke displacement is exactly
+     * {@code Δr(eps) = R·Δr(0)} — a pure rotation of the converter-driven motion, not an added force.
+     *
+     * <p>The rotation is by {@code epsConv} about {@code k = −mirrorSign · nSite}, chosen so that
+     * {@code R·uSite = cos(eps)·uSite + sin(eps)·tSite} with {@code tSite = mirrorSign·(uSite × nSite)} — the
+     * task's required stroke direction. {@code R(0) = I} exactly, so {@code eps = 0} recovers the canonical
+     * motor and the feature is never wired at all when the angle is zero.
+     *
+     * <h3>Gauge (the rotation CENTRE)</h3>
+     * A bare basis rotation pivots the converter about the S2 pivot P, which displaces the F8 anchor by
+     * {@code |x̃|·eps} at the instant a head binds — a large STATIC attachment strain that would be
+     * indistinguishable from the old actin-side offsets. The default gauge removes it: the offset
+     * {@code Δ = x̃_ref − R·x̃_ref}, with {@code x̃_ref} the arm at the model's own REFERENCE BINDING POSE
+     * ({@code phi = PHI_PRE}, {@code psi = psiActin} — the pose the 8-gate bind certifies), makes the geometry
+     * {@code xF8 = P + x̃_ref + R(x̃ − x̃_ref)}, i.e. the converter plane rotates ABOUT THE BINDING INTERFACE.
+     * The physical statement: the head is docked on actin, so the docked interface — not the distant S2
+     * pivot — is what the converter swings about. Δ is a rest-GEOMETRY offset, not a force, and it cancels
+     * identically out of the stroke increment either way ({@code Δr(eps) = R·Δr(0)} for both gauges).
+     * {@code -converter-skew-gauge off} restores the bare pivot rotation as a control.
+     *
+     * <h3>Frames, covariance, and what is NOT rotated</h3>
+     * Every direction here is a simulated material direction (the filament's own {@code uVec}/{@code yVec} and
+     * the motor's own base triad); no laboratory axis enters, and the frame is rebuilt from the CURRENT
+     * material frame every step, so it rolls, bends and translates with the bound filament (no latched lab
+     * anchor). The S2 anchor geometry is NOT rotated: the beam nodes, the clamped base tangent {@code g4Tan},
+     * the anchored base point {@code g4E} and the coverslip floor normal all stay in {@code frame} and are
+     * read unrotated by the solver. An UNBOUND motor gets flag 0 ⇒ the canonical branch ⇒ it is exactly the
+     * canonical motor.
+     *
+     * <p><b>Ordering.</b> This task runs FIRST in the step, before {@code matBeamGeom}, so geometry, head
+     * placement, the bond, the gates and the solve all see ONE converter frame within a step. It therefore
+     * reads the binding state as of the start of the step: a head that binds during step t gets its converter
+     * frame at step t+1 (a one-step establishment lag, identical on both runners).
+     *
+     * <p>{@code convF} (stride 13, planar c·N+m): [0..2] b*, [3..5] econv*, [6..8] eup*, [9..11] gauge offset
+     * (µm), [12] flag (0 ⇒ the canonical branch). chiP[16]=epsConv (rad), [17]=gauge on, [18]=phiRef.
+     */
+    public static void convFrameStep(IntArray boundSeg, FloatArray filUVec, FloatArray filYVec, FloatArray bindAzim,
+            DoubleArray frame, DoubleArray params, DoubleArray q, DoubleArray convF,
+            DoubleArray chiP, IntArray counts) {
+        int N = counts.get(0), nSeg = counts.get(3);
+        int mode = (int) chiP.get(0);
+        double eps = chiP.get(16), gauge = chiP.get(17), phiRef = chiP.get(18), mirror = chiP.get(13);
+        for (@Parallel int m = 0; m < N; m++) {
+            int s = boundSeg.get(m);
+            if (mode == 0 || eps == 0.0 || s < 0) { convF.set(12 * N + m, 0.0); continue; }
+            double bx = frame.get(m),         by = frame.get(N + m),      bz = frame.get(2 * N + m);
+            double ex = frame.get(3 * N + m), ey = frame.get(4 * N + m),  ez = frame.get(5 * N + m);   // econv
+            double ux = frame.get(6 * N + m), uy = frame.get(7 * N + m),  uz = frame.get(8 * N + m);   // eup
+            // ---- local site frame at the ATTACHMENT azimuth (the bond's own moment-arm direction) ----------
+            double sux = filUVec.get(s), suy = filUVec.get(nSeg + s), suz = filUVec.get(2 * nSeg + s);
+            double yx = filYVec.get(s), yy = filYVec.get(nSeg + s), yz = filYVec.get(2 * nSeg + s);
+            double zx = suy * yz - suz * yy, zy = suz * yx - sux * yz, zz = sux * yy - suy * yx;
+            double zl = zx * zx + zy * zy + zz * zz;
+            if (zl > 1e-30) { double iz = 1.0 / Math.sqrt(zl); zx *= iz; zy *= iz; zz *= iz; }
+            double ph = bindAzim.get(m);
+            double cph = Math.cos(ph), sph = Math.sin(ph);
+            double nx = cph * yx + sph * zx, ny = cph * yy + sph * zy, nz = cph * yz + sph * zz;   // outward radial
+            // rotation axis: R_k(eps)·uSite = cos(eps)·uSite + sin(eps)·tSite  with  tSite = mirror·(uSite×nSite)
+            double kx = -mirror * nx, ky = -mirror * ny, kz = -mirror * nz;
+            double kl = Math.sqrt(kx * kx + ky * ky + kz * kz);
+            if (!(kl > 1e-12)) { convF.set(12 * N + m, 0.0); continue; }
+            double ik = 1.0 / kl; kx *= ik; ky *= ik; kz *= ik;
+            double c = Math.cos(eps), sn = Math.sin(eps), omc = 1.0 - c;
+            // ---- Rodrigues of the three base vectors (inlined; no device-side helper allocation) -----------
+            double dB = kx * bx + ky * by + kz * bz;
+            double rbx = bx * c + (ky * bz - kz * by) * sn + kx * dB * omc;
+            double rby = by * c + (kz * bx - kx * bz) * sn + ky * dB * omc;
+            double rbz = bz * c + (kx * by - ky * bx) * sn + kz * dB * omc;
+            double dE = kx * ex + ky * ey + kz * ez;
+            double rex = ex * c + (ky * ez - kz * ey) * sn + kx * dE * omc;
+            double rey = ey * c + (kz * ex - kx * ez) * sn + ky * dE * omc;
+            double rez = ez * c + (kx * ey - ky * ex) * sn + kz * dE * omc;
+            double dU = kx * ux + ky * uy + kz * uz;
+            double rux = ux * c + (ky * uz - kz * uy) * sn + kx * dU * omc;
+            double ruy = uy * c + (kz * ux - kx * uz) * sn + ky * dU * omc;
+            double ruz = uz * c + (kx * uy - ky * ux) * sn + kz * dU * omc;
+            convF.set(m, rbx);           convF.set(N + m, rby);           convF.set(2 * N + m, rbz);
+            convF.set(3 * N + m, rex);   convF.set(4 * N + m, rey);       convF.set(5 * N + m, rez);
+            convF.set(6 * N + m, rux);   convF.set(7 * N + m, ruy);       convF.set(8 * N + m, ruz);
+            // ---- gauge offset: put the rotation centre at the REFERENCE binding interface -------------------
+            double ofx = 0.0, ofy = 0.0, ofz = 0.0;
+            if (gauge != 0.0) {
+                double lb = params.get(m), rF8x = params.get(N + m), rF8y = params.get(2 * N + m);
+                double rCx = params.get(3 * N + m), rCy = params.get(4 * N + m);
+                double psiRef = q.get(3 * N + m);                              // psiActin (per motor)
+                double cpr = Math.cos(phiRef), spr = Math.sin(phiRef);
+                double uBx = ux * cpr + bx * spr, uBy = uy * cpr + by * spr, uBz = uz * cpr + bz * spr;
+                double d0x = bx * (rF8x - rCx) + ux * (rF8y - rCy);
+                double d0y = by * (rF8x - rCx) + uy * (rF8y - rCy);
+                double d0z = bz * (rF8x - rCx) + uz * (rF8y - rCy);
+                double cps = Math.cos(psiRef), sps = Math.sin(psiRef);
+                double axx = d0x * cps + (ey * d0z - ez * d0y) * sps;          // rotConv(d0, psiRef, econv)
+                double ayy = d0y * cps + (ez * d0x - ex * d0z) * sps;
+                double azz = d0z * cps + (ex * d0y - ey * d0x) * sps;
+                double xrx = lb * uBx + axx, xry = lb * uBy + ayy, xrz = lb * uBz + azz;   // arm at the ref pose
+                double dR = kx * xrx + ky * xry + kz * xrz;
+                double Rx = xrx * c + (ky * xrz - kz * xry) * sn + kx * dR * omc;
+                double Ry = xry * c + (kz * xrx - kx * xrz) * sn + ky * dR * omc;
+                double Rz = xrz * c + (kx * xry - ky * xrx) * sn + kz * dR * omc;
+                ofx = xrx - Rx; ofy = xry - Ry; ofz = xrz - Rz;
+            }
+            convF.set(9 * N + m, ofx); convF.set(10 * N + m, ofy); convF.set(11 * N + m, ofz);
+            convF.set(12 * N + m, 1.0);
+        }
+    }
+
+    // ===================================================================================================
     // HOST-SIDE ANALYSIS HELPERS (not device kernels)
     // ===================================================================================================
     /** Axial (roll-driving) component of the bond's segment-side torque for motor m: TS·uSeg (N·m). */

@@ -366,7 +366,7 @@ public final class ExplicitBindDiagHarness {
         Glide2D G = e.G; FilamentStore f = G.fil; MotorStore mot = G.mot; RigidRodBody b = mot.body; int N = e.N, nSeg = e.nSeg;
         e.matc.set(0, t); e.matc.set(1, seed); mot.setCounts(t, seed, e.nSeg); f.counts.set(1, t); f.counts.set(2, seed);
         for (int m = 0; m < N; m++) e.active.set(m, 1);
-        TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom);
+        TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
         // -------- DIAGNOSTIC HOOK: pre-bind geometry (exactly what matBindExplicit sees) --------
         if (acc != null) diag(e, acc, prev, f, mot);
         // -------- the UNMODIFIED binding decision + rest of the step --------
@@ -391,7 +391,7 @@ public final class ExplicitBindDiagHarness {
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
-        TwoBodyBeamAnalyticGpu.matS2SolveStep(e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts);
+        TwoBodyBeamAnalyticGpu.matS2SolveStep(e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts, e.convF);
         MatSoaSlice.matReduceBlocks(mot.boundSeg, e.active, mot.forceDotFil, e.redP, e.exCounts, e.redBlk);
         MatSoaSlice.matReduceFinal(e.redBlk, f.coord, e.redP, e.exCounts, e.redOut);
         if (acc != null) { acc.boundSum += e.redOut.get(0); acc.boundSteps++; }
@@ -591,7 +591,7 @@ public final class ExplicitBindDiagHarness {
             e.matc.set(0, t); e.matc.set(1, seed); mot.setCounts(t, seed, e.nSeg); f.counts.set(1, t); f.counts.set(2, seed);
             for (int m = 0; m < N; m++) e.active.set(m, 1);
             for (int s = 0; s < nSeg; s++) segCxPre[s] = f.coord.get(s);   // for first-step fil displacement
-            TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom);
+            TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
             int[] preBound = new int[N]; for (int m = 0; m < N; m++) preBound[m] = mot.boundSeg.get(m);
             GEval[] pre = new GEval[N];
             for (int m = 0; m < N; m++) {
@@ -655,7 +655,7 @@ public final class ExplicitBindDiagHarness {
             RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
             DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
             DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
-            TwoBodyBeamAnalyticGpu.matS2SolveStep(e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts);
+            TwoBodyBeamAnalyticGpu.matS2SolveStep(e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts, e.convF);
             MatSoaSlice.matReduceBlocks(mot.boundSeg, e.active, mot.forceDotFil, e.redP, e.exCounts, e.redBlk);
             MatSoaSlice.matReduceFinal(e.redBlk, f.coord, e.redP, e.exCounts, e.redOut);
             // first-step filament displacement for motors that bound this step (bound-seg centroid move, nm)
@@ -800,7 +800,7 @@ public final class ExplicitBindDiagHarness {
         Glide2D G = e.G; FilamentStore f = G.fil; MotorStore mot = G.mot; RigidRodBody b = mot.body; int N = e.N;
         e.matc.set(0, t); e.matc.set(1, seed); mot.setCounts(t, seed, e.nSeg); f.counts.set(1, t); f.counts.set(2, seed);
         for (int m = 0; m < N; m++) e.active.set(m, 1);
-        TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom);
+        TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
         TwoBodyBeamAnalyticGpu.matBindExplicit(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
         NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
         MatSoaSlice.matCock(mot.nucleotideState, e.q, e.cockP, e.exCounts);
@@ -819,7 +819,7 @@ public final class ExplicitBindDiagHarness {
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
         DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
-        TwoBodyBeamAnalyticGpu.matS2SolveStep(e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts);
+        TwoBodyBeamAnalyticGpu.matS2SolveStep(e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts, e.convF);
         MatSoaSlice.matReduceBlocks(mot.boundSeg, e.active, mot.forceDotFil, e.redP, e.exCounts, e.redBlk);
         MatSoaSlice.matReduceFinal(e.redBlk, f.coord, e.redP, e.exCounts, e.redOut);
     }

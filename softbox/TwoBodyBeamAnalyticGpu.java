@@ -342,12 +342,21 @@ public final class TwoBodyBeamAnalyticGpu {
         }
     }
 
+    /**
+     * A zeroed per-motor converter-frame buffer (stride 13): flag {@code [12] = 0} for every motor, so
+     * {@link #matBeamGeom} and {@link #matS2SolveStep} take the VERBATIM canonical branch over the base
+     * {@code frame}. This is what every caller that does not use the noncanonical converter-stroke-plane
+     * rotation passes, and it is why adding the parameter is byte-preserving.
+     */
+    public static DoubleArray identityConvFrame(int nM) {
+        DoubleArray a = new DoubleArray(13 * Math.max(1, nM)); a.init(0.0); return a; }
+
     // =============================================== beam geom (pre-solve) + explicit head placement (mat)
     /** Compute the beam-derived head geometry (C, xH, xF8) from the CURRENT beam state — the device analog of
      *  {@code geom2D} (pre-solve). Writes outGeom [0..2]=C, [3..5]=xH, [6..8]=xF8 (planar c·nM+m). Same
      *  closed form as matS2SolveStep's final block (validated). Lets placeHead + bondForces run BEFORE the solve. */
     public static void matBeamGeom(DoubleArray nodes, DoubleArray frame, DoubleArray params, DoubleArray q,
-                                   IntArray counts, DoubleArray outGeom) {
+                                   IntArray counts, DoubleArray outGeom, DoubleArray convF) {
         int nM = counts.get(0), M = counts.get(2);
         for (@Parallel int m = 0; m < nM; m++) {
             double bx=frame.get(m), by=frame.get(nM+m), bz=frame.get(2*nM+m);
@@ -357,13 +366,27 @@ public final class TwoBodyBeamAnalyticGpu {
             double phi=q.get(m), psi=q.get(nM+m);
             double Px=nodes.get((3*M)*nM+m), Py=nodes.get((3*M+1)*nM+m), Pz=nodes.get((3*M+2)*nM+m);
             double cphi=Math.cos(phi), sphi=Math.sin(phi);
-            double uBx=ux*cphi+bx*sphi, uBy=uy*cphi+by*sphi, uBz=uz*cphi+bz*sphi;
-            double Cx=Px+uBx*lb, Cy=Py+uBy*lb, Cz=Pz+uBz*lb;
-            double d0x=bx*(rF8x-rCx)+ux*(rF8y-rCy), d0y=by*(rF8x-rCx)+uy*(rF8y-rCy), d0z=bz*(rF8x-rCx)+uz*(rF8y-rCy);
             double cpsi=Math.cos(psi), spsi=Math.sin(psi);
-            double xF8x=Cx+(d0x*cpsi+(ey*d0z-ez*d0y)*spsi), xF8y=Cy+(d0y*cpsi+(ez*d0x-ex*d0z)*spsi), xF8z=Cz+(d0z*cpsi+(ex*d0y-ey*d0x)*spsi);
-            double rcx=bx*rCx+ux*rCy, rcy=by*rCx+uy*rCy, rcz=bz*rCx+uz*rCy;
-            double xHx=Cx-(rcx*cpsi+(ey*rcz-ez*rcy)*spsi), xHy=Cy-(rcy*cpsi+(ez*rcx-ex*rcz)*spsi), xHz=Cz-(rcz*cpsi+(ex*rcy-ey*rcx)*spsi);
+            double Cx, Cy, Cz, xF8x, xF8y, xF8z, xHx, xHy, xHz;
+            if (convF.get(12*nM+m) == 0.0) {   // CANONICAL branch — VERBATIM, byte-identical
+                double uBx=ux*cphi+bx*sphi, uBy=uy*cphi+by*sphi, uBz=uz*cphi+bz*sphi;
+                Cx=Px+uBx*lb; Cy=Py+uBy*lb; Cz=Pz+uBz*lb;
+                double d0x=bx*(rF8x-rCx)+ux*(rF8y-rCy), d0y=by*(rF8x-rCx)+uy*(rF8y-rCy), d0z=bz*(rF8x-rCx)+uz*(rF8y-rCy);
+                xF8x=Cx+(d0x*cpsi+(ey*d0z-ez*d0y)*spsi); xF8y=Cy+(d0y*cpsi+(ez*d0x-ex*d0z)*spsi); xF8z=Cz+(d0z*cpsi+(ex*d0y-ey*d0x)*spsi);
+                double rcx=bx*rCx+ux*rCy, rcy=by*rCx+uy*rCy, rcz=bz*rCx+uz*rCy;
+                xHx=Cx-(rcx*cpsi+(ey*rcz-ez*rcy)*spsi); xHy=Cy-(rcy*cpsi+(ez*rcx-ex*rcz)*spsi); xHz=Cz-(rcz*cpsi+(ex*rcy-ey*rcx)*spsi);
+            } else {                            // ROTATED CONVERTER FRAME (ChiralSiteSystem.convFrameStep)
+                double cb0=convF.get(m), cb1=convF.get(nM+m), cb2=convF.get(2*nM+m);
+                double ce0=convF.get(3*nM+m), ce1=convF.get(4*nM+m), ce2=convF.get(5*nM+m);
+                double cu0=convF.get(6*nM+m), cu1=convF.get(7*nM+m), cu2=convF.get(8*nM+m);
+                double of0=convF.get(9*nM+m), of1=convF.get(10*nM+m), of2=convF.get(11*nM+m);
+                double uBx=cu0*cphi+cb0*sphi, uBy=cu1*cphi+cb1*sphi, uBz=cu2*cphi+cb2*sphi;
+                Cx=Px+of0+uBx*lb; Cy=Py+of1+uBy*lb; Cz=Pz+of2+uBz*lb;
+                double d0x=cb0*(rF8x-rCx)+cu0*(rF8y-rCy), d0y=cb1*(rF8x-rCx)+cu1*(rF8y-rCy), d0z=cb2*(rF8x-rCx)+cu2*(rF8y-rCy);
+                xF8x=Cx+(d0x*cpsi+(ce1*d0z-ce2*d0y)*spsi); xF8y=Cy+(d0y*cpsi+(ce2*d0x-ce0*d0z)*spsi); xF8z=Cz+(d0z*cpsi+(ce0*d0y-ce1*d0x)*spsi);
+                double rcx=cb0*rCx+cu0*rCy, rcy=cb1*rCx+cu1*rCy, rcz=cb2*rCx+cu2*rCy;
+                xHx=Cx-(rcx*cpsi+(ce1*rcz-ce2*rcy)*spsi); xHy=Cy-(rcy*cpsi+(ce2*rcx-ce0*rcz)*spsi); xHz=Cz-(rcz*cpsi+(ce0*rcy-ce1*rcx)*spsi);
+            }
             outGeom.set(m,Cx); outGeom.set(nM+m,Cy); outGeom.set(2*nM+m,Cz);
             outGeom.set(3*nM+m,xHx); outGeom.set(4*nM+m,xHy); outGeom.set(5*nM+m,xHz);
             outGeom.set(6*nM+m,xF8x); outGeom.set(7*nM+m,xF8y); outGeom.set(8*nM+m,xF8z);
@@ -899,7 +922,8 @@ public final class TwoBodyBeamAnalyticGpu {
      */
     public static void matS2SolveStep(DoubleArray nodes, DoubleArray frame, DoubleArray q, FloatArray bondData,
                                       IntArray boundSeg, DoubleArray params, DoubleArray sys, DoubleArray outGeom,
-                                      FloatArray forceDotFil, FloatArray forceMag, IntArray matc, IntArray counts) {
+                                      FloatArray forceDotFil, FloatArray forceMag, IntArray matc, IntArray counts,
+                                      DoubleArray convF) {
         int nM = counts.get(0), maxIt = counts.get(1), M = counts.get(2);
         int STRIDE = 13;
         int nF = 3 * M, n = nF + 2, W = n + 1;
@@ -933,19 +957,49 @@ public final class TwoBodyBeamAnalyticGpu {
             else     { if ((mPolicy & 2) != 0) brownM = 0; }
             double f8x = bnd ? bondData.get(dB) : 0.0, f8y = bnd ? bondData.get(dB + 1) : 0.0, f8z = bnd ? bondData.get(dB + 2) : 0.0;
             double phi = q.get(m), psi = q.get(nM + m), thetaS = q.get(2 * nM + m), psiActin = q.get(3 * nM + m);
+            // TRUE CONVERTER-STROKE-PLANE ROTATION (noncanonical, default-off). skewF == 0 ⇒ every branch below
+            // takes the VERBATIM canonical path over the base frame ⇒ arithmetically byte-identical. When on,
+            // the converter block (geometry AND its Jacobians/generalized forces) is the canonical block
+            // conjugated by the site-frame rotation R built in ChiralSiteSystem.convFrameStep; the BEAM's own
+            // frame data (floor normal eup, clamp tangent g4Tan, anchor g4E) is NOT rotated.
+            double skewF = convF.get(12 * nM + m);
+            double cb0 = 0, cb1 = 0, cb2 = 0, ce0 = 0, ce1 = 0, ce2 = 0, cu0 = 0, cu1 = 0, cu2 = 0, of0 = 0, of1 = 0, of2 = 0;
+            if (skewF != 0.0) {
+                cb0 = convF.get(m);          cb1 = convF.get(nM + m);      cb2 = convF.get(2 * nM + m);
+                ce0 = convF.get(3 * nM + m); ce1 = convF.get(4 * nM + m);  ce2 = convF.get(5 * nM + m);
+                cu0 = convF.get(6 * nM + m); cu1 = convF.get(7 * nM + m);  cu2 = convF.get(8 * nM + m);
+                of0 = convF.get(9 * nM + m); of1 = convF.get(10 * nM + m); of2 = convF.get(11 * nM + m);
+            }
             int base = m * (n * W);   // per-item scratch = n*(n+1), M-generic (=210 at M=4 [L40], =420 at M=6 [L60])
             int st = 0, itDone = maxIt;
             for (int it = 0; it < maxIt; it++) {
                 for (int i = 0; i < n; i++) for (int j = 0; j < W; j++) sys.set(base + i * W + j, 0.0);
                 double Px = nodes.get((3 * M) * nM + m), Py = nodes.get((3 * M + 1) * nM + m), Pz = nodes.get((3 * M + 2) * nM + m);
                 double cphi = Math.cos(phi), sphi = Math.sin(phi);
-                double uBx = ux * cphi + bx * sphi, uBy = uy * cphi + by * sphi, uBz = uz * cphi + bz * sphi;
-                double Cx = Px + uBx * lb, Cy = Py + uBy * lb, Cz = Pz + uBz * lb;
-                double d0x = bx * (rF8x - rCx) + ux * (rF8y - rCy), d0y = by * (rF8x - rCx) + uy * (rF8y - rCy), d0z = bz * (rF8x - rCx) + uz * (rF8y - rCy);
                 double cpsi = Math.cos(psi), spsi = Math.sin(psi);
-                double xF8x = Cx + (d0x * cpsi + (ey * d0z - ez * d0y) * spsi);
-                double xF8y = Cy + (d0y * cpsi + (ez * d0x - ex * d0z) * spsi);
-                double xF8z = Cz + (d0z * cpsi + (ex * d0y - ey * d0x) * spsi);
+                double Cx, Cy, Cz, xF8x, xF8y, xF8z;
+                // the phi ARM (C−P without the gauge offset) and the generalized-force axis, set per branch
+                double cpx, cpy, cpz, gux, guy, guz;
+                if (skewF == 0.0) {
+                    double uBx = ux * cphi + bx * sphi, uBy = uy * cphi + by * sphi, uBz = uz * cphi + bz * sphi;
+                    Cx = Px + uBx * lb; Cy = Py + uBy * lb; Cz = Pz + uBz * lb;
+                    double d0x = bx * (rF8x - rCx) + ux * (rF8y - rCy), d0y = by * (rF8x - rCx) + uy * (rF8y - rCy), d0z = bz * (rF8x - rCx) + uz * (rF8y - rCy);
+                    xF8x = Cx + (d0x * cpsi + (ey * d0z - ez * d0y) * spsi);
+                    xF8y = Cy + (d0y * cpsi + (ez * d0x - ex * d0z) * spsi);
+                    xF8z = Cz + (d0z * cpsi + (ex * d0y - ey * d0x) * spsi);
+                    cpx = Cx - Px; cpy = Cy - Py; cpz = Cz - Pz;
+                    gux = ux; guy = uy; guz = uz;
+                } else {
+                    double uBx = cu0 * cphi + cb0 * sphi, uBy = cu1 * cphi + cb1 * sphi, uBz = cu2 * cphi + cb2 * sphi;
+                    Cx = Px + of0 + uBx * lb; Cy = Py + of1 + uBy * lb; Cz = Pz + of2 + uBz * lb;
+                    double d0x = cb0 * (rF8x - rCx) + cu0 * (rF8y - rCy), d0y = cb1 * (rF8x - rCx) + cu1 * (rF8y - rCy), d0z = cb2 * (rF8x - rCx) + cu2 * (rF8y - rCy);
+                    xF8x = Cx + (d0x * cpsi + (ce1 * d0z - ce2 * d0y) * spsi);
+                    xF8y = Cy + (d0y * cpsi + (ce2 * d0x - ce0 * d0z) * spsi);
+                    xF8z = Cz + (d0z * cpsi + (ce0 * d0y - ce1 * d0x) * spsi);
+                    // the gauge offset is a constant rest-geometry translation ⇒ it must NOT enter ∂xF8/∂phi
+                    cpx = uBx * lb; cpy = uBy * lb; cpz = uBz * lb;
+                    gux = cu0; guy = cu1; guz = cu2;   // the generalized-force axis rotates WITH the geometry
+                }
                 // STRETCH
                 for (int i = 0; i < M; i++) {
                     double ax = nodes.get((3*(i+1))*nM+m) - nodes.get((3*i)*nM+m);
@@ -1045,11 +1099,11 @@ public final class TwoBodyBeamAnalyticGpu {
                 if (brownM != 0) for (int j=1;j<=M;j++){ int fb=(j-1)*3;
                     for (int k=0;k<3;k++){ long salt = 0x4811L + ((long)m*1009 + (long)j*131 + k)*7919L;
                         addF(sys,base,W,n, fb+k, brownTorqueD(gNode, dt, seed, tt, salt)); } }
-                // F8 / converter / bind block
+                // F8 / converter / bind block  (axis = gu*, the generalized-force axis of the branch above)
                 int pB = 3*(M-1), iPhi = nF, iPsi = nF+1;
-                double cpx=Cx-Px, cpy=Cy-Py, cpz=Cz-Pz, fcx=xF8x-Cx, fcy=xF8y-Cy, fcz=xF8z-Cz;
-                double Jphix=uy*cpz-uz*cpy, Jphiy=uz*cpx-ux*cpz, Jphiz=ux*cpy-uy*cpx;
-                double Jpsix=uy*fcz-uz*fcy, Jpsiy=uz*fcx-ux*fcz, Jpsiz=ux*fcy-uy*fcx;
+                double fcx=xF8x-Cx, fcy=xF8y-Cy, fcz=xF8z-Cz;
+                double Jphix=guy*cpz-guz*cpy, Jphiy=guz*cpx-gux*cpz, Jphiz=gux*cpy-guy*cpx;
+                double Jpsix=guy*fcz-guz*fcy, Jpsiy=guz*fcx-gux*fcz, Jpsiz=gux*fcy-guy*fcx;
                 double J03=Jphix*1e-6,J04=Jpsix*1e-6,J13=Jphiy*1e-6,J14=Jpsiy*1e-6,J23=Jphiz*1e-6,J24=Jpsiz*1e-6;
                 double kfSI=kF8Code*1e6;
                 for (int i=0;i<5;i++){
@@ -1068,7 +1122,7 @@ public final class TwoBodyBeamAnalyticGpu {
                 double th2 = psi - phi;
                 double caFx=cpy*f8z-cpz*f8y, caFy=cpz*f8x-cpx*f8z, caFz=cpx*f8y-cpy*f8x;
                 double fcFx=fcy*f8z-fcz*f8y, fcFy=fcz*f8x-fcx*f8z, fcFz=fcx*f8y-fcy*f8x;
-                double QphiF8=(ux*caFx+uy*caFy+uz*caFz)*1e-6, QpsiF8=(ux*fcFx+uy*fcFy+uz*fcFz)*1e-6;
+                double QphiF8=(gux*caFx+guy*caFy+guz*caFz)*1e-6, QpsiF8=(gux*fcFx+guy*fcFy+guz*fcFz)*1e-6;
                 addF(sys,base,W,n, pB+0, f8x); addF(sys,base,W,n, pB+1, f8y); addF(sys,base,W,n, pB+2, f8z);
                 addF(sys,base,W,n, iPhi, QphiF8 + kc*(th2-thetaS));
                 addF(sys,base,W,n, iPsi, QpsiF8 - kc*(th2-thetaS) - kbnd*(psi-psiActin));
@@ -1098,13 +1152,23 @@ public final class TwoBodyBeamAnalyticGpu {
             // final geomC → outGeom + reaction writeback
             double Px2=nodes.get((3*M)*nM+m), Py2=nodes.get((3*M+1)*nM+m), Pz2=nodes.get((3*M+2)*nM+m);
             double cphi=Math.cos(phi), sphi=Math.sin(phi);
-            double uBx=ux*cphi+bx*sphi, uBy=uy*cphi+by*sphi, uBz=uz*cphi+bz*sphi;
-            double Cx=Px2+uBx*lb, Cy=Py2+uBy*lb, Cz=Pz2+uBz*lb;
-            double d0x=bx*(rF8x-rCx)+ux*(rF8y-rCy), d0y=by*(rF8x-rCx)+uy*(rF8y-rCy), d0z=bz*(rF8x-rCx)+uz*(rF8y-rCy);
             double cpsi=Math.cos(psi), spsi=Math.sin(psi);
-            double xF8x=Cx+(d0x*cpsi+(ey*d0z-ez*d0y)*spsi), xF8y=Cy+(d0y*cpsi+(ez*d0x-ex*d0z)*spsi), xF8z=Cz+(d0z*cpsi+(ex*d0y-ey*d0x)*spsi);
-            double rcx=bx*rCx+ux*rCy, rcy=by*rCx+uy*rCy, rcz=bz*rCx+uz*rCy;
-            double xHx=Cx-(rcx*cpsi+(ey*rcz-ez*rcy)*spsi), xHy=Cy-(rcy*cpsi+(ez*rcx-ex*rcz)*spsi), xHz=Cz-(rcz*cpsi+(ex*rcy-ey*rcx)*spsi);
+            double Cx, Cy, Cz, xF8x, xF8y, xF8z, xHx, xHy, xHz;
+            if (skewF == 0.0) {   // CANONICAL branch — VERBATIM, byte-identical
+                double uBx=ux*cphi+bx*sphi, uBy=uy*cphi+by*sphi, uBz=uz*cphi+bz*sphi;
+                Cx=Px2+uBx*lb; Cy=Py2+uBy*lb; Cz=Pz2+uBz*lb;
+                double d0x=bx*(rF8x-rCx)+ux*(rF8y-rCy), d0y=by*(rF8x-rCx)+uy*(rF8y-rCy), d0z=bz*(rF8x-rCx)+uz*(rF8y-rCy);
+                xF8x=Cx+(d0x*cpsi+(ey*d0z-ez*d0y)*spsi); xF8y=Cy+(d0y*cpsi+(ez*d0x-ex*d0z)*spsi); xF8z=Cz+(d0z*cpsi+(ex*d0y-ey*d0x)*spsi);
+                double rcx=bx*rCx+ux*rCy, rcy=by*rCx+uy*rCy, rcz=bz*rCx+uz*rCy;
+                xHx=Cx-(rcx*cpsi+(ey*rcz-ez*rcy)*spsi); xHy=Cy-(rcy*cpsi+(ez*rcx-ex*rcz)*spsi); xHz=Cz-(rcz*cpsi+(ex*rcy-ey*rcx)*spsi);
+            } else {              // ROTATED CONVERTER FRAME
+                double uBx=cu0*cphi+cb0*sphi, uBy=cu1*cphi+cb1*sphi, uBz=cu2*cphi+cb2*sphi;
+                Cx=Px2+of0+uBx*lb; Cy=Py2+of1+uBy*lb; Cz=Pz2+of2+uBz*lb;
+                double d0x=cb0*(rF8x-rCx)+cu0*(rF8y-rCy), d0y=cb1*(rF8x-rCx)+cu1*(rF8y-rCy), d0z=cb2*(rF8x-rCx)+cu2*(rF8y-rCy);
+                xF8x=Cx+(d0x*cpsi+(ce1*d0z-ce2*d0y)*spsi); xF8y=Cy+(d0y*cpsi+(ce2*d0x-ce0*d0z)*spsi); xF8z=Cz+(d0z*cpsi+(ce0*d0y-ce1*d0x)*spsi);
+                double rcx=cb0*rCx+cu0*rCy, rcy=cb1*rCx+cu1*rCy, rcz=cb2*rCx+cu2*rCy;
+                xHx=Cx-(rcx*cpsi+(ce1*rcz-ce2*rcy)*spsi); xHy=Cy-(rcy*cpsi+(ce2*rcx-ce0*rcz)*spsi); xHz=Cz-(rcz*cpsi+(ce0*rcy-ce1*rcx)*spsi);
+            }
             outGeom.set(m,Cx); outGeom.set(nM+m,Cy); outGeom.set(2*nM+m,Cz);
             outGeom.set(3*nM+m,xHx); outGeom.set(4*nM+m,xHy); outGeom.set(5*nM+m,xHz);
             outGeom.set(6*nM+m,xF8x); outGeom.set(7*nM+m,xF8y); outGeom.set(8*nM+m,xF8z);

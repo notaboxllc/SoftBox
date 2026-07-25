@@ -72,6 +72,8 @@ public final class ExplicitMatSolveHarness {
         FloatArray bond = new FloatArray(13 * K), forceDotFil = new FloatArray(K), forceMag = new FloatArray(K);
         IntArray boundSeg = new IntArray(K), status = new IntArray(K), iters = new IntArray(K);
         IntArray matc = IntArray.fromElements(t, seed, 1, 0), counts = IntArray.fromElements(K, 1, M, 0);   // matc[3]=motor-Brownian policy (0 = canonical)
+        // zeroed converter frame (flag 0 for every motor) ⇒ matS2SolveStep takes the VERBATIM canonical branch
+        DoubleArray convId = TwoBodyBeamAnalyticGpu.identityConvFrame(K);
         sys.init(0.0);
         double[] pr = paramArr(G);
         for (int m = 0; m < K; m++) {
@@ -86,7 +88,7 @@ public final class ExplicitMatSolveHarness {
         // ---- CPU-mirror: matS2SolveStep called directly (plain Java = the CPU runner) ----
         DoubleArray nMir = copy(nodes), qMir = copy(q), oMir = new DoubleArray(9 * K); DoubleArray sMir = new DoubleArray(TwoBodyBeamAnalyticGpu.SYS_STRIDE * K); sMir.init(0.0);
         FloatArray fdfMir = new FloatArray(K), fmMir = new FloatArray(K); IntArray stMir = new IntArray(K), itMir = new IntArray(K);
-        TwoBodyBeamAnalyticGpu.matS2SolveStep(nMir, copy(frame), qMir, bond, boundSeg, copy(params), sMir, oMir, fdfMir, fmMir, matc, counts);
+        TwoBodyBeamAnalyticGpu.matS2SolveStep(nMir, copy(frame), qMir, bond, boundSeg, copy(params), sMir, oMir, fdfMir, fmMir, matc, counts, TwoBodyBeamAnalyticGpu.identityConvFrame(K));
 
         // ---- GPU ----
         log.append("## §5 lowering probe (device TaskGraph, no silent fallback)\n");
@@ -95,8 +97,8 @@ public final class ExplicitMatSolveHarness {
         FloatArray fdfGpu = new FloatArray(K), fmGpu = new FloatArray(K); IntArray stGpu = new IntArray(K), itGpu = new IntArray(K);
         try {
             TaskGraph tg = new TaskGraph("mats2")
-                .transferToDevice(DataTransferMode.EVERY_EXECUTION, nGpu, frame, qGpu, bond, boundSeg, params, sGpu, matc, counts)
-                .task("s2", TwoBodyBeamAnalyticGpu::matS2SolveStep, nGpu, frame, qGpu, bond, boundSeg, params, sGpu, oGpu, fdfGpu, fmGpu, matc, counts)
+                .transferToDevice(DataTransferMode.EVERY_EXECUTION, nGpu, frame, qGpu, bond, boundSeg, params, sGpu, matc, counts, convId)
+                .task("s2", TwoBodyBeamAnalyticGpu::matS2SolveStep, nGpu, frame, qGpu, bond, boundSeg, params, sGpu, oGpu, fdfGpu, fmGpu, matc, counts, convId)
                 .transferToHost(DataTransferMode.EVERY_EXECUTION, nGpu, qGpu, oGpu, fdfGpu, fmGpu, stGpu, itGpu);
             WorkerGrid wg = new WorkerGrid1D(K); wg.setLocalWork(Math.min(64, K), 1, 1);
             GridScheduler gs = new GridScheduler("mats2.s2", wg);

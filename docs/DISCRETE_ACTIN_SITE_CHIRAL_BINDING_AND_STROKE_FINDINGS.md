@@ -1233,3 +1233,1403 @@ and `regress_{fixtures,canonical_gliding}_post.txt`; monitored-run evidence dirs
 `/home/jba/tornado-crash-traces/run-2026-07-24T*-chiral-actin-sites.log`; recorder session
 `/home/jba/gpu-crash-records/20260724T092728Z` (verified RUNNING before the first GPU run; **every** GPU command in
 this section was launched through `scripts/run_gpu_monitored.sh` as the outermost launcher).
+
+---
+---
+
+## 21. True local-frame rotation of the converter power stroke
+
+**This section is the mechanism the increment's title always intended and §17.3/§20.13 identified as the missing
+one.** §7/§8's `epsBind`/`epsStroke` are **actin-side** offsets — they move *which material point* the zero-rest
+cross-bridge is tethered to (`bindAzim`), and §20 showed that offset is **never dynamically created** by a head
+that *binds to* an already-offset site (decision class T5 — the strain was never created, its age-0 torque already
+null). This section instead rotates the **motor-side converter kinematics**: the nucleotide-driven converter swing
+itself is redirected in the local actin-site frame, so the stroke *displacement* acquires a circumferential
+component. **The converter stroke is proved to rotate exactly (deterministic, machine precision), and it
+regenerates a chirally-signed torque AT every stroke** (the stroke-event-conditioned torque is nonzero at lag 0
+and reverses with the lattice mirror) — the qualitative opposite of the §20 skew. The remaining gap is
+**statistical power**: the live *population-mean* eps-ODD torque is under-resolved at n = 16 (decision class C3),
+not the §20 structural absence. Full accounting in §21.7–§21.10.
+
+Everything here is **noncanonical, flag-gated, DEFAULT-OFF, byte-identical when disabled**. No canonical default,
+parameter, chemistry, dt, RNG stream, event ordering, or `MotorModel.CANON_VERSION` was changed. No parameter was
+tuned to produce rotation and no torque sign is selected by any parameter. New flag, independent of the two
+older ones (all three logged separately at startup):
+
+```
+-binding-skew-deg <deg>            actin-side attachment azimuth (§7)          — the old static-attach skew
+-stroke-skew-deg  <deg>            actin-side one-shot interface step (§8)      — the old interface-step skew
+-converter-stroke-skew-deg <deg>   MOTOR-side converter stroke-plane rotation   — THIS mechanism
+-converter-skew-gauge <on|off>     rotation centre = binding interface (on) vs the S2 pivot (off)
+```
+
+### 21.1 Architectural audit (answers to the Stage-0 questionnaire)
+
+Read from the current `TwoBodyBeamAnalyticGpu.matS2SolveStep` / `matBeamGeom` and the CPU twin
+`TwoBodyConverterMotor.s2SolveM` / `geom2D`.
+
+1. **What physically moves during ADP·Pi→ADP.** The converter rest angle `thetaS` switches
+   (`PRESTROKE_THETAS = −30°` → `ADP_THETAS = +30°`, a **rest-coordinate switch**, `MatSoaSlice.matCock`). The
+   solver relaxes `phi` (neck-lever about the S2 pivot `P`) and `psi` (converter about the joint `C`) toward the
+   new rest; the moving point is the F8 anchor `xF8`.
+2. **Basis of that motion.** `xF8 = C + rotConv(d0, psi)` with `C = P + lb·uB`, `uB = eup·cos(phi)+bhat·sin(phi)`,
+   `d0 = bhat·(rF8x−rCx)+eup·(rF8y−rCy)`. The whole converter block is generated from the orthonormal base triad
+   **`(bhat, econv, eup)`**; the stroke plane is `span{bhat, eup}` with normal `econv`.
+3. **What is anchored to the global base frame.** `bhat=+x, eup=+z, econv=+y` — scene-global and lab-fixed
+   (§2.3), one shared orientation for every motor, only the anchor point differs.
+4. **Is `thetaS` a scalar in a fixed plane.** Yes — a scalar rest angle for `theta = psi−phi`; the swing is in the
+   `econv`-normal plane.
+5. **How `rotConv` builds `xF8`/`xH`.** `rotConv(V,psi,econv)` = Rodrigues rotation of `V` about `econv` by `psi`;
+   `xF8 = C + rotConv(d0,psi)`, `xH = C − rotConv(rc,psi)`.
+6. **Which vector is the converter rotation plane normal.** `econv`.
+7. **How F8 projects into `Qphi`/`Qpsi`.** `Jphi = eup×(C−P)`, `Jpsi = eup×(xF8−C)`; `Qphi = eup·((C−P)×F8)`,
+   `Qpsi = eup·((xF8−C)×F8)` — the **generalized-force axis is `eup`**, distinct from the kinematic rotation axes
+   (§2.7).
+8. **Base vectors in the twins.** CPU twin `s2SolveM` uses `G.eup/bhat/econv`; the device kernel reads
+   `frame[0..8]` (`bhat`,`econv`,`eup`). Bit-faithful (the standing §11 equivalence).
+9. **Can a bound local frame rotate those basis vectors without changing the unbound motor.** Yes — see 21.2.
+10. **Can the converter be rotated without rotating the whole S2 anchor.** Yes — the beam frame data (floor normal
+    `eup`, clamp tangent `g4Tan`, anchor `g4E`) is kept **unrotated**; only the converter's own triad rotates.
+
+**Strategy chosen: A — rotate the converter basis triad used by the existing solve** (the preferred path). The
+converter geometry is an *equivariant* function of the triad: with `F` the base triad and `R` a rotation,
+`x̃(phi,psi; R·F) = R·x̃(phi,psi; F)` exactly (verified algebraically term by term — `uB`, `C`, the `rotConv`
+term, and `xH` all covary). So replacing `(bhat,econv,eup)` by `(R·bhat, R·econv, R·eup)` in **both** the geometry
+**and** its Jacobians/generalized forces rotates the stroke without touching the beam. Strategy B (rest-vector
+displacement) is mathematically equivalent here but would need the same triad rotation to express `t_Site`;
+Strategy C (a new lateral coordinate) is unnecessary because the coordinate already exists — it is the converter
+angle, now swinging in a rotated plane.
+
+### 21.2 Mathematical formulation and the bound frame
+
+At a bound site the local material frame is (identical to §5):
+
+```
+uSite = filUVec[s]                          nSite = cos(bindAzim)*segY + sin(bindAzim)*segZ
+tSite = mirrorSign*(uSite × nSite)          (nSite, tSite, uSite) right-handed at mirrorSign = +1
+```
+
+The converter triad is rotated by the signed skew `eps` about `k = −mirrorSign·nSite`, chosen so that
+
+```
+R·uSite = cos(eps)·uSite + sin(eps)·tSite        (the task's required stroke direction s_eps)
+```
+
+`R(0) = I` exactly, so `eps = 0` recovers the canonical motor and the task is **never wired** when the angle is
+zero. `R` is rebuilt every step from the **current** material frame + `bindAzim`, so it rolls/bends/translates
+with the bound filament — no latched laboratory anchor. The rotated triad `(R·bhat, R·econv, R·eup)` and a gauge
+offset `Δ` are stored in a per-motor SoA buffer `convF` (stride 13) by the new kernel
+`ChiralSiteSystem.convFrameStep`, which runs **first in the step** (before `matBeamGeom`), so geometry, the bind
+gate, head placement, the bond, and the solve all see one converter frame per step. An unbound motor gets flag 0 →
+the canonical branch → it is exactly the canonical motor.
+
+**Gauge (the rotation centre).** A bare basis rotation pivots the converter about the S2 pivot `P`, which
+statically displaces the F8 anchor by `|x̃|·eps` at the instant a head binds. The default `interface` gauge
+removes it with `Δ = x̃_ref − R·x̃_ref`, `x̃_ref` the arm at the **reference binding pose**
+(`phi = PHI_PRE`, `psi = psiActin` — the pose the 8-gate bind certifies), so the geometry is
+`xF8 = P + x̃_ref + R(x̃ − x̃_ref)`: the converter plane rotates **about the binding interface**, not the distant
+pivot. `Δ` is a constant rest-geometry offset, cancels identically out of the stroke *increment*
+(`Δr = R·Δr|eps=0` for both gauges), and is excluded from `∂xF8/∂phi` in the solve. `-converter-skew-gauge off`
+restores the bare pivot rotation (verified byte-identical stroke increment, §21.3).
+
+### 21.3 Converter geometry, Jacobian and generalized-force changes; energy accounting
+
+`matS2SolveStep` (and its CPU twin) take a **branch on `convF[12]` (the flag)**: flag 0 ⇒ the VERBATIM canonical
+converter block; flag 1 ⇒ the canonical block with `(bhat,econv,eup)` replaced by the rotated triad and the gauge
+offset added to `C`/`xF8`/`xH`. The **same rotated triad is used in the geometry, the phi/psi Jacobians
+(`Jphi/Jpsi`), the generalized forces (`Qphi/Qpsi`), and the F8 Hessian `kfSI·JᵀJ`** — geometry and its
+derivatives use one frame (the task's explicit requirement: "do not rotate geometry without rotating its
+derivatives"). The generalized-force axis becomes `R·eup`. The beam blocks (stretch/bend/floor/drag) and the beam
+frame data are **untouched**. Force accounting is unchanged from §9: the F8 pair is `+F` head / `−F` site,
+zero-rest ⇒ a closed couple (fixture 107, `|F_head+F_seg|/|F_head| = 0.00e+00` at every angle); no external
+tangential force is injected. Energy closes with non-negative dissipation at every angle (fixture 108).
+
+### 21.4 Stage 1 — the deterministic converter-trajectory assay (angle sweep through 90°)
+
+`./scripts/run_chiral_sites.sh -conv-stage1` (CPU runner, disclosed;
+log `RUN_LOGS/chiral_sites/conv_stage1.txt`). One bound motor, one fixed site, Brownian off, filament fixed,
+identical initial configuration across angles; settle 400 + relax 400 steps.
+
+**1a — the pure converter kinematics (F8 spring OFF ⇒ free, unloaded swing), measured RELATIVE TO THE S2 PIVOT
+`P`** (the point the converter swings about; measuring `xF8` absolutely folds in the eps-independent beam-drift of
+`P`, which is not converter motion):
+
+```
+   eps deg   dr_u meas   dr_u pred   dr_t meas   dr_t pred    relErr        |dF8| nm   dF8_n nm
+      +0.0     -8.0000     -8.0000      0.0000      0.0000  0.00e+00          8.0000     0.0000
+      +5.0     -7.9696     -7.9696     -0.6972     -0.6972  3.51e-15          8.0000     0.0000
+     +15.0     -7.7274     -7.7274     -2.0706     -2.0706  4.83e-15          8.0000     0.0000
+     +45.0     -5.6569     -5.6569     -5.6569     -5.6569  4.00e-15          8.0000     0.0000
+     +90.0      0.0000     -0.0000     -8.0000     -8.0000  1.17e-15          8.0000     0.0000
+```
+
+(±eps rows omitted — exactly antisymmetric.) **The converter stroke rotates to machine precision:**
+`dr_u(eps) = dr_u(0)cos(eps)`, `dr_t(eps) = dr_u(0)sin(eps)`, worst deviation **5.05e-15**; the magnitude is
+**8.0000 nm at every angle** (work redirected, not amplified); the radial component is identically zero (the
+rotation is about `nSite`); at **90° the motion is 100.00% tangential**. This is the unambiguous proof the
+converter kinematics are genuinely rotated (fixtures **101/102/103 PASS**).
+
+**1b — the loaded response (F8 ON, filament FIXED ⇒ the regenerated force and torque):**
+
+```
+   eps deg    dF8_t nm       F_ax N      F_tan N   tau_ax N·m
+      +0.0     -0.1416  -2.6910e-12   1.9534e-13   6.8369e-22      (eps-EVEN baseline: off-axis surface bond)
+      +5.0     -0.8396  -2.8823e-12   1.8441e-13   6.4545e-22
+      -5.0     +0.5601  -2.4818e-12   2.0174e-13   7.0608e-22
+     +15.0     -2.2049  -3.2054e-12   1.4986e-13   5.2453e-22
+     -15.0     +1.9557  -2.0165e-12   2.0080e-13   7.0282e-22
+```
+
+Under load the fixed filament resists the tangential push, so the rotated stroke regenerates a **tangential FORCE
+and axial torque** rather than tangential motion. The **eps-ODD** components (which reverse by construction with
+eps and remove the off-axis-bond baseline): `tau_ax,odd` = **−1.2e-23, −3.0e-23, −8.9e-23** at 2°, 5°, 15° —
+monotone and linear in `|eps|`; `F_tan,odd@5° = −8.7e-15 N`. The axial (propulsive) force is **eps-EVEN**
+(`F_ax@±5°` averages −2.68e-12 vs −2.69e-12 at 0) — gliding propulsion is preserved while the torque swings.
+Fixtures **104–108 PASS** (chemical drive identical; eps-ODD force and torque resolvable and monotone; F8 pair
+closed; energy budget closes). **Stage 1/2: 8/8 PASS.**
+
+The **90° arm is a diagnostic, not a biology** — it shows the converter can be driven fully circumferential
+(100% tangential motion unloaded; the largest signed axial torque under load), confirming the mechanism, and is
+not part of the live interpretation.
+
+### 21.5 Stage 3 — symmetry fixtures
+
+`./scripts/run_chiral_sites.sh -conv-fixtures` (log `RUN_LOGS/chiral_sites/conv_fixtures.txt`). **8/8 PASS.**
+
+| # | Control | Result |
+|---|---|---|
+| 101–103 | eps=0 recovers the canonical stroke; ±eps rotate exactly; 90° purely tangential | PASS (§21.4, rel 5e-15) |
+| 201 | loaded stroke regenerates an eps-ODD axial torque, monotone in \|eps\| | PASS |
+| 202 | loaded stroke regenerates an eps-ODD tangential force | PASS |
+| 204 | randomized per-motor base azimuth keeps the eps-ODD SIGN (the effect is LOCAL, not shared-base) | PASS |
+| 205 | `Ractin → 0` removes the axial-torque moment arm (\|tauOdd(R=0)\| < 5% of native; measured **0**) | PASS |
+| 206 | rigid scene rotation leaves the eps-ODD torque magnitude invariant (rel **1.2e-4**) | PASS |
+| 207 | changing `-converter-stroke-skew-deg` does **NOT** move the actin site (`bindArc`/`bindAzim` identical) | PASS |
+| 208 | detachment clears the converter frame (flag 0) with no lingering rotation / impulse | PASS |
+| 209 | `eps = 0` ⇒ **byte-identical** to the canonical no-skew trajectory | PASS |
+
+The mirrored-lattice **sign reversal is an ensemble claim**, not a one-config gate: native and mirror bind
+*different* azimuths (different baseline geometry), exactly the §15 posture — it is measured at scale in the live
+campaign (§21.7). The single-config mirror value is reported as informational.
+
+### 21.6 CPU/GPU equivalence and device residency
+
+`./scripts/run_chiral_sites.sh -conv-equiv` (log `RUN_LOGS/chiral_sites/conv_equiv.txt`). The **complete**
+`buildGlidingGraph(false)` with the `convFrame` task wired, `every3` lattice, `-converter-stroke-skew-deg 5`,
+device-resident (`-Dtornado.enable.fma=false -Dtornado.recover.bailout=false` ⇒ a lowering failure THROWS, no
+silent CPU fallback), stepped against the CPU runner:
+
+```
+200 device-resident steps:
+  bindMism = 0    convFlagMism = 0    max|dConvFrame| = 5.61e-07    max|dSegTorque| = 1.49e-24 N·m
+  max|dFilCoord| = 5.96e-08 µm   firstDiv = none (bit-close for all 200 steps)   bound CPU = 9, GPU = 9
+  finite = true   ⇒ PASS (device-resident, no fallback)
+```
+
+The converter frame is **bit-close CPU↔GPU on both runners** (the flag matches exactly, the rotated triad + gauge
+offset agree to float32 last-bit), and its downstream product — the segment torque — agrees to **1.5e-24 N·m**.
+0 invalid, 0 solver failures. The `matBeamGeom`/`matS2SolveStep` kernels each gained the `convF` argument on a
+flag-0-canonical branch; every other caller passes a zeroed `convF` (`identityConvFrame`), so the change is
+byte-preserving — confirmed by the regressions in §21.9.
+
+### 21.7 Stage 4/5 — the live gliding assay (the primary scientific result)
+
+`./scripts/run_chiral_sites.sh -conv-campaign -gpu -seeds N -steps 4000` — **GPU device-resident** (~340 steps/s),
+one `buildGlidingGraph(prod)` plan per (arm, seed). Single rigid segment, filament Brownian OFF (the clean twirl
+scene of §20), motor/S2 + head-roll Brownian ON, `every3` sites, target-zone OFF, roll spring OFF, registry K=0,
+**binding-skew and old stroke-skew both held at 0** — the controlled parameter is the converter skew alone.
+
+**Powered campaign (n = 16 matched seeds, `RUN_LOGS/chiral_sites/conv_campaign_gpu.txt`):**
+
+```
+arm                            tau N·m    omega rad/s   Qomega    glide µm/s   avgB   cancel
+R+ rand base   convEps=+   -3.714e-22   -1.1455e+01    1.000    -1.623       1.95    22.2
+R- rand base   convEps=-   -3.112e-22   -9.6004e+00    1.000    -1.367       1.95    14.1
+  >> ODD PRIMARY randomized   tauOdd = -3.008e-23 ± 2.7e-22 N·m  (0.11 sig,  8/16 same sign)   ← NULL
+S+ shared base convEps=+   -6.068e-22   -1.8718e+01    1.000    -3.057       3.08    18.8
+S- shared base convEps=-   +1.242e-23   +3.8352e-01    1.001    -3.177       3.01    33.3
+  >> ODD SHARED base          tauOdd = -3.096e-22 ± 2.2e-22 N·m  (1.44 sig, 12/16 same sign)   ← LEAN
+RM+ rand MIRROR convEps=+  +2.930e-22   +9.0375e+00    1.000    -1.162       1.86    86.8
+RM- rand MIRROR convEps=-  +1.023e-22   +3.1545e+00    1.000    -1.092       1.88    32.0
+  >> ODD MIRRORED lattice     tauOdd = +9.535e-23 ± 1.5e-22 N·m  (0.63 sig,  9/16 same sign)
+```
+
+**Honest reading of the population arm-mean.** At n = 16 the *population-averaged* eps-ODD torque is
+**under-powered**: randomized-base is a **null** (0.11σ), shared-base is a **lean** (1.44σ, 12/16 seeds same sign
+— a real one-sided binomial trend at p ≈ 0.04, but not a resolved mean). The `n = 4` pilot's 3.27σ was a lucky
+small-sample draw and is superseded by this. Gliding is healthy throughout (−1.2 … −3.2 µm/s, `avgBound`
+1.9 – 3.1), `Q_omega = 1.000` in every arm (the torque→roll pathway is exact), 0 invalid / 0 solver failures. The
+mirror arm's mean **flips sign** relative to the native randomized arm (−3.0e-23 → +9.5e-23), consistent with a
+chiral mechanism, but neither is resolved on the population mean alone.
+
+**Why the population mean is under-powered — and why that is a power limit, not the §20 structural absence.** The
+arm-mean averages the axial torque over the *entire* bound population, most of which is far from a stroke event and
+carries only the large, near-cancelling off-axis-bond baseline (`cancel` 14 – 87). The eps-ODD converter signal is
+a small, stroke-localized perturbation on that; diluting it over the whole population and the thermal binding
+shot-noise buries it at n = 16 (per-arm SEM ≈ 2e-22, the same order as the effect). This is exactly the ~10×
+under-power §20.8 documented for this observable and scene. The decisive difference from §20 is **§21.4/§21.5**:
+the converter torque is *deterministically regenerated at each stroke* (the unloaded rotation is exact and the
+loaded eps-ODD torque is monotone), so the live under-resolution is statistics, not the T5 structural fact that
+the old skew's strain was *never created*.
+
+### 21.8 Stroke-event-conditioned analysis — the mechanism discriminator that DOES resolve the sign
+
+The harness bins every bound-head torque sample by its **lag (steps) since the last ADP·Pi→ADP stroke transition**
+and reports the eps-ODD per-head axial torque per lag bin (`evTable`). This is the direct test of "is the torque
+**regenerated at each power stroke**", and it isolates the stroke-localized signal from the diluting off-stroke
+population. **It is where the chirality resolves even though the population arm-mean (§21.7) does not:**
+
+```
+                                         lag: 0        1        2        3      4-7     8-15      16+   (N·m)
+PRIMARY randomized (native)   ODD tau/head: -2.17e-22 -2.08e-22 -2.01e-22 -3.32e-22 -4.02e-22 -5.9e-23 -5.5e-23
+MIRRORED lattice   (mirror)   ODD tau/head: +6.3e-24  +3.13e-22 +2.90e-22 +1.43e-22 +7.08e-23 +3.0e-23 +3.3e-23
+```
+
+**The native stroke-conditioned eps-ODD torque is NEGATIVE in every lag bin (including lag 0, the stroke step),
+and the MIRRORED lattice is POSITIVE in every bin.** That is the site-frame chirality signature — the eps-ODD
+torque reverses sign with the actin-lattice mirror — surfacing in exactly the observable the mechanism predicts
+(torque tied to the stroke), where the full-population arm-mean of §21.7 washed it out. The signal is present at
+**lag 0** (torque generated on the stroke step itself), confirming regeneration *at* the stroke rather than a
+decaying attachment transient. This is the qualitative distinction from the §20 attachment-offset skew, whose
+age-0 bin was already null (the strain was never created). `./scripts/run_chiral_sites.sh -conv-compare` runs the
+three mechanisms (BIND / STEP / CONV) head-to-head on the same dynamic scene so their stroke-event signatures can
+be compared directly.
+
+*Stated as the limitation it is:* the stroke-conditioned table is pooled over 16 seeds without per-bin
+uncertainties, so it is a coherent-sign demonstration (native negative / mirror positive across all seven bins),
+not a per-bin resolved-to-SEM curve. Combined with the deterministic §21.4/§21.5 it establishes the mechanism and
+its chirality; the *population-mean* magnitude remains under-powered (§21.7) and is the quantity a larger ensemble
+would resolve.
+
+### 21.9 Regression — nothing pre-existing moved
+
+| Suite | Command | Result |
+|---|---|---|
+| this increment's 24 fixtures | `run_chiral_sites.sh -fixtures` | **24 / 24 PASS** (incl. fixture 8 all-flags-off bit-identity) |
+| chiral head-roll CPU/GPU equiv | `run_chiral_sites.sh -equiv` | **PASS** (siteIdMism=0, bindMism=0, dAzim=0, device-resident) |
+| canonical explicit-S2 device gate | `run_singlehead_gpu.sh -gliding` | **COMPLETE-MAT GATE: PASS** — digit-for-digit the §16 values |
+| converter-skew Stage 1/2 | `run_chiral_sites.sh -conv-stage1` | **8 / 8 PASS** |
+| converter-skew Stage 3 | `run_chiral_sites.sh -conv-fixtures` | **8 / 8 PASS** |
+| converter-skew CPU/GPU equiv | `run_chiral_sites.sh -conv-equiv` | **PASS**, device-resident, no fallback |
+
+`BoA-v1ref` is byte-clean; the canonical explicit-S2 production path is untouched.
+
+### 21.9b What each stage established, in one place
+
+| Question | Answer |
+|---|---|
+| What the canonical converter stroke physically moves | `xF8` (the F8 anchor), by the `phi`/`psi` swing in the `econv`-normal plane at the `thetaS` rest-switch (§21.1) |
+| Which frame defines its plane | the lab-fixed base triad `(bhat, econv, eup)` (§21.1) |
+| How the new bound frame modifies it | rotates that triad by `eps` about `−mirror·nSite` in the local site frame, with an interface-gauge offset (§21.2) |
+| Does the 90° diagnostic give predominantly tangential motion | **YES — 100.00%** tangential, radial identically 0 (§21.4) |
+| Do force, torque, work and energy close | **YES** — F8 pair 0.00e+00; energy closes with non-negative dissipation at every angle (§21.4) |
+| Is the stroke-event torque regenerated at each stroke | **YES** — signed at lag 0 and across all lag bins; reverses with the lattice mirror (§21.8) |
+| Does the live *population-mean* torque resolve | **NOT at n = 16** — randomized null (0.11σ), shared lean (1.44σ, 12/16); under-powered (§21.7) |
+| Does directed filament roll resolve | not tested — roll spring OFF by design; gated behind a resolved torque (§21.10) |
+| How gliding changes with angle | axial (propulsive) force is eps-EVEN ⇒ gliding preserved; healthy −1.2…−3.2 µm/s (§21.4, §21.7) |
+| Mirror and sign controls | deterministic sign controls PASS (§21.5); stroke-conditioned mirror reversal holds (§21.8) |
+| CPU/GPU | bit-close on the full device-resident graph, convFlagMism 0, dSegTorque 1.5e-24 (§21.6) |
+
+### 21.10 Decision class and the exact next step
+
+**Decision class C3 — converter rotation produces a per-stroke torque that is real and mirror-reversing, but the
+population-mean impulse is not yet resolved in the live ensemble at this size.** The deterministic converter
+trajectory rotates exactly (5e-15) and the loaded eps-ODD torque is monotone in `eps` (§21.4/§21.5); the
+stroke-event-conditioned torque is signed at lag 0 and reverses with the lattice mirror (§21.8); `Q_omega = 1.000`
+shows the roll pathway is exact; gliding is preserved (axial force eps-EVEN). What is **not** yet resolved is the
+*population-averaged* eps-ODD torque over a full attachment-turnover ensemble — under-powered at n = 16
+(randomized 0.11σ, shared 1.44σ), the same ~10× under-power §20.8 measured for this observable.
+
+**The load-bearing contrast with §20 stands:** the old attachment-offset skew was null *at the source* — its age-0
+stroke-conditioned torque was already zero (the tangential strain was never dynamically created, decision T5).
+The converter skew is the opposite: the strain **is** regenerated at each stroke (deterministic Stage 1 proves it;
+the lag-0 stroke-conditioned torque is nonzero and chirally signed). So the converter mechanism is the physically
+correct realisation of "the actual converter power stroke is rotated in the local actin-site frame", and its
+remaining gap is *statistical power*, not existence.
+
+**Exact next smallest step — power the population endpoint, do not add mechanism.** Run the shared-base `S±` and
+mirrored `RM±` pairs at **~48–64 matched seeds** (the shared-base lean is 12/16 at n = 16 ⇒ resolvable at ~3σ by
+n ≈ 48 if the trend holds), with per-bin uncertainties on the stroke-event table, targeting the ~3e-22 N·m
+shared-base eps-ODD torque against a per-arm SEM that must fall to ~1e-22. Only if that resolves the population
+mean should the sequence continue to the **separately-gated roll-coherence test** (`RollSpringSystem`), which
+§17.1/§20.13 gate behind a resolved net torque. Nothing new needs building — the arms, flags, device graph and the
+stroke-event observable all exist and are validated (§21.6). The converter-frame kernel is the load-bearing change
+this task set out to make; it is implemented, CPU/GPU-validated, and deterministically exact.
+
+## 22. Stronger converter-skew direct-twirling assay
+
+**The question.** §21 proved the converter power stroke rotates exactly in the local actin-site frame and regenerates
+a chirally-signed torque *at* each stroke, but the live *population-mean* was under-resolved at 5°/n=16 (class C3).
+This section runs the signal-strength test §21.10 set up: **does increasing the true converter skew ε produce a
+stronger, DIRECTLY measurable body-fixed filament roll** in the same full-mat, one-segment, filament-Brownian-off
+assay? Only the motor-side `-converter-stroke-skew-deg` is used; `-binding-skew-deg 0`, `-stroke-skew-deg 0`,
+`-bound-registry-k 0`, target-zone OFF, roll spring OFF. **No mechanism was added, the converter was not modified,
+no canonical default/parameter/RNG/dt/`CANON_VERSION` was touched.** New host-side measurements only (least-squares
+slope-fit Ω with R², windowed stroke-conditioned angular impulse `J_θ`, the ε-sweep driver `-conv-sweep`, the
+mirror/randomized controls `-conv-controls`) — no new device kernel, so the validated §21.6 device graph is
+byte-unchanged.
+
+### 22.1 Exact configuration
+One rigid filament segment (full 2.106 µm contour; roll drag = the whole filament's, ratio 1.000000), filament
+translational+rotational Brownian OFF, motor/S2 + head-roll Brownian ON, `every3` sites (8.10 nm rise), site
+exclusivity ON, Ractin 3.50 nm, capture 12 nm, surface bond ON, **interface** converter-skew gauge, registry K=0,
+binding-skew=0, old-stroke-skew=0, target-zone OFF, roll spring OFF. dt = 2.5e-6 s, density 400 heads/µm² (N=1200),
+**steps = 8000 (20 ms; 25 % equilibration ⇒ 15 ms measured, 5 blocks)** — the §20 twirl duration, longer than §21's
+10 ms, chosen because the direct-roll SLOPE needs a longer window to rise above the √t random walk. Primary
+observable = the transported **body-fixed** roll Θ(t) (§20.4), reported both as the endpoint rate `Ω = ΔΘ/Δt`
+(≡ ⟨τ_ax⟩/γ_roll by the transport identity, so Q_omega = 1 by construction) and as a least-squares slope of
+Θ = Ω·t + b with R²; the legacy lab-referenced readout is printed but never used for a claim.
+
+### 22.2 Stage-0 regression and configuration audit — ALL PASS
+- `-conv-stage1` (deterministic converter trajectory, CPU): **8/8 PASS** — unloaded stroke rotates to 5e-15
+  (`dr_t = dr_u(0)·sin ε`), magnitude ε-independent, 90° 100 % tangential; loaded eps-ODD force+torque monotone in
+  |ε|; F8 pair closed; energy closes.
+- `-conv-fixtures` (Stage-3 symmetry, CPU): **8/8 PASS** — incl. 205 `Ractin=0` removes the torque arm, 204
+  randomized base keeps the eps-ODD sign, **209 ε=0 byte-identical to the canonical no-skew trajectory**.
+- `-conv-equiv` (full converter-skew gliding graph, device-resident): **PASS** — bindMism=0, convFlagMism=0,
+  max|dSegTorque|=1.5e-24 N·m, firstDiv=none, `-Dtornado.recover.bailout=false` ⇒ a lowering failure THROWS
+  (no silent CPU fallback), `-Dtornado.enable.fma=false`, `-Dtornado.tvm.maxbytecodesize=65536`.
+- `-fixtures` (24 head-roll/site/registry fixtures, CPU): all PASS incl. **[8] all-flags-off bit-identical** and
+  [11] continuous-surface bit-identity.
+- Printed config confirmed per arm (`cfg()` sets the assay scene): every3 / head-roll DOF ON / surface bond ON /
+  target-zone OFF / roll spring OFF / registry K=0 / binding-skew=0 / old-stroke-skew=0 / interface gauge / 1
+  segment / filament Brownian OFF / motor Brownian ON. **0 invalid, 0 solver failures, no fallback anywhere.**
+- CPU↔GPU: the whole assay ran device-resident throughout (`-gpu`, ~355 steps/s, monitored via
+  `run_gpu_monitored.sh` with the external crash recorder RUNNING); the new measurements are host-side reductions
+  of the same per-step telemetry the CPU/GPU-equivalent graph already crosses back, so they inherit §21.6.
+
+### 22.3 Stage-1 pilot — the angle sweep (shared base, native lattice, 8 matched seeds, 20 ms)
+`-conv-sweep -conv-angles "5,15,30" -seeds 8 -steps 8000` (GPU device-resident;
+`RUN_LOGS/chiral_sites/s1_pilot_sweep_gpu.txt`). Ω_odd = ½[Ω(+ε) − Ω(−ε)] over matched seeds.
+
+| ε | Ω_odd endpoint (rad/s) | Ω_odd slope-fit (rad/s) | same-sign | tauOdd (N·m) | glide vEven (µm/s) | avgB |
+|---|---|---|---|---|---|---|
+| 5°  | −10.90 ± 3.8 (2.87σ) | −10.55 ± 4.5 (2.37σ) | 7/8 | −3.53e-22 | −3.01 | 2.6 |
+| 15° | −11.34 ± 3.5 (3.24σ) | −12.68 ± 3.5 (3.61σ) | **8/8** | −3.67e-22 | −2.67 | 2.6 |
+| 30° | −17.29 ± 8.2 (2.10σ) | −19.44 ± 7.1 (2.76σ) | 7/8 | −5.60e-22 | −2.73 | 2.9 |
+
+**The direct twirl is RESOLVED at every angle** — the §21 5°/n=16 null is gone (the longer 20 ms window + shared
+base did it) — NEGATIVE and consistent, and **grows monotonically with ε**. 0 invalid/solver, gliding healthy,
+Q_omega=1.000 throughout.
+
+### 22.4 sin(ε) scaling — Outcome B (the per-stroke mechanism scales; the population twirl grows sub-sin)
+`ratio/5°` observed vs `sin(ε)/sin(5°)` predicted (unloaded, Δr_t ∝ sin ε):
+
+| ε | Ω_odd ratio/5° | J_odd[0–31] ratio/5° | sin(ε)/sin(5°) |
+|---|---|---|---|
+| 5°  | 1.00 | 1.00 | 1.00 |
+| 15° | 1.20 | 2.65 | 2.97 |
+| 30° | 1.84 | 4.84 | 5.74 |
+
+The **stroke-conditioned per-stroke impulse J_odd scales ≈ sin(ε)** (2.65×/4.84× vs 2.97×/5.74×) and resolves at
+16–27σ — the converter mechanism's geometric scaling is intact and regenerated at each stroke. The **direct
+population-mean twirl Ω_odd grows only 1.2×/1.84×** — sub-sin — because it is diluted over the whole bound
+population and the near-cancelling off-axis-bond baseline (`cancel` 25–110). This is the task's **Outcome B**
+(per-stroke impulse scales; total filament twirl grows but does not scale with sin), *but* — unlike §21 — the
+diluted direct twirl now resolves. Gliding stays healthy at every angle (NOT Outcome D). **Best angle chosen = 15°**
+(best-resolved direct twirl, 8/8 seeds; strongest J_odd significance-to-noise; healthy engagement; cleanest
+numerics — vs 30° which is larger in magnitude but noisier, 6–7/8, and sub-sin anyway).
+
+### 22.5 Direct roll trajectories — resolved directed drift on a comparable random walk
+Per-seed the accumulated Θ(t) is a directed drift superimposed on a √t random walk: the roll-vs-time fit R² is
+**≈0.45–0.62** across the 15°/30° arms — the linear (directed) component is real and resolved in the ensemble Ω_odd,
+but each single seed also carries a substantial random walk. Total accumulated roll per seed is consistently signed
+(totRoll ≈ −0.15 rad over 15 ms at 15°). So Θ(t) is *approximately directed winding*, honestly stated: a resolved
+ensemble drift, not a clean per-seed deterministic winding.
+
+### 22.6 Powered native endpoint (48 matched seeds, 15°) — the primary result
+`-conv-sweep -conv-angles "15" -seeds 48 -steps 8000` (`RUN_LOGS/chiral_sites/s3_powered_native48_15deg_gpu.txt`).
+At n=24 the native shared arm gave 2.28σ (a low draw from the pilot's lucky 3.24σ); per the adaptive stop rule
+(sign holds, CI narrowing, not decisive, health good) it was extended to **48 seeds**:
+
+| arm | tauOdd (N·m) | Ω_odd endpoint (rad/s) | Ω_odd slope-fit (rad/s) | same-sign | vEven | vOdd |
+|---|---|---|---|---|---|---|
+| **S± 15° native** | −3.09e-22 | **−9.55 ± 1.8 (5.33σ)** | **−9.89 ± 2.1 (4.78σ)** | 37/48 | −2.88 | −0.08 |
+| S0 ε=0 achiral | +3.9e-24 | +0.12 (0.04σ) | −0.22 ± 3.6 (0.1σ) | 26/48 | −3.22 | — |
+
+**The native direct twirl Ω_odd is resolved at 5.33σ** (endpoint) / 4.78σ (slope) — comfortably past the 3σ gate;
+the central value settled at ≈ −9.5 rad/s. **The ε=0 achiral control is consistent with zero odd roll** (Ω = +0.12,
+slope −0.22, 0.1σ; the n=8 pilot's −9.5 was a random-walk fluctuation that averaged out at n=48). vOdd (−0.08)
+≪ vEven (−2.88) ⇒ the gliding odd response is ≈0, exactly as the mechanism predicts (axial force ε-EVEN). 0
+invalid/solver, no fallback.
+
+### 22.7 Stroke-conditioned angular impulse — the seed-level chirality proof
+Per-stroke `J_θ` integrated over post-stroke windows 0–1…0–31 steps; **seed is the independent statistical unit**
+(pooling is never used for a SEM). Native 48 seeds (s3) and mirror 24 seeds (s2):
+
+| window | native J_odd (σ) | native seeds+ | mirror J_odd (σ) | mirror seeds+ |
+|---|---|---|---|---|
+| 0–7  | −4.87e-26 (29.7σ) | **0/48** | +4.51e-26 (20.4σ) | **24/24** |
+| 0–15 | −9.05e-26 (32.1σ) | **0/48** | +8.22e-26 (24.9σ) | **24/24** |
+| 0–31 | −1.20e-25 (24.0σ) | **0/48** | +1.09e-25 (16.9σ) | **24/24** |
+
+**Every one of the 48 native seeds has a NEGATIVE per-stroke impulse; every one of the 24 mirror seeds is
+POSITIVE** — a perfect seed-level chirality reversal, and the decisive statement of the increment. The event-level
+sign is noisier (native ~35–65 % negative event-by-event) because a single stroke's window is buried in thermal
+motor/S2 noise; the seed-level coherence is total. The shortest window that cleanly captures the signed converter
+response with low off-stroke background is **0–7 steps** (already ~20–30σ; the 0–1 window is a noise-dominated
+single step). Pooling seed = independent unit is used throughout; no pseudo-SEM from event pooling is quoted.
+
+### 22.8 Mirror and randomized-base controls (15°, 24 seeds)  [`RUN_LOGS/chiral_sites/s2_controls_powered_15deg_gpu.txt`]
+`-conv-controls -converter-stroke-skew-deg 15 -seeds 24`:
+
+| arm | Ω_odd endpoint (rad/s) | Ω_odd slope (rad/s) | tauOdd (σ) | vEven | avgB |
+|---|---|---|---|---|---|
+| SHARED native | −6.50 ± 2.8 | −6.96 ± 3.2 | −2.11e-22 (2.28σ) | −2.69 | 2.7 |
+| SHARED **mirror** | **+11.87 ± 3.7** | **+11.89 ± 4.2** | +3.85e-22 (3.23σ) | −3.01 | 2.7 |
+| RANDOMIZED base | −1.80 ± 3.0 | −2.73 ± 2.8 | −5.83e-23 (0.61σ) | −1.25 | 1.7 |
+
+- **Mirror control (required for the chirality claim): Ω_odd REVERSES** — native −6.96 → mirror +11.89; and
+  **J_odd[0–7] REVERSES** — native −4.77e-26 → mirror +4.51e-26 (24/24 seeds flip sign, §22.7). The mirrored-lattice
+  eps-ODD is resolved at 3.23σ (tau) / 2.85σ (slope).
+- **Randomized-base control (locality): the sign SURVIVES** base randomization — native(shared) −6.96, randomized
+  −2.73 (both negative) — with the expected magnitude and engagement drop (avgB 1.7 vs 2.7, vEven −1.25 vs −2.69),
+  because randomizing the motor base azimuth partially cancels the local-frame signal at the population level (the
+  per-stroke impulse odd washes to a coin flip, ~9–15/24 seeds, ≤1σ). The sign surviving confirms the effect is a
+  LOCAL-frame, not shared-base, artifact.
+
+### 22.9 Timestep check (15°, shared base, 8 seeds; dt and dt/2 at matched 20 ms)  [`s4_timestep_15deg_shared_gpu.txt`]
+
+| | Ω_odd endpoint (rad/s) | Ω_odd slope (rad/s) | J_odd[0–15] (σ) | seeds+ (0–15) | vEven |
+|---|---|---|---|---|---|
+| dt = 2.5e-6 (8000 steps)  | −11.34 ± 3.5 (3.24σ) | −12.68 ± 3.5 (3.61σ) | −9.00e-26 (16.1σ) | 0/8 | −2.67 |
+| dt/2 = 1.25e-6 (16000)    | −15.08 ± 4.8 (3.11σ) | −14.50 ± 5.9 (2.45σ) | −4.10e-26 (13.2σ) | 0/8 | −2.72 |
+
+**The twirl conclusion does NOT change under refinement**: Ω_odd stays NEGATIVE and resolved (3.1–3.2σ), the
+per-stroke impulse stays negative and 0/8 seeds positive at both dt. **Documented dt bias (stated separately as the
+task requires):** the Ω_odd *magnitude* grows ≈33 % at dt/2 (−11.3 → −15.1 rad/s) — a per-bound cross-bridge-force
+dt-sensitivity (the stroke torque is slightly undersampled at coarse dt), the same family as the §-dt gliding
+studies. The glide even channel is dt-stable here (vEven −2.67 → −2.72, ~2 %). J_odd measured over a fixed number of
+*steps* is ~½ at dt/2 because the same step-window spans half the physical time; the per-second impulse rate and the
+sign/seed-coherence are preserved. Net: sign, resolution and chirality are dt-robust; the magnitude carries a known
+~33 % dt-sensitivity that does not alter the conclusion.
+
+### 22.10 Torque-to-roll accounting — Q_omega = 1.000
+In every arm the measured body-fixed roll equals the independently-measured mean axial torque divided by the
+integrator's own roll drag (`Ω = ⟨τ_ax⟩/γ_roll`, γ_roll = 3.2419e-23 N·m·s): **Q_omega = 1.000 to four digits**,
+including the ε=0 arms. There is no torque-to-rotation gap — the resolved roll is fully explained by the measured
+converter torque; 1e-21 N·m ⇒ 30.85 rad/s in this filament.
+
+### 22.11 Success gate for directed twirling
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Native Ω_odd excludes zero at ≥3σ | **PASS** — 5.33σ endpoint / 4.78σ slope (n=48) |
+| 2 | +ε and −ε give opposite body-fixed roll | **PASS** — S+ −10.05, S− +9.04 rad/s |
+| 3 | Mirrored lattice reverses Ω_odd | **PASS** — native −9.55 → mirror +11.87; J_odd 24/24 flip |
+| 4 | ε=0 control consistent with zero odd roll | **PASS** — Ω +0.12, slope −0.22 (0.1σ), n=48 |
+| 5 | Θ(t) approximately directed winding, not only a walk | **PARTIAL** — resolved ensemble drift; per-seed R²≈0.45–0.62 |
+| 6 | Stroke-conditioned impulse same sign + mirror reversal | **PASS** — native 0/48 seeds +, mirror 24/24 +, 20–32σ |
+| 7 | Q_omega confirms torque explains roll | **PASS** — 1.000 every arm |
+| 8 | Axial gliding healthy | **PASS** — vEven −2.7…−3.0 µm/s |
+| 9 | Gliding odd ≈0 / ≪ even | **PASS** — vOdd −0.08 vs vEven −2.88 (3 %) |
+| 10 | Survives timestep refinement | **PASS** (conclusion) — sign/resolution/chirality dt-robust; magnitude +33 % dt bias documented |
+| 11 | No invalid states / solver failures / fallback | **PASS** — 0/0/none across every run |
+
+10 of 11 pass decisively; #5 is partial (the directed twirl is a resolved ensemble drift on a comparable per-seed
+random walk, R²≈0.5).
+
+### 22.12 Decision class and the exact next step
+**Decision class D1 — directed twirling is established in the simplified full-mat, one-segment, filament-Brownian-off
+assay, and it strengthens with the converter skew.** Increasing the true converter-stroke skew turned the §21
+under-resolved 5° signal into a directly-measured, resolved body-fixed roll: native Ω_odd = −9.55 ± 1.8 rad/s
+(5.33σ, n=48), reversing to +11.87 under the lattice mirror, surviving base randomization in sign, with the
+stroke-conditioned per-stroke impulse coherent across **all 48 native / all 24 mirror seeds** and dt-robust in
+sign/resolution. **The scaling is Outcome B**: the per-stroke geometric impulse scales ≈ sin(ε) (the mechanism), but
+the population-mean direct twirl grows only sub-sin (≈1.2×/1.84× for 15°/30°) because it is diluted over the whole
+bound population — so a bigger skew helps, but with diminishing return in the *directly measured* twirl. **The
+smallest converter skew that produces a resolved direct twirl is ≈ 5–15°** (5° already 2.4–2.9σ at 20 ms/n=8; 15°
+clean at 8/8 seeds and 5.33σ at n=48).
+
+**Honest limits (not hidden):** (a) gate #5 — per-seed R²≈0.5, i.e. a resolved directed drift on a comparable random
+walk, not a clean deterministic winding; (b) the Ω_odd *magnitude* carries a ≈33 % dt-sensitivity (sign/resolution
+unaffected); (c) 15° is a large, non-biological skew — this is a mechanism signal-strength result, not a pitch
+claim; the roll-per-distance quoted next is a diagnostic only. **Roll-per-distance (diagnostic, this Brownian-off
+one-segment scene only):** Ω_odd/|vEven| ≈ 9.55 rad/s ÷ 2.88 µm/s ≈ **3.3 rad/µm ≈ 0.53 turn/µm** at 15° — reported
+solely to size the simplified assay, NOT as a biological pitch.
+
+**Exact next step — separately gated, do not fold into this task.** With a resolved net torque now in hand, the
+sequence §17.1/§20.13 gated behind it opens: the **roll-coherence test** with `RollSpringSystem` (does a
+multi-segment filament roll coherently, or does the resolved single-segment torque wash out across segments?), at
+15° shared base, mirror-controlled. Only after that resolves should a biological pitch (turn/µm at a biological ε,
+if any converter skew is physical) be discussed. Nothing new needs building for the roll-coherence test beyond
+wiring `RollSpringSystem`, which this task deliberately left OFF.
+
+**Visualization (illustrative only).** `-twirl -3js threejs_conv_twirl -converter-stroke-skew-deg 15 -steps 8000
+-stride 40` writes 200-frame movies for ε=0 / +15 native / −15 native / +15 mirror (material roll ticks, discrete
+bound sites, head→site bonds coloured by per-head torque sign, accumulated transported roll, total axial torque, ε
+in frame metadata). Single-seed (101), so noisy and NOT a statistical claim; the numbers above are the result.
+Serve with `python3 SoftBox/sim_server.py 8000` from `~/Code`, open `http://localhost:8000/SoftBox/sim_viewer_boa.html`.
+
+### 22.13 Regression — nothing pre-existing moved
+`-conv-fixtures` 8/8, `-conv-stage1` 8/8, `-conv-equiv` PASS (device-resident), `-fixtures` all PASS incl. [8]
+all-flags-off bit-identity and 209 ε=0 byte-identity. The new work is additive: host-side measurement reductions
+(slope-fit Ω, windowed `J_θ`, `oddMS`/`msMask`/`median`), two new report drivers (`-conv-sweep`, `-conv-controls`),
+and the converter-skew `makeTwirlMovies` arms — no device kernel, no canonical path, no `CANON_VERSION`, RNG, dt or
+event-ordering change. `BoA-v1ref` byte-clean; the canonical explicit-S2 production path untouched.
+
+
+## 23. Converter-twirling efficiency and motor-geometry audit
+
+**The question this section was set.** §22 established directed twirling in the simplified assay (native
+Ω_odd = −9.55 ± 1.8 rad/s at 5.33σ, mirror-reversing, per-stroke impulse coherent across all 48 native seeds)
+but with an apparent paradox: the **stroke-conditioned per-stroke impulse `J_odd` scales ≈ sin(ε)** while the
+**population-mean roll Ω_odd grows only sub-sin** (1.20×/1.84× at 15°/30° against sin-ratios 2.97×/5.74×).
+§22.4 attributed that to *dilution over the bound population*. This section tests the attribution by accounting
+for the axial angular impulse over the **whole bound episode** instead of a fixed post-stroke window, and then
+asks whether motor geometry can improve the transfer.
+
+**The headline is that the attribution was wrong, and in the favourable direction.** There is no loss between
+the stroke event and the population mean: the stroke window *under-counts* the chiral impulse by ~2.6×, and once
+the full bound cycle is accounted for the measured population torque is reproduced to within ~1–26 %. The one
+genuine loss channel is the **pre**-stroke dwell, and the dominant chiral lever in this motor turns out to be
+the **static bound-pose preload**, not the stroke. Full accounting in §23.3–§23.5.
+
+Everything here is **noncanonical, flag-gated, DEFAULT-OFF, byte-identical when disabled**. No canonical
+default, parameter, chemistry, dt, RNG stream, event ordering, `MotorModel.CANON_VERSION`, device kernel or
+TaskGraph task was changed (§23.15).
+
+### 23.1 Exact configuration and what is new
+
+Scene identical to §22.1: one rigid filament segment (full 2.106 µm contour, roll-drag ratio 1.000000),
+filament translational+rotational Brownian OFF, motor/S2 + head-roll Brownian ON, `every3` sites (8.10 nm rise),
+site exclusivity ON, Ractin 3.50 nm, capture 12 nm, surface bond ON, **interface** converter-skew gauge,
+registry K = 0, `-binding-skew-deg 0`, `-stroke-skew-deg 0`, target-zone OFF, roll spring OFF, dt = 2.5e-6 s,
+density 400 heads/µm² (N = 1200), 8000 steps (20 ms; 25 % equilibration ⇒ 15 ms measured), shared motor bases,
+**GPU device-resident throughout** (`run_gpu_monitored.sh` outermost, external recorder RUNNING,
+`-Dtornado.enable.fma=false -Dtornado.recover.bailout=false -Dtornado.tvm.maxbytecodesize=65536`; a lowering
+failure THROWS, so there is no silent CPU fallback anywhere in this section).
+
+New, all measurement-side:
+
+| addition | what it is | risk |
+|---|---|---|
+| `ChiralSiteHarness.Ledger` | per-motor bound-EPISODE state machine; routes each step's `τ_ax·dt` into `J_pre`/`J_stroke`/`J_post_early`/`J_post_late` by lag since the episode's FIRST stroke | host-side reduction only |
+| `softbox/ConvBudget.java` | seed-level statistics, quantile stratification, efficiency metrics, atlas classification | pure analysis |
+| `ExplicitCompleteMatHarness.EPISODE_TELEM` | adds `q`/`nodes`/`outGeom` to the **production copy-out list** so the motor-internal stratifiers are host-current on GPU | **transfers only** — no kernel, no device work, no ordering |
+| `applyGeomScales` + the base-triad roll | the Phase C/D/E diagnostic geometry hooks | **scene parameters only** — see §23.6 |
+| `-conv-budget`, `-conv-gauge-compare`, `-conv-geom-sweep <axis>`, `-conv-geom-values` | drivers | new modes |
+
+**Control that the instrumentation did not perturb the physics.** The `-conv-budget` 15°/n = 8 arm reproduces
+§22.3's pilot **digit for digit** — Ω_odd slope-fit **−12.675 vs −12.68 rad/s (3.61σ vs 3.61σ)**, `tauOdd`
+−3.675e-22 vs −3.67e-22, vEven −2.67, avgBound 2.66/2.60 — and at n = 24 the baseline arm reproduces §22.8's
+24-seed shared-native arm exactly (Ω_odd slope −6.956 vs −6.96, `tauOdd` −2.1055e-22 vs −2.11e-22, 2.28σ vs
+2.28σ). Adding three buffers to the copy-out set changed nothing, as it must.
+
+**Statistics.** The independent unit is the SEED throughout. Per-seed means over that seed's episodes are the
+primitive; across-seed mean ± SEM, median, IQR, seed-sign fraction and a deterministic seed-bootstrap 95 % CI
+sit on top. Every conclusion is drawn in the ε-ODD channel `X_odd = ½[X(+ε) − X(−ε)]` on matched seeds, which
+cancels the large ε-EVEN off-axis-bond baseline (|τ|/|τ̄| = 20–110 in these arms). Ratios are formed from
+seed-paired ODD means and suppressed when the denominator is under 3σ. Event-level counts are descriptive only;
+no pseudo-SEM is ever quoted from pooled events.
+
+### 23.2 The full-cycle impulse budget — definitions
+
+For every bound episode that contains an ADP·Pi→ADP stroke, the axial angular impulse of each measured step
+(`τ_ax·dt`, `τ_ax` the bond's segment-side torque projected on the filament's own material tangent) is routed by
+its **lag since that episode's FIRST stroke**:
+
+```
+J_pre        = Σ τ_ax·dt   from the observed attachment through the step before the stroke
+J_stroke     = Σ τ_ax·dt   over lags 0..7      (the §22.7 shortest validated stroke-local window)
+J_post_early = Σ τ_ax·dt   over lags 8..31
+J_post_late  = Σ τ_ax·dt   over lags 32 .. detachment
+J_total      = J_pre + J_stroke + J_post_early + J_post_late
+J_recoil     = J_total − J_stroke
+f_retain     = J_total / J_stroke
+```
+
+Routing by lag-since-the-FIRST-stroke (rather than resetting on a re-stroke) makes double counting structurally
+impossible; re-strokes are counted in a separate field. In this scene they never happen — `strokes/episode` is
+**1.000** in every arm, because the mean post-stroke residence (~281 steps) is shorter than the ATP/ADP·Pi
+re-priming path after detachment.
+
+Two censoring rules, both stated rather than hidden. Episodes already in progress when the measurement window
+opens are **left-censored and never recorded** (their attachment was not observed, so `J_pre` is undefined).
+Episodes still bound at the horizon are recorded with a censored flag and **excluded from the budget** (~5 % of
+records). Both exclusions are conservative for the closure test of §23.5, which is computed both ways.
+
+Each recorded episode also carries the at-stroke state used for stratification: site id, bind azimuth, pre- and
+post-stroke lifetimes, S2 end-to-end extension and bending energy, converter φ and ψ, the F8 axial / tangential
+/ radial force components and axial torque, the number of simultaneously bound motors, the motor base azimuth,
+the motor pivot's azimuth about the filament, and the stroke-window work terms `W_chiral = Σ τ_ax·dΘ` and
+`W_F8 = Σ F_seg·Δx_F8`.
+
+### 23.3 Phase A — the full bound-cycle impulse budget (15°, n = 8) [`p1_budget_15deg_n8_gpu.txt`]
+
+366 (+ε) / 374 (−ε) stroke-bearing episodes over 8 matched seeds, 22/18 right-censored and excluded;
+`strokes/episode` = 1.000; mean pre-stroke life 39.3 steps, mean post-stroke life 281 steps (0.70 ms);
+window-truncated fraction 0.010; 0 invalid, 0 solver failures, no fallback.
+
+| component (per stroke-bearing episode) | ODD mean N·m·s | SEM | σ | median | seed sign |
+|---|---|---|---|---|---|
+| `J_pre` (attach → stroke−1) | **+6.999e-26** | 2.03e-26 | 3.45 | +6.08e-26 | 88 % |
+| `J_stroke` (lags 0–7) | **−4.563e-26** | 5.64e-27 | 8.09 | −5.00e-26 | **100 %** |
+| `J_post_early` (lags 8–31) | **−6.851e-26** | 5.43e-27 | 12.62 | −6.95e-26 | **100 %** |
+| `J_post_late` (lags 32 → detach) | **−8.818e-26** | 4.27e-26 | 2.07 | −7.02e-26 | 75 % |
+| **`J_total`** (attach → detach) | **−1.323e-25** | 4.02e-26 | 3.30 | −1.26e-25 | **100 %** |
+| `J_recoil` = `J_total − J_stroke` | **−8.669e-26** | 4.02e-26 | 2.16 | −9.26e-26 | 75 % |
+| `f_retain` = `J_total/J_stroke` | **+2.90** | per-seed mean +3.37 ± 0.97, median +3.03 | | | |
+
+seed-bootstrap 95 % CI: `J_stroke` [−5.53e-26, −3.39e-26], `J_total` [−2.12e-25, −6.27e-26].
+
+**`f_retain` = +2.90, not < 1.** The post-stroke bound period does not cancel the stroke impulse — it
+**reinforces** it (`J_recoil` carries the SAME sign as `J_stroke`). The only opposing channel is `J_pre`, the
+**pre**-stroke bound dwell. **Decision class E1 is refuted: there is no late-bound recoil loss.**
+
+**ε = 0 achiral null (the budget's own noise floor; the ε = 0 arm split into two 4-seed halves).**
+`J_stroke` null = −2.71e-28 ± 1.77e-27 (**0.15σ**) against the signal's −4.56e-26 (8.09σ) — a 170× separation.
+`J_total` null = +5.63e-26 ± 4.96e-26 (1.13σ): honestly, `J_total`'s uncertainty is dominated by the long
+`J_post_late` tail, whose *own* noise floor is comparable to the signal's SEM. So `J_stroke`/`J_post_early` are
+sharply resolved and `J_total`/`J_post_late` are resolved but tail-noise-limited — stated rather than smoothed.
+(At n = 24 with the finalist geometry the same null gives every component ≤ 0.92σ; §23.11.)
+
+**Stroke-free bound episodes (control).** Episodes that never stroke carry `J_pre`-sum +2.40e-24 over 14 (+ε)
+and −1.25e-24 over 13 (−ε) — no coherent chiral impulse, as required: without a nucleotide transition the
+rotated converter frame produces no rectified impulse.
+
+### 23.4 Phase A2 — which states retain the chiral impulse
+
+Quantile-binned in the ODD channel, seed as the unit (full tables in the log). The signal-bearing structure:
+
+- **`J_stroke_odd` is remarkably UNIFORM** across every stratifier — −2.9e-26 … −6.3e-26 in all 40+ bins, with
+  no bin flipping sign. The per-stroke chiral impulse is a **robust property of the mechanism**, not of a
+  favoured sub-population. There is no "productive pose" to select for.
+- **All the variance lives in `J_recoil`**, i.e. in the long bound tail, and it changes sign between bins:
+  strongly reinforcing at long post-stroke lifetime (`[450,∞)` −3.14e-25) and at short (`[77,169)` −1.74e-25),
+  but ~0 or mildly opposing in the middle (`[169,291)` +8.8e-28, `[291,450)` +1.2e-26).
+- **`J_pre` is the loss, and it is pose-driven, not lifetime-driven.** The clearest single stratifier is the
+  pre-stroke lifetime: the shortest-pre-life quartile `[−∞,12)` has `J_total_odd = +1.47e-26` — the WRONG sign —
+  while every longer-pre-life quartile is strongly negative (−1.15e-25 … −1.71e-25).
+- **`f_retain` never falls below ~1 in any healthy bin** and reaches +5…+8 in the low-φ, mid-ψ, mid-axial-force
+  and long-lifetime bins. Nothing in the geometry-accessible state space looks like a truncation regime
+  (`fast-detach` fraction 0.012).
+- **`nBound` at stroke** (3.65 mean): `f_retain` is +4.1…+4.3 for ≥3 simultaneously bound heads but −2.3 for
+  <3 — the multi-head tug-of-war *helps* rather than cancels here, opposite to the §22.4 dilution guess.
+- **Motor base azimuth** is a single bin (0, shared bases) as designed, so the randomized-base locality control
+  is the §23.12 job.
+
+### 23.5 Phase A3/A4 — the closure that answers the load-bearing question, and the ε-scaling decomposition
+
+**The closure.** If the population mean were losing chiral impulse somewhere between the stroke and the
+ensemble, then (episode rate) × (per-episode impulse) would exceed the measured `τ_odd`. It does not:
+
+| ε | episodes/seed | episode rate | `J_total_odd` | predicted `τ_odd` | measured `τ_odd` | closure (`J_total`) | closure (`J_stroke` only) |
+|---|---|---|---|---|---|---|---|
+| 5° | 44.4 | 2958 /s | −1.502e-25 | −4.44e-22 | −3.533e-22 | **1.26** | 0.15 |
+| 15° | 43.8 | 2917 /s | −1.323e-25 | −3.86e-22 | −3.675e-22 | **1.05** | 0.36 |
+| 30° | 46.4 | 3096 /s | −1.829e-25 | −5.66e-22 | −5.605e-22 | **1.01** | 0.47 |
+
+(Rate = uncensored stroke-bearing episodes per second over the 15 ms measurement window; the residual and the
+26 % at 5° are consistent with the two censoring exclusions, which preferentially drop long-lived episodes and
+therefore the `J_post_late` tail.)
+
+**⇒ The chiral impulse is NOT being lost. It is being UNDER-COUNTED by the stroke window.** The 0–7-step window
+captures only 15–47 % of the per-episode chiral impulse; the rest accrues over the long post-stroke bound
+residence with the SAME sign. `eta_pop` measured against `J_stroke` is +2.0…+2.6 (the population delivers
+2–2.6× MORE torque than the stroke window predicts) and against `J_total` it is ≈ 1. **There is no transmission
+defect to fix.**
+
+**Why Ω_odd nevertheless grows sub-sin — the decomposition.** Ratios against the 5° arm
+[`p2_budget_05deg_n8_gpu.txt`, `p3_budget_30deg_n8_gpu.txt`]:
+
+| quantity | 5° | 15° | 30° | scaling |
+|---|---|---|---|---|
+| sin ε / sin 5° | 1.00 | 2.97 | 5.74 | — |
+| `J_stroke` | 1.00 | 2.49 | 4.61 | **∝ sin ε** |
+| `J_post_early` | 1.00 | 2.50 | 4.57 | **∝ sin ε** |
+| `J_pre` (OPPOSING) | 1.00 | **3.40** | **7.83** | **super-sin** |
+| `J_post_late` | 1.00 | 0.71 | 1.07 | **ε-independent** |
+| `J_total` | 1.00 | 0.88 | 1.22 | ~flat |
+| `τ_odd` | 1.00 | 1.04 | 1.59 | ~flat |
+| `Ω_odd` (slope) | 1.00 | 1.20 | 1.84 | ~flat (= §22.4) |
+
+Three channels with three different ε-laws:
+
+1. **The stroke-driven channel** (`J_stroke + J_post_early`, lags 0–31) scales **∝ sin ε** — the converter
+   mechanism works exactly as designed, all the way to 30°.
+2. **The pre-stroke channel** (`J_pre`) is **OPPOSING and grows FASTER than sin ε**, cancelling
+   **44.9 % → 61.3 % → 76.8 %** of the stroke-driven channel at 5°/15°/30°. The net stroke contribution
+   therefore grows only **1.00 → 1.75 → 1.93**, which is what the observed Ω_odd growth (1.00 → 1.20 → 1.84)
+   actually tracks.
+3. **The late tail** (`J_post_late`, lags ≥32) is **ε-insensitive** and is the DOMINANT term at 5° (83 % of
+   `J_total`), acting as a constant pedestal that further compresses every ratio taken against 5°.
+
+**This replaces §22.4's attribution.** The sub-sin growth is not "dilution over the bound population" — it is a
+**super-linear opposing pre-stroke chiral preload** plus an ε-independent bound-tail pedestal. §22.4's Outcome-B
+*observation* stands; its *mechanism* was wrong.
+
+**Atlas mapping (Phase A4).** Against `docs/TWIRLING_MECHANISM_ATLAS_FINDINGS.md` and its master identity
+`J_θ = −R·γ_y·Δy_bound − γ_ω·Δω_bound` (the cycle impulse is set entirely by the net chiral-coordinate
+displacement accrued WHILE BOUND — which is exactly why the whole-episode integral, not the stroke window, is
+the physical observable):
+
+- The full motor is **atlas class A** on the harness's own classifier (`f_retain` = 2.16–8.19 ≫ 0, recoil
+  same-signed, truncation fraction 0.01) — a **direct chiral stroke with retained bound displacement**.
+- Mechanistically it is a **superposition of two R4 atlas legs with OPPOSITE handedness**:
+  **A2 (oblique vector stroke)** carrying the sin ε-scaling `J_stroke + J_post_early` — the measured
+  `J_stroke_odd` at 15° (−4.56e-26) sits within 20 % of the atlas's reduced-model A2(15°) `J_θ` = −5.44e-26 —
+  plus **A3 (finite-rest bound pose / chiral binding registry, whose atlas impulse is "all in `J_pre`")**
+  appearing here with the *wrong sign* as a parasite.
+- It is emphatically **NOT** the atlas's conservative-failure class (A5/A6, "large peak τ, cycle impulse ≈ 0",
+  which the atlas §16 identified as the explanation for the §20 askew-attachment null). The measured
+  cycle-integrated impulse is finite, coherent (100 % of seeds) and mirror-reversing.
+- It is **not** class C either: post-stroke residence (median 281 steps) vastly exceeds the stroke window, so
+  nothing is preserved by early detachment.
+
+#### 23.5b Efficiency metrics (15°, n = 8)
+
+| metric | value | note |
+|---|---|---|
+| `eta_geom` = \|Δr_t\|/\|Δr_total\| | **0.2588** | −2.071 / 8.000 nm, deterministic (§21.4); = sin 15° exactly |
+| `eta_J` = \|`J_stroke_odd`\| | 4.563e-26 N·m·s | per stroke, stroke window |
+| `eta_cycle` = signed `J_total_odd` | **−1.323e-25 N·m·s** | the physically meaningful per-cycle impulse |
+| `eta_retain` = `J_total/J_stroke` | **+2.90** | > 1 ⇒ the window under-counts |
+| `eta_pop` = `τ_odd`/(rate·`J_stroke`) | **+2.59** | ⇒ **≈ 1.0 when computed against `J_total`** (closure table) |
+| `eta_energy` (proxy) = `W_chiral`/\|`W_F8`\| | **+8.20e-05** | +1.99e-24 J chiral work vs 2.43e-20 J stroke-window F8 work. NOT a thermodynamic efficiency — no chemical free-energy accounting. The 1e-4 scale is set by the ratio of the filament's roll mobility × moment arm to its axial mobility, i.e. a geometric consequence of a 3.5 nm arm on a 2.1 µm rod, not a mechanism inefficiency. |
+| `eta_twirl/glide` = \|Ω_odd\|/\|v_even\| | 4.74 rad/µm = **0.755 turn/µm** | DIAGNOSTIC ONLY (Brownian-off, one rigid segment, non-biological 15° skew) |
+
+### 23.6 Phase B — source-code geometry audit (read before any sweep)
+
+Read from `TwoBodyBeamAnalyticGpu.matBeamGeom` / `matS2SolveStep`, the CPU twins
+`TwoBodyConverterMotor.geom2D` / `s2SolveM`, `buildS2Mat`, `build3core` and
+`ExplicitMatSolveHarness.paramArr`.
+
+**The converter block, in one place.**
+
+```
+uB  = ê_up·cos φ + b̂·sin φ            C   = P + lb·uB              (P = beam node[M], the S2 pivot)
+d0  = b̂·(rF8x−rCx) + ê_up·(rF8y−rCy)   xF8 = C + R_econv(ψ)·d0
+rc  = b̂·rCx + ê_up·rCy                 xH  = C − R_econv(ψ)·rc
+```
+
+| quantity | symbol | value | where it lives | kind |
+|---|---|---|---|---|
+| S2 mechanically free length | L | **40 nm** | literal at `ChiralSiteHarness.build()` → `buildS2Mat(…,40.0,…)` | call-site scene parameter |
+| S2 initial slack (sag) | — | 1.5 nm | `EXPLICIT_GLIDE_SLACK_NM` | constant |
+| S2 element count | M | **4** | `round(L / EXP4G_L0_NM)`, `EXP4G_L0_NM = 10 nm` | **derived from L** |
+| S2 element length | l0 | **10 nm** | `G.g4l0 = L/M` | derived |
+| S2 stretch stiffness | ks | **0.4200 N/m** | `EXP4G_EA_SI / l0`, EA = 4.2e-9 N (70 pN/nm × 60 nm, MD-informed) | derived → `params[11]` |
+| S2 bend stiffness | kb | **7.200e-20 N·m** | `EXP4G_EI_SI / l0`, EI = 7.2e-28 N·m² (0.01 pN/nm × 60nm³/3) | derived → `params[13]` |
+| S2 node drag radius | — | 5 nm | `EXP4G_RNODE_NM` | constant → `params[16]` |
+| converter joint C rel. pivot P | lb | **8.000 nm** | `LB_3C` → `G.lb` | constant → `params[0]` |
+| F8 material point | rF8 | (3.5, 1.5) nm | `R_F8` → `G.rF8` | constant → `params[1..2]` |
+| converter material point | rConv | (−3.5, −1.5) nm | `R_CONV` → `G.rConv` | constant → `params[3..4]` |
+| **converter rotation radius** | \|d0\| | **7.6158 nm** | derived: (7.0, 3.0) nm in (b̂, ê_up) | derived |
+| C→F8 offset ⊥ the zero-skew stroke axis | rCF8_perp | **3.000 nm** | the ê_up component of d0 | derived |
+| C→F8 offset ‖ the zero-skew stroke axis | rCF8_axial | **7.000 nm** | the b̂ component of d0 | derived |
+| head point rel. C | \|rc\| | 3.8079 nm | derived from rConv | derived |
+| pre-stroke lever angle | φ_pre | +30° | `PHI_PRE_3E` | constant |
+| converter rest switch | θ_s | −30° → +30° (Δ = 60°) | `PRESTROKE_THETAS` / `ADP_THETAS` | constants |
+| **unloaded stroke magnitude** | \|Δr\| | **8.0000 nm** (ε-independent) | measured, §21.4 fixture 103 | emergent |
+| zero-skew axial stroke | Δr_u(0) | **−8.0000 nm** (tangential exactly 0) | measured, §21.4 | emergent |
+| interface gauge reference pose | (φ_ref, ψ_ref) | (`PHI_PRE`, `psiActin`) | `chiP[18]`, `q[3N+m]` | derived |
+
+**Structural finding #1 — the stroke is the LEVER swing, not the converter arm.** A pure 60° converter swing on
+radius \|d0\| would give a chord `2·7.6158·sin 30° = 7.6158 nm`, but the measured unloaded stroke is
+**8.0000 nm = 2·lb·sin 30°** exactly. The bound head's ψ is pinned to actin by the binding spring, so the whole
+θ_s switch is taken up by the neck-lever angle φ and the F8 anchor swings on radius **lb**, not \|d0\|. This was
+then verified empirically across every geometry in §23.8–§23.10: the unloaded stroke is **bit-identical**
+(8.0000 / −8.0000 / −2.0706 nm at ε = 15°) at S2 lengths 20–80 nm, S2 bend stiffness 0.5–2×, F8 eccentricity
+0.75–1.5× raw and \|d0\|-compensated, and converter transverse offsets ±2 nm. **Consequence: no geometry axis in
+this motor can change the stroke; they can only change the LOADED transmission and the static preload.**
+(Consistent with `canonical-motor-divergence`: step ∝ LEVER.)
+
+**Structural finding #2 — no kernel change is needed for any geometry sweep.** `matS2SolveStep` and
+`matBeamGeom` read `lb, rF8x, rF8y, rCx, rCy` from `params[0..4]` and `ks, l0, kb` from `params[11..13]`, all
+built host-side by `ExplicitMatSolveHarness.paramArr(G)` from `Glide2D` scalar fields; the base triad comes from
+`frame[0..8]`. The smallest sufficient hooks are therefore host-side scene edits applied before `packExMat`,
+which is exactly what was built. **The validated converter device kernels are byte-unchanged**, so §21.6's
+device-residency equivalence carries over unconditionally and no new CPU/GPU gate is owed for a geometry arm.
+
+**The four default-off hooks, and what each moves.**
+
+- `-s2-free-length-scale s` — L → s·L at **fixed M**, so the kernel's DOF count, `sys` stride and lowering are
+  untouched and the change lands in `l0 = L/M` ⇒ `ks = EA/l0`, `kb = EI/l0`: the *same* continuum beam (EA, EI
+  fixed at their MD-informed values) discretized over a different span. The clamped emergence point
+  `g4E = P − (L−slack)·b̂` and the substrate floor move with it; **the motor pivot P and the whole motor lawn do
+  not move**, so binding geometry is not silently re-randomised.
+- `-s2-bend-stiffness-scale s` — `kb → s·kb` alone, at fixed length, fixed stretch stiffness, fixed geometry.
+  Deliberately a *separate* parameter (the one-factor-at-a-time requirement); they compose only if both are set.
+- `-converter-f8-eccentricity-scale s` [`-converter-f8-eccentricity-compensated on`] — moves **only the F8
+  material point** `rF8`, never `rConv`, so the head point `xH` and `gammaPsi` (which depends on \|rConv\|) are
+  untouched: the smallest mechanically interpretable perturbation. Raw mode scales
+  `rCF8_perp = rF8y − rCy`; compensated mode re-solves the axial component to hold **\|d0\| fixed**.
+- `-converter-transverse-offset-nm δ` — rolls each motor's base triad **about its own b̂**. b̂ is invariant, so
+  the axial stroke direction is untouched; (econv, ê_up) tilt, which displaces the converter **joint C** out of
+  the motor's axial plane while the S2 pivot P stays put. `δ_roll = asin(δ / (lb·cos φ_pre))` with
+  `lb·cos φ_pre = 6.9282 nm`, so ±2 nm is a ±16.8° roll — well inside the reachable arm and non-pathological.
+  A **local** motor-geometry perturbation (b̂/econv/ê_up are the motor's own base directions), not a laboratory
+  axis, introducing no site-frame handedness by construction; the ε = 0 and mirror controls are nevertheless the
+  required empirical checks (§23.10).
+
+A **broad general-purpose geometry system was deliberately not built**: these are five scalars and one frame
+roll, all default-valued to exact no-ops (`geomScaled()` reports the state; `resetGeomScales()` restores).
+
+### 23.7 Phase F — interface vs pivot converter-skew gauge (15°, matched seeds, n = 8) [`p4_gauge_15deg_n8_gpu.txt`]
+
+The two gauges have, by construction (§21.2), the **identical unloaded stroke increment** — `Δr(ε) = R·Δr(0)`
+either way. They differ only in the rotation CENTRE, hence only in the STATIC rest geometry at the moment a head
+docks. This was the cheapest test on the list and it turned out to be the most informative one in the section.
+
+| | **interface** (default) | **pivot** (`-converter-skew-gauge off`) |
+|---|---|---|
+| `J_pre` | +6.999e-26 (3.45σ, 88 %) | **+2.663e-25 (18.83σ, 100 %)** — 3.8× larger |
+| `J_stroke` | −4.563e-26 (8.09σ, 100 %) | −1.968e-26 (5.82σ, 100 %) — **2.3× smaller** |
+| `J_post_early` | −6.851e-26 (12.62σ, 100 %) | −1.88e-28 (**0.02σ**) — **abolished** |
+| `J_post_late` | −8.818e-26 (2.07σ) | **+3.065e-25 (6.39σ, 100 %)** — **sign reversed** |
+| **`J_total`** | **−1.323e-25 (3.30σ)** | **+5.530e-25 (14.64σ)** — **sign reversed, 4.2× larger** |
+| `f_retain` | +2.90 | **−28.1** |
+| **Ω_odd (slope)** | **−12.68 ± 3.5 (3.61σ)** | **+49.50 ± 4.6 (10.81σ)** — **sign reversed, 3.9× larger** |
+| `τ_odd` | −3.675e-22 (3.24σ) | +1.604e-21 (8.59σ) |
+| v_even | −2.67 µm/s | −3.94 µm/s |
+| avgBound | 2.66 / 2.60 | 2.52 / 2.42 |
+| pre-life / post-life (steps) | 39.3 / 281 | 37.2 / 272 |
+| invalid / solver | 0 / 0 | 0 / 0 |
+
+**Reading.** The gauge switch moves **only the static-preload channels** (`J_pre` ×3.8, `J_post_late` reversed
+and ×3.5) and leaves the converter's own stroke channel qualitatively where it was (`J_stroke` same sign,
+weakened 2.3×; `J_post_early` abolished). The bare pivot rotation displaces the F8 anchor by ≈ \|x̃\|·ε at the
+instant of docking — the large static attachment strain §21.2 identified and deliberately gauged away — and that
+strain's bound relaxation is a genuine chiral rectifier: it produces a **cycle-integrated** impulse (14.6σ,
+100 % of seeds), not merely a transient.
+
+**This is decision class E5, and it is also the E7 trap.** The pivot gauge is a **4× stronger, 10.8σ twirl** —
+by far the largest population signal measured anywhere in this lineage — but:
+
+1. its handedness is **opposite** to the converter stroke's, so it is not "more of the same mechanism";
+2. its chirality is **binding-preload-borne, not stroke-borne**: it lives in `J_pre`/`J_post_late` while the
+   `J_stroke`/`J_post_early` stroke channel actually *weakens*;
+3. in atlas terms it is **A3 (finite-rest bound pose / chiral binding registry)** overwhelming
+   **A2 (oblique vector stroke)** — a *different* R4 atlas mechanism the atlas independently ranks as
+   comparable to A2;
+4. it is therefore exactly the confound E7 names ("preload chirality"), and it must **not** be reported as an
+   improved converter-twirling design. Reported instead as what it is: proof that in this motor the **static
+   bound-pose preload, not the stroke, is the dominant chiral lever** — and a clean demonstration that the
+   §21.2 interface gauge was the right default precisely because it suppresses it.
+
+**Why this is not the §20 (T5) null.** §20's `epsBind` moved the *actin site*, so a head binding to an
+already-offset site never created the strain (age-0 torque already null). The pivot gauge instead displaces the
+*motor's* F8 anchor at an unmoved site, so the strain **is** created at docking and its bound relaxation carries
+a net chiral coordinate displacement — the atlas master identity's requirement. The budget separates the two
+cases cleanly, which is the point of building it.
+
+### 23.8 Phase C — S2 transmission sweeps (one factor at a time, ε = ±15°, n = 8)
+
+**Precondition, verified deterministically for EVERY geometry before any arm was believed** (the confound block
+is printed per value): the unloaded converter stroke is **bit-identical across the whole sweep** —
+`|Δr₀| = 8.0000 nm`, `Δr₀_axial = −8.0000 nm`, `Δr₀_tangential = −0.0000 nm`, and at ε = 15°
+`|Δr| = 8.0000`, `Δr_axial = −7.7274`, `Δr_tangential = −2.0706 nm`. **Any effect seen here is therefore a pure
+TRANSMISSION effect, not a stroke-length change** (§23.6, structural finding #1).
+
+#### 23.8a S2 free length [`p5_geom_s2len_n8_gpu.txt`]
+
+| L scale (L, l0, ks, kb) | Ω_odd ± SEM rad/s | σ | `J_stroke_odd` | `J_total_odd` | **`f_retain`** | v_even | avgB | invalid |
+|---|---|---|---|---|---|---|---|---|
+| 0.50× (20 nm, 5.0 nm, 0.8400, 1.44e-19) | −12.08 ± 8.5 | 1.42 | −2.887e-26 | −9.171e-26 | +3.18 | −2.221 | 2.16 | 0 |
+| **0.75× (30 nm, 7.5 nm, 0.5600, 9.60e-20)** | **−25.33 ± 9.5** | 2.66 | −4.565e-26 | **−2.486e-25** | **+5.45** | −2.661 | 2.50 | 0 |
+| 1.00× (40 nm, 10 nm, 0.4200, 7.20e-20) — **baseline** | −12.68 ± 3.5 | 3.61 | −4.563e-26 | −1.323e-25 | +2.90 | −2.673 | 2.63 | 0 |
+| 1.25× (50 nm, 12.5 nm, 0.3360, 5.76e-20) | −11.28 ± 5.2 | 2.18 | −4.935e-26 | −1.051e-25 | +2.13 | −2.921 | 2.62 | 0 |
+| 1.50× (60 nm, 15 nm, 0.2800, 4.80e-20) | −6.77 ± 5.1 | 1.33 | −5.211e-26 | −8.760e-26 | +1.68 | −2.647 | 2.49 | 0 |
+| 2.00× (80 nm, 20 nm, 0.2100, 3.60e-20) | −5.11 ± 4.3 | 1.19 | −4.556e-26 | −3.273e-26 | **+0.72** | −2.118 | 1.99 | 0 |
+
+**This is decision class E2, and it isolates the mechanism exactly.**
+
+- **`J_stroke_odd` is FLAT** across a 4× span of S2 length (−2.89e-26 … −5.21e-26; −4.56e-26 at 0.50×, 0.75×,
+  1.00× and 2.00×). The converter delivers the same per-stroke chiral impulse regardless of its tail.
+- **`f_retain` falls MONOTONICALLY with S2 length** over 0.75× → 2.00×: **5.45 → 2.90 → 2.13 → 1.68 → 0.72**.
+  At 2.00× (L = 80 nm) retention has collapsed below 1 — the bound cycle now *loses* impulse rather than
+  reinforcing it.
+- `J_total_odd` and Ω_odd track `f_retain` (they must, since `J_stroke` is flat): Ω_odd −25.33 → −5.11.
+- **Physical reading, in the atlas's own terms.** The master identity says the cycle impulse is set entirely by
+  the net chiral-coordinate displacement accrued **while bound**. A long, compliant S2 lets the *motor's own
+  base* take up that displacement instead of the actin site, so less of it is delivered to the filament as
+  impulse. Shortening the tail stiffens the load path and the retention nearly doubles. **The compliance that
+  absorbs the chiral impulse is the S2 beam, and it acts on the RETAINED bound displacement — not on the
+  stroke.**
+- **Not a confound:** unloaded stroke bit-identical; gliding essentially unchanged at the finalist (v_even
+  −2.673 → −2.661, +0.4 %); engagement −5 %; 0 invalid / 0 solver at every length; S2 bend energy at stroke
+  3.5–4.0 kT throughout.
+- **Non-monotone at the short end.** 0.50× (L = 20 nm) *reverses* the trend (Ω −12.08, `f_retain` 3.18, 1.42σ)
+  with the sweep's worst engagement (avgB 2.16) and a degraded `J_stroke_odd` (−2.89e-26): at 20 nm the tail is
+  short and stiff enough to start limiting the head's reach to the lattice. The optimum sits near
+  **0.75× (L = 30 nm)**, not "as short as possible".
+
+#### 23.8b S2 bending stiffness [`p6_geom_s2bend_n8_gpu.txt`]
+
+`kb → s·kb` alone, at fixed L = 40 nm, fixed `ks = 0.4200 N/m`, fixed geometry. Unloaded stroke again
+bit-identical across the sweep.
+
+| kb scale (kb, N·m) | Ω_odd ± SEM rad/s | σ | `J_stroke_odd` | `J_total_odd` | `f_retain` | v_even | avgB | invalid |
+|---|---|---|---|---|---|---|---|---|
+| 0.50× (3.600e-20) | −0.57 ± 6.9 | 0.08 | −4.006e-26 | −5.169e-26 | +1.29 | −3.048 | 2.68 | 0 |
+| 0.75× (5.400e-20) | −9.86 ± 7.1 | 1.39 | −4.116e-26 | −1.341e-25 | +3.26 | −2.914 | 2.61 | 0 |
+| 1.00× (7.200e-20) — **baseline** | −12.68 ± 3.5 | 3.61 | −4.563e-26 | −1.323e-25 | +2.90 | −2.673 | 2.63 | 0 |
+| 1.50× (1.080e-19) | −6.52 ± 7.1 | 0.92 | −4.568e-26 | −7.573e-26 | +1.66 | −3.021 | 2.69 | 0 |
+| 2.00× (1.440e-19) | −12.48 ± 8.8 | 1.42 | −4.741e-26 | −1.814e-25 | +3.83 | −2.897 | 2.63 | 0 |
+
+**NULL.** `f_retain` scatters non-monotonically (1.29 / 3.26 / 2.90 / 1.66 / 3.83), every off-baseline arm is
+≤ 2.5σ, and the matched-seed deltas (dΩ_odd +0.19 … +12.1 against SEMs of 7–9) are entirely within noise.
+`J_stroke_odd` is flat again. Gliding and engagement unchanged; 0 invalid / 0 solver everywhere.
+
+**This null is informative, not merely negative.** The `s2len 0.75×` finalist changes **both** ks (0.4200 →
+0.5600 N/m) and kb (7.20e-20 → 9.60e-20) **and** the span (40 → 30 nm). This sweep reaches a **larger** kb
+(1.08e-19 at 1.5×, 1.44e-19 at 2.0×) with no effect at all. ⇒ **The S2 compliance that absorbs the retained
+chiral impulse is the AXIAL/span path, not the bending path.** The Phase-C hypothesis ("shorter *or* stiffer
+S2") is only half right: shorter helps, stiffer-in-bending does not.
+
+### 23.9 Phase D — converter/F8 eccentricity sweep (ε = ±15°, n = 8)
+
+**The clean geometric quantity.** The converter swings the F8 anchor on `d0` about the joint C. The zero-skew
+stroke is AXIAL (≈ ∓b̂), so the in-plane component of `d0` perpendicular to the stroke axis is
+`rCF8_perp = rF8y − rCy` = **3.000 nm** canonically (against `rCF8_axial` = 7.000 nm, `|d0|` = 7.6158 nm).
+Only the **F8 material point** is moved — never `rConv` — so `xH` and `gammaPsi` are untouched (§23.6).
+
+**The confound control, run first and for every geometry** [`p7_geom_ecc_n8_gpu.txt`]:
+
+| ecc | `rCF8_perp` | `\|d0\|` | unloaded `\|Δr₀\|` | `Δr₀_axial` | `Δr_tangential(15°)` | loaded F_ax | loaded F_tan | loaded τ_ax |
+|---|---|---|---|---|---|---|---|---|
+| 0.75× | 2.250 nm | 7.3527 | **8.0000** | **−8.0000** | **−2.0706** | +5.134e-12 | +1.611e-13 | +5.639e-22 |
+| 1.00× | 3.000 nm | 7.6158 | **8.0000** | **−8.0000** | **−2.0706** | +4.848e-12 | +4.601e-13 | +1.610e-21 |
+| 1.25× | 3.750 nm | 7.9412 | **8.0000** | **−8.0000** | **−2.0706** | +4.296e-12 | +5.752e-13 | +2.013e-21 |
+| 1.50× | 4.500 nm | 8.3217 | **8.0000** | **−8.0000** | **−2.0706** | +3.594e-12 | +5.467e-13 | +1.913e-21 |
+
+**The unloaded stroke is bit-identical at every eccentricity**, so the raw sweep is ALREADY
+stroke-magnitude-matched: eccentricity cannot be a disguised stroke-length change, because `|d0|` never enters
+the stroke (§23.6). What eccentricity *does* change is the **loaded** mechanics, strongly and monotonically:
+the single-motor tangential force rises 3.6× and the chiral torque 3.6×, while the axial force falls 30 %.
+
+| ecc | Ω_odd ± SEM rad/s | σ | `J_stroke_odd` | `J_total_odd` | `f_retain` | **v_even** | avgB | invalid |
+|---|---|---|---|---|---|---|---|---|
+| 0.75× | −13.92 ± 7.0 | 1.98 | −4.931e-26 | −1.057e-25 | +2.14 | −2.363 | 2.56 | 0 |
+| 1.00× — **baseline** | −12.68 ± 3.5 | 3.61 | −4.563e-26 | −1.323e-25 | +2.90 | −2.673 | 2.63 | 0 |
+| 1.25× | −7.14 ± 2.5 | 2.87 | −4.488e-26 | −5.335e-26 | +1.19 | **−3.785** | 2.37 | 0 |
+| 1.50× | −17.55 ± 6.0 | 2.92 | −4.513e-26 | −1.853e-25 | +4.11 | **−5.691** | 2.53 | 0 |
+
+**NULL, and the clearest E7 illustration in the section.** `J_stroke_odd` is flat (tripling the per-motor
+deterministic torque does **not** raise the per-stroke population impulse); Ω_odd is **non-monotone** with every
+off-baseline arm ≤ 2.9σ; and the one arm that *looks* better (1.50×) runs at **2.1× the baseline glide speed**
+(−5.691 vs −2.673 µm/s), a materially different mechanical regime, so the comparison is void by the task's own
+rule. This is the textbook demonstration of *"a larger instantaneous torque alone is not success"*.
+**Not advanced.**
+
+#### 23.9b `|d0|`-compensated eccentricity [`p8_geom_ecccomp_n8_gpu.txt`]
+
+The pre-registered stroke-magnitude-matched control: `rCF8_perp` scaled while the axial component is re-solved
+to hold **`|d0|` = 7.6158 nm exactly** (rCF8_axial 7.2758 / 7.0000 / 6.6285 / 6.1441 nm).
+
+| ecc (perp) | Ω_odd ± SEM rad/s | σ | `J_stroke_odd` | `J_total_odd` | `f_retain` | v_even | avgB | invalid |
+|---|---|---|---|---|---|---|---|---|
+| 0.75× (2.250 nm) | −17.50 ± 5.8 | 3.00 | −5.239e-26 | −1.573e-25 | +3.00 | −2.422 | 2.68 | 0 |
+| 1.00× (3.000 nm) — **baseline** | −12.68 ± 3.5 | 3.61 | −4.563e-26 | −1.323e-25 | +2.90 | −2.673 | 2.63 | 0 |
+| 1.25× (3.750 nm) | +1.56 ± 6.7 | 0.23 | −4.365e-26 | +1.178e-26 | −0.27 | **−4.126** | 2.56 | 0 |
+| 1.50× (4.500 nm) | −15.84 ± 4.4 | 3.61 | −4.456e-26 | −1.966e-25 | +4.41 | **−5.416** | 2.51 | 0 |
+
+**NULL, same shape as the raw sweep** — non-monotone (one arm crosses zero at 0.23σ), the large-eccentricity
+arms again carry a 1.5–2× glide change, and the best-behaved arm (0.75×, `dΩ_odd` = −4.83) is under 1σ of its
+own SEM. As the §23.9 confound table predicted, compensation changed nothing that mattered, because `|d0|`
+never entered the stroke. **Not advanced.**
+
+### 23.10 Phase E — converter transverse offset [`p9_geom_trans_n8_gpu.txt`]
+
+**What is shifted, stated before the result** (§23.6): the motor's base triad is rolled about **its own b̂**, so
+b̂ — and hence the axial stroke direction — is invariant while (econv, ê_up) tilt, displacing the converter
+**joint C** out of the motor's axial plane by the requested amount at the reference pose. The S2 pivot P, the
+beam, the motor lawn and the actin site all stay exactly where they are.
+
+**Safety properties, verified:**
+- **Unloaded stroke bit-identical at every offset** (8.0000 / −8.0000 / −2.0706 nm) — a roll about b̂ cannot move
+  the axial stroke.
+- **The offset introduces no handedness of its own:** Ω_odd stays NEGATIVE at −2, −1, 0 and +2 nm (the +1 nm arm
+  is unresolved at 0.60σ). ±δ do not produce opposite rolls; the ε-odd sign is set by ε, not by δ.
+- 0 invalid / 0 solver at every offset; engagement 2.41–2.69; glide −2.55 … −3.10 µm/s.
+
+| δ (nm) | Ω_odd ± SEM rad/s | σ | `J_stroke_odd` | `J_total_odd` | `f_retain` | v_even | avgB |
+|---|---|---|---|---|---|---|---|
+| −2.00 | −13.88 ± 6.6 | 2.11 | −3.535e-26 | −8.954e-26 | +2.53 | −3.096 | 2.69 |
+| −1.00 | −10.70 ± 5.7 | 1.87 | −4.407e-26 | −8.942e-26 | +2.03 | −2.843 | 2.58 |
+| **0.00 — baseline** | −12.68 ± 3.5 | 3.61 | −4.563e-26 | −1.323e-25 | +2.90 | −2.673 | 2.63 |
+| +1.00 | −5.33 ± 8.9 | 0.60 | −4.343e-26 | +9.590e-27 | −0.22 | −2.775 | 2.50 |
+| +2.00 | −10.62 ± 5.0 | 2.13 | −4.643e-26 | −1.013e-25 | +2.18 | −2.554 | 2.41 |
+
+**NULL — decision class E4 refuted.** No offset improves Ω_odd, `J_total_odd` or `f_retain`; every off-baseline
+arm is ≤ 2.13σ and every matched-seed `dJ_total_odd` is within noise. `J_stroke_odd` is flat once more.
+± offsets are **not** equivalent in detail (−2 nm and +2 nm differ), as anticipated — the motor geometry has no
+reflection symmetry about its axial plane once the head is docked stereospecifically — but neither direction is
+a lever.
+
+*Caveat on the deterministic probe.* The per-offset single-motor loaded probe is erratic across the sweep
+(τ_ax −2.89e-22, +1.30e-21, +1.61e-21, +1.84e-21, −6.33e-22 at −2/−1/0/+1/+2 nm) because moving the converter
+block changes which lattice site the single probe motor docks to. It is a per-configuration diagnostic, not an
+ensemble statement; only the 8-seed live arms above carry the verdict.
+
+### 23.11 Powered finalist — S2 free length 0.75× (L = 30 nm), 24 matched seeds
+
+**One finalist only.** Of the five geometry axes swept, four were nulls (§23.8b, §23.9, §23.9b, §23.10). The S2
+free length was the single axis with a monotone, mechanism-consistent effect, so it alone was powered — inside
+the "no more than two finalists" limit. `-conv-geom-sweep s2len -conv-geom-values "1.0,0.75" -seeds 24`
+[`f1_final_s2len0.75_head2head_n24_gpu.txt`], **both arms in ONE run so the seeds are matched by construction**.
+
+| quantity | baseline L = 40 nm | **finalist L = 30 nm** | Δ (matched seed) |
+|---|---|---|---|
+| **Ω_odd (slope)** | −6.96 ± 3.17 rad/s (**2.19σ**), 16/24 | **−19.18 ± 4.77 rad/s (4.02σ)**, 20/24 | **−12.23 (×2.76)** |
+| τ_odd | −2.106e-22 N·m (2.28σ) | −5.905e-22 N·m (**4.44σ**), 20/24 | |
+| `J_pre` | +7.468e-26 (7.75σ, 96 %) | +7.641e-26 (7.50σ, 92 %) | +2 % — **unchanged** |
+| `J_stroke` | −4.708e-26 (19.76σ, 100 %) | −4.739e-26 (14.50σ, 100 %) | **−3.15e-28 (0.7 %)** |
+| `J_post_early` | −6.255e-26 (12.11σ, 100 %) | −7.720e-26 (14.36σ, 100 %) | +23 % |
+| **`J_post_late`** | −3.359e-26 (1.12σ, 58 %) | **−1.257e-25 (3.30σ, 75 %)** | **×3.74** |
+| **`J_total`** | −6.853e-26 (2.05σ, 67 %) | **−1.739e-25 (4.03σ, 79 %)** | ×2.54 |
+| **`f_retain`** | +1.456 | **+3.669** | **+2.213** |
+| v_even | −2.688 µm/s | −2.675 µm/s | **+0.013 (0.5 %)** |
+| avgBound | 2.72 | 2.54 | −6.6 % |
+| invalid / solver | 0 / 0 | 0 / 0 | |
+
+**Independent validation of the baseline arm.** At n = 24 the baseline reproduces §22.8's 24-seed shared-native
+arm **exactly** — Ω_odd slope −6.956 vs −6.96 rad/s, τ_odd −2.1055e-22 vs −2.11e-22, 2.28σ vs 2.28σ. The n = 8
+pilot's −12.68 was a high draw (the same seed-count effect §22.6 documented in the other direction); the powered
+baseline is −6.96, and the finalist beats it by **2.76×**.
+
+**The improvement is retention, and only retention — localised to the late bound tail.** `J_stroke_odd` is
+unchanged to **0.7 %** (Δ = −3.15e-28 against a −4.7e-26 signal) and `J_pre` to 2 %; every bit of the gain sits
+in `J_post_late` (×3.74) with a secondary contribution from `J_post_early` (+23 %). The unloaded stroke is
+bit-identical. So this is not a bigger stroke, not a different preload, and not a changed duty cycle:
+**a compliant S2 bleeds off the retained chiral bound displacement over the ~0.7 ms post-stroke residence, and
+shortening the tail stops the bleed** — precisely the quantity the atlas master identity says sets the cycle
+impulse.
+
+**Costs.** Gliding is untouched (v_even −2.688 → −2.675 µm/s, +0.5 %, well inside seed scatter), so this is
+*not* the "larger roll caused only by slower translation" artifact. Engagement falls 6.6 % (avgBound 2.72 →
+2.54) — a real but small cost consistent with a shorter tail reaching slightly less of the lattice, and it does
+not touch the per-stroke impulse. No instability: 0 invalid, 0 solver failures.
+
+**ε = 0 achirality control at the finalist geometry, n = 24**
+[`f2_final_s2len0.75_budget_n24_gpu.txt`]: τ = +5.194e-23 ± 1.5e-22 (**0.3σ**, 14/24 seeds),
+Ω endpoint +1.602 rad/s, Ω slope +3.92 ± 4.9 (**0.8σ**), Q_omega = 1.000, `cancel` 545 (a near-zero mean torque
+by construction), 0 invalid. The ε = 0 half-split NULL budget gives **every component ≤ 0.92σ**
+(`J_stroke` +3.14e-27 ± 3.43e-27 vs the finalist's −4.74e-26 at 14.5σ; `J_total` +3.34e-26 ± 5.37e-26 vs
+−1.74e-25 at 4.03σ). **The finalist geometry is achiral at ε = 0**, so its twirl is carried by the converter
+skew and not by the geometry change.
+
+**Biological standing (stated, not oversold).** L = 30 nm is inside the range the explicit-S2 model was built to
+span (`EXP4G_L_NM` = {10, 20, 40, 60} nm, all MD-informed from the same EA/EI), so this is a
+*re-parameterisation within the model's own validated envelope*, not an exotic geometry. It is nevertheless a
+**diagnostic finding about where the chiral impulse is stored, not a proposal to change the canonical
+`explicit-s2-l40` motor** — `MotorModel`'s frozen L40 descriptor is untouched (§23.15).
+
+> **READ §23.13b BEFORE USING THIS RESULT.** Under timestep refinement the advantage does not reproduce: at
+> dt/2 the two geometries are statistically indistinguishable, because the BASELINE's own `J_post_late` rises
+> ×1.86 at dt/2 and closes the gap. The production-dt baseline appears to under-resolve the compliant tail's
+> late bound-phase torque, so **the ×2.76 gain is substantially numerical**. The physics it localises (a
+> compliant S2 holds less retained chiral displacement) survives; the design claim does not.
+
+### 23.12 Mirror and randomized-base controls at the finalist geometry (L = 30 nm, ε = ±15°, n = 16)
+
+`-conv-controls -converter-stroke-skew-deg 15 -s2-free-length-scale 0.75 -seeds 16`
+[`f3_final_s2len0.75_controls_n24_gpu.txt`]. Pre-registered requirements: the mirrored lattice must **REVERSE**
+Ω_odd and `J_odd[0-7]`, and the randomized-base arm must **preserve the SIGN** with a reduced magnitude (the
+§22.8 pattern at the baseline geometry). **Both hold.**
+
+| arm | τ_odd (N·m) | σ | seeds same sign | Ω_odd (rad/s) | `J_odd[0-7]` | v_even | avgB |
+|---|---|---|---|---|---|---|---|
+| SHARED **native** | −7.140e-22 | **4.43** | 14/16 | **−23.42 ± 6** | **−5.056e-26** | −2.41 / −2.78 | 2.43 / 2.46 |
+| SHARED **MIRROR** | **+5.381e-22** | 2.87 | 11/16 | **+18.68 ± 6** | **+4.422e-26** | −2.95 / −2.53 | 2.45 / 2.57 |
+| **RANDOMIZED** base | −1.868e-22 | 1.00 | 10/16 | −4.44 | — | | |
+
+- **Mirror control (the chirality claim): Ω_odd REVERSES** — native −23.42 → mirror **+18.68** — and
+  **`J_odd[0-7]` REVERSES** — native −5.056e-26 → mirror **+4.422e-26**. The mirrored ε-ODD torque is resolved at
+  **2.87σ**. The finalist geometry therefore carries the *same* site-frame chirality as the baseline, at ~2.7×
+  the magnitude; it did not manufacture a new, non-chiral signal.
+- **Randomized-base control (locality): the sign SURVIVES** base randomization — native(shared) −23.42,
+  randomized −4.44, both negative — with the expected magnitude and resolution drop (1.00σ, 10/16), exactly the
+  §22.8 pattern. The effect is a **LOCAL-frame** one, not a shared-base artifact.
+- Q_omega = 1.000 in every arm; 0 invalid, 0 solver failures.
+
+**⇒ Success-gate criterion #4 PASSES at the finalist geometry.**
+
+*Standing baseline controls, already established and unaffected by this section:* §22.8 mirror reversal at
+24 seeds (Ω_odd native −6.96 → mirror +11.89; `J_odd[0-7]` −4.77e-26 → +4.51e-26 with **24/24 seeds flipping**),
+§22.6 ε = 0 at 48 seeds (Ω +0.12, 0.1σ), §21.5 fixture 204 (randomized base keeps the ε-ODD sign) and
+fixture 205 (`Ractin → 0` removes the moment arm).
+
+### 23.13 Timestep check (dt vs dt/2 at matched 20 ms, n = 8) — **the mechanism survives; the finalist's advantage does NOT**
+
+`-conv-budget -halfdt -steps 16000`, baseline [`f4_dt_baseline_half_n8_gpu.txt`] and finalist
+[`f5_dt_s2len0.75_half_n8_gpu.txt`]. **Magnitude bias is documented separately from sign and interpretation**,
+per §22.9.
+
+#### 23.13a Baseline geometry: what is dt-robust and what is not
+
+| quantity | dt = 2.5e-6 (8000 steps) | dt/2 = 1.25e-6 (16000 steps) | ratio |
+|---|---|---|---|
+| **`J_pre`** | +6.999e-26 (3.45σ) | +7.021e-26 (4.81σ, 100 %) | **×1.003** |
+| `J_stroke` (lags 0–7) | −4.563e-26 (8.09σ) | −1.118e-26 (5.48σ) | ×0.24 † |
+| `J_post_early` (lags 8–31) | −6.851e-26 (12.62σ) | −6.120e-26 (23.17σ) | ×0.89 |
+| `J_post_late` (lags ≥32) | −8.818e-26 (2.07σ) | **−1.639e-25 (3.87σ)** | **×1.86** |
+| **`J_total`** | −1.323e-25 (3.30σ) | −1.661e-25 (3.01σ) | **×1.26** |
+| `f_retain` | +2.90 | +14.86 † | — |
+| Ω_odd (slope) | −12.675 ± 3.5 (3.61σ) | −14.502 ± 5.9 (2.45σ) | ×1.14 |
+| τ_odd | −3.675e-22 (3.24σ) | −4.887e-22 (3.11σ) | ×1.33 |
+| v_even | −2.673 µm/s | −2.718 µm/s | ×1.02 |
+| **closure** (rate × `J_total` / τ_odd) | **1.05** | **1.12** | — |
+| invalid / solver | 0 / 0 | 0 / 0 | |
+
+† **`J_stroke` and therefore `f_retain` are NOT dt-invariant by construction**: the stroke window is defined in
+*steps*, so at dt/2 "lags 0–7" spans half the physical time (§22.9 documented the same for the windowed `J_θ`).
+`f_retain`'s jump to +14.86 is a shrinking denominator, not improved retention. **The dt-comparable quantities
+are `J_pre`, `J_total` and the closure**, all of which are stable.
+
+**What IS dt-robust — i.e. every Phase-A conclusion:**
+- the **sign and channel structure** are identical at both dt (`J_pre` positive/opposing; `J_stroke`,
+  `J_post_early`, `J_post_late` all negative; 100 % seed coherence on the resolved channels);
+- **`J_pre`, the loss channel, is dt-stable to 0.3 %** — the single most important number in §23.16(2);
+- **`J_total` is dt-stable to 26 %** and its sign, resolution (3.0–3.3σ) and seed coherence hold;
+- **the closure holds at both dt** (1.05 → 1.12), so §23.16(1) — "the impulse is not lost, the stroke window
+  under-counts it" — is a dt-independent statement;
+- Ω_odd stays negative and resolved; its magnitude carries a +14 % (slope) / +33 % (τ) shift, the same family and
+  size as §22.9's documented ~33 % dt-sensitivity. gliding is dt-stable to 2 %.
+
+#### 23.13b Finalist vs baseline AT dt/2 — the advantage is not confirmed
+
+Both arms n = 8, identical seeds, matched 20 ms:
+
+| | baseline dt/2 | finalist (L = 30 nm) dt/2 | Δ |
+|---|---|---|---|
+| Ω_odd (slope) | −14.502 ± 5.9 (2.45σ) | −12.212 ± 4.5 (2.71σ) | **+2.29 — ≪ 1σ** |
+| τ_odd | −4.887e-22 (3.11σ) | −3.037e-22 (1.61σ) | |
+| `J_total` | −1.661e-25 (3.01σ) | −1.042e-25 (2.30σ) | |
+| `J_post_late` | −1.639e-25 | −9.392e-26 | |
+| `J_pre` | +7.021e-26 | +6.474e-26 | |
+| v_even | −2.718 | −2.614 | |
+| closure | 1.12 | 1.06 | |
+
+**At dt/2 the two geometries are statistically indistinguishable** (ΔΩ_odd = +2.29 against SEMs of 4.5–5.9), and
+the finalist's central value is if anything slightly *worse*. The reason is visible in the budget: **refining dt
+does to the BASELINE almost exactly what shortening S2 did at production dt.** The baseline's `J_post_late`
+rises ×1.86 at dt/2 (−8.8e-26 → −1.64e-25) and its `J_total` reaches −1.661e-25 — essentially the finalist's
+production-dt value (−1.739e-25 at n = 24).
+
+**Honest reading.** The production-dt baseline appears to **under-resolve the late bound-phase torque of the
+compliant S2 tail**, and a shorter/stiffer tail (shorter relaxation time) is better resolved at the same dt. So
+the §23.11 finalist gain is **substantially a numerical-resolution effect, not a demonstrated mechanical
+improvement**. What survives refinement is the *physics* — a compliant tail does hold less retained chiral
+displacement, and both a finer dt and a shorter tail recover it — but **"L = 30 nm is a better twirling motor"
+is NOT established**, and the ×2.76 headline must not be carried forward as a design claim.
+
+**Success-gate criterion #10: PARTIAL.** Sign, channel decomposition, `J_pre` and the closure are dt-robust
+(the Phase-A conclusions stand unchanged); the finalist's *advantage over baseline* is not confirmed at dt/2 at
+n = 8. This is a limitation of the geometry result, not of the budget.
+
+**Follow-up this creates.** The late bound-phase dynamics of the explicit-S2 tail are dt-sensitive at the
+production timestep. That is the same family as the project's standing cross-bridge sub-step work
+(`docs/…SUBSTEP…`, the `-xbimplicit*`/`-rotimplicit`/`-ratefix` lineage): before any S2-geometry claim is made,
+the twirl observable should be re-measured under the sub-step, or the finalist re-run at dt/2 with n ≥ 24.
+
+### 23.14 Success gate for "an improved twirling design"
+
+| # | criterion | S2 length 0.75× |
+|---|---|---|
+| 1 | direct body-fixed Ω_odd improves significantly over baseline | **PASS** — −6.96 (2.19σ) → **−19.18 (4.02σ)**, ×2.76, n = 24 matched |
+| 2 | the improvement is explained by improved `J_total`, `f_retain` or `eta_pop` | **PASS** — `J_total` ×2.54, `f_retain` +1.46 → +3.67, with `J_stroke` unchanged to 0.7 % |
+| 3 | per-stroke chirality remains correct | **PASS** — `J_stroke_odd` −4.739e-26 at 14.50σ, 100 % of seeds |
+| 4 | mirror reverses the signal | **PASS** — Ω_odd −23.42 → **+18.68**; `J_odd[0-7]` −5.056e-26 → **+4.422e-26**; mirrored ε-ODD resolved at 2.87σ (§23.12) |
+| 5 | ε = 0 stays achiral | **PASS** — Ω +1.60 endpoint / +3.92 ± 4.9 slope (0.8σ), τ 0.3σ, null budget ≤ 0.92σ, n = 24 |
+| 6 | gliding remains healthy | **PASS** — v_even −2.688 → −2.675 µm/s (+0.5 %) |
+| 7 | engagement does not collapse | **PASS** — avgBound 2.72 → 2.54 (−6.6 %) |
+| 8 | no numerical instability | **PASS** — 0 invalid, 0 solver failures, no fallback, in every arm of every sweep |
+| 9 | force / torque / work / energy accounting closes | **PASS** — §21.3 F8 pair closed (0.00e+00) and energy closes at every angle; unchanged here (no kernel touched); the budget's own closure reproduces `τ_odd` to 1.01–1.05 (§23.5) |
+| 10 | survives dt/2 in sign and interpretation | **PARTIAL** — the mechanism does (sign, channel structure, `J_pre` to 0.3 %, closure 1.05 → 1.12); the **finalist's advantage does NOT** (at dt/2, n = 8, baseline −14.50 ± 5.9 vs finalist −12.21 ± 4.5, ΔΩ ≪ 1σ) (§23.13) |
+
+**9 of 10 criteria pass; #10 is PARTIAL and it is the one that matters for adoption.** The dt/2 check shows the
+baseline's own `J_post_late` rises ×1.86 under refinement, closing most of the gap, so the ×2.76 headline is
+**substantially a numerical-resolution effect**. The geometry finding is therefore reported as a *diagnostic
+localisation of where the chiral impulse is stored*, **not** as a validated improved design (§23.13b).
+
+The randomized-base locality control is not a numbered gate but is reported alongside: the sign SURVIVES base
+randomization at the finalist geometry (native −23.42, randomized −4.44, both negative), so the effect is
+local-frame, not shared-base (§23.12).
+
+### 23.15 Regression — nothing pre-existing moved
+
+| suite | command | result |
+|---|---|---|
+| 24 head-roll / site / registry fixtures (incl. **[8] all-flags-off bit-identity**) | `-fixtures` | **24 / 24 PASS** |
+| converter Stage-3 symmetry (incl. **209 ε = 0 byte-identity**, 204 randomized base, 205 Ractin → 0) | `-conv-fixtures` | **8 / 8 PASS** |
+| converter Stage 1/2 deterministic trajectory + force/torque/energy closure | `-conv-stage1` | **8 / 8 PASS** |
+| converter-skew gliding graph, device-resident, no fallback | `-conv-equiv` | **PASS** — 200 device-resident steps, bindMism=0, convFlagMism=0, max\|dConvFrame\|=5.61e-07, max\|dSegTorque\|=1.49e-24 N·m, max\|dFilCoord\|=5.96e-08 µm, firstDiv=none, bound CPU=9/GPU=9 — **digit-identical to §21.6**, proving the device path is unchanged (log `r2_conv_equiv_gpu.txt`) |
+
+(logs `RUN_LOGS/chiral_sites/r1_regression_cpu.txt`, `r2_conv_equiv_gpu.txt`)
+
+The new work is **additive and measurement-side**: one host-side episode ledger (`ChiralSiteHarness.Ledger`),
+one analysis class (`ConvBudget`), four new drivers, four default-off scene scalars plus one default-off
+base-triad roll, and **one copy-out-list flag** (`EPISODE_TELEM`). No device kernel, no TaskGraph task, no
+buffer width, no task ordering, no canonical default, no parameter, no chemistry, no dt, no RNG stream, no
+`MotorModel.CANON_VERSION`. `applyGeomScales` and the frame roll are exact no-ops at their defaults.
+`BoA-v1ref` is byte-clean; the canonical explicit-S2 production path is untouched.
+
+**Instrumentation-neutrality control (the one that matters here).** The `-conv-budget` arms, which add `q`,
+`nodes` and `outGeom` to the production copy-out set, reproduce §22.3's 15°/n = 8 pilot **digit for digit**
+(Ω_odd slope −12.675 vs −12.68, 3.61σ; `tauOdd` −3.675e-22; vEven −2.67; avgBound 2.66/2.60) and §22.8's
+24-seed shared-native arm exactly (−6.956 vs −6.96; 2.28σ). Adding copy-outs changed nothing, as it must.
+
+### 23.16 Mechanistic conclusion
+
+1. **The premise of the investigation is false, and that is the finding.** The chiral impulse is not lost
+   between the stroke event and the population mean. The stroke-conditioned window used in §21.8/§22.7 captures
+   only **15–47 %** of a bound episode's chiral angular impulse; the remainder accrues over the ~0.7 ms
+   post-stroke residence **with the same sign**. Once the full bound cycle is accounted for,
+   `episode rate × J_total_odd` reproduces the measured population torque to **1.01–1.05 at 15–30°** (1.26 at
+   5°). `f_retain` = +1.46…+8.19, not < 1. **Decision class E1 (late-bound recoil) is refuted; E6 (population
+   cancellation) is refuted; the motor is atlas class A, not the atlas's conservative-failure class A5/A6.**
+2. **The single loss channel is the PRE-stroke bound dwell.** `J_pre` is opposite-signed and grows **faster
+   than sin ε** (×3.40 at 15°, ×7.83 at 30° against sin ratios 2.97/5.74), cancelling **45 % → 61 % → 77 %** of
+   the sin ε-scaling stroke channel at 5°/15°/30°. That, plus an **ε-independent late-bound pedestal**
+   (`J_post_late`, 83 % of `J_total` at 5°), is the true mechanism of §22.4's sub-sin Outcome B — not the
+   "dilution over the bound population" §22.4 assumed. The stroke channel itself (`J_stroke + J_post_early`)
+   scales ∝ sin ε cleanly all the way to 30°.
+3. **The dominant chiral lever in this motor is the static bound-pose preload, not the stroke.** Switching the
+   rotation-centre gauge — which by construction leaves the unloaded stroke increment identical — moves `J_pre`
+   by 3.8×, reverses `J_post_late`, reverses `J_total` (−1.32e-25 → +5.53e-25, 14.6σ) and reverses and
+   quadruples Ω_odd (−12.7 → +49.5 rad/s, 10.8σ), while the stroke channel merely weakens. In atlas terms the
+   pivot gauge lets **A3 (chiral binding registry)** overwhelm **A2 (oblique stroke)**. It is a bigger twirl but
+   a *different, opposite-handed mechanism* — the E7 "preload chirality" confound, reported as such and
+   explicitly not adopted.
+4. **Motor geometry cannot change the stroke, only its transmission.** The unloaded converter stroke is
+   bit-identically 8.0000 nm across every geometry tested, because the bound head's ψ is pinned to actin by the
+   binding spring and the stroke is the **neck-lever swing at radius lb = 8 nm**, not the converter arm
+   \|d0\| = 7.6158 nm. Consequently four of the five geometry axes are nulls, and the one that works
+   (**S2 free length**) works **entirely through retention**: `f_retain` falls monotonically with S2 length
+   (5.45 → 0.72 over 0.75×→2.00×), and the powered finalist improves Ω_odd **×2.76** with `J_stroke` unchanged
+   to 0.7 %, all of the gain in `J_post_late` (×3.74), at zero glide cost. **The compliance that absorbs the
+   retained chiral bound displacement is the S2 beam's axial/span path** — the bend-stiffness sweep is a null
+   even at a larger kb, which localises it.
+5. **But that geometry gain does not survive timestep refinement, and the honest verdict is that it is largely
+   numerical.** At dt/2 the baseline's own `J_post_late` rises ×1.86 and the two geometries become
+   indistinguishable (§23.13b). The production timestep under-resolves the compliant tail's late bound-phase
+   torque; a shorter tail is simply better resolved at the same dt. **So the answer to "can motor geometry
+   improve the transmission?" is: not demonstrably.** Four of five axes are outright nulls, and the fifth is a
+   dt artifact to first order. What the geometry sweep *did* deliver is the mechanistic localisation in (4) —
+   which channel the impulse lives in and which compliance absorbs it — and that is dt-robust.
+
+### 23.17 Decision class
+
+**Primary: E5 (gauge/static preload controls population efficiency) + E2 (S2 compliance absorbs the chiral
+impulse — as physics, but not as a validated design gain), on top of an explicit refutation of the task's
+framing premise.** If a single class must be named for the *actionable* outcome it is **E5**: the static
+bound-pose preload is the dominant lever and the one opposing channel, and no geometry axis rescues anything
+that was not already accounted for.
+
+| class | verdict |
+|---|---|
+| **E1** late-bound recoil is the dominant loss | **REFUTED** — `J_recoil` is SAME-signed; `f_retain` = +1.46…+8.19 |
+| **E2** S2 compliance absorbs the chiral stroke | **CONFIRMED as physics, NOT as a design gain** — `f_retain` monotone in S2 length (5.45 → 0.72), finalist ×2.76 Ω_odd / ×2.54 `J_total` with `J_stroke` flat at production dt; but at dt/2 the baseline closes the gap (`J_post_late` ×1.86) and the arms become indistinguishable ⇒ largely a resolution effect (§23.13b) |
+| **E3** eccentricity improves mechanical advantage | **REFUTED** — non-monotone, ≤2.9σ, glide-confounded at the large end; raw and compensated both null |
+| **E4** transverse offset improves productive geometry | **REFUTED** — no offset beats baseline; ≤2.13σ |
+| **E5** gauge/static preload controls population efficiency | **CONFIRMED, and dominant** — pivot gauge reverses and quadruples Ω_odd (10.8σ) purely via the preload channels |
+| **E6** population cancellation dominates, geometry cannot rescue | **REFUTED** — the budget closes to ~1.0; there is no population cancellation |
+| **E7** an apparent improvement is a confound | **OBSERVED TWICE and flagged** — the pivot gauge (preload chirality, opposite handedness) and eccentricity 1.25×/1.50× (1.4–2.1× glide change). Neither adopted. The S2-length finalist is explicitly NOT E7: unloaded stroke bit-identical, `J_stroke` flat to 0.7 %, glide unchanged to 0.5 %, ε = 0 achiral at 0.8σ. |
+| **E8** numerical or GPU failure | **NOT OBSERVED** — 0 invalid, 0 solver failures, no fallback, in every arm of every run in this section |
+
+### 23.18 Honest limits
+
+- `J_total`/`J_post_late` are resolved (3.3–4.0σ, 79–100 % of seeds) but **tail-noise-limited**: the ε = 0
+  half-split null reaches 0.62–1.13σ on `J_total`, so `J_total`'s SEM is of the same order as the null's.
+  `J_stroke` and `J_post_early` are sharply resolved (8–20σ; null 0.15–0.92σ).
+- The closure is 1.01–1.26, not 1.00; the residual is consistent with the two censoring exclusions, which
+  preferentially remove long-lived episodes and therefore `J_post_late`. It is a ~10–25 % accounting, not a
+  conservation law.
+- 15° (and 30°) are large, non-biological skews. Everything here is a mechanism signal-strength result on a
+  simplified assay (one rigid segment, filament Brownian OFF); the roll-per-distance numbers stay diagnostic.
+- The geometry pilots are n = 8, where a doubled central value comes with a doubled SEM (the `s2len 0.75×` pilot
+  read −25.33 ± 9.52 at 2.66σ; the powered n = 24 value is −19.18 ± 4.77 at 4.02σ). Only the finalist was
+  powered; the four nulls are nulls **at n = 8**, and a small effect below that resolution cannot be excluded.
+- `eta_energy` is a transparent proxy (`W_chiral`/\|`W_F8`\|), not a thermodynamic efficiency: no chemical
+  free-energy accounting is available, and its ~1e-4 magnitude is set by the filament's roll-vs-axial mobility
+  ratio on a 3.5 nm arm, not by the mechanism.
+
+### 23.19 Exact next recommended experiment — target `J_pre`, not the stroke and not the geometry
+
+The budget names the target unambiguously. Three channels, three ε-laws (§23.5):
+
+| channel | ε-scaling | sign | fixable by |
+|---|---|---|---|
+| `J_stroke + J_post_early` | ∝ sin ε | correct | already works — nothing to fix |
+| **`J_pre`** | **super-sin (×3.40 / ×7.83)** | **OPPOSING** | **the next experiment** |
+| `J_post_late` | ε-independent | correct | S2 length moves it at production dt, but dt/2 shows that is largely resolution (§23.13b) — treat as OPEN |
+
+`J_pre` exists because the converter frame is rotated **while the head is docked in the pre-stroke (ADP·Pi)
+state**, so the bound rest pose is already displaced tangentially — with the *opposite* handedness to the stroke
+that follows. Phase F proves this channel is real, dominant and gauge-controlled: moving the rotation centre
+changes `J_pre` by 3.8× and flips the net roll (§23.7). It is not a numerical artifact, and it is **not**
+removable by S2 geometry (the finalist leaves `J_pre` unchanged to 2 %), F8 eccentricity or a transverse offset.
+
+**The experiment: a STATE-DEPENDENT converter skew.** Apply ε = 0 while the motor is in ADP·Pi and ε ≠ 0 from
+the ADP·Pi → ADP transition onward — i.e. make the stroke *plane*, not the motor, chiral. Concretely, gate
+`ChiralSiteSystem.convFrameStep`'s rotation on `nucleotideState` exactly as `MatSoaSlice.matCock` already gates
+`thetaS`. Cost: one flag and one predicate in an existing kernel; no new mechanism, no new force law, no new
+buffer, ε = 0 still byte-identical.
+
+**Why this and not something else:**
+- It is the **only** channel the budget shows to be both large and opposing.
+- It is atlas class **D / A4 (state-dependent chiral geometry)**, which
+  `docs/TWIRLING_MECHANISM_ATLAS_FINDINGS.md` independently ranks as its **strongest R4 mechanism** (−15.9σ, the
+  only one that survives `R_actin → 0` as a direct couple).
+- It is the more defensible physical statement of "the lever-arm swing is rotated": the stroke plane differs
+  between nucleotide states, rather than the motor carrying a permanent structural asymmetry that is already
+  strained before it strokes.
+- It does **not** add a chiral mechanism — it removes the parasitic half of the one already present.
+
+**Falsifiable prediction from the measured budget** (assuming the other channels are unchanged — exactly what
+the experiment tests): removing `J_pre` gives
+
+| ε | `J_total_odd` now | predicted with `J_pre` = 0 | gain | predicted Ω_odd |
+|---|---|---|---|---|
+| 5° | −1.502e-25 | −1.708e-25 | ×1.14 | ≈ −12.0 rad/s |
+| 15° | −1.323e-25 | −2.023e-25 | ×1.53 | ≈ −19.4 rad/s |
+| 30° | −1.829e-25 | −3.441e-25 | ×1.88 | ≈ −36.6 rad/s |
+
+and — the discriminating signature — the ε-scaling of Ω_odd should rise from the present **1.00 / 1.20 / 1.84**
+to about **1.00 / 1.62 / 3.05**. Recovery of a *steeper but still sub-sin* growth is the predicted outcome,
+because the ε-independent `J_post_late` pedestal remains. **If Ω_odd instead scales fully as sin ε, the
+`J_post_late` pedestal is also ε-coupled and the channel decomposition needs revising; if Ω_odd does not improve
+at all, `J_pre` is not separable from the stroke channel and the mechanism is intrinsically self-cancelling.**
+Either way the result is decisive.
+
+**Run it as:** `-conv-budget` at ε = 5/15/30°, shared base, n = 8 pilot then n = 24–48 on the best angle, with
+the mirror and ε = 0 controls — i.e. the apparatus built in this section, unchanged. **Run it at the baseline
+L = 40 nm geometry**: do NOT stack the `s2len 0.75×` finalist, because §23.13b shows that gain is substantially
+a timestep-resolution effect and stacking it would confound the state-dependence test with a numerical one.
+Include a dt/2 arm from the start — the late bound-phase channel this section identified is exactly the one that
+moves with dt. **Only after that** should filament Brownian motion be enabled or the `RollSpringSystem` multi-segment
+roll-coherence test (§22.12) be run: both add variance to an observable whose per-episode budget is only now
+understood.
+
+**Explicitly do NOT:**
+- increase ε further (the stroke channel already scales correctly; the loss grows *faster* than the gain);
+- adopt the pivot gauge (a bigger number from a different, opposite-handed, preload-borne mechanism — §23.7);
+- pursue S2 bending stiffness, F8 eccentricity or a converter transverse offset (all null, §23.8b–§23.10);
+- re-derive anything from `J_stroke` alone — it under-counts the physical impulse by ~2.6× (§23.5).
+
+### 23.20 Files, flags and evidence
+
+New: `softbox/ConvBudget.java`; `ChiralSiteHarness.Ledger` + `-conv-budget`, `-conv-gauge-compare`,
+`-conv-geom-sweep <s2len|s2bend|ecc|ecccomp|trans>`, `-conv-geom-values "a,b,…"`;
+`ExplicitCompleteMatHarness.{EPISODE_TELEM, applyGeomScales, geomScaleString, resetGeomScales, S2_LEN_SCALE,
+S2_BEND_SCALE, CONV_ECC_SCALE, CONV_ECC_COMP, CONV_TRANS_NM}` + the CLI flags
+`-s2-free-length-scale`, `-s2-bend-stiffness-scale`, `-converter-f8-eccentricity-scale`,
+`-converter-f8-eccentricity-compensated`, `-converter-transverse-offset-nm`.
+
+Logs, all under `RUN_LOGS/chiral_sites/`:
+
+| log | content |
+|---|---|
+| `p1_budget_15deg_n8_gpu.txt` | Phase A/A2/A3/A4 at 15°, n = 8 + ε = 0 half-split null |
+| `p2_budget_05deg_n8_gpu.txt`, `p3_budget_30deg_n8_gpu.txt` | the ε-scaling decomposition |
+| `p4_gauge_15deg_n8_gpu.txt` | Phase F interface vs pivot gauge |
+| `p5_geom_s2len_n8_gpu.txt`, `p6_geom_s2bend_n8_gpu.txt` | Phase C |
+| `p7_geom_ecc_n8_gpu.txt`, `p8_geom_ecccomp_n8_gpu.txt` | Phase D |
+| `p9_geom_trans_n8_gpu.txt` | Phase E |
+| `f1_final_s2len0.75_head2head_n24_gpu.txt` | powered finalist head-to-head, n = 24 matched |
+| `f2_final_s2len0.75_budget_n24_gpu.txt` | finalist budget + ε = 0 achirality control, n = 24 |
+| `f3_final_s2len0.75_controls_n24_gpu.txt` | finalist mirror + randomized-base controls (§23.12) |
+| `f4_dt_baseline_half_n8_gpu.txt`, `f5_dt_s2len0.75_half_n8_gpu.txt` | dt/2 check (§23.13) |
+| `r1_regression_cpu.txt` | `-fixtures` 24/24, `-conv-fixtures` 8/8, `-conv-stage1` 8/8 |

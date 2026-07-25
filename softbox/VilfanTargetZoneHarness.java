@@ -1226,7 +1226,7 @@ public final class VilfanTargetZoneHarness {
         DoubleArray nodes = cpD(e.nodes), q = cpD(e.q), sys = cpD(e.sys), outGeom = cpD(e.outGeom);
         FloatArray fdf = cpF(G.mot.forceDotFil), fm = cpF(G.mot.forceMag);
         IntArray matc = IntArray.fromElements(t, seed, brownOn, policy);
-        TwoBodyBeamAnalyticGpu.matS2SolveStep(nodes, e.frame, q, G.bondData, G.mot.boundSeg, e.params, sys, outGeom, fdf, fm, matc, e.exCounts);
+        TwoBodyBeamAnalyticGpu.matS2SolveStep(nodes, e.frame, q, G.bondData, G.mot.boundSeg, e.params, sys, outGeom, fdf, fm, matc, e.exCounts, e.convF);
         int N = e.N;
         double[][] out = new double[N][3];
         for (int m = 0; m < N; m++) { out[m][0] = q.get(m); out[m][1] = q.get(N+m); out[m][2] = nodes.get(m) + nodes.get(3*N+m) + nodes.get((3*e.M)*N+m); }
