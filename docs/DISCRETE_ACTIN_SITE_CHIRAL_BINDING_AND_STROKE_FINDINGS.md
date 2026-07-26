@@ -3160,8 +3160,11 @@ fully rotated plane.
 
 *Telemetry defect, stated:* the intended "last waiting step" sample lands on lag 0 (the ledger runs after
 `matCock`, so `q@pre ≡ q@lag0` in every row) — the column is therefore omitted above and the dwell is
-**bracketed** by `q@attach` and `q@lag0` rather than sampled at its end. Fixed in the harness for future runs;
-it does not affect any impulse channel, and the bracket answers the waiting-state question.
+**bracketed** by `q@attach` and `q@lag0` rather than sampled at its end. It does not affect any impulse channel,
+and the bracket answers the waiting-state question. **Fixed and verified** after the screen: a 1-seed smoke run
+now reports the binary arm at `eps@pre = 0.0000°` (the closed gate, last waiting step) against
+`eps@lag0 = 15.0000°`, where both previously read 15.0000°. The Stage-4 table above is left as measured — it is
+not re-run for a telemetry label, and the bracket it reports is sound.
 
 #### 25.4.2 ε-ODD full-cycle impulse budget (N·m·s per stroke-bearing episode, seed = unit)
 
