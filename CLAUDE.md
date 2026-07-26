@@ -462,6 +462,18 @@ preserved (~4 %), 0 invalid. Rolled through `nearestSeg2D`/`gate2D`/g7 sites, `m
 ./scripts/run_lasertrap.sh -motor-regression          # Gates A–F  |  -motor-compare → cross-model table
 ```
 
+**S2 FIXTURE HETEROGENEITY (new study, 2026-07-26) — AUDIT ONLY.** Separately bounded investigation of the
+assay fixture *mechanically free S2 length*: does a heterogeneous lawn change the core GLIDING predictions,
+their variability or their density dependence? (Twirling is auxiliary and never selects a distribution.)
+Report: `docs/gliding/S2_FIXTURE_HETEROGENEITY_FINDINGS.md`. **Source audit complete; nothing implemented, no
+result.** Verdict: per-motor free S2 length is a **DATA-ONLY** change — `params` is already a per-motor planar
+buffer (17×N) and both runners already read it per motor, so no kernel edit, no buffer-size change and no
+TaskGraph change is needed. Two carry-forward conditions: **hold M global** (`nodeStride`/`sysStride`/
+`exCounts[2]` depend on it — vary `l0_i = L_i/M` at fixed EA/EI instead), and **guard the legacy scalar path**
+`TwoBodyConverterMotor.s2NodeForcesM`/`s2SolveM`/`ExplicitBeamAnalytic.beamTangentFree`, which read the SCALAR
+`G.g4ks/g4kb/g4l0` and would silently ignore per-motor assignments (the ExplicitCompleteMat path does not call
+them today, but that must be asserted, not assumed). Also: `queryR` must use max L_i; `g4floorZ` stays global.
+
 ## Documentation conventions
 Same as v1: `CLAUDE.md` = cross-session context (this file); `JOURNAL.md` = terse, newest-first,
 what-was-done / what-was-learned / what's-open. Do not archive JOURNAL entries autonomously.

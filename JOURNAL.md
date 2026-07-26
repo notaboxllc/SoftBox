@@ -1,5 +1,41 @@
 # Soft Box Project Journal
 
+### 2026-07-26 — NEW STUDY (S2 fixture heterogeneity) — SOURCE AUDIT ONLY: per-motor free S2 length is a DATA-ONLY change; one legacy scalar path would silently ignore it
+
+Opened a separately bounded study of the assay fixture "mechanically free S2 length" — does replacing the
+homogeneous 40 nm lawn with a heterogeneous one change the core GLIDING predictions, their variability or their
+density dependence? Twirling is auxiliary and must never select a distribution. Report:
+`docs/gliding/S2_FIXTURE_HETEROGENEITY_FINDINGS.md` (new, consolidated — deliberately NOT appended to the
+already-huge chiral-sites report). **AUDIT ONLY — no implementation, no campaign, no result; report sections
+5-19 are scaffolded and explicitly unrun.**
+- **FEASIBILITY: PASSES, data-only.** `params` is ALREADY a per-motor planar buffer (17 comps x N) and BOTH
+  runners already read `params.get(11*nM+m)` etc. per motor (`beamRelaxAnalytic:95`, `matBeamGeom:311`,
+  `matS2SolveStep:949`). The homogeneity lives in `packExMat`'s fill loop
+  (`for c<17: params.set(c*N+m, pr[c])` — the same row copied to every motor), not in the storage.
+  => per-motor `ks_i`/`l0_i`/`kb_i` needs **NO kernel edit, NO buffer-size change, NO TaskGraph change**.
+  The Study-A stopping rule "cannot be implemented without invasive kernel redesign" is NOT triggered.
+- **No CPU/GPU divergence risk on this path:** `stepGlidingCPU` calls `matS2SolveStep`/`matBeamGeom` DIRECTLY —
+  the same kernel methods the TaskGraph wires — so both runners consume identical per-motor params.
+- **HAZARD FOUND (the "silently assumes identical lengths" question — answer: YES).**
+  `TwoBodyConverterMotor.s2NodeForcesM:6771` and `s2SolveM:6785` read the SCALARS `G.g4ks`/`G.g4kb`/`G.g4l0`
+  (and `ExplicitBeamAnalytic.beamTangentFree`). They serve the legacy `stepGlideS2` stepper, which the
+  ExplicitCompleteMat path never calls (it appears there only in a COMMENT) — but under a heterogeneous lawn
+  that path would silently ignore every per-motor assignment. **Must be guarded/asserted before any campaign**
+  rather than relying on the call graph staying as it is.
+- **M must stay GLOBAL:** `nodeStride = 3(M+1)`, `sysStride = (3M+2)(3M+3)`, `exCounts[2] = M`. Per-motor M
+  needs ragged buffers + kernel topology change. So hold **M = 4** and vary `l0_i = L_i/M` (6.25-12.5 nm over
+  L in 25-50 nm) at fixed EA/EI — one continuum material, different unsupported spans.
+- **Per-motor emergence geometry already exists** (`g4E[m]`, `g4Node[m][j]`, `frame[9..11]`). Consistency
+  requirement recorded: varying `L_i` must update `l0_i`, `ks_i`, `kb_i`, `g4E[m]` AND `g4Node[m][*]` together —
+  changing L while retaining 40 nm stiffness or emergence geometry is the obvious failure mode.
+- **Globals needing explicit handling:** `queryR = G4_QUERYR + L + 0.01` must use **max L_i** or the neighbour
+  search is non-conservative for the longest motors; `g4floorZ` is a min over emergence points (one substrate
+  plane — stays global, but couples the distribution to every motor's floor term).
+- **NEXT:** implement the per-motor assignment (M fixed, §3.5 guard), then the Study-A validation fixtures
+  BEFORE any campaign. NOT RUN: homogeneous 25-50 nm map, dt/2 subset, H1-H7 classification, D0-D5 quenched
+  lawns, stratified enrichment, mixed-vs-post-hoc null, density dependence, twirling readout, mixed-lawn
+  CPU/GPU equivalence.
+
 ### 2026-07-26 — §25.7 POWERED CONFIRMATION (24 matched seeds) — the linear ramp TWIRLS and mirror-reverses, but is NOT more productive than always-active; the n=8 J_pre "inversion" does not reproduce (P2 + P3)
 
 24 matched seeds, eps = +/-15 deg, 7 arms x 24 = **168/168 atomic records**, GPU device-resident, resume-safe.
