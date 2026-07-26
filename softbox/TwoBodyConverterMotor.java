@@ -4443,6 +4443,9 @@ public final class TwoBodyConverterMotor {
         double supBuckleCrit=0,supKcompPost=0,supSmoothBuck=0;   // 4I calibrated Euler-buckling compression branch (mat)
         // 4G: per-motor explicit S2 beam (default OFF ⇒ stepGlide2D never reads these). node[m][M] = the live pivot G.A[m].
         boolean g4On=false; double[][][] g4Node; double[][] g4E; int g4M=0; double g4l0=0,g4ks=0,g4kb=0,g4gammaNode=0,g4kfloor=0,g4floorZ=0; double[] g4Tan;
+        // §S2-FIXTURE: per-motor QUENCHED free S2 length. null ⇒ homogeneous (the canonical path, byte-identical).
+        // Non-null ⇒ params[11..13] are written per motor from these; see docs/gliding/S2_FIXTURE_HETEROGENEITY_FINDINGS.md.
+        double[] g4LnmArr, g4l0Arr, g4ksArr, g4kbArr;
     }
     static int g4NMot(double density){ return (int)Math.round(density*G4_MX*G4_MY); }
 
@@ -6768,7 +6771,11 @@ public final class TwoBodyConverterMotor {
         if(l0>1e-12){ double c=Math.max(-1,Math.min(1,dot(G.g4Tan,b0)/l0)); double th=Math.acos(c); E+=0.5*kb*th*th; }
         for(int j=1;j<M;j++){ double[] a=sub(nd[j],nd[j-1]),b=sub(nd[j+1],nd[j]); double la=Math.sqrt(dot(a,a)),lb=Math.sqrt(dot(b,b)); if(la<1e-12||lb<1e-12) continue;
             double c=Math.max(-1,Math.min(1,dot(a,b)/(la*lb))); double th=Math.acos(c); E+=0.5*kb*th*th; } return E; }
-    static double[][] s2NodeForcesM(Glide2D G,double[][] nd){ int M=G.g4M; double ks=G.g4ks,l0m=G.g4l0*1e-6; double[][] F=new double[M+1][3];
+    static double[][] s2NodeForcesM(Glide2D G,double[][] nd){ int M=G.g4M;
+        // §3.5 GUARD: this legacy path reads the SCALAR G.g4ks/g4l0 and would SILENTLY ignore a per-motor lawn.
+        if(G.g4l0Arr!=null) throw new IllegalStateException("s2NodeForcesM reads scalar G.g4ks/g4l0 and cannot "
+            +"honour a per-motor S2 lawn; use the ExplicitCompleteMat path (matS2SolveStep). See §3.5.");
+        double ks=G.g4ks,l0m=G.g4l0*1e-6; double[][] F=new double[M+1][3];
         for(int i=0;i<M;i++){ double[] b=sub(nd[i+1],nd[i]); double len=Math.sqrt(dot(b,b)); if(len<1e-15) continue; double f=ks*(len*1e-6-l0m); double[] u=scl(b,1.0/len);
             for(int k=0;k<3;k++){ F[i][k]+=f*u[k]; F[i+1][k]-=f*u[k]; } }
         double h=1e-5; for(int j=0;j<=M;j++) for(int k=0;k<3;k++){ double sav=nd[j][k]; nd[j][k]=sav+h; double Ep=s2BendEnergyM(G,nd); nd[j][k]=sav-h; double Em=s2BendEnergyM(G,nd); nd[j][k]=sav; F[j][k]+= -((Ep-Em)/(2*h))*1e6; }

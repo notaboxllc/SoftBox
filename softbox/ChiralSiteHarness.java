@@ -71,7 +71,7 @@ public final class ChiralSiteHarness {
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
-                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false;
+                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-fixtures" -> fixtures = true;
@@ -135,6 +135,13 @@ public final class ChiralSiteHarness {
                 case "-conv-ramp-screen" -> rampScreen = true;
                 case "-conv-powered" -> powered = true;
                 case "-conv-powered-report" -> poweredReport = true;
+                case "-s2-lawn" -> { String[] q = args[++i].split(","); ExplicitCompleteMatHarness.S2_LAWN_NM = new double[q.length];
+                                     for (int k = 0; k < q.length; k++) ExplicitCompleteMatHarness.S2_LAWN_NM[k] = Double.parseDouble(q[k]); }
+                case "-s2-lawn-weights" -> { String[] q = args[++i].split(","); ExplicitCompleteMatHarness.S2_LAWN_W = new double[q.length];
+                                     for (int k = 0; k < q.length; k++) ExplicitCompleteMatHarness.S2_LAWN_W[k] = Double.parseDouble(q[k]); }
+                case "-s2-lawn-seed" -> ExplicitCompleteMatHarness.S2_LAWN_SEED = Integer.parseInt(args[++i]);
+                case "-s2-fixtures" -> s2Fix = true;
+                case "-s2-map" -> s2Map = true;
                 case "-conv-geom-values" -> { String[] p = args[++i].split(","); CONV_GEOM_VALS = new double[p.length];
                                               for (int k = 0; k < p.length; k++) CONV_GEOM_VALS[k] = Double.parseDouble(p[k]); }
                 case "-conv-angles" -> { String[] p = args[++i].split(","); CONV_ANGLES = new double[p.length];
@@ -179,6 +186,8 @@ public final class ChiralSiteHarness {
         else if (rampScreen) runRampScreen();
         else if (powered)    runPoweredConfirm();
         else if (poweredReport) analysePowered(EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0);
+        else if (s2Fix)      ok = runS2Fixtures();
+        else if (s2Map)      runS2Map();
         else if (twirlAudit)      ok = runTwirlAudit();
         else if (twirlEquiv) ok = runTwirlEquiv();
         else if (twirlPilot) runTwirlPilot();
@@ -192,7 +201,7 @@ public final class ChiralSiteHarness {
         else if (mechanism) runMechanismProbe();
         else ok = runFixtures();
         System.out.println("====================================================================================================");
-        if (fixtures || equiv || all || twirlAudit || twirlEquiv || gatedFix || rampFix)
+        if (fixtures || equiv || all || twirlAudit || twirlEquiv || gatedFix || rampFix || s2Fix)
             System.out.println(ok ? "ALL GATED CHECKS PASS" : "*** SOME CHECKS FAILED ***");
         TornadoCrashDiagnostic.normalMainReturn("ok=" + ok);
         if (!ok) System.exit(1);
@@ -261,6 +270,7 @@ public final class ChiralSiteHarness {
             // default-off diagnostic motor-geometry scales (Phases C/D of the twirling-efficiency audit); exact
             // no-op at the defaults, applied BEFORE packExMat reads paramArr/g4Node.
             ExplicitCompleteMatHarness.applyGeomScales(G);
+            ExplicitCompleteMatHarness.applyS2Lawn(G);   // §S2-FIXTURE quenched per-motor free S2 length (default-off)
             return G;
         } finally { TwoBodyConverterMotor.G4_NSEG_RUN = saved; }
     }
@@ -3015,6 +3025,221 @@ public final class ChiralSiteHarness {
         System.out.println("    (Outcome A: OmegaOdd and J_odd both scale ≈ sin ε ⇒ weak 5° amplitude was the limit; B: J_odd scales");
         System.out.println("     but OmegaOdd does not ⇒ population cancellation/duty dilution; C: neither scales ⇒ loaded dynamics");
         System.out.println("     suppress the geometric skew; D: twirl grows but gliding/engagement collapses ⇒ mechanically disruptive.)");
+    }
+
+    // ==================================================== STUDY A — per-motor free S2 length: validation gates
+    /**
+     * Study-A validation fixtures. Proves the per-motor lawn is data-only, consistent, quenched, deterministic,
+     * uncorrelated with motor identity, and byte-identical to the canonical path when off or degenerate.
+     */
+    static boolean runS2Fixtures() {
+        passN = failN = 0;
+        System.out.println("\n--- STUDY A — PER-MOTOR MECHANICALLY FREE S2 LENGTH: VALIDATION GATES ---");
+        System.out.println("  (report: docs/gliding/S2_FIXTURE_HETEROGENEITY_FINDINGS.md; audit §3)");
+        int savedSegs = FIL_SEGS; FIL_SEGS = 1;
+        try {
+            ExplicitCompleteMatHarness.resetS2Lawn();
+            Glide2D off = build(SEED);
+            var eOff = ExplicitCompleteMatHarness.packExMat(off, 0);
+            System.out.println("  " + ExplicitCompleteMatHarness.s2LawnString(off));
+
+            // [1] degenerate 100 % @ 40 nm must be byte-identical to OFF
+            ExplicitCompleteMatHarness.S2_LAWN_NM = new double[]{ 40.0 };
+            Glide2D deg = build(SEED);
+            var eDeg = ExplicitCompleteMatHarness.packExMat(deg, 0);
+            double dP = 0, dN = 0;
+            for (int c = 0; c < 17*off.N; c++) dP = Math.max(dP, Math.abs(eOff.params.get(c) - eDeg.params.get(c)));
+            for (int c = 0; c < eOff.nodes.getSize(); c++) dN = Math.max(dN, Math.abs(eOff.nodes.get(c) - eDeg.nodes.get(c)));
+            System.out.printf(Locale.US, "  [1] degenerate 100%%@40 vs OFF: max|dparams|=%.3e  max|dnodes|=%.3e%n", dP, dN);
+            ck(501, "[S2] a degenerate 100%@40 nm lawn is BYTE-IDENTICAL to the feature being off", dP == 0.0 && dN == 0.0);
+
+            // [2] per-motor continuum formulas, and consistency of the emergence geometry
+            ExplicitCompleteMatHarness.S2_LAWN_NM = new double[]{ 30.0, 40.0, 50.0 };
+            ExplicitCompleteMatHarness.S2_LAWN_W = new double[]{ 0.2, 0.6, 0.2 };
+            Glide2D het = build(SEED);
+            var eHet = ExplicitCompleteMatHarness.packExMat(het, 0);
+            System.out.println("  " + ExplicitCompleteMatHarness.s2LawnString(het));
+            int M = het.g4M; double worstF = 0, worstG = 0;
+            for (int m = 0; m < het.N; m++) {
+                double L = het.g4LnmArr[m]*1e-3, l0 = L/M;
+                worstF = Math.max(worstF, Math.abs(eHet.params.get(12*het.N+m) - l0)/l0);
+                worstF = Math.max(worstF, Math.abs(eHet.params.get(11*het.N+m) - TwoBodyConverterMotor.EXP4G_EA_SI/(l0*1e-6))
+                                          / (TwoBodyConverterMotor.EXP4G_EA_SI/(l0*1e-6)));
+                worstF = Math.max(worstF, Math.abs(eHet.params.get(13*het.N+m) - TwoBodyConverterMotor.EXP4G_EI_SI/(l0*1e-6))
+                                          / (TwoBodyConverterMotor.EXP4G_EI_SI/(l0*1e-6)));
+                // emergence point must sit (L − slack) behind the pivot along b̂
+                double e2e = L - TwoBodyConverterMotor.EXPLICIT_GLIDE_SLACK_NM*1e-3;
+                double[] P = het.g4Node[m][M], E = het.g4E[m];
+                double d = Math.sqrt(sq(P[0]-E[0]) + sq(P[1]-E[1]) + sq(P[2]-E[2]));
+                worstG = Math.max(worstG, Math.abs(d - e2e)/e2e);
+            }
+            System.out.printf(Locale.US, "  [2] per-motor l0/ks/kb rel err %.2e ; emergence span rel err %.2e%n", worstF, worstG);
+            ck(502, "[S2] per-motor l0_i = L_i/M, ks_i = EA/l0_i, kb_i = EI/l0_i hold exactly (rel < 1e-12)", worstF < 1e-12);
+            ck(503, "[S2] per-motor emergence geometry follows L_i (|P−E| = L_i − slack, rel < 1e-9)", worstG < 1e-9);
+
+            // [3] realised counts match the request
+            java.util.TreeMap<Double,Integer> h = new java.util.TreeMap<>();
+            for (double v : het.g4LnmArr) h.merge(v, 1, Integer::sum);
+            int c30 = h.getOrDefault(30.0,0), c40 = h.getOrDefault(40.0,0), c50 = h.getOrDefault(50.0,0);
+            int e30 = (int) Math.round(0.2*het.N), e50 = (int) Math.round(0.2*het.N);
+            System.out.printf("  [3] realised counts 30/40/50 = %d/%d/%d of %d (requested 20/60/20 %%)%n", c30, c40, c50, het.N);
+            ck(504, "[S2] exact class counts match the requested weights (largest-remainder, no multinomial noise)",
+                    Math.abs(c30-e30) <= 1 && Math.abs(c50-e50) <= 1 && c30+c40+c50 == het.N);
+
+            // [4] determinism and seed sensitivity
+            Glide2D het2 = build(SEED);
+            boolean same = true; for (int m = 0; m < het.N; m++) same &= het.g4LnmArr[m] == het2.g4LnmArr[m];
+            ExplicitCompleteMatHarness.S2_LAWN_SEED = 999;
+            Glide2D het3 = build(SEED);
+            int diff = 0; for (int m = 0; m < het.N; m++) if (het.g4LnmArr[m] != het3.g4LnmArr[m]) diff++;
+            ExplicitCompleteMatHarness.S2_LAWN_SEED = 20260726;
+            System.out.printf("  [4] same fixture seed identical: %b ; different seed changes %d/%d assignments%n", same, diff, het.N);
+            ck(505, "[S2] assignment is DETERMINISTIC for a fixed fixture seed", same);
+            ck(506, "[S2] a different fixture seed reassigns the lawn", diff > het.N/10);
+
+            // [5] no correlation with motor id or anchor position
+            double sx = 0, sy = 0, sL = 0, sxL = 0, syL = 0, sxx = 0, syy = 0, sLL = 0, si = 0, siL = 0, sii = 0;
+            int N = het.N;
+            for (int m = 0; m < N; m++) {
+                double L = het.g4LnmArr[m], x = het.A[m][0], y = het.A[m][1], id = m;
+                sx += x; sy += y; sL += L; sxL += x*L; syL += y*L; sxx += x*x; syy += y*y; sLL += L*L;
+                si += id; siL += id*L; sii += id*id;
+            }
+            double rx = corr(N, sx, sL, sxL, sxx, sLL), ry = corr(N, sy, sL, syL, syy, sLL), ri = corr(N, si, sL, siL, sii, sLL);
+            System.out.printf(Locale.US, "  [5] corr(L, anchorX)=%+.4f  corr(L, anchorY)=%+.4f  corr(L, motorID)=%+.4f%n", rx, ry, ri);
+            ck(507, "[S2] assignment is UNCORRELATED with anchor position and motor id (|r| < 0.1)",
+                    Math.abs(rx) < 0.1 && Math.abs(ry) < 0.1 && Math.abs(ri) < 0.1);
+
+            // [6] quenched: the assignment never changes during a run
+            var eq = ExplicitCompleteMatHarness.packExMat(het, 1);
+            double[] before = new double[N];
+            for (int m = 0; m < N; m++) before[m] = eq.params.get(12*N+m);
+            for (int t = 0; t < 200; t++) ExplicitCompleteMatHarness.stepGlidingCPU(eq, t, SEED);
+            double drift = 0; for (int m = 0; m < N; m++) drift = Math.max(drift, Math.abs(eq.params.get(12*N+m) - before[m]));
+            System.out.printf(Locale.US, "  [6] max drift of per-motor l0 over 200 stepped steps: %.3e%n", drift);
+            ck(508, "[S2] the lawn is QUENCHED — no motor's L changes during the run (binding/stroking never redraw)",
+                    drift == 0.0);
+
+            // [7] the legacy scalar path must REFUSE rather than silently ignore the lawn (audit §3.5)
+            boolean threw = false;
+            try { TwoBodyConverterMotor.s2NodeForcesM(het, het.g4Node[0]); }
+            catch (IllegalStateException ex) { threw = true; }
+            ck(509, "[S2] the legacy scalar path (s2NodeForcesM) REFUSES a per-motor lawn instead of ignoring it", threw);
+
+            // [8] per-motor homogeneous @L must reproduce the global length sweep at the same L
+            ExplicitCompleteMatHarness.resetS2Lawn();
+            ExplicitCompleteMatHarness.S2_LEN_SCALE = 30.0/40.0;
+            Glide2D glob = build(SEED); var eG = ExplicitCompleteMatHarness.packExMat(glob, 0);
+            ExplicitCompleteMatHarness.S2_LEN_SCALE = 1.0;
+            ExplicitCompleteMatHarness.S2_LAWN_NM = new double[]{ 30.0 };
+            Glide2D perm = build(SEED); var eM = ExplicitCompleteMatHarness.packExMat(perm, 0);
+            double dGP = 0, dGN = 0;
+            for (int c = 0; c < 17*glob.N; c++) dGP = Math.max(dGP, Math.abs(eG.params.get(c) - eM.params.get(c)));
+            for (int c = 0; c < eG.nodes.getSize(); c++) dGN = Math.max(dGN, Math.abs(eG.nodes.get(c) - eM.nodes.get(c)));
+            System.out.printf(Locale.US, "  [8] per-motor homogeneous 30 nm vs global scale 0.75: max|dparams|=%.3e max|dnodes|=%.3e%n", dGP, dGN);
+            ck(510, "[S2] per-motor HOMOGENEOUS @30 nm reproduces the global length sweep at 30 nm", dGP < 1e-18 && dGN < 1e-18);
+        } finally {
+            ExplicitCompleteMatHarness.resetS2Lawn(); ExplicitCompleteMatHarness.resetGeomScales(); FIL_SEGS = savedSegs;
+        }
+        System.out.printf(Locale.US, "%n  Study-A S2 fixtures: %d PASS, %d FAIL%n", passN, failN);
+        return failN == 0;
+    }
+    static double corr(int n, double sx, double sy, double sxy, double sxx, double syy) {
+        double num = n*sxy - sx*sy, den = Math.sqrt(Math.max(0,(n*sxx - sx*sx))*Math.max(0,(n*syy - sy*sy)));
+        return den > 0 ? num/den : 0;
+    }
+
+    // ==================================================== STUDY A — homogeneous free-S2 response map
+    static double[] S2_MAP_NM = { 25, 30, 35, 40, 45, 50 };
+
+    /** Resume-safe homogeneous map: each (L, seed) is one atomic record, reusing the §25.7 record machinery. */
+    static void runS2Map() {
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; BUDGET = true;
+        boolean savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;   // the §25.7-confirmed mechanism, unmodified
+        String prov = powProvenance();
+        System.out.printf(Locale.US, "%n--- STUDY A: HOMOGENEOUS FREE-S2 RESPONSE MAP (canonical gliding scene:%n"
+                + "    %d-segment filament, filament Brownian ON, density %.0f heads/µm², %d matched seeds,%n"
+                + "    dt = %.3e, %d steps; runner: %s) ---%n",
+                TwoBodyConverterMotor.G4_NSEG, DENSITY, SEEDS, DTR, STEPS, GPU ? "GPU device-resident" : "CPU");
+        System.out.println("  lengths (nm): " + java.util.Arrays.toString(S2_MAP_NM));
+        System.out.println("  provenance: " + prov);
+        int done = 0, ran = 0;
+        for (double L : S2_MAP_NM) {
+            for (int i = 0; i < SEEDS; i++) {
+                int seed = SEED + i;
+                String id = String.format(Locale.US, "s2map_L%.0f_%d", L, seed);
+                if (powRead(id) != null) { done++; continue; }
+                ExplicitCompleteMatHarness.S2_LAWN_NM = new double[]{ L };
+                TArm T = new TArm(id, 0.0, false, +1, true, TwoBodyConverterMotor.G4_NSEG).conv(EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0);
+                long t0 = System.currentTimeMillis();
+                TRes r = runTwirlArm(T, seed, STEPS);
+                try { powWrite(id, powValues(r), prov + " L=" + L); }
+                catch (java.io.IOException e) { throw new RuntimeException("record write failed: " + id, e); }
+                ran++;
+                System.out.printf(Locale.US, "    [%3d] %-22s glide=%+7.3f µm/s avgB=%5.2f strokes/s=%6.0f inv=%d (%.1f s)%n",
+                        done + ran, id, r.glide, r.avgBound, r.strokeRatePerS, r.invalid, (System.currentTimeMillis()-t0)/1000.0);
+                ExplicitCompleteMatHarness.resetS2Lawn();
+            }
+        }
+        System.out.printf("%n  records: %d reused, %d newly run, %d expected%n", done, ran, S2_MAP_NM.length*SEEDS);
+        CONV_RAMP_ARM = null; BUDGET = false; ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem;
+        ExplicitCompleteMatHarness.resetS2Lawn(); FIL_BROWN = true; cfgOff(); EPS_CONV_ARM = 0;
+        reportS2Map();
+    }
+
+    /** The Study-A response table: core gliding first, engagement and flux next, twirling last. */
+    static void reportS2Map() {
+        System.out.println("\n  ================= STUDY A — HOMOGENEOUS FREE-S2 RESPONSE MAP =================");
+        System.out.println("  #### CORE GLIDING ####");
+        System.out.printf("    %6s %14s %8s %10s %10s %10s %8s%n",
+                "L nm", "v ± SEM µm/s", "CV", "median", "IQR width", "95% CI lo/hi", "n");
+        for (double L : S2_MAP_NM) {
+            double[] v = s2Col(L, "glide");
+            double[] ms = ConvBudget.msn(v), q = ConvBudget.iqr(v), ci = ConvBudget.bootCI(v, 4000, (long) L);
+            double sd = ms[2] > 1 ? ms[1]*Math.sqrt(ms[2]) : Double.NaN;
+            System.out.printf(Locale.US, "    %6.0f %+8.3f±%5.3f %8.3f %10.3f %10.3f  [%+.2f,%+.2f] %5.0f%n",
+                    L, ms[0], ms[1], Math.abs(sd/ms[0]), ConvBudget.median(v), q[1]-q[0], ci[0], ci[1], ms[2]);
+        }
+        System.out.println("\n  #### ENGAGEMENT AND EVENT FLUX ####");
+        System.out.printf("    %6s %10s %12s %12s %12s %10s %10s %8s%n",
+                "L nm", "avgBound", "strokes/s", "epRate /s", "preLife", "postLife", "rollR2", "bad");
+        for (double L : S2_MAP_NM)
+            System.out.printf(Locale.US, "    %6.0f %10.3f %12.0f %12.0f %12.1f %10.1f %10.3f %8.1f%n", L,
+                    ConvBudget.msn(s2Col(L,"avgBound"))[0], ConvBudget.msn(s2Col(L,"strokeRatePerS"))[0],
+                    ConvBudget.msn(s2Col(L,"epRate"))[0], ConvBudget.msn(s2Col(L,"preLife"))[0],
+                    ConvBudget.msn(s2Col(L,"postLife"))[0], ConvBudget.msn(s2Col(L,"rollR2"))[0],
+                    ConvBudget.msn(s2Col(L,"invalid"))[0] + ConvBudget.msn(s2Col(L,"solverFail"))[0]);
+        System.out.println("\n  #### SECONDARY: TWIRLING (single-sign arm — NOT an eps-ODD measurement) ####");
+        System.out.printf("    %6s %12s %12s %14s %14s %14s%n", "L nm", "tau N·m", "OmegaFit", "J_stroke", "J_total", "Qomega");
+        for (double L : S2_MAP_NM) {
+            double[] jp = s2Col(L,"jPre"), js = s2Col(L,"jStroke"), je = s2Col(L,"jEarly"), jl = s2Col(L,"jLate");
+            double[] tot = new double[jp.length];
+            for (int i = 0; i < jp.length; i++) tot[i] = jp[i]+js[i]+je[i]+jl[i];
+            System.out.printf(Locale.US, "    %6.0f %+12.4e %+12.3f %+14.4e %+14.4e %14.3f%n", L,
+                    ConvBudget.msn(s2Col(L,"tau"))[0], ConvBudget.msn(s2Col(L,"omegaFit"))[0],
+                    ConvBudget.msn(js)[0], ConvBudget.msn(tot)[0], ConvBudget.msn(s2Col(L,"qOmega"))[0]);
+        }
+        System.out.println("    NOTE: this map runs a SINGLE eps sign, so these are raw (eps-EVEN + eps-ODD) values,");
+        System.out.println("    NOT the eps-ODD chiral quantities of §§23-25. They cannot be read as a twirl amplitude.");
+        double[] v40 = s2Col(40, "glide");
+        System.out.println("\n  ---- paired differences vs the 40 nm reference (matched seeds) ----");
+        System.out.printf("    %6s %16s %8s %12s%n", "L nm", "dV ± SEM", "sigma", "davgBound");
+        for (double L : S2_MAP_NM) {
+            if (L == 40) continue;
+            double[] d = paired(s2Col(L,"glide"), v40), ms = ConvBudget.msn(d);
+            double[] db = ConvBudget.msn(paired(s2Col(L,"avgBound"), s2Col(40,"avgBound")));
+            System.out.printf(Locale.US, "    %6.0f %+9.3f±%5.3f %8.2f %+12.3f%n", L, ms[0], ms[1], ConvBudget.sigma(ms), db[0]);
+        }
+    }
+    static double[] s2Col(double L, String key) {
+        int ki = POWK(key); double[] o = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            double[] r = powRead(String.format(Locale.US, "s2map_L%.0f_%d", L, SEED + i));
+            o[i] = r != null ? r[ki] : Double.NaN;
+        }
+        return o;
     }
 
     // ============================================ §25.7 — RESUME-SAFE POWERED CONFIRMATION OF THE LINEAR RAMP

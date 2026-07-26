@@ -8,7 +8,15 @@ auxiliary phenotype read from the same runs and never used to select a distribut
 
 ## 1. Executive conclusion
 
-**STATUS: SECTION 3 (SOURCE AUDIT) COMPLETE. No implementation, no campaign, no result.**
+**STATUS: AUDIT + STUDY-A IMPLEMENTATION + HOMOGENEOUS MAP COMPLETE. Study B not started.**
+
+**CORE GLIDING RESULT — mean gliding speed IS sensitive to mechanically free S2 length.** The per-seed trend
+across 25–50 nm is **dv/dL = −0.0319 ± 0.0087 (µm/s)/nm, 3.69σ, 88 % of seeds** — i.e. |v| *rises* with free
+length, from −2.25 µm/s at 25 nm to −3.09 µm/s at 50 nm, a **37 % change across the plausible range**. The
+widest paired contrast (50 − 25 nm) is −0.844 ± 0.333 µm/s (2.54σ, 6/8 seeds). **Provisional classification H3
+(mean-sensitive)** — provisional because the dt/2 subset is not yet run and the effect's likely carrier (the
+post-stroke tail) is exactly the dt-sensitive channel of §23.13a. Velocity *variability* shows no clean length
+dependence (CV 0.19–0.39, non-monotone), so this is **not** H2. Density dependence is **unmeasured**.
 
 The audit was the gating deliverable and it **passes decisively on feasibility**: per-motor free S2 length is a
 **data-only** change. `params` is already a per-motor planar buffer and both runners already read it per motor,
@@ -151,16 +159,130 @@ compliance of the path between substrate and converter. It is **not** measured, 
 length, and **not** independently calibrated. Varying it at fixed EA/EI varies *how much of one continuum beam
 is free to bend and stretch*, which is the fixture question being asked.
 
-## 5–19. NOT YET IMPLEMENTED OR RUN
+## 5. Homogeneous per-motor implementation (COMPLETE)
 
-Homogeneous per-motor implementation (5); homogeneous response map over 25–50 nm on the canonical gliding assay
-(6); the dt/2 subset at 30 / 40 / 50 nm (7); the H1–H7 classification (8); per-motor quenched assignment with a
-dedicated deterministic stream (9); the D0–D5 distribution fixtures and their 15 validation gates (10);
+The audit's verdict held exactly: **the entire mechanical change is three lines in `packExMat`** writing
+`params[11..13]` per motor when a lawn is set. No kernel edit, no buffer-size change, no TaskGraph change.
+
+`ExplicitCompleteMatHarness.applyS2Lawn(G)` assigns a quenched per-motor `L_i` from a discrete distribution
+(class lengths + weights) and rebuilds every dependent quantity **together**: `l0_i = L_i/M` with **M held
+global** (audit §3.6), `ks_i = EA/l0_i`, `kb_i = EI/l0_i`, the per-motor emergence point
+`g4E[m] = P_m − (L_i − slack)·b̂`, and the node chain. EA and EI are fixed — one continuum material, different
+unsupported spans. Exact class counts (largest-remainder, never multinomial noise) are deterministically
+shuffled with a **private counter-based fixture stream** that touches no chemistry or Brownian RNG. Globals per
+§3.8: `queryR` uses **max L_i**; `g4floorZ` stays global as one substrate plane.
+
+Flags: `-s2-lawn "35,40,45"`, `-s2-lawn-weights`, `-s2-lawn-seed`, `-s2-fixtures`, `-s2-map`. Default **off**.
+
+### 5.1 Validation gates — 10 / 10 PASS [`-s2-fixtures`]
+
+| gate | result |
+|---|---|
+| degenerate 100 % @ 40 nm ≡ feature OFF | **byte-identical** (`max\|dparams\|` = 0, `max\|dnodes\|` = 0) |
+| per-motor `l0_i`, `ks_i`, `kb_i` continuum formulas | exact, rel err **0.00e+00** |
+| emergence geometry follows `L_i` (\|P−E\| = L_i − slack) | rel err 2.92e-15 |
+| exact class counts | 240 / 720 / 240 of 1200 for 20/60/20 % |
+| deterministic for a fixed fixture seed | identical |
+| different fixture seed reassigns | 662 / 1200 changed |
+| uncorrelated with anchor x / y / motor id | r = +0.0108 / +0.0099 / +0.0090 |
+| **QUENCHED** — no `L_i` changes over 200 stepped steps | drift **0.00e+00** |
+| **legacy scalar path refuses the lawn** (audit §3.5) | throws `IllegalStateException` |
+| **per-motor homogeneous @30 nm ≡ global length sweep @30 nm** | **byte-identical** |
+
+The last two close the audit's named hazards by test rather than by assumption: the §3.5 path would have
+silently used the global scalars, and the homogeneous-per-motor identity is what makes the map's zero-width
+40 nm reference trustworthy.
+
+## 6. Homogeneous response map [`sA_map_n8_gpu.txt`]
+
+Canonical gliding scene — **12-segment filament, filament Brownian ON**, density 400 heads/µm², N = 1200,
+dt = 2.5e-6 s, 8000 steps, 25 % equilibration, 8 matched seeds, GPU device-resident, monitored, resume-safe
+(one atomic record per (L, seed)). Converter mechanism: the §25.7-confirmed **linear ramp**, unmodified.
+**48/48 records, 0 invalid, 0 solver failures, no fallback, no crash.**
+
+### 6.1 Core gliding
+
+| L (nm) | v ± SEM (µm/s) | CV | median | IQR width | 95 % CI |
+|---|---|---|---|---|---|
+| 25 | −2.248 ± 0.281 | 0.354 | −2.070 | 0.886 | [−2.82, −1.78] |
+| 30 | −2.502 ± 0.172 | 0.194 | −2.580 | 0.672 | [−2.82, −2.19] |
+| 35 | −2.400 ± 0.329 | 0.387 | −2.659 | 0.257 | [−2.82, −1.74] |
+| **40 (reference)** | −2.946 ± 0.405 | 0.389 | −3.382 | 1.429 | [−3.66, −2.16] |
+| 45 | −2.777 ± 0.264 | 0.269 | −2.686 | 0.725 | [−3.24, −2.27] |
+| 50 | −3.091 ± 0.213 | 0.195 | −3.174 | 0.649 | [−3.48, −2.68] |
+
+**Pairwise comparisons against 40 nm resolve nothing** (dV = +0.699/1.29σ, +0.444/0.95σ, +0.546/1.82σ,
++0.169/0.31σ, −0.145/0.42σ at 25/30/35/45/50 nm). Reporting only those would have concluded "no effect".
+
+**The matched-seed TREND test does resolve it**, and is the correct statistic here because every length shares
+the same seed set:
+
+| per-seed slope vs L | value | σ | seeds same sign |
+|---|---|---|---|
+| **dv/dL** | **−0.03194 ± 0.00866 (µm/s)/nm** | **3.69** | **88 %** |
+| d(avgBound)/dL | +0.01074 ± 0.00733 /nm | 1.46 | 88 % |
+| d(strokes/s)/dL | +13.10 ± 9.50 (1/s)/nm | 1.38 | 88 % |
+| d(postLife)/dL | +0.668 ± 0.523 steps/nm | 1.28 | 50 % |
+
+Widest paired contrast, 50 − 25 nm: **−0.844 ± 0.333 µm/s (2.54σ), 6/8 seeds**.
+
+**Longer free S2 ⇒ faster gliding**, ~37 % over 25→50 nm. Engagement and stroke flux trend the same way
+(88 % seed agreement) but are **not resolved** individually at n = 8.
+
+### 6.2 Variability, engagement and flux
+
+| L (nm) | avgBound | strokes/s | episode rate /s | preLife | postLife | invalid+solver |
+|---|---|---|---|---|---|---|
+| 25 | 2.532 | 3417 | 3183 | 40.2 | 241.2 | 0.0 |
+| 30 | 2.434 | 3125 | 2933 | 42.0 | 247.6 | 0.0 |
+| 35 | 2.778 | 3608 | 3433 | 42.4 | 250.9 | 0.0 |
+| 40 | 2.778 | 3658 | 3442 | 41.0 | 255.4 | 0.0 |
+| 45 | 2.599 | 3442 | 3200 | 39.9 | 251.2 | 0.0 |
+| 50 | 2.809 | 3675 | 3458 | 39.9 | 261.5 | 0.0 |
+
+Velocity CV is **0.19–0.39 with no monotone length dependence** — the fluctuation magnitude is not obviously an
+L effect, so **H2 is not supported**. Engagement stays within ~15 % across a 2× span of free length.
+
+### 6.3 Secondary twirling — reported, but NOT an ε-ODD measurement
+
+The map runs a **single ε sign**, so its `tau`, `OmegaFit`, `J_stroke` and `J_total` columns are raw
+(ε-EVEN + ε-ODD) values, **not** the ε-ODD chiral quantities of §§23–25, and cannot be read as a twirl
+amplitude. They are recorded for completeness only. A true ε-ODD twirl-vs-L map requires ±ε at every length —
+double the campaign — and has **not** been run. Additionally `Q_omega` here is 0.08–0.17 rather than ≈1: that is
+**expected**, not a defect — the §§22–25 transport identity `Ω = ⟨τ⟩/γ_roll` was established for the ONE-segment
+rigid scene, whereas this map uses the 12-segment filament where roll is averaged over segments and γ_roll is
+segment 0's. **No twirling conclusion is drawn from this map.**
+
+## 7. dt-refinement subset — NOT RUN
+
+**Required before H3 is believed.** §23.13a established that the long post-stroke tail is the dt-sensitive
+channel, and `postLife` trends with L here (+0.67 steps/nm), so the gliding trend's likely carrier is exactly
+the quantity that moved under refinement before. The 30 / 40 / 50 nm dt/2 subset at matched physical duration is
+the immediate next step.
+
+## 8. Homogeneous classification — **H3 (mean-sensitive), PROVISIONAL**
+
+**H3** — free length materially shifts mean speed: dv/dL resolved at 3.69σ, ~37 % over 25–50 nm.
+**Not H1** (mean is not robust). **Not H2** (CV non-monotone, no clean variance dependence). **H4 unresolved** —
+engagement and stroke flux trend with L at 88 % seed agreement but only 1.4σ. **H5 not assessable** — the twirl
+columns are single-sign (§6.3). **H6 not excluded** — this is why the classification is provisional; the dt/2
+subset (§7) must confirm the ranking survives. **Not H7** — the response is smooth and monotone in trend with no
+isolated extrema or discontinuities, and numerical health is perfect at every length.
+
+**Study B is NOT authorised yet.** The brief's gate is "do not introduce heterogeneous lawns until Study A passes
+numerical and interpretive review", and §7 is outstanding.
+
+## 9–19. NOT YET IMPLEMENTED OR RUN
+
+The D0–D5 distribution campaign (9–10, the mechanism is built and gated but no heterogeneous lawn has been
+RUN);
 mean-matched lawns (11); stratified recruitment/load/torque enrichment (12); mixed lawn versus post-hoc weighted
 average of homogeneous arms (13); density dependence (14); secondary twirling consequences (15); CPU/GPU
 equivalence on a broad mixed lawn (16); biological interpretation and limits (17); next recommendation (18);
 experiments deliberately not run (19).
 
-**No result in this document should be cited — there are none yet.** The next step is §5: implement the
-per-motor assignment with M fixed and the §3.5 guard, then run the Study-A validation fixtures before any
-campaign.
+**Exact next step:** the §7 dt/2 subset at 30 / 40 / 50 nm. If the dv/dL ranking survives, H3 is confirmed and
+Study B opens; if it does not, the classification becomes **H6 (timestep-confounded)** and the homogeneous
+result must be restated as a numerical sensitivity rather than a fixture result. Also outstanding before any
+heterogeneity claim: the density subset (saturation shift), a true ±ε twirl-vs-L map, and mixed-lawn CPU/GPU
+equivalence.

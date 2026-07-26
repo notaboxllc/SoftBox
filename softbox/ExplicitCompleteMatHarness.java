@@ -158,6 +158,92 @@ public final class ExplicitCompleteMatHarness {
     static boolean CONV_ECC_COMP   = false;  // -converter-f8-eccentricity-compensated : hold |d0| (the converter rotation radius) FIXED while eccentricity varies
     static double  CONV_TRANS_NM   = 0.0;    // -converter-transverse-offset-nm : roll the motor's OWN base triad about its OWN b̂ so the converter JOINT C is displaced ⊥ the axial plane by this much at the reference pose
     static boolean geomScaled() { return S2_LEN_SCALE != 1.0 || S2_BEND_SCALE != 1.0 || CONV_ECC_SCALE != 1.0 || CONV_TRANS_NM != 0.0; }
+
+    // ---- §S2-FIXTURE: QUENCHED per-motor mechanically free S2 length (default-off) --------------------------
+    // A lawn is a discrete distribution: class lengths (nm) + weights. Every motor is assigned ONE length at
+    // initialisation and keeps it for the whole run — adsorption geometry is QUENCHED disorder, never redrawn
+    // on binding or stroking. Homogeneous arms use a single class, which exercises the SAME per-motor code path
+    // (validation gate: per-motor homogeneous must equal the global length sweep).
+    static double[] S2_LAWN_NM = null;      // -s2-lawn "35,40,45"   (null ⇒ feature OFF, canonical 40 nm)
+    static double[] S2_LAWN_W  = null;      // -s2-lawn-weights "0.25,0.5,0.25" (null ⇒ equal weights)
+    static int      S2_LAWN_SEED = 20260726;// -s2-lawn-seed : the fixture stream, independent of chemistry/Brownian
+    static boolean  s2LawnOn() { return S2_LAWN_NM != null && S2_LAWN_NM.length > 0; }
+    static void     resetS2Lawn() { S2_LAWN_NM = null; S2_LAWN_W = null; S2_LAWN_SEED = 20260726; }
+
+    /**
+     * Assign the quenched per-motor free S2 length and rebuild every dependent quantity CONSISTENTLY:
+     * {@code l0_i = L_i/M} (M held GLOBAL — buffer strides depend on it), {@code ks_i = EA/l0_i},
+     * {@code kb_i = EI/l0_i}, the per-motor emergence point {@code g4E[m] = P_m − (L_i − slack)·b̂} and the
+     * node chain. EA and EI are fixed, so this is ONE continuum material with different unsupported spans.
+     *
+     * <p>Exact counts are assigned (not multinomial draws) and then deterministically shuffled across motor
+     * positions with a counter-based fixture stream, so the assignment is reproducible, uncorrelated with motor
+     * id / anchor position, and does not touch any chemistry or Brownian RNG.
+     *
+     * <p>Globals handled per §3.8: {@code queryR} uses the MAXIMUM length (a shorter radius would make the
+     * neighbour search non-conservative for the longest motors); {@code g4floorZ} stays global — one substrate
+     * plane — as the min over emergence points.
+     */
+    static void applyS2Lawn(Glide2D G) {
+        if (!s2LawnOn()) return;
+        int N = G.N, M = G.g4M, K = S2_LAWN_NM.length;
+        double[] w = S2_LAWN_W != null ? S2_LAWN_W.clone() : null;
+        if (w == null) { w = new double[K]; java.util.Arrays.fill(w, 1.0/K); }
+        if (w.length != K) throw new IllegalArgumentException("-s2-lawn-weights length must match -s2-lawn");
+        double wsum = 0; for (double v : w) wsum += v;
+        // exact counts (largest-remainder), never multinomial noise
+        int[] cnt = new int[K]; int used = 0; double[] rem = new double[K];
+        for (int k = 0; k < K; k++) { double x = N*w[k]/wsum; cnt[k] = (int) Math.floor(x); rem[k] = x - cnt[k]; used += cnt[k]; }
+        while (used < N) { int best = 0; for (int k = 1; k < K; k++) if (rem[k] > rem[best]) best = k; cnt[best]++; rem[best] = -1; used++; }
+        int[] cls = new int[N]; int p = 0;
+        for (int k = 0; k < K; k++) for (int j = 0; j < cnt[k]; j++) cls[p++] = k;
+        // deterministic Fisher–Yates on a PRIVATE counter-based stream (no existing stream is shifted)
+        for (int i = N - 1; i > 0; i--) {
+            long h = ((long) i * 2654435761L) ^ ((long) S2_LAWN_SEED * 0x9E3779B1L);
+            h ^= (h >>> 13); h *= 0x9E3779B1L; h ^= (h >>> 16);
+            int j = (int) Math.floorMod(h, i + 1);
+            int t = cls[i]; cls[i] = cls[j]; cls[j] = t;
+        }
+        double slack = TwoBodyConverterMotor.EXPLICIT_GLIDE_SLACK_NM * 1e-3;
+        G.g4LnmArr = new double[N]; G.g4l0Arr = new double[N]; G.g4ksArr = new double[N]; G.g4kbArr = new double[N];
+        double zfl = Double.POSITIVE_INFINITY, maxL = 0;
+        for (int m = 0; m < N; m++) {
+            double Lnm = S2_LAWN_NM[cls[m]], L = Lnm * 1e-3;
+            maxL = Math.max(maxL, L);
+            G.g4LnmArr[m] = Lnm;
+            G.g4l0Arr[m] = L / M;
+            G.g4ksArr[m] = TwoBodyConverterMotor.EXP4G_EA_SI / (G.g4l0Arr[m] * 1e-6);
+            G.g4kbArr[m] = TwoBodyConverterMotor.EXP4G_EI_SI / (G.g4l0Arr[m] * 1e-6);
+            double e2e = Math.max(1e-6, L - slack);
+            double sag = slack > 1e-9 ? Math.sqrt(Math.max(0, L*L - e2e*e2e)) * 0.5 : 0.0;
+            double[] P = G.g4Node[m][M].clone();                       // the pivot is the fixed point; the lawn does not move
+            double[] Em = { P[0] - G.bhat[0]*e2e, P[1] - G.bhat[1]*e2e, P[2] - G.bhat[2]*e2e };
+            G.g4E[m] = Em; zfl = Math.min(zfl, Em[0]*G.eup[0] + Em[1]*G.eup[1] + Em[2]*G.eup[2]);
+            for (int j = 0; j <= M; j++) {
+                double fr = (double) j / M, bow = sag * Math.sin(Math.PI * fr);
+                for (int c = 0; c < 3; c++) G.g4Node[m][j][c] = Em[c] + (P[c] - Em[c])*fr + G.eup[c]*bow;
+            }
+            G.g4Node[m][0] = Em.clone(); G.g4Node[m][M] = P.clone();
+        }
+        G.g4floorZ = zfl - 0.05;                                        // one substrate plane (global), §3.8
+        G.queryR = TwoBodyConverterMotor.G4_QUERYR + maxL + 0.01;       // MAX length ⇒ conservative neighbour search
+        TwoBodyConverterMotor.initMatGrid(G);
+    }
+    /** Realised lawn summary for the configuration log and the validation fixtures. */
+    static String s2LawnString(Glide2D G) {
+        if (G.g4LnmArr == null) return "s2Lawn=OFF (homogeneous 40.00 nm, canonical)";
+        int N = G.N; double s = 0, s2 = 0, mn = 1e9, mx = -1e9;
+        java.util.TreeMap<Double,Integer> hist = new java.util.TreeMap<>();
+        for (double v : G.g4LnmArr) { s += v; s2 += v*v; mn = Math.min(mn,v); mx = Math.max(mx,v);
+                                      hist.merge(v, 1, Integer::sum); }
+        double mean = s/N, sd = Math.sqrt(Math.max(0, s2/N - mean*mean));
+        double sk = 0; for (double v : G.g4LnmArr) sk += Math.pow(v-mean, 3);
+        sk = sd > 0 ? sk/N/Math.pow(sd,3) : 0;
+        StringBuilder h = new StringBuilder();
+        for (var e : hist.entrySet()) h.append(String.format(Locale.US, "%.2f:%d(%.1f%%) ", e.getKey(), e.getValue(), 100.0*e.getValue()/N));
+        return String.format(Locale.US, "s2Lawn=ON N=%d mean=%.4f nm SD=%.4f skew=%+.3f range=[%.2f,%.2f] seed=%d classes{ %s}",
+                N, mean, sd, sk, mn, mx, S2_LAWN_SEED, h);
+    }
     static void resetGeomScales() { S2_LEN_SCALE = 1.0; S2_BEND_SCALE = 1.0; CONV_ECC_SCALE = 1.0; CONV_ECC_COMP = false; CONV_TRANS_NM = 0.0; }
 
     /**
@@ -339,6 +425,11 @@ public final class ExplicitCompleteMatHarness {
             for (int j = 0; j <= M; j++) for (int k = 0; k < 3; k++) e.nodes.set((3*j+k)*N+m, G.g4Node[m][j][k]);
             double[] fr = ExplicitMatSolveHarness.frameArr(G, m); for (int c = 0; c < 15; c++) e.frame.set(c*N+m, fr[c]);
             for (int c = 0; c < 17; c++) e.params.set(c*N+m, pr[c]);
+            // §S2-FIXTURE: the ONLY change heterogeneity needs — params is already per-motor planar storage and
+            // both runners already read params.get(c*nM+m), so a per-motor lawn is DATA ONLY (audit §3.2-3.3).
+            if (G.g4l0Arr != null) { e.params.set(11*N+m, G.g4ksArr[m]);
+                                     e.params.set(12*N+m, G.g4l0Arr[m]);
+                                     e.params.set(13*N+m, G.g4kbArr[m]); }
             e.q.set(m, G.phi[m]); e.q.set(N+m, G.psi[m]); e.q.set(2*N+m, G.thetaS[m]); e.q.set(3*N+m, G.psiActin[m]);
             int bs = G.mot.boundSeg.get(m); e.boundSeg.set(m, bs); e.active.set(m, bs >= 0 ? 1 : 0);
         }

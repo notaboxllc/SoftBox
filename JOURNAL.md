@@ -1,5 +1,39 @@
 # Soft Box Project Journal
 
+### 2026-07-26 — STUDY A (S2 fixture) — per-motor free S2 length implemented DATA-ONLY (10/10 gates); homogeneous map: mean gliding IS length-sensitive, dv/dL = -0.032 (µm/s)/nm at 3.69 sigma (H3, PROVISIONAL pending dt/2)
+
+Implemented Study A and ran the homogeneous response map. Report:
+`docs/gliding/S2_FIXTURE_HETEROGENEITY_FINDINGS.md` §§5-8.
+- **The audit verdict held: DATA-ONLY.** The entire mechanical change is three lines in `packExMat` writing
+  `params[11..13]` per motor. No kernel edit, no buffer-size change, no TaskGraph change. `applyS2Lawn` assigns a
+  QUENCHED per-motor L_i and rebuilds l0_i/ks_i/kb_i/g4E[m]/g4Node[m] TOGETHER, with **M held global** and EA/EI
+  fixed (one continuum material, different unsupported spans). Exact counts + deterministic shuffle on a PRIVATE
+  counter-based fixture stream; `queryR` uses max L_i; `g4floorZ` stays global.
+- **Validation 10/10 PASS**, incl. the two hazards the audit named: degenerate 100%@40 is **byte-identical** to
+  OFF; per-motor homogeneous @30 nm is **byte-identical** to the global length sweep @30 nm; the legacy scalar
+  path (`s2NodeForcesM`) now **THROWS** on a per-motor lawn instead of silently ignoring it; lawn is QUENCHED
+  (drift 0.00e+00 over 200 stepped steps); uncorrelated with anchor x/y and motor id (r <= 0.011).
+- **CORE GLIDING RESULT — mean speed IS sensitive to free S2 length.** Canonical scene (12-segment filament,
+  filament Brownian ON, 400 heads/um^2, 8 matched seeds, GPU, 48/48 records, 0 invalid/solver, no crash).
+  **Pairwise vs 40 nm resolves NOTHING** (all <= 1.82 sigma) — reporting only those would have concluded "no
+  effect". The matched-seed **TREND test resolves it: dv/dL = -0.03194 +/- 0.00866 (µm/s)/nm, 3.69 sigma, 88 %
+  of seeds**; |v| rises -2.248 (25 nm) -> -3.091 (50 nm), **~37 % across the range**. Widest paired contrast
+  50-25 nm = -0.844 +/- 0.333 (2.54 sigma, 6/8).
+- **Variability is NOT length-dependent** (CV 0.19-0.39, non-monotone) => not H2. Engagement/stroke flux trend
+  the same way (88 % seed agreement) but only ~1.4 sigma => H4 unresolved.
+- **Classification H3 (mean-sensitive), PROVISIONAL.** Not H1/H2/H7. **H6 NOT excluded** — the dt/2 subset is
+  outstanding, and the trend's likely carrier (postLife, +0.67 steps/nm) is exactly the dt-sensitive channel of
+  §23.13a. **Study B is NOT authorised** until that resolves.
+- **Twirl columns in this map are SINGLE-SIGN** => raw (eps-EVEN + eps-ODD), NOT the eps-ODD quantities of
+  §§23-25, and NOT a twirl amplitude. `Q_omega` 0.08-0.17 is EXPECTED here (12-segment filament; the transport
+  identity was established for the ONE-segment rigid scene), not a defect. No twirling conclusion drawn.
+- New: `-s2-lawn`, `-s2-lawn-weights`, `-s2-lawn-seed`, `-s2-fixtures`, `-s2-map`;
+  `ExplicitCompleteMatHarness.{applyS2Lawn, s2LawnString, s2LawnOn, resetS2Lawn}`; `Glide2D.g4{Lnm,l0,ks,kb}Arr`;
+  §3.5 guard in `TwoBodyConverterMotor.s2NodeForcesM`. Records `RUN_LOGS/chiral_sites/s25powered/s2map_L*_*.tsv`.
+- **NEXT: the dt/2 subset at 30/40/50 nm.** If the ranking survives, H3 confirmed and Study B opens; if not, the
+  result becomes H6 (timestep-confounded). Also unrun: density subset (saturation shift), a true +/-eps
+  twirl-vs-L map, D0-D5 lawns, stratified enrichment, mixed-vs-post-hoc null, mixed-lawn CPU/GPU equivalence.
+
 ### 2026-07-26 — NEW STUDY (S2 fixture heterogeneity) — SOURCE AUDIT ONLY: per-motor free S2 length is a DATA-ONLY change; one legacy scalar path would silently ignore it
 
 Opened a separately bounded study of the assay fixture "mechanically free S2 length" — does replacing the
