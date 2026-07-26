@@ -71,7 +71,7 @@ public final class ChiralSiteHarness {
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
-                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false;
+                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-fixtures" -> fixtures = true;
@@ -132,6 +132,7 @@ public final class ChiralSiteHarness {
                 case "-conv-gated-sweep" -> gatedSweep = true;
                 case "-conv-ramp-audit" -> rampAudit = true;
                 case "-conv-ramp-fixtures" -> rampFix = true;
+                case "-conv-ramp-screen" -> rampScreen = true;
                 case "-conv-geom-values" -> { String[] p = args[++i].split(","); CONV_GEOM_VALS = new double[p.length];
                                               for (int k = 0; k < p.length; k++) CONV_GEOM_VALS[k] = Double.parseDouble(p[k]); }
                 case "-conv-angles" -> { String[] p = args[++i].split(","); CONV_ANGLES = new double[p.length];
@@ -173,6 +174,7 @@ public final class ChiralSiteHarness {
         else if (gatedSweep) runGatedSweep();
         else if (rampAudit)  runRampAudit();
         else if (rampFix)    ok = runRampFixtures();
+        else if (rampScreen) runRampScreen();
         else if (twirlAudit)      ok = runTwirlAudit();
         else if (twirlEquiv) ok = runTwirlEquiv();
         else if (twirlPilot) runTwirlPilot();
@@ -1537,6 +1539,9 @@ public final class ChiralSiteHarness {
         final double seedIdx, epsSign; final boolean internals;
         final int[] att, str, ns, seg;
         final double[] jPre, jStr, jEarly, jLate, wF8, wCh, prevF8;
+        // §25 ramp telemetry per open episode
+        final double[] qAtt, eAtt, qPre, ePre, qL0, eL0, qL7, eL7, qMax, eMax, qFin, eFin, eInt, dAbs, dPeak, ePrev;
+        final double epsMaxRad; final int rampMode; final double rampOnset;
         static final int SN = 13;
         final double[] snap;                       // per motor: the at-stroke state (stride SN)
         final java.util.List<double[]> done = new java.util.ArrayList<>();
@@ -1553,6 +1558,13 @@ public final class ChiralSiteHarness {
             java.util.Arrays.fill(att, -1); java.util.Arrays.fill(str, -1);
             jPre = new double[N]; jStr = new double[N]; jEarly = new double[N]; jLate = new double[N];
             wF8 = new double[N]; wCh = new double[N]; prevF8 = new double[3*N]; snap = new double[SN*N];
+            qAtt = new double[N]; eAtt = new double[N]; qPre = new double[N]; ePre = new double[N];
+            qL0 = new double[N]; eL0 = new double[N]; qL7 = new double[N]; eL7 = new double[N];
+            qMax = new double[N]; eMax = new double[N]; qFin = new double[N]; eFin = new double[N];
+            eInt = new double[N]; dAbs = new double[N]; dPeak = new double[N]; ePrev = new double[N];
+            epsMaxRad = Math.abs(convSkew) * Math.PI / 180.0;
+            rampMode = ExplicitCompleteMatHarness.CONV_SKEW_RAMP;
+            rampOnset = ExplicitCompleteMatHarness.CONV_SKEW_RAMP_ONSET;
         }
         boolean open(int m) { return att[m] >= 0; }
         void begin(int m, int t, int bs) {
@@ -1560,6 +1572,11 @@ public final class ChiralSiteHarness {
             jPre[m] = 0; jStr[m] = 0; jEarly[m] = 0; jLate[m] = 0; wF8[m] = 0; wCh[m] = 0;
             for (int k = 0; k < SN; k++) snap[SN*m + k] = Double.NaN;
             readF8(m, prevF8, 3*m);
+            double q0 = rampQ(m), e0 = rampE(m, q0);
+            qAtt[m] = q0; eAtt[m] = e0; qPre[m] = q0; ePre[m] = e0;
+            qL0[m] = Double.NaN; eL0[m] = Double.NaN; qL7[m] = Double.NaN; eL7[m] = Double.NaN;
+            qMax[m] = q0; eMax[m] = e0; qFin[m] = q0; eFin[m] = e0;
+            eInt[m] = 0; dAbs[m] = 0; dPeak[m] = 0; ePrev[m] = e0;
         }
         private void readF8(int m, double[] out, int off) {
             if (!internals) { out[off] = out[off+1] = out[off+2] = Double.NaN; return; }
@@ -1569,7 +1586,20 @@ public final class ChiralSiteHarness {
         void accumulate(int m, int t, int bs, double tau, double fax, double ftan, double dRollSeg,
                         boolean stroked, int prevNb, double mirror) {
             if (att[m] < 0) return;
-            if (stroked) { ns[m]++; if (str[m] < 0) { str[m] = t; snapshot(m, t, bs, tau, fax, ftan, prevNb, mirror); } }
+            // ---- §25 ramp telemetry: qTheta / eps_eff sampled at the episode's landmark lags -------------
+            double qNow = rampQ(m), eNow = rampE(m, qNow);
+            // Sample the WAITING state only on steps that are still pre-stroke. `stroked` is evaluated by the
+            // caller from this step's nucleotide transition, and matCock has already switched thetaS by the time
+            // the ledger runs, so without the !stroked guard this lands ON lag 0 and duplicates it.
+            if (str[m] < 0 && !stroked) { qPre[m] = qNow; ePre[m] = eNow; }
+            if (qNow > qMax[m]) qMax[m] = qNow;
+            if (Math.abs(eNow) > Math.abs(eMax[m])) eMax[m] = eNow;
+            qFin[m] = qNow; eFin[m] = eNow;
+            eInt[m] += eNow * DTR;
+            double de = Math.abs(eNow - ePrev[m]); dAbs[m] += de; if (de > dPeak[m]) dPeak[m] = de; ePrev[m] = eNow;
+            if (stroked) { ns[m]++; if (str[m] < 0) { str[m] = t; snapshot(m, t, bs, tau, fax, ftan, prevNb, mirror);
+                                                     qL0[m] = qNow; eL0[m] = eNow; } }
+            if (str[m] >= 0 && t - str[m] == ConvBudget.STROKE_W) { qL7[m] = qNow; eL7[m] = eNow; }
             int lag = str[m] < 0 ? -1 : t - str[m];
             double dJ = tau * DTR;
             if (lag < 0) jPre[m] += dJ;
@@ -1662,6 +1692,15 @@ public final class ChiralSiteHarness {
             return E;
         }
         private double nd(int j, int k, int m) { return e.nodes.get((3*j+k)*N + m); }
+        /** qTheta from the stored converter coordinate (host mirror of the kernel; telemetry only). */
+        private double rampQ(int m) { return ChiralSiteSystem.qTheta(e.q.get(m), e.q.get(N + m)); }
+        /** eps_eff (rad, unsigned magnitude scale) under this arm's activation schedule. */
+        private double rampE(int m, double q) {
+            if (rampMode != ChiralSiteSystem.RAMP_OFF) return epsMaxRad * ChiralSiteSystem.rampF(q, rampMode, rampOnset);
+            if (ExplicitCompleteMatHarness.CONV_SKEW_STATE_GATED)
+                return e.q.get(2*N + m) <= e.chiP.get(20) ? 0.0 : epsMaxRad;
+            return epsMaxRad;
+        }
 
         /** Finish motor m's episode at step t. Stroke-bearing episodes become records; stroke-free ones feed the control. */
         void close(int m, int t, boolean censored) {
@@ -1701,6 +1740,13 @@ public final class ChiralSiteHarness {
             r[ConvBudget.F_WCHIRAL]  = wCh[m];
             r[ConvBudget.F_TRUNC]    = postLife < ConvBudget.STROKE_W ? 1 : 0;
             r[ConvBudget.F_FASTDET]  = postLife <= ConvBudget.STROKE_W ? 1 : 0;
+            r[ConvBudget.F_Q_ATT] = qAtt[m];  r[ConvBudget.F_EPS_ATT] = eAtt[m];
+            r[ConvBudget.F_Q_PRE] = qPre[m];  r[ConvBudget.F_EPS_PRE] = ePre[m];
+            r[ConvBudget.F_Q_L0]  = qL0[m];   r[ConvBudget.F_EPS_L0]  = eL0[m];
+            r[ConvBudget.F_Q_L7]  = qL7[m];   r[ConvBudget.F_EPS_L7]  = eL7[m];
+            r[ConvBudget.F_Q_MAX] = qMax[m];  r[ConvBudget.F_EPS_MAX] = eMax[m];
+            r[ConvBudget.F_Q_FIN] = qFin[m];  r[ConvBudget.F_EPS_FIN] = eFin[m];
+            r[ConvBudget.F_EPS_INT] = eInt[m]; r[ConvBudget.F_DEPS_ABS] = dAbs[m]; r[ConvBudget.F_DEPS_PEAK] = dPeak[m];
             done.add(r);
             if (Double.isFinite(wF8[m]) && wF8[m] != 0) { wF8Abs += Math.abs(wF8[m]); wF8N++; }
         }
@@ -2965,6 +3011,144 @@ public final class ChiralSiteHarness {
         System.out.println("    (Outcome A: OmegaOdd and J_odd both scale ≈ sin ε ⇒ weak 5° amplitude was the limit; B: J_odd scales");
         System.out.println("     but OmegaOdd does not ⇒ population cancellation/duty dilution; C: neither scales ⇒ loaded dynamics");
         System.out.println("     suppress the geometric skew; D: twirl grows but gliding/engagement collapses ⇒ mechanically disruptive.)");
+    }
+
+    // ================================================ §25 STAGE 4 — the 8-seed dynamic full-cycle budget screen
+    /** One Stage-4 arm: a name plus its activation schedule. */
+    record ArmCfg(String tag, int ramp, boolean gated) {}
+    static final ArmCfg[] S4_ARMS = {
+        new ArmCfg("A always-active", ChiralSiteSystem.RAMP_OFF, false),
+        new ArmCfg("B binary gated",  ChiralSiteSystem.RAMP_OFF, true),
+        new ArmCfg("C linear",        ChiralSiteSystem.RAMP_LINEAR, false),
+        new ArmCfg("D smoothstep",    ChiralSiteSystem.RAMP_SMOOTHSTEP, false),
+        new ArmCfg("E delayed .25",   ChiralSiteSystem.RAMP_DELAYED, false),
+    };
+
+    /**
+     * §25 STAGE 4. The 8-seed dynamic full-cycle budget screen: five activation schedules on MATCHED seeds at
+     * ε = ±15°, reporting every impulse channel plus the two load-bearing composites
+     * {@code J_charge_release = J_pre + J_stroke} and {@code J_productive_early = J_stroke + J_post_early},
+     * the ramp waiting-state telemetry, the matched differences vs always-active, and the population closure.
+     */
+    static void runRampScreen() {
+        double eps = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0;
+        FIL_SEGS = 1; FIL_BROWN = false; BUDGET = true;
+        boolean savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = true;
+        System.out.printf(Locale.US, "%n--- §25 STAGE 4 — EIGHT-SEED FULL-CYCLE BUDGET SCREEN of the progress-ramped%n"
+                + "    converter skew (ε = ±%.0f°, one rigid segment, filament Brownian OFF, shared bases,%n"
+                + "    native lattice, interface gauge; runner: %s) ---%n",
+                eps, GPU ? "GPU device-resident" : "CPU sequential");
+        cfg(2, true, 0.0, 0.0, 0.0, false, +1, true);
+        dragAudit("assay filament:"); System.out.println();
+        int NA = S4_ARMS.length;
+        double[][] row = new double[NA][]; double[][] ramp = new double[NA][];
+        for (int a = 0; a < NA; a++) {
+            ArmCfg A = S4_ARMS[a];
+            CONV_RAMP_ARM = A.ramp(); CONV_STATE_GATED_ARM = A.gated();
+            System.out.printf("%n  ######## %s ########%n", A.tag());
+            cfg(2, true, 0.0, 0.0, 0.0, false, +1, true);
+            System.out.println("  config: " + ExplicitCompleteMatHarness.chiralConfigString());
+            tHeader();
+            TRes[] rp = runTwirlSeeds(new TArm("S+ " + A.tag(), 0.0, false, +1, false, 1).conv(+eps));
+            TRes[] rm = runTwirlSeeds(new TArm("S- " + A.tag(), 0.0, false, +1, false, 1).conv(-eps));
+            tReport("S+ " + A.tag(), rp); tReport("S- " + A.tag(), rm); tPaired(A.tag(), rp, rm);
+            ConvBudget.budgetTable(A.tag(), ledgerOf(rp), ledgerOf(rm));
+            row[a] = budgetRow(rp, rm);
+            ramp[a] = rampRow(rp, rm);
+        }
+        CONV_RAMP_ARM = null; CONV_STATE_GATED_ARM = null;
+        s4Tables(row, ramp, eps);
+        BUDGET = false; ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; cfgOff(); EPS_CONV_ARM = 0;
+    }
+
+    /** Waiting-state and activation telemetry, averaged over BOTH ±ε arms (these are ε-EVEN descriptors). */
+    static double[] rampRow(TRes[] rp, TRes[] rm) {
+        java.util.List<double[]>[] ap = ledgerOf(rp), am = ledgerOf(rm);
+        java.util.function.ToDoubleFunction<double[]>[] g = new java.util.function.ToDoubleFunction[]{
+            (java.util.function.ToDoubleFunction<double[]>) r -> r[ConvBudget.F_Q_ATT],
+            (java.util.function.ToDoubleFunction<double[]>) r -> Math.toDegrees(r[ConvBudget.F_EPS_ATT]),
+            (java.util.function.ToDoubleFunction<double[]>) r -> r[ConvBudget.F_Q_PRE],
+            (java.util.function.ToDoubleFunction<double[]>) r -> Math.toDegrees(r[ConvBudget.F_EPS_PRE]),
+            (java.util.function.ToDoubleFunction<double[]>) r -> r[ConvBudget.F_Q_L0],
+            (java.util.function.ToDoubleFunction<double[]>) r -> Math.toDegrees(r[ConvBudget.F_EPS_L0]),
+            (java.util.function.ToDoubleFunction<double[]>) r -> r[ConvBudget.F_Q_L7],
+            (java.util.function.ToDoubleFunction<double[]>) r -> Math.toDegrees(r[ConvBudget.F_EPS_L7]),
+            (java.util.function.ToDoubleFunction<double[]>) r -> r[ConvBudget.F_Q_MAX],
+            (java.util.function.ToDoubleFunction<double[]>) r -> Math.toDegrees(r[ConvBudget.F_EPS_MAX]),
+            (java.util.function.ToDoubleFunction<double[]>) r -> r[ConvBudget.F_Q_FIN],
+            (java.util.function.ToDoubleFunction<double[]>) r -> Math.toDegrees(r[ConvBudget.F_DEPS_PEAK]),
+        };
+        double[] o = new double[g.length];
+        for (int i = 0; i < g.length; i++)
+            o[i] = 0.5*(ConvBudget.msn(ConvBudget.seedMean(ap, g[i]))[0]
+                      + ConvBudget.msn(ConvBudget.seedMean(am, g[i]))[0]);
+        return o;
+    }
+
+    /** The §25 Stage-4 comparison tables. */
+    static void s4Tables(double[][] R, double[][] Q, double eps) {
+        int NA = S4_ARMS.length;
+        System.out.println("\n  ============ §25 STAGE 4 — WAITING-STATE AND ACTIVATION TELEMETRY (ε-EVEN descriptors) ============");
+        System.out.printf("    %-16s %8s %9s %8s %9s %8s %9s %8s %9s %8s %10s%n",
+                "arm", "q@att", "eps@att", "q@pre", "eps@pre", "q@lag0", "eps@lag0", "q@lag7", "eps@lag7", "qMax", "peakDeps");
+        for (int a = 0; a < NA; a++)
+            System.out.printf(Locale.US, "    %-16s %8.4f %9.4f %8.4f %9.4f %8.4f %9.4f %8.4f %9.4f %8.4f %10.5f%n",
+                    S4_ARMS[a].tag(), Q[a][0], Q[a][1], Q[a][2], Q[a][3], Q[a][4], Q[a][5], Q[a][6], Q[a][7], Q[a][8], Q[a][11]);
+        System.out.println("    (eps in DEGREES; q@pre is the LOADED waiting state — the §25.1 quantity the ramp exists to reduce)");
+
+        System.out.println("\n  ============ §25 STAGE 4 — ε-ODD FULL-CYCLE IMPULSE BUDGET (N·m·s per stroke-bearing episode) ============");
+        System.out.printf("    %-16s %13s %13s %13s %13s %13s %10s%n",
+                "arm", "J_pre", "J_stroke", "J_post_early", "J_post_late", "J_total±SEM", "f_retain");
+        for (int a = 0; a < NA; a++)
+            System.out.printf(Locale.US, "    %-16s %+13.4e %+13.4e %+13.4e %+13.4e %+.3e±%.0e %10.3f%n",
+                    S4_ARMS[a].tag(), R[a][0], R[a][1], R[a][2], R[a][3], R[a][4], R[a][5], R[a][7]);
+
+        System.out.println("\n  ---- COMPOSITES (the §25 load-bearing quantities) ----");
+        System.out.printf("    %-16s %18s %20s %13s %10s %8s %8s%n",
+                "arm", "J_charge_release", "J_productive_early", "J_recoil", "OmegaOdd", "vEven", "avgB");
+        for (int a = 0; a < NA; a++)
+            System.out.printf(Locale.US, "    %-16s %+18.4e %+20.4e %+13.4e %+10.2f %8.3f %8.2f%n",
+                    S4_ARMS[a].tag(), R[a][0]+R[a][1], R[a][1]+R[a][2], R[a][6], R[a][8], R[a][11], R[a][13]);
+
+        System.out.println("\n  ---- MATCHED DIFFERENCES vs ALWAYS-ACTIVE (arm − A) ----");
+        System.out.printf("    %-16s %12s %12s %12s %12s %12s %14s %16s %9s %8s %8s%n",
+                "arm", "dJ_pre", "dJ_stroke", "dJ_early", "dJ_late", "dJ_total", "dJ_charge_rel", "dJ_prod_early", "dOmega", "dvEven", "davgB");
+        for (int a = 1; a < NA; a++)
+            System.out.printf(Locale.US, "    %-16s %+12.3e %+12.3e %+12.3e %+12.3e %+12.3e %+14.3e %+16.3e %+9.2f %+8.3f %+8.2f%n",
+                    S4_ARMS[a].tag(), R[a][0]-R[0][0], R[a][1]-R[0][1], R[a][2]-R[0][2], R[a][3]-R[0][3],
+                    R[a][4]-R[0][4], (R[a][0]+R[a][1])-(R[0][0]+R[0][1]), (R[a][1]+R[a][2])-(R[0][1]+R[0][2]),
+                    R[a][8]-R[0][8], R[a][11]-R[0][11], R[a][13]-R[0][13]);
+
+        System.out.println("\n  ---- RETENTION vs ALWAYS-ACTIVE, and the FINALIST GATES ----");
+        System.out.printf("    %-16s %12s %14s %12s %10s %10s %8s%n",
+                "arm", "|J_str|/A", "|J_prodEar|/A", "J_tot/A", "vEven/A", "avgB/A", "gates");
+        for (int a = 1; a < NA; a++) {
+            double rs = R[0][1] != 0 ? R[a][1]/R[0][1] : Double.NaN;
+            double rpe = (R[0][1]+R[0][2]) != 0 ? (R[a][1]+R[a][2])/(R[0][1]+R[0][2]) : Double.NaN;
+            double rt = R[0][4] != 0 ? R[a][4]/R[0][4] : Double.NaN;
+            boolean g1 = R[a][1] < 0, g2 = rs >= 0.5, g3 = R[a][2] < 0, g4 = (R[a][1]+R[a][2]) < 0, g5 = R[a][4] < 0;
+            boolean g7 = Math.abs(R[a][11]-R[0][11]) <= 0.2*Math.abs(R[0][11]);
+            boolean g8 = Math.abs(R[a][13]-R[0][13]) <= 0.2*Math.abs(R[0][13]);
+            boolean g10 = R[a][19] == 0;
+            System.out.printf(Locale.US, "    %-16s %12.3f %14.3f %12.3f %10.3f %10.3f   %s%s%s%s%s%s%s%s%n",
+                    S4_ARMS[a].tag(), rs, rpe, rt,
+                    R[0][11] != 0 ? R[a][11]/R[0][11] : Double.NaN, R[0][13] != 0 ? R[a][13]/R[0][13] : Double.NaN,
+                    g1?"1":"-", g2?"2":"-", g3?"3":"-", g4?"4":"-", g5?"5":"-", g7?"7":"-", g8?"8":"-", g10?"X":"-");
+        }
+        System.out.println("    gates: 1 J_stroke<0 | 2 |J_stroke|>=50% of A | 3 J_post_early<0 | 4 J_productive_early<0");
+        System.out.println("           5 J_total<0 | 7 vEven within 20% | 8 avgB within 20% | X 0 invalid/solver");
+        System.out.println("    (gate 6, the deterministic activation force jump >=50% below binary, was PASSED in §25.3:");
+        System.out.printf("     binary 22.3%%; linear 5.6%%; smoothstep 4.4%%; delayed 3.9%%)%n");
+
+        System.out.println("\n  ---- POPULATION CLOSURE: episode-rate × J_total_odd vs measured tauOdd ----");
+        System.out.printf("    %-16s %12s %14s %14s %9s%n", "arm", "epRate /s", "pred tauOdd", "meas tauOdd", "closure");
+        for (int a = 0; a < NA; a++) {
+            double pr = R[a][17]*R[a][4];
+            System.out.printf(Locale.US, "    %-16s %12.0f %+14.4e %+14.4e %9.3f%n",
+                    S4_ARMS[a].tag(), R[a][17], pr, R[a][10], R[a][10] != 0 ? pr/R[a][10] : Double.NaN);
+        }
     }
 
     // ================================================ §25 STAGES 1-3 — ramp identity, path and force gates

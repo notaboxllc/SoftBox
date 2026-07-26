@@ -2956,10 +2956,9 @@ budgetRow, gatedComparisonTable}`; flags `-converter-skew-state-gated`, `-conv-g
 
 ## 25. Progress-ramped converter skew and a curved chiral power-stroke path
 
-**STATUS: STAGES 0–3 COMPLETE (deterministic, CPU). Stage 4 authorised but NOT YET RUN.** The dynamic 8-seed
-budget screen, angle scaling, powered endpoint, mirror / randomized-base / Ractin controls, population closure
-and the dt/2 test are **not run**, and **no decision class RC1–RC8 is assigned** — the classes are dynamic
-statements about impulse channels, which Stage 4 supplies.
+**STATUS: STAGES 0–4 COMPLETE.** Angle scaling, the powered endpoint, the mirror / randomized-base / `Ractin`
+controls and the dt/2 test are **not run** (§25.5). Decision class: **RC1 (qualified) primary, RC3 secondary,
+with RC5 explicitly REFUTED for continuous ramps** — see §25.4.6.
 
 **Why the experiment exists.** §24 showed that switching the converter skew on at Pi release removes `J_pre`
 and annihilates `J_stroke` with it, because the two are the charging and release halves of one history-dependent
@@ -3122,11 +3121,162 @@ ascending/descending pose sweep of the basis; (iii) a comparator whose `curEps` 
 binary reference read 0.0 %; (iv) normalizing the activation step by the *instantaneous* |F|, which inflates a
 ramp step taken while the bond is near rest, replaced by the pre-transition force as specified.
 
-### 25.4 – 25.12 — Stage 4 onward, NOT YET RUN
+### 25.4 Stage 4 — eight-seed full-cycle budget screen [`h4_ramp_screen_n8_gpu.txt`]
 
-The 8-seed dynamic budget screen (always-active / binary / linear / smoothstep / delayed), the composite
-`J_pre + J_stroke` and `J_stroke + J_post_early`, the selection gates, angle scaling, the powered endpoint, the
-mirror / ε = 0 / randomized-base / `Ractin = 0` controls, population closure and the dt/2 test are **pending**.
-**No decision class RC1–RC8 is assigned**: every class is a statement about dynamic impulse channels, and
-nothing in Stages 1–3 licenses one. In particular, whether a smoother activation path preserves the productive
-stroke channel — the actual question §24 left open — is exactly what Stage 4 measures.
+Exactly the §§22–24 assay: one rigid segment (2.106 µm contour), filament Brownian OFF, motor/S2 + head-roll
+Brownian ON, `every3` sites, exclusivity ON, Ractin 3.5 nm, capture 12 nm, surface bond ON, interface gauge,
+target-zone OFF, roll spring OFF, registry K = 0, binding/stroke skew 0, 400 heads/µm² (N = 1200), shared bases,
+dt = 2.5e-6 s, 8000 steps (20 ms; 25 % equilibration ⇒ 15 ms measured), **8 matched seeds**, ε = ±15°. Five
+activation schedules on the SAME seed set: **A** always-active, **B** binary state-gated (§24),
+**C** linear, **D** smoothstep, **E** delayed smoothstep q0 = 0.25.
+
+**Device residency.** GPU device-resident throughout via `run_gpu_monitored.sh` with the external recorder
+RUNNING, `-Dtornado.enable.fma=false -Dtornado.recover.bailout=false -Dtornado.tvm.maxbytecodesize=65536`.
+The ramp adds **no TaskGraph task, no buffer and no device work** — only branches inside the already-wired
+`convFrame` kernel — but because the kernel body changed, equivalence was **re-verified rather than assumed**:
+`-conv-equiv` with the smoothstep ramp gave `bindMism = 0`, `convFlagMism = 0`, `max|dConvFrame| = 1.54e-06`,
+`max|dSegTorque| = 1.51e-24 N·m`, `firstDiv = none`, bound CPU = 9 / GPU = 9 — **PASS, no fallback**
+(`h3_ramp_equiv_gpu.txt`). 0 invalid / 0 solver failures in every Stage-4 arm.
+
+*A first attempt at this screen was lost to a GPU hard freeze (Xid 79 + 154, host reboot) after completing only
+arm A; evidence collected per policy and written up in `docs/GPU_CRASH_CASE_20260726_XID79.md`. The partial log
+is retained as `h4_ramp_screen_n8_gpu.CRASHED-xid79.txt` and is **not** used — a matched-seed comparison cannot
+be spliced across a reboot. The screen was re-run in full within one boot.*
+
+#### 25.4.1 Waiting-state telemetry
+
+| arm | q@attach | eps@attach | q@lag0 | **eps@lag0** | q@lag7 | eps@lag7 | qMax | peak Δeps/step |
+|---|---|---|---|---|---|---|---|---|
+| A always-active | 0.0001 | **15.000°** | 0.1026 | **15.000°** | 0.8431 | 15.000° | 0.9932 | 0° |
+| B binary gated | 0.0000 | 0.000° | 0.0991 | 15.000° | 0.8485 | 15.000° | 0.9953 | 15.00° |
+| C linear | 0.0000 | **0.000°** | 0.0963 | **1.445°** | 0.8526 | 12.790° | 0.9905 | 7.46° |
+| D smoothstep | 0.0000 | **0.000°** | 0.0997 | **1.057°** | 0.8578 | 13.420° | 0.9938 | 9.01° |
+| E delayed .25 | 0.0000 | **0.000°** | 0.0953 | **0.251°** | 0.8426 | 12.305° | 0.9933 | 11.30° |
+
+**The ramp does what §25.1 designed it to do in the live assay**: at attachment every ramped arm carries
+**exactly 0°** where always-active carries the full 15°, and by the stroke instant it has risen to only
+**0.25–1.4°**. By lag 7 the skew is essentially complete (12.3–13.4°), so the stroke is executed in a nearly
+fully rotated plane.
+
+*Telemetry defect, stated:* the intended "last waiting step" sample lands on lag 0 (the ledger runs after
+`matCock`, so `q@pre ≡ q@lag0` in every row) — the column is therefore omitted above and the dwell is
+**bracketed** by `q@attach` and `q@lag0` rather than sampled at its end. Fixed in the harness for future runs;
+it does not affect any impulse channel, and the bracket answers the waiting-state question.
+
+#### 25.4.2 ε-ODD full-cycle impulse budget (N·m·s per stroke-bearing episode, seed = unit)
+
+| arm | `J_pre` | `J_stroke` | `J_post_early` | `J_post_late` | `J_total` ± SEM | `f_retain` |
+|---|---|---|---|---|---|---|
+| **A always-active** | **+6.999e-26** | −4.563e-26 | −6.851e-26 | −8.818e-26 | −1.323e-25 ± 4e-26 | 2.90 |
+| **B binary gated** | +2.938e-26 | −1.923e-28 | −5.520e-26 | −3.828e-26 | −6.430e-26 ± 6e-26 | 334 † |
+| **C linear** | **−2.694e-26** | −1.178e-26 | −4.544e-26 | −6.230e-26 | **−1.465e-25 ± 5e-26** | 12.4 † |
+| **D smoothstep** | **−3.148e-26** | −1.428e-26 | −3.830e-26 | −8.203e-28 | −8.488e-26 ± 5e-26 | 5.94 † |
+| **E delayed .25** | −3.381e-27 | −3.516e-27 | −2.983e-26 | −1.029e-25 | **−1.396e-25 ± 7e-26** | 39.7 † |
+
+† `f_retain` is meaningless once `J_stroke` → 0 (a vanishing denominator); reported only to make that explicit.
+
+#### 25.4.3 Composites — the load-bearing quantities
+
+| arm | `J_charge_release` = J_pre+J_stroke | `J_productive_early` = J_stroke+J_post_early | Ω_odd | v_even | avgB |
+|---|---|---|---|---|---|
+| A always-active | **+2.437e-26** | −1.141e-25 | −12.68 | −2.673 | 2.63 |
+| B binary gated | **+2.918e-26** | −5.540e-26 | −7.47 | −3.078 | 2.62 |
+| **C linear** | **−3.872e-26** | −5.722e-26 | **−15.97** | −2.682 | 2.50 |
+| D smoothstep | **−4.576e-26** | −5.258e-26 | −8.72 | −2.844 | 2.53 |
+| E delayed .25 | −6.897e-27 | −3.334e-26 | −11.93 | −2.741 | 2.49 |
+
+**Two findings, both against expectation.**
+
+1. **`J_pre` REVERSES SIGN under the continuous ramps.** Always-active +7.00e-26 (opposing) → linear −2.69e-26,
+   smoothstep −3.15e-26 (now *contributing*, same sign as the stroke); delayed −3.38e-27 (≈ 0). The ramps do
+   not merely reduce the opposing preload the §23/§24 work identified — they **invert** it.
+2. **`J_charge_release` is NOT invariant across activation schedules — §24's key observation does not
+   generalise.** It held for the binary switch (A +2.437e-26 → B +2.918e-26, the basis of §24's "loading and
+   release are inseparable" conclusion) but the continuous ramps move it decisively and change its sign
+   (C −3.872e-26, D −4.576e-26). **RC5 is refuted for continuous ramps.** §24's entanglement conclusion is
+   therefore specific to a *discontinuous* switch, not a property of the mechanism.
+
+#### 25.4.4 Matched differences vs always-active, and the finalist gates
+
+| arm | ΔJ_pre | ΔJ_stroke | ΔJ_total | ΔJ_charge_rel | ΔJ_prod_early | ΔΩ_odd | Δv_even | ΔavgB |
+|---|---|---|---|---|---|---|---|---|
+| B binary | −4.06e-26 | +4.54e-26 | +6.80e-26 | +4.82e-27 | +5.87e-26 | +5.20 | −0.406 | −0.01 |
+| **C linear** | **−9.69e-26** | +3.39e-26 | **−1.41e-26** | −6.31e-26 | +5.69e-26 | **−3.30** | −0.009 | −0.13 |
+| D smoothstep | −1.02e-25 | +3.14e-26 | +4.74e-26 | −7.01e-26 | +6.16e-26 | +3.96 | −0.171 | −0.10 |
+| E delayed | −7.34e-26 | +4.21e-26 | −7.30e-27 | −3.13e-26 | +8.08e-26 | +0.75 | −0.068 | −0.14 |
+
+Retention ratios and the pre-registered gates:
+
+| arm | \|J_stroke\|/A | \|J_prodEarly\|/A | J_total/A | Ω_odd/A | v_even/A | avgB/A | gates met |
+|---|---|---|---|---|---|---|---|
+| B binary | 0.004 | 0.485 | 0.486 | 0.589 | 1.152 | 0.997 | 1,3,4,5,7,8,X |
+| **C linear** | **0.258** | 0.501 | **1.107** | **1.259** | 1.003 | 0.951 | 1,3,4,5,7,8,X |
+| D smoothstep | 0.313 | 0.461 | 0.642 | 0.688 | 1.064 | 0.962 | 1,3,4,5,7,8,X |
+| E delayed | 0.077 | 0.292 | 1.055 | 0.941 | 1.026 | 0.948 | 1,3,4,5,7,8,X |
+
+**No arm qualifies as a provisional finalist: gate 2 (`|J_stroke|` ≥ 50 % of always-active) FAILS for every
+schedule**, ramped or binary (0.26 / 0.31 / 0.08). Gates 1, 3, 4, 5, 7, 8 and the numerical-health gate pass
+everywhere, and gate 6 was passed deterministically in §25.3.
+
+**But gate 2's rationale is undermined by finding (1), and that must be said rather than quietly ignored.**
+The gate was written on §24's picture, in which `J_pre` could at best be driven to zero and the stroke channel
+was therefore the sole carrier of useful impulse. Under a continuous ramp `J_pre` *contributes* instead, so a
+weakened `J_stroke` no longer implies a weakened cycle: **linear delivers `J_total` = 111 % and Ω_odd = 126 % of
+always-active** while carrying 0° at attachment and 1.4° at the stroke. Judged on the physically meaningful
+endpoints rather than on one window, C is the best schedule measured in this lineage — but it does **not** meet
+the gates as pre-registered, and it is not declared a finalist here.
+
+#### 25.4.5 Population closure
+
+| arm | episode rate /s | predicted τ_odd | measured τ_odd | closure |
+|---|---|---|---|---|
+| A always-active | 2867 | −3.793e-22 | −3.675e-22 | **1.032** |
+| B binary gated | 2842 | −1.827e-22 | −3.112e-22 | 0.587 |
+| C linear | 2983 | −4.369e-22 | −5.517e-22 | 0.792 |
+| D smoothstep | 2933 | −2.490e-22 | −3.049e-22 | 0.817 |
+| E delayed .25 | 2808 | −3.921e-22 | −5.461e-22 | 0.718 |
+
+Always-active closes at 1.03, reproducing §23.5. **Every non-baseline schedule under-closes (0.59–0.82)**: the
+episode budget accounts for only ~72–82 % of the measured population torque under a ramp. Flagged as a
+**partial RC7**, not explained. The most likely reading is that censoring (left-censored episodes are never
+recorded; right-censored are dropped) bites harder when the impulse is spread across the dwell rather than
+concentrated in the stroke window — but that is a hypothesis, and resolving it needs the censoring-inclusive
+accounting, not more seeds.
+
+#### 25.4.6 Decision class
+
+**Primary RC1 (qualified) — the corrected ramp is mechanically continuous and retains a negative productive
+channel and a full-cycle impulse equal to or better than always-active** (C: `J_productive_early` −5.72e-26,
+`J_total` 111 %, Ω_odd 126 %), with 0° waiting-state skew at attachment and an 83 %-smaller activation force
+step (§25.3). The qualification is real: `|J_stroke|` is only 26–31 % of always-active, so the *stroke window
+itself* is genuinely weaker and the pre-registered gate 2 fails.
+
+**Secondary RC3 — delayed onset progressively weakens the stroke channel.** Ordering by onset,
+`|J_stroke|`/A = 0.31 (smoothstep, earliest effective rise) → 0.26 (linear) → 0.08 (delayed q0 = 0.25), and
+`|J_productive_early|`/A = 0.46 → 0.50 → 0.29. **Early chiral charging does matter**, exactly as §24 implied.
+
+**RC5 explicitly REFUTED for continuous ramps** (§25.4.3, finding 2). **Partial RC7** on closure (§25.4.5).
+**Not** RC2 (the preload is inverted, not reproduced), **not** RC4 (0° at attachment, §25.4.1), **not** RC6 (q
+is monotone and unambiguous in the live dynamics — qMax 0.99 in every arm), **not** RC8 (0 invalid, 0 solver,
+no fallback; the Xid 79 freeze was a hardware event on a discarded first attempt).
+
+Mapped to the pre-registered outcomes this is **C (interpolation / charging–release tradeoff)** with a strong
+element of **A (useful compromise)**, and it refutes **D (charge-release invariance)** for continuous schedules.
+
+### 25.5 Stages NOT run
+
+Per the stop rule, this continuation ended at the 8-seed screen. **Not run:** 5°/30° angle scaling; the 24- and
+48-seed powered endpoint; the mirror campaign; the randomized-base campaign; the `Ractin = 0` control; the dt/2
+campaign; the multisegment roll-coherence test. No claim in §25 depends on them.
+
+### 25.6 Exact next recommended experiment
+
+**Power the linear ramp against always-active at 24 matched seeds, 15°, with the mirror control.** It is the
+only schedule that improved both endpoints (`J_total` 111 %, Ω_odd 126 %) while removing the waiting-state skew,
+and its Ω_odd advantage (−15.97 vs −12.68) currently rests on n = 8 with per-arm SEMs of ±3.5–4.8 — i.e. the
+difference is **not resolved**. The powered run must answer three things together: whether ΔΩ_odd survives, whether
+the mirror reverses the ramped signal (untested — no ramped chirality control has been run), and whether the
+`J_pre` sign inversion is stable or a small-n artifact.
+
+**Do NOT** raise ε, adopt the pivot gauge, or add ramp shapes before that resolves; and **do not** re-use gate 2
+as written — it presumes a picture that §25.4.3 refuted.

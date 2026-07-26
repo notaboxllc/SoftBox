@@ -1,5 +1,49 @@
 # Soft Box Project Journal
 
+### 2026-07-26 — §25 STAGE 4 — the progress ramp INVERTS the pre-stroke preload and §24's charge-release invariance does NOT generalise (RC1 qualified / RC3 / RC5 refuted)
+
+Eight-seed, five-schedule full-cycle budget screen at eps = +/-15 deg (A always-active, B binary gated, C linear,
+D smoothstep, E delayed q0=0.25), matched seeds, GPU device-resident. Report: Section 25.4. Log
+`h4_ramp_screen_n8_gpu.txt`.
+- **Waiting state: the ramp works live.** At ATTACHMENT every ramped arm carries **exactly 0 deg** where
+  always-active carries the full 15; by the stroke instant it has risen to only **0.25-1.4 deg** (E/D/C), and by
+  lag 7 it is essentially complete (12.3-13.4). Telemetry defect stated: the intended last-waiting-step sample
+  lands on lag 0 (ledger runs after matCock), so the dwell is BRACKETED by q@attach and q@lag0; fixed for future
+  runs, affects no impulse channel.
+- **FINDING 1 — `J_pre` REVERSES SIGN under continuous ramps.** always-active **+6.999e-26** (opposing) ->
+  linear **-2.694e-26**, smoothstep **-3.148e-26** (now CONTRIBUTING), delayed -3.381e-27 (~0). The ramps do not
+  merely reduce the opposing preload — they invert it.
+- **FINDING 2 — §24's charge-release invariance does NOT generalise. RC5 REFUTED for continuous ramps.**
+  `J_pre + J_stroke`: A +2.437e-26 -> B +2.918e-26 (invariant under the BINARY switch — the basis of §24's
+  "loading and release are inseparable") but C **-3.872e-26**, D **-4.576e-26** — moved decisively and
+  sign-changed. §24's entanglement conclusion is specific to a DISCONTINUOUS switch, not a property of the
+  mechanism.
+- **Endpoints:** `J_total`/A = 1.107 (C linear), 1.055 (E), 0.642 (D), 0.486 (B); Omega_odd/A = **1.259 (C)**,
+  0.941 (E), 0.688 (D), 0.589 (B). **C linear improves BOTH endpoints over always-active** while carrying 0 deg
+  at attachment. Gliding and engagement healthy everywhere (vEven within 0.3-15 %, avgB within 5 %).
+- **NO provisional finalist: pre-registered gate 2 (|J_stroke| >= 50 % of A) FAILS for every schedule**
+  (0.26 C / 0.31 D / 0.08 E / 0.004 B). Gates 1,3,4,5,7,8 + numerical health pass everywhere; gate 6 passed
+  deterministically in §25.3. **But gate 2's rationale is undermined by Finding 1** — it presumed `J_pre` could
+  at best reach zero, so the stroke window was the sole carrier. Recorded as a finding about the GATE, and C is
+  NOT declared a finalist.
+- **Closure: partial RC7.** A closes at 1.032 (reproducing §23.5) but every non-baseline schedule under-closes
+  (B 0.587, C 0.792, D 0.817, E 0.718). Flagged, not explained; censoring is the hypothesis, not the answer.
+- **RC3 secondary CONFIRMED:** ordering by onset, |J_stroke|/A = 0.31 -> 0.26 -> 0.08 and |J_prodEarly|/A =
+  0.46 -> 0.50 -> 0.29 => early chiral charging DOES matter.
+- **Device residency re-verified rather than assumed:** the ramp adds no task/buffer/device work, but the kernel
+  body changed, so `-conv-equiv` was re-run with the smoothstep ramp — bindMism=0, convFlagMism=0,
+  dSegTorque 1.51e-24, firstDiv=none, PASS, no fallback. 0 invalid / 0 solver in every arm.
+- **GPU HARD FREEZE on the first attempt (Xid 79 "GPU has fallen off the bus" + Xid 154 "Node Reboot Required",
+  host reboot, exit=134 at step 6660/8000).** Evidence collected per policy BEFORE resuming GPU work; written up
+  in `docs/GPU_CRASH_CASE_20260726_XID79.md`. Failure window = INSIDE kernel execution (state=EXECUTING), not
+  teardown. Partial log kept as `.CRASHED-xid79.txt` and NOT used — a matched-seed comparison cannot be spliced
+  across a reboot; the screen was re-run in full within one boot.
+- **NOT RUN (stop rule):** 5/30 deg scaling, 24/48-seed endpoint, mirror campaign, randomized-base, Ractin=0,
+  dt/2, multisegment roll coherence.
+- **NEXT:** power **C linear** vs always-active at 24 matched seeds + the MIRROR control (no ramped chirality
+  control has been run). Its Omega_odd edge rests on n=8 with SEMs +/-3.5-4.8 and is NOT resolved. Do not re-use
+  gate 2 as written.
+
 ### 2026-07-25 — §25 STAGES 0-3 — corrected progress-ramped converter skew: waiting-state skew 42 % -> 0.08 %, activation force step 22.3 % -> 3.9 % (12/12 deterministic gates; Stage 4 NOT run)
 
 Continuation of the §25 Stage-0 audit. Implements the corrected theta normalization and the three ramp shapes,

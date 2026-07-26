@@ -56,8 +56,17 @@ final class ConvBudget {
             F_FAX = 15, F_FTAN = 16, F_FRAD = 17, F_TAUAX = 18,
             F_JPRE = 19, F_JSTROKE = 20, F_JEARLY = 21, F_JLATE = 22,
             F_NSTROKE = 23, F_NBOUND = 24, F_BASEAZ = 25, F_ANCHAZ = 26,
-            F_WF8 = 27, F_WCHIRAL = 28, F_TRUNC = 29, F_FASTDET = 30;
-    static final int NF = 31;
+            F_WF8 = 27, F_WCHIRAL = 28, F_TRUNC = 29, F_FASTDET = 30,
+    // ---- §25 ramp-specific episode telemetry (0 for the non-ramped arms) ------------------------------
+            F_Q_ATT = 31, F_EPS_ATT = 32,      // qTheta / eps_eff at the observed attachment
+            F_Q_PRE = 33, F_EPS_PRE = 34,      // ... immediately BEFORE the stroke (the waiting state)
+            F_Q_L0  = 35, F_EPS_L0  = 36,      // ... at lag 0 (the stroke step)
+            F_Q_L7  = 37, F_EPS_L7  = 38,      // ... at the end of the stroke window
+            F_Q_MAX = 39, F_EPS_MAX = 40,      // episode maxima
+            F_Q_FIN = 41, F_EPS_FIN = 42,      // ... final value before detachment
+            F_EPS_INT = 43,                    // integral of eps_eff dt over the episode (rad·s)
+            F_DEPS_ABS = 44, F_DEPS_PEAK = 45; // integral |d eps_eff| and the peak per-step |d eps_eff|
+    static final int NF = 46;
 
     static double jTotal(double[] r) { return r[F_JPRE] + r[F_JSTROKE] + r[F_JEARLY] + r[F_JLATE]; }
     static double jRecoil(double[] r) { return jTotal(r) - r[F_JSTROKE]; }
