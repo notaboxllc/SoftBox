@@ -143,6 +143,10 @@ public final class ExplicitCompleteMatHarness {
     // from the ADP·Pi→ADP transition onward while bound. Removes the opposing pre-stroke chiral preload J_pre
     // measured in §23 WITHOUT touching the stroke itself. See ChiralSiteSystem.convFrameStep and §24.
     static boolean CONV_SKEW_STATE_GATED = false;   // -converter-skew-state-gated on|off
+    // §25 PROGRESS RAMP (noncanonical, default-off): eps_eff = eps · f(qTheta) with qTheta the normalized
+    // mechanical converter progress. Mutually exclusive with CONV_SKEW_STATE_GATED (checked at startup).
+    static int     CONV_SKEW_RAMP = ChiralSiteSystem.RAMP_OFF;   // -converter-skew-progress-ramp off|linear|smoothstep|delayed
+    static double  CONV_SKEW_RAMP_ONSET = 0.25;                  // -converter-skew-ramp-onset <0..1>
     // ---- DIAGNOSTIC MOTOR-GEOMETRY SCALES for the converter-twirling efficiency audit (default-off) ----------
     // ALL FOUR are pure SCENE parameters: the explicit-S2 device kernels read every geometric quantity from the
     // per-motor `params[]` planar buffer (built by ExplicitMatSolveHarness.paramArr from these Glide2D fields) and
@@ -238,9 +242,23 @@ public final class ExplicitCompleteMatHarness {
     static boolean convSkewOn() { return SITE_MODE > 0 && CONV_SKEW_DEG != 0.0; }
     /** the SECOND (post-cock) converter-frame invocation is wired ONLY for the state-gated mode. */
     static boolean convSkewStateGated() { return convSkewOn() && CONV_SKEW_STATE_GATED; }
+    static boolean convSkewRamped() { return convSkewOn() && CONV_SKEW_RAMP != ChiralSiteSystem.RAMP_OFF; }
+    /** Reject ambiguous simultaneous activation modes AT STARTUP rather than silently preferring one. */
+    static void checkConvSkewModes() {
+        if (CONV_SKEW_STATE_GATED && CONV_SKEW_RAMP != ChiralSiteSystem.RAMP_OFF)
+            throw new IllegalArgumentException("-converter-skew-state-gated on and -converter-skew-progress-ramp "
+                + "are mutually exclusive activation schedules; pick one (§25).");
+        if (!(CONV_SKEW_RAMP_ONSET >= 0.0 && CONV_SKEW_RAMP_ONSET < 1.0))
+            throw new IllegalArgumentException("-converter-skew-ramp-onset must be in [0,1), got " + CONV_SKEW_RAMP_ONSET);
+    }
+    static String rampName(int r) {
+        return switch (r) { case ChiralSiteSystem.RAMP_LINEAR -> "linear";
+                            case ChiralSiteSystem.RAMP_SMOOTHSTEP -> "smoothstep";
+                            case ChiralSiteSystem.RAMP_DELAYED -> "delayed"; default -> "off"; }; }
     static void resetChiral() { SITE_MODE = 0; HEAD_ROLL = false; HEAD_ROLL_BROWN = true; REG_K = 0; EPS_BIND_DEG = 0;
         EPS_STROKE_DEG = 0; SITE_EXCLUSIVE = true; MIRROR_SIGN = 1.0; SITE_CAPTURE_NM = 12.0; RAND_BASE_AZ = false;
-        CONV_SKEW_DEG = 0; CONV_SKEW_GAUGE = true; CONV_SKEW_STATE_GATED = false; }
+        CONV_SKEW_DEG = 0; CONV_SKEW_GAUGE = true; CONV_SKEW_STATE_GATED = false;
+        CONV_SKEW_RAMP = ChiralSiteSystem.RAMP_OFF; CONV_SKEW_RAMP_ONSET = 0.25; }
     static String siteModeName(int m) {
         return switch (m) { case 1 -> "native"; case 2 -> "every3"; case 3 -> "every4";
                             case 4 -> "stair9-45"; case 5 -> "stair9-90"; default -> "off"; }; }
@@ -256,12 +274,13 @@ public final class ExplicitCompleteMatHarness {
             "sites=%s(rise=%.3f nm, stair=%.1f deg) headRollDof=%s headRollBrownian=%s registryK=%.3e N·m/rad "
             + "binding-skew-deg=%+.2f [actin-side attachment azimuth] "
             + "stroke-skew-deg=%+.2f [actin-side one-shot interface step] "
-            + "converter-stroke-skew-deg=%+.2f [MOTOR-side converter stroke-plane rotation, gauge=%s, stateGated=%s] "
+            + "converter-stroke-skew-deg=%+.2f [MOTOR-side converter stroke-plane rotation, gauge=%s, stateGated=%s, ramp=%s(onset=%.2f)] "
             + "siteExclusive=%s mirror=%+.0f capture=%.1f nm "
             + "Ractin=%.2f nm randomBaseAzimuth=%s surfaceBond=%s",
             siteModeName(SITE_MODE), siteRise(SITE_MODE) * 1e3, siteStairPhase(SITE_MODE) * 180 / Math.PI,
             HEAD_ROLL ? "ON" : "OFF", HEAD_ROLL_BROWN ? "ON" : "OFF", REG_K, EPS_BIND_DEG, EPS_STROKE_DEG,
             CONV_SKEW_DEG, CONV_SKEW_GAUGE ? "interface" : "pivot", CONV_SKEW_STATE_GATED ? "ON" : "OFF",
+            rampName(CONV_SKEW_RAMP), CONV_SKEW_RAMP_ONSET,
             SITE_EXCLUSIVE ? "ON" : "OFF", MIRROR_SIGN, SITE_CAPTURE_NM, R_ACTIN_NM,
             RAND_BASE_AZ ? "ON" : "OFF", SURFACE_ON ? "ON" : "OFF");
     }
@@ -379,7 +398,11 @@ public final class ExplicitCompleteMatHarness {
                 // [19] state gating on/off; [20] the thetaS pre/post discriminant, built from the SAME cockP
                 // constants matCock uses, so the skew and the rest-coordinate switch share one state source.
                 CONV_SKEW_STATE_GATED ? 1.0 : 0.0,
-                0.5 * (TwoBodyConverterMotor.PRESTROKE_THETAS + TwoBodyConverterMotor.ADP_THETAS));
+                0.5 * (TwoBodyConverterMotor.PRESTROKE_THETAS + TwoBodyConverterMotor.ADP_THETAS),
+                // [21..22] the §25.1 CALIBRATED theta endpoints (one source of truth: ChiralSiteSystem);
+                // [23] ramp shape, [24] delayed-ramp onset.
+                ChiralSiteSystem.THETA_PRE, ChiralSiteSystem.THETA_POST,
+                CONV_SKEW_RAMP, CONV_SKEW_RAMP_ONSET);
         // Per-motor CONVERTER FRAME (stride 13, planar): [0..2] b*, [3..5] econv*, [6..8] eup*, [9..11] gauge
         // offset (µm), [12] flag. ALL ZERO ⇒ flag 0 ⇒ matBeamGeom / matS2SolveStep take the VERBATIM canonical
         // branch reading the base frame ⇒ byte-identical when the feature is off (it is never even wired).

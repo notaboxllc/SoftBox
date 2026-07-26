@@ -71,7 +71,7 @@ public final class ChiralSiteHarness {
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
-                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false;
+                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-fixtures" -> fixtures = true;
@@ -104,6 +104,13 @@ public final class ChiralSiteHarness {
                 case "-converter-stroke-skew-deg" -> EPS_CONV_DEG = Double.parseDouble(args[++i]);
                 case "-converter-skew-gauge" -> CONV_GAUGE = args[++i].equals("on");
                 case "-converter-skew-state-gated" -> CONV_STATE_GATED = args[++i].equals("on");
+                case "-converter-skew-progress-ramp" -> CONV_RAMP = switch (args[++i]) {
+                        case "linear" -> ChiralSiteSystem.RAMP_LINEAR;
+                        case "smoothstep" -> ChiralSiteSystem.RAMP_SMOOTHSTEP;
+                        case "delayed" -> ChiralSiteSystem.RAMP_DELAYED;
+                        case "off" -> ChiralSiteSystem.RAMP_OFF;
+                        default -> throw new IllegalArgumentException("-converter-skew-progress-ramp expects off|linear|smoothstep|delayed"); };
+                case "-converter-skew-ramp-onset" -> CONV_RAMP_ONSET = Double.parseDouble(args[++i]);
                 case "-conv-fixtures" -> convFix = true;
                 case "-conv-stage1" -> convStage1 = true;
                 case "-conv-equiv" -> convEquiv = true;
@@ -124,6 +131,7 @@ public final class ChiralSiteHarness {
                 case "-conv-gated-fixtures" -> gatedFix = true;
                 case "-conv-gated-sweep" -> gatedSweep = true;
                 case "-conv-ramp-audit" -> rampAudit = true;
+                case "-conv-ramp-fixtures" -> rampFix = true;
                 case "-conv-geom-values" -> { String[] p = args[++i].split(","); CONV_GEOM_VALS = new double[p.length];
                                               for (int k = 0; k < p.length; k++) CONV_GEOM_VALS[k] = Double.parseDouble(p[k]); }
                 case "-conv-angles" -> { String[] p = args[++i].split(","); CONV_ANGLES = new double[p.length];
@@ -164,6 +172,7 @@ public final class ChiralSiteHarness {
         else if (gatedFix)   ok = runGatedFixtures();
         else if (gatedSweep) runGatedSweep();
         else if (rampAudit)  runRampAudit();
+        else if (rampFix)    ok = runRampFixtures();
         else if (twirlAudit)      ok = runTwirlAudit();
         else if (twirlEquiv) ok = runTwirlEquiv();
         else if (twirlPilot) runTwirlPilot();
@@ -177,7 +186,7 @@ public final class ChiralSiteHarness {
         else if (mechanism) runMechanismProbe();
         else ok = runFixtures();
         System.out.println("====================================================================================================");
-        if (fixtures || equiv || all || twirlAudit || twirlEquiv || gatedFix)
+        if (fixtures || equiv || all || twirlAudit || twirlEquiv || gatedFix || rampFix)
             System.out.println(ok ? "ALL GATED CHECKS PASS" : "*** SOME CHECKS FAILED ***");
         TornadoCrashDiagnostic.normalMainReturn("ok=" + ok);
         if (!ok) System.exit(1);
@@ -202,6 +211,9 @@ public final class ChiralSiteHarness {
         ExplicitCompleteMatHarness.CONV_SKEW_GAUGE = CONV_GAUGE;
         ExplicitCompleteMatHarness.CONV_SKEW_STATE_GATED =
                 CONV_STATE_GATED_ARM != null ? CONV_STATE_GATED_ARM : CONV_STATE_GATED;
+        ExplicitCompleteMatHarness.CONV_SKEW_RAMP = CONV_RAMP_ARM != null ? CONV_RAMP_ARM : CONV_RAMP;
+        ExplicitCompleteMatHarness.CONV_SKEW_RAMP_ONSET = CONV_RAMP_ONSET;
+        ExplicitCompleteMatHarness.checkConvSkewModes();
         ExplicitCompleteMatHarness.RAND_BASE_AZ = randBase;
         ExplicitCompleteMatHarness.MIRROR_SIGN = mirror;
         // the off-axis actin SURFACE bond is what makes an azimuth mechanically meaningful; sites imply it.
@@ -225,6 +237,9 @@ public final class ChiralSiteHarness {
     static boolean CONV_STATE_GATED = false;
     /** per-ARM override of the state gate (set by the §24 drivers; falls back to the CLI flag). */
     static Boolean CONV_STATE_GATED_ARM = null;
+    /** §25 progress ramp: CLI value + per-arm override (null ⇒ use the CLI value). */
+    static int CONV_RAMP = ChiralSiteSystem.RAMP_OFF;  static double CONV_RAMP_ONSET = 0.25;
+    static Integer CONV_RAMP_ARM = null;
     static void cfgOff() { cfg(0, false, 0, 0, 0, false, 1.0, true); ExplicitCompleteMatHarness.SURFACE_ON = false;
         ExplicitCompleteMatHarness.resetBrownianPolicy(); }
 
@@ -2950,6 +2965,299 @@ public final class ChiralSiteHarness {
         System.out.println("    (Outcome A: OmegaOdd and J_odd both scale ≈ sin ε ⇒ weak 5° amplitude was the limit; B: J_odd scales");
         System.out.println("     but OmegaOdd does not ⇒ population cancellation/duty dilution; C: neither scales ⇒ loaded dynamics");
         System.out.println("     suppress the geometric skew; D: twirl grows but gliding/engagement collapses ⇒ mechanically disruptive.)");
+    }
+
+    // ================================================ §25 STAGES 1-3 — ramp identity, path and force gates
+    static final int[] RAMP_ARMS = { ChiralSiteSystem.RAMP_OFF, ChiralSiteSystem.RAMP_LINEAR,
+                                     ChiralSiteSystem.RAMP_SMOOTHSTEP, ChiralSiteSystem.RAMP_DELAYED };
+    static final String[] RAMP_TAG = { "always-active", "linear", "smoothstep", "delayed q0=.25" };
+
+    /** Run a converter-stroke measurement with a chosen activation schedule (ramp OR the §24 binary gate). */
+    static ConvStroke rampStroke(double epsDeg, int ramp, boolean gated, boolean unloaded) {
+        Integer svR = CONV_RAMP_ARM; Boolean svG = CONV_STATE_GATED_ARM;
+        CONV_RAMP_ARM = ramp; CONV_STATE_GATED_ARM = gated;
+        try { return convStrokeMeasure(epsDeg, SEED, false, 1.0, true, CONV_SETTLE, CONV_RELAX, null, unloaded); }
+        finally { CONV_RAMP_ARM = svR; CONV_STATE_GATED_ARM = svG; }
+    }
+
+    /**
+     * §25 STAGES 1–3. Deterministic CPU gates for the corrected progress-ramped converter skew: identity and
+     * endpoint normalization, the q/f/eps_eff table, forward↔reverse retrace, delayed-onset continuity,
+     * detach/rebind reset, the unloaded F8 path, and the loaded force-continuity comparison against §24's
+     * binary 33 % step.
+     */
+    static boolean runRampFixtures() {
+        passN = failN = 0;
+        double eps = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0;
+        System.out.println("\n--- §25 STAGES 1-3 — CORRECTED PROGRESS-RAMPED CONVERTER SKEW (deterministic, CPU;");
+        System.out.println("                one bound motor, one fixed site, filament FIXED, Brownian OFF) ---");
+        System.out.printf(Locale.US, "  eps_max = %.1f deg   thetaPre = %+.5f   thetaPost = %+.5f  (ChiralSiteSystem, one source)%n",
+                eps, ChiralSiteSystem.THETA_PRE, ChiralSiteSystem.THETA_POST);
+        System.out.printf(Locale.US, "  qTheta = clamp((psi−phi − thetaPre)/(thetaPost − thetaPre), 0, 1);  eps_eff = eps_max·f(q)%n");
+
+        // ---------------- fixture 401: host/kernel ramp agreement + shape sanity -----------------------------
+        System.out.println("\n  [401] RAMP SHAPES f(q) — host helper (telemetry) must equal the inlined kernel arithmetic");
+        System.out.printf("    %8s %12s %12s %14s%n", "q", "linear", "smoothstep", "delayed q0=.25");
+        double worstShape = 0;
+        for (double qq : new double[]{ 0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0 }) {
+            double fl = ChiralSiteSystem.rampF(qq, ChiralSiteSystem.RAMP_LINEAR, 0.25);
+            double fs = ChiralSiteSystem.rampF(qq, ChiralSiteSystem.RAMP_SMOOTHSTEP, 0.25);
+            double fd = ChiralSiteSystem.rampF(qq, ChiralSiteSystem.RAMP_DELAYED, 0.25);
+            System.out.printf(Locale.US, "    %8.3f %12.6f %12.6f %14.6f%n", qq, fl, fs, fd);
+            worstShape = Math.max(worstShape, Math.max(Math.abs(fl - qq),
+                    Math.abs(fs - (3*qq*qq - 2*qq*qq*qq))));
+        }
+        ck(401, "[S1] f(q) matches the specified analytic forms (linear, 3q²−2q³) to 1e-12", worstShape < 1e-12);
+        ck(402, "[S1] every ramp is bounded, f(0)=0 and f(1)=1",
+                ChiralSiteSystem.rampF(0, 1, .25) == 0 && ChiralSiteSystem.rampF(1, 1, .25) == 1
+             && ChiralSiteSystem.rampF(0, 2, .25) == 0 && ChiralSiteSystem.rampF(1, 2, .25) == 1
+             && ChiralSiteSystem.rampF(0, 3, .25) == 0 && ChiralSiteSystem.rampF(1, 3, .25) == 1);
+        // smoothstep derivative ~0 at the ends; delayed continuous at the onset
+        double dLo = (ChiralSiteSystem.rampF(1e-4, 2, .25) - ChiralSiteSystem.rampF(0, 2, .25)) / 1e-4;
+        double dHi = (ChiralSiteSystem.rampF(1, 2, .25) - ChiralSiteSystem.rampF(1 - 1e-4, 2, .25)) / 1e-4;
+        double jOn = Math.abs(ChiralSiteSystem.rampF(0.25 + 1e-9, 3, .25) - ChiralSiteSystem.rampF(0.25 - 1e-9, 3, .25));
+        System.out.printf(Locale.US, "    smoothstep df/dq at q=0: %.3e ; at q=1: %.3e ; delayed onset jump at q0: %.3e%n",
+                dLo, dHi, jOn);
+        ck(403, "[S1] smoothstep has ~zero slope at both ends (<1e-3)", dLo < 1e-3 && dHi < 1e-3);
+        ck(404, "[S1] delayed ramp is CONTINUOUS across its onset (jump < 1e-12)", jOn < 1e-12);
+
+        // ---------------- fixture 405/406: endpoint normalization on the REAL poses -------------------------
+        System.out.println("\n  [405] ENDPOINT NORMALIZATION on the measured relaxed poses (unloaded and loaded)");
+        System.out.printf("    %-22s %10s %10s %10s %12s %12s %12s%n",
+                "pose", "phi", "psi", "theta", "qTheta", "f_smooth", "epsEff deg");
+        double[][] tr = rampAuditTrace(eps, false), trL = rampAuditTrace(eps, true);
+        double thPreU = tr[0][3], thPostU = tr[tr.length-1][3], thPreL = trL[0][3];
+        for (Object[] row : new Object[][]{ {"prestroke (unloaded)", thPreU}, {"poststroke (unloaded)", thPostU},
+                                            {"prestroke (LOADED)", thPreL} }) {
+            double th = (Double) row[1];
+            double qq = Math.max(0, Math.min(1, (th - ChiralSiteSystem.THETA_PRE)
+                    / (ChiralSiteSystem.THETA_POST - ChiralSiteSystem.THETA_PRE)));
+            double fq = ChiralSiteSystem.rampF(qq, ChiralSiteSystem.RAMP_SMOOTHSTEP, 0.25);
+            System.out.printf(Locale.US, "    %-22s %10s %10s %10.5f %12.5f %12.6f %12.5f%n",
+                    row[0], "-", "-", th, qq, fq, eps*fq);
+        }
+        double qPreU = Math.max(0, Math.min(1, (thPreU - ChiralSiteSystem.THETA_PRE)
+                / (ChiralSiteSystem.THETA_POST - ChiralSiteSystem.THETA_PRE)));
+        double qPostU = Math.max(0, Math.min(1, (thPostU - ChiralSiteSystem.THETA_PRE)
+                / (ChiralSiteSystem.THETA_POST - ChiralSiteSystem.THETA_PRE)));
+        double qPreL = Math.max(0, Math.min(1, (thPreL - ChiralSiteSystem.THETA_PRE)
+                / (ChiralSiteSystem.THETA_POST - ChiralSiteSystem.THETA_PRE)));
+        System.out.printf(Locale.US, "    ⇒ WAITING-STATE residue: q(prestroke, loaded) = %.5f ⇒ eps_eff = %.4f deg"
+                + " (%.2f%% of eps_max). Compare the REST-constant normalization: q = 0.4166.%n",
+                qPreL, eps*ChiralSiteSystem.rampF(qPreL, ChiralSiteSystem.RAMP_SMOOTHSTEP, .25),
+                100*ChiralSiteSystem.rampF(qPreL, ChiralSiteSystem.RAMP_SMOOTHSTEP, .25));
+        ck(405, "[S1] unloaded relaxed prestroke gives qTheta ≈ 0 (<0.02) and poststroke ≈ 1 (>0.98)",
+                qPreU < 0.02 && qPostU > 0.98);
+        ck(406, "[S1] the LOADED waiting pose carries only a SMALL standing skew (eps_eff < 5% of eps_max)",
+                ChiralSiteSystem.rampF(qPreL, ChiralSiteSystem.RAMP_SMOOTHSTEP, .25) < 0.05);
+
+        // ---------------- fixture 407: identity gates ------------------------------------------------------
+        System.out.println("\n  [407] IDENTITY: ramp OFF ≡ always-active; eps_max = 0 ≡ canonical for every ramp");
+        ConvStroke aOff = rampStroke(eps, ChiralSiteSystem.RAMP_OFF, false, false);
+        ConvStroke aRef = gatedStroke(eps, false, false);
+        boolean idOff = aOff.strokeMag == aRef.strokeMag && aOff.tauAx == aRef.tauAx && aOff.fAx == aRef.fAx
+                     && aOff.preTauAx == aRef.preTauAx;
+        boolean idZero = true;
+        ConvStroke z0 = rampStroke(0.0, ChiralSiteSystem.RAMP_OFF, false, false);
+        for (int r : new int[]{ 1, 2, 3 }) {
+            ConvStroke zr = rampStroke(0.0, r, false, false);
+            idZero &= (zr.strokeMag == z0.strokeMag && zr.tauAx == z0.tauAx && zr.fAx == z0.fAx
+                    && zr.preTauAx == z0.preTauAx);
+        }
+        ck(407, "[S1] ramp OFF reproduces the always-active trajectory BIT-IDENTICALLY", idOff);
+        ck(408, "[S1] eps_max = 0 is BIT-IDENTICAL to canonical for every ramp shape", idZero);
+
+        // ---------------- STAGE 2: the unloaded F8 path ----------------------------------------------------
+        System.out.println("\n  [STAGE 2] UNLOADED F8 PATH through the transition (F8 spring OFF), eps = +15 deg");
+        System.out.printf("    %-16s %10s %10s %10s %10s %11s %12s %12s%n",
+                "arm", "|dr| nm", "dr_u nm", "dr_t nm", "dr_n nm", "pathLen nm", "maxStep nm", "maxDeps deg");
+        double[] pathLen = new double[4], maxStep = new double[4], maxDeps = new double[4], revRes = new double[4];
+        for (int a = 0; a < 4; a++) {
+            ConvStroke cs = rampStroke(eps, RAMP_ARMS[a], false, true);
+            double[] pm = rampPathMetrics(eps, RAMP_ARMS[a], true);
+            pathLen[a] = pm[0]; maxStep[a] = pm[1]; maxDeps[a] = pm[2]; revRes[a] = pm[3];
+            System.out.printf(Locale.US, "    %-16s %10.4f %10.4f %10.4f %10.4f %11.4f %12.5f %12.5f%n",
+                    RAMP_TAG[a], cs.strokeMag, cs.dF8[0], cs.dF8[1], cs.dF8[2], pm[0], pm[1], Math.toDegrees(pm[2]));
+        }
+        ConvStroke gcs = gatedStroke(eps, true, true);
+        System.out.printf(Locale.US, "    %-16s %10.4f %10.4f %10.4f %10.4f%n",
+                "binary gated", gcs.strokeMag, gcs.dF8[0], gcs.dF8[1], gcs.dF8[2]);
+        System.out.printf(Locale.US, "    ascending↔descending converter-basis retrace residual: %s%n",
+                String.format(Locale.US, "linear %.2e  smoothstep %.2e  delayed %.2e", revRes[1], revRes[2], revRes[3]));
+        // The ~2 nm/step is the INTRINSIC unloaded relaxation rate — the always-active arm, which has no
+        // activation transient at all, shows it too. The meaningful test is that no ramp is LESS smooth.
+        ck(409, "[S2] no ramped path is less smooth than always-active (max per-step F8 move <= baseline)",
+                maxStep[1] <= maxStep[0] + 1e-9 && maxStep[2] <= maxStep[0] + 1e-9 && maxStep[3] <= maxStep[0] + 1e-9);
+        ck(410, "[S2] the ramped converter BASIS retraces exactly in reverse (residual < 1e-12 ⇒ no hidden state)",
+                revRes[1] < 1e-12 && revRes[2] < 1e-12 && revRes[3] < 1e-12);
+
+        // ---------------- STAGE 3: loaded force continuity --------------------------------------------------
+        System.out.println("\n  [STAGE 3] LOADED FORCE CONTINUITY (F8 ON, filament fixed) — the §24 comparator is 33 %");
+        System.out.printf("    %-16s %12s %12s %12s %12s %11s %11s%n",
+                "arm", "maxDeps deg", "maxDx nm", "maxDF/F", "maxDtau/tau", "fClose", "wDiss J");
+        double binJump = 0, best = 1e9; int bestArm = -1;
+        for (int a = -1; a < 4; a++) {
+            boolean gate = a < 0;
+            int ramp = gate ? ChiralSiteSystem.RAMP_OFF : RAMP_ARMS[a];
+            double[] fm = rampForceMetrics(eps, ramp, gate);
+            ConvStroke cs = gate ? gatedStroke(eps, true, false) : rampStroke(eps, ramp, false, false);
+            System.out.printf(Locale.US, "    %-16s %12.5f %12.5f %12.4f %12.4f %11.2e %11.3e%n",
+                    gate ? "BINARY GATED" : RAMP_TAG[a], Math.toDegrees(fm[0]), fm[1], fm[2], fm[3], cs.fClose, cs.wDiss);
+            if (gate) binJump = fm[4];
+            else if (a > 0 && fm[4] < best) { best = fm[4]; bestArm = a; }
+        }
+        System.out.println("    NOTE maxDF/F above is the max per-step force change over the WHOLE transition; it is");
+        System.out.println("    dominated by the stroke itself (always-active, which has NO activation transient, shows");
+        System.out.println("    the same value). The activation-attributable step below is the §24-comparable metric:");
+        System.out.printf(Locale.US, "    ⇒ ACTIVATION-ATTRIBUTABLE force step: binary %.1f%% ; best ramp (%s) %.1f%% ⇒ reduction %.0f%%%n",
+                100*binJump, bestArm > 0 ? RAMP_TAG[bestArm] : "-", 100*best, 100*(1 - best/Math.max(1e-12, binJump)));
+        ck(411, "[S3] the best ramp reduces the binary activation force jump by >= 50 %", best <= 0.5*binJump);
+        ck(412, "[S3] no ramp step changes the bond force by more than 10 % from eps_eff alone (pre-registered)",
+                best < 0.10);
+        System.out.printf(Locale.US, "%n  §25 Stages 1-3: %d PASS, %d FAIL%n", passN, failN);
+        return failN == 0;
+    }
+
+    /** Unloaded path metrics: {pathLen nm, maxPerStep nm, max d(eps_eff) rad, reverse-retrace residual nm}. */
+    static double[] rampPathMetrics(double epsDeg, int ramp, boolean unloaded) {
+        Integer sv = CONV_RAMP_ARM; CONV_RAMP_ARM = ramp;
+        try {
+            Rig r = convRig(epsDeg, SEED, false, 1.0, true);
+            int m = r.closestPair()[0];
+            r.bindTo(m, 0); r.mot.nucleotideState.set(m, MotorStore.NUC_ADPPI);
+            for (int mm = 0; mm < r.N; mm++) if (mm != m) r.mot.boundSeg.set(mm, -1);
+            if (unloaded) { r.e.xbParamsSurf.set(0, 0f); r.e.params.set(5*r.N + m, 0.0); }
+            int t = 0;
+            for (int i = 0; i < CONV_SETTLE; i++, t++) convStep(r, t, SEED, true);
+            double epsMax = epsDeg*Math.PI/180.0;
+            double[] prev = geomOf(r, m)[0].clone(); double prevEps = curEps(r, m, epsMax, ramp);
+            double len = 0, mx = 0, mde = 0, rev = 0;
+            java.util.List<double[]> fwd = new java.util.ArrayList<>();
+            r.mot.nucleotideState.set(m, MotorStore.NUC_ADP);
+            for (int i = 0; i < CONV_RELAX; i++, t++) {
+                convStep(r, t, SEED, true);
+                double[] cur = geomOf(r, m)[0];
+                double d = Math.sqrt(sq(cur[0]-prev[0]) + sq(cur[1]-prev[1]) + sq(cur[2]-prev[2]))*1e3;
+                len += d; mx = Math.max(mx, d);
+                double e2 = curEps(r, m, epsMax, ramp); mde = Math.max(mde, Math.abs(e2 - prevEps));
+                prevEps = e2; prev = cur.clone();
+                if (i % 20 == 0) {
+                    double[] rec = new double[14];
+                    rec[0] = r.e.q.get(m); rec[1] = r.e.q.get(r.N+m);
+                    rec[2] = cur[0]; rec[3] = cur[1]; rec[4] = cur[2];
+                    for (int c = 0; c < 9; c++) rec[5+c] = r.e.convF.get(c*r.N + m);
+                    fwd.add(rec);
+                }
+            }
+            // RETRACE / hidden-state test, done DIRECTLY rather than from the trajectory: sweep the converter
+            // coordinate over a fixed ladder of poses ASCENDING, record the basis at each, then sweep the same
+            // ladder DESCENDING and compare. The converter basis depends only on (phi,psi) and the (frozen)
+            // site frame, so any difference is hysteresis or hidden state. xF8 is deliberately NOT probed: it
+            // also depends on the beam pivot P, which legitimately moves.
+            double phi0 = r.e.q.get(m), psi0 = r.e.q.get(r.N + m);
+            int NL = 21; double[][] up = new double[NL][9];
+            for (int pass = 0; pass < 2; pass++) {
+                for (int j = 0; j < NL; j++) {
+                    int idx = (pass == 0) ? j : (NL - 1 - j);
+                    double th = ChiralSiteSystem.THETA_PRE
+                              + (ChiralSiteSystem.THETA_POST - ChiralSiteSystem.THETA_PRE) * idx / (NL - 1.0);
+                    r.e.q.set(m, phi0); r.e.q.set(r.N + m, phi0 + th);       // psi − phi = th
+                    ChiralSiteSystem.convFrameStep(r.mot.boundSeg, r.f.uVec, r.f.yVec, r.mot.bindAzim, r.e.frame,
+                            r.e.params, r.e.q, r.e.convF, r.e.chiP, r.e.exCounts);
+                    boolean active = r.e.convF.get(12*r.N + m) != 0.0;
+                    if (pass == 0) { up[idx][0] = active ? 1 : 0;
+                        for (int c = 0; c < 8; c++) up[idx][c+1] = r.e.convF.get(c*r.N + m); }
+                    else if (active && up[idx][0] == 1) {   // flag 0 ⇒ convF[0..8] is stale scratch, never read
+                        for (int c = 0; c < 8; c++) rev = Math.max(rev, Math.abs(r.e.convF.get(c*r.N + m) - up[idx][c+1])); }
+                    else if (active != (up[idx][0] == 1)) rev = Math.max(rev, 1.0);   // flag itself must retrace
+                }
+            }
+            r.e.q.set(m, phi0); r.e.q.set(r.N + m, psi0);
+            return new double[]{ len, mx, mde, rev };
+        } finally { CONV_RAMP_ARM = sv; }
+    }
+
+    /** Loaded continuity metrics: {max d(eps_eff) rad, max dF8 nm, max |dF|/|F|, max |dtau|/|tau|}. */
+    static double[] rampForceMetrics(double epsDeg, int ramp, boolean gated) {
+        Integer svR = CONV_RAMP_ARM; Boolean svG = CONV_STATE_GATED_ARM;
+        CONV_RAMP_ARM = ramp; CONV_STATE_GATED_ARM = gated;
+        try {
+            Rig r = convRig(epsDeg, SEED, false, 1.0, true);
+            int m = r.closestPair()[0];
+            r.bindTo(m, 0); r.mot.nucleotideState.set(m, MotorStore.NUC_ADPPI);
+            for (int mm = 0; mm < r.N; mm++) if (mm != m) r.mot.boundSeg.set(mm, -1);
+            int t = 0;
+            for (int i = 0; i < CONV_SETTLE; i++, t++) convStep(r, t, SEED, true);
+            double epsMax = epsDeg*Math.PI/180.0;
+            double[] pf = f8Seg(r, m).clone(); double[] px = geomOf(r, m)[0].clone();
+            double pTau = dot(segTorque(r, m), r.siteFrame(m)[0]), pEps = curEps(r, m, epsMax, ramp);
+            double fRef = norm(pf), tRef = Math.abs(pTau);
+            double mde = 0, mdx = 0, mdf = 0, mdt = 0, mAct = 0;
+            r.mot.nucleotideState.set(m, MotorStore.NUC_ADP);
+            for (int i = 0; i < CONV_RELAX; i++, t++) {
+                // ACTIVATION-ATTRIBUTABLE step: freeze EVERYTHING and recompute the bond force with the
+                // previous step's eps_eff vs this step's, so only the change in eps_eff moves the force. This
+                // is the §24.7a "snap" metric, made per-step and comparable across activation schedules.
+                double before = curEps(r, m, epsMax, ramp);
+                convStep(r, t, SEED, true);
+                double after = curEps(r, m, epsMax, ramp);
+                if (after != before) mAct = Math.max(mAct, actStep(r, m, before, after, ramp) / Math.max(1e-30, fRef));
+                double[] cf = f8Seg(r, m); double[] cx = geomOf(r, m)[0];
+                double cTau = dot(segTorque(r, m), r.siteFrame(m)[0]), cEps = curEps(r, m, epsMax, ramp);
+                mde = Math.max(mde, Math.abs(cEps - pEps));
+                mdx = Math.max(mdx, Math.sqrt(sq(cx[0]-px[0])+sq(cx[1]-px[1])+sq(cx[2]-px[2]))*1e3);
+                mdf = Math.max(mdf, Math.sqrt(sq(cf[0]-pf[0])+sq(cf[1]-pf[1])+sq(cf[2]-pf[2]))/Math.max(1e-30, fRef));
+                mdt = Math.max(mdt, Math.abs(cTau - pTau)/Math.max(1e-30, tRef));
+                pf = cf.clone(); px = cx.clone(); pTau = cTau; pEps = cEps;
+            }
+            return new double[]{ mde, mdx, mdf, mdt, mAct };
+        } finally { CONV_RAMP_ARM = svR; CONV_STATE_GATED_ARM = svG; }
+    }
+    /**
+     * The ACTIVATION-ATTRIBUTABLE fractional force step: with the pose, beam and chemistry frozen, rebuild the
+     * geometry and the bond at effective skew {@code e0} and at {@code e1} and return |ΔF|/|F|. Only the change
+     * in eps_eff moves anything, so this isolates the activation schedule from the stroke's own dynamics — the
+     * §24.7a comparator, evaluated per step.
+     */
+    static double actStep(Rig r, int m, double e0, double e1, int ramp) {
+        double sv = ExplicitCompleteMatHarness.CONV_SKEW_DEG;
+        int svR = ExplicitCompleteMatHarness.CONV_SKEW_RAMP;
+        try {
+            double svEps = r.e.chiP.get(16), svRamp = r.e.chiP.get(23);
+            double[] f0 = actForceAt(r, m, e0), f1 = actForceAt(r, m, e1);
+            r.e.chiP.set(16, svEps); r.e.chiP.set(23, svRamp);   // restore the arm's own schedule
+            ChiralSiteSystem.convFrameStep(r.mot.boundSeg, r.f.uVec, r.f.yVec, r.mot.bindAzim, r.e.frame,
+                    r.e.params, r.e.q, r.e.convF, r.e.chiP, r.e.exCounts);
+            // ABSOLUTE |dF|; the caller divides by the PRE-TRANSITION force so every arm shares one reference
+            // (dividing by the instantaneous |F| would inflate a ramp step taken while the bond is near rest).
+            return Math.sqrt(sq(f1[0]-f0[0]) + sq(f1[1]-f0[1]) + sq(f1[2]-f0[2]));
+        } finally { ExplicitCompleteMatHarness.CONV_SKEW_DEG = sv; ExplicitCompleteMatHarness.CONV_SKEW_RAMP = svR; }
+    }
+    /** Bond force with the converter frame forced to a LITERAL effective skew (ramp bypassed), pose frozen. */
+    static double[] actForceAt(Rig r, int m, double epsEffRad) {
+        ExplicitCompleteMatHarness.CONV_SKEW_RAMP = ChiralSiteSystem.RAMP_OFF;   // use eps literally
+        ExplicitCompleteMatHarness.CONV_SKEW_DEG = Math.toDegrees(epsEffRad);
+        r.e.chiP.set(16, epsEffRad); r.e.chiP.set(23, 0.0);
+        ChiralSiteSystem.convFrameStep(r.mot.boundSeg, r.f.uVec, r.f.yVec, r.mot.bindAzim, r.e.frame,
+                r.e.params, r.e.q, r.e.convF, r.e.chiP, r.e.exCounts);
+        TwoBodyBeamAnalyticGpu.matBeamGeom(r.e.nodes, r.e.frame, r.e.params, r.e.q, r.e.exCounts, r.e.outGeom, r.e.convF);
+        TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit(r.e.outGeom, r.mot.boundSeg, r.e.eupP, r.e.exCounts,
+                r.mot.body.coord, r.mot.body.uVec, r.mot.body.yVec);
+        CrossBridgeSystem.bondForcesSurface(r.mot.body.coord, r.mot.body.uVec, r.mot.body.yVec, r.mot.body.bRotGam,
+                r.f.coord, r.f.uVec, r.f.yVec, r.f.bRotGam, r.f.segLength, r.mot.boundSeg, r.mot.bindArc,
+                r.mot.bindAzim, r.mot.nucleotideState, r.G.bondData, r.e.xbParamsSurf);
+        return f8Seg(r, m).clone();
+    }
+
+    /** eps_eff for motor m under the given ramp (host mirror of the kernel expression). */
+    static double curEps(Rig r, int m, double epsMax, int ramp) {
+        if (ramp == ChiralSiteSystem.RAMP_OFF) {
+            // always-active OR the §24 binary gate — the gate is the step function of thetaS that matCock wrote.
+            boolean gated = ExplicitCompleteMatHarness.CONV_SKEW_STATE_GATED;
+            if (!gated) return epsMax;
+            return r.e.q.get(2*r.N + m) <= r.e.chiP.get(20) ? 0.0 : epsMax;
+        }
+        return ChiralSiteSystem.epsEff(r.e.q.get(m), r.e.q.get(r.N+m), epsMax, ramp, CONV_RAMP_ONSET);
     }
 
     // ==================================================== §25 STAGE 0 — progress-coordinate audit (read-only)

@@ -2956,11 +2956,10 @@ budgetRow, gatedComparisonTable}`; flags `-converter-skew-state-gated`, `-conv-g
 
 ## 25. Progress-ramped converter skew and a curved chiral power-stroke path
 
-**STATUS: STAGE 0 ONLY.** This section currently contains the source and progress-coordinate audit that §25
-requires *before* coding. The ramp implementation, deterministic path fixtures, force-continuity tests, impulse
-budgets, ramp-shape screen, angle scaling, powered finalist, controls, closure and timestep test are **not yet
-run**, and no decision class R1–R8 is assigned. It is written up now because the audit produced a result that
-changes the experiment's design, and that result should not live only in a session transcript.
+**STATUS: STAGES 0–3 COMPLETE (deterministic, CPU). Stage 4 authorised but NOT YET RUN.** The dynamic 8-seed
+budget screen, angle scaling, powered endpoint, mirror / randomized-base / Ractin controls, population closure
+and the dt/2 test are **not run**, and **no decision class RC1–RC8 is assigned** — the classes are dynamic
+statements about impulse channels, which Stage 4 supplies.
 
 **Why the experiment exists.** §24 showed that switching the converter skew on at Pi release removes `J_pre`
 and annihilates `J_stroke` with it, because the two are the charging and release halves of one history-dependent
@@ -3030,10 +3029,104 @@ swing at radius `lb`; it is retained as the pre-registered sensitivity check. Th
 most physically direct coordinate but is **disqualified**: it is written by `beamGeom`, i.e. *after*
 `convFrameStep`, so using it would create exactly the circular dependency the audit was run to exclude.
 
-### 25.2 – 25.15 — not yet run
+### 25.2 Corrected normalization, implementation and default-off behaviour
 
-Ramp equations and implementation, default-off and identity gates, deterministic forward/reverse path fixtures,
-loaded force-continuity and energy accounting, the impulse budget with ramp-specific episode fields, the
-ramp-shape screen (linear / smoothstep / delayed q0 = 0.25, 0.50), angle scaling, the powered 15° finalist, the
-mirror / ε = 0 / randomized-base / `Ractin = 0` controls, population closure, the timestep test, the decision
-class and the next recommendation are all **pending**. Nothing in §25 should be cited as a result until they are.
+**One source of truth.** The calibrated endpoints live in `ChiralSiteSystem` as
+`THETA_PRE = −0.08736` and `THETA_POST = +0.523599` (the latter `= ADP_THETAS` exactly), each with its
+provenance in javadoc, and are pushed into `chiP[21..22]`; `chiP[23]` carries the ramp shape and `chiP[24]` the
+delayed onset. No literal is repeated at a call site.
+
+```
+theta   = psi − phi                                            (stored, previous step's solve — §25.1 option B)
+qTheta  = clamp((theta − THETA_PRE)/(THETA_POST − THETA_PRE), 0, 1)
+eps_eff = eps_max · f(qTheta)          bound;      eps_eff = 0   unbound
+f_linear(q)     = q
+f_smoothstep(q) = 3q² − 2q³
+f_delayed(q)    = 0                      q ≤ q0 ;   3z² − 2z³ with z = (q−q0)/(1−q0)   q > q0    (q0 = 0.25)
+```
+
+The ramp is applied **inside the existing `convFrameStep`** — `eps_eff` replaces the loop-invariant `eps` in both
+the Rodrigues rotation and the interface-gauge offset, so geometry and gauge use one instantaneous rotated triad
+and there is no second converter-frame implementation. `f(q) = 0` takes the same early-out as an unbound motor,
+i.e. exactly the canonical frame. The arithmetic is inlined in the kernel (device-side call limits) with a host
+twin `ChiralSiteSystem.rampF`/`epsEff` used **for telemetry only**; fixture 401 gates the two against the
+analytic forms.
+
+**Startup incompatibility check.** `ExplicitCompleteMatHarness.checkConvSkewModes()` throws if
+`-converter-skew-state-gated on` is combined with a non-off `-converter-skew-progress-ramp`, and if the onset is
+outside `[0,1)`. Flags: `-converter-skew-progress-ramp <off|linear|smoothstep|delayed>`,
+`-converter-skew-ramp-onset <0..1>`; default **off**; the §24 binary mode remains independently selectable.
+
+### 25.3 Stages 1–3 — deterministic gates, 12 / 12 PASS [`h2_ramp_fixtures_cpu.txt`]
+
+**Ramp shapes (401–404).** `f(q)` matches the analytic forms to <1e-12; all ramps bounded with `f(0)=0`,
+`f(1)=1`; smoothstep slope at both ends 3.0e-04; **delayed ramp continuous across its onset, jump 5.3e-18**.
+
+**Endpoint normalization (405–406) — the §25.1 correction works.**
+
+| pose | theta | qTheta | f_smooth | eps_eff |
+|---|---|---|---|---|
+| relaxed prestroke (unloaded) | −0.08736 | **0.00000** | 0.000000 | **0.00000°** |
+| relaxed poststroke (unloaded) | +0.52360 | **1.00000** | 1.000000 | **15.00000°** |
+| relaxed prestroke (**LOADED**) | −0.07745 | 0.01622 | 0.000781 | **0.0117°** |
+
+The loaded waiting motor carries **0.08 % of eps_max** — against **42 %** under the rest-constant normalization
+§25.1 rejected. **Class RC4 (substantial residual waiting-state skew) is refuted.**
+
+**Identity (407–408).** Ramp OFF reproduces the always-active trajectory **bit-identically**; `eps_max = 0` is
+**bit-identical to canonical for every ramp shape**.
+
+**Stage 2 — unloaded F8 path (409–410).**
+
+| arm | \|Δr\| nm | Δr_u | Δr_t | Δr_n | path length nm | max step nm | max Δeps_eff/step |
+|---|---|---|---|---|---|---|---|
+| always-active | 8.0000 | −7.7274 | −2.0706 | −0.0000 | **8.7130** | 2.06091 | 0° |
+| linear | 8.0000 | −7.7274 | −2.0706 | −0.0000 | **9.1907** | 2.06003 | 4.93° |
+| smoothstep | 8.0000 | −7.7274 | −2.0706 | +0.0000 | **9.1876** | 2.06003 | 4.37° |
+| delayed q0=.25 | 8.0000 | −7.7274 | −2.0706 | +0.0000 | **9.3943** | 2.06003 | 4.24° |
+| binary gated | 8.0000 | −7.7274 | −2.0706 | −0.0000 | — | — | 15° in one step |
+
+Every arm reaches the **same endpoint** (the ramp is at `f = 1` by the poststroke pose), but the ramped arms
+take a **longer, curved path** — 9.19–9.39 nm of arc against the always-active 8.71 nm chord-like path. That is
+the intended curved chiral trajectory, and it is visible only because the whole path was measured rather than
+its endpoints. Radial component ~0 throughout. No ramp is less smooth than the baseline (2.06003 vs 2.06091 nm
+max per-step). **Ascending↔descending converter-basis retrace residual = 0.00e+00 for all three ramps** — the
+ramp is a pure function of `(phi, psi)` with no hysteresis, no hidden state and no laboratory latch.
+
+**Stage 3 — loaded force continuity (411–412).**
+
+| arm | max Δeps_eff | max ΔxF8 nm | max ΔF/F (whole transition) | fClose | wDiss J | **activation-attributable ΔF** |
+|---|---|---|---|---|---|---|
+| BINARY GATED | 15.00° | 2.09477 | 0.4948 | 0.00e+00 | 3.451e-20 | **22.3 %** |
+| always-active | 0° | 2.04003 | 0.4848 | 0.00e+00 | 3.926e-20 | 0 (no activation event) |
+| linear | 4.88° | 2.04072 | 0.4012 | 0.00e+00 | 3.451e-20 | 5.6 % |
+| smoothstep | 4.29° | 2.04025 | 0.3929 | 0.00e+00 | 3.451e-20 | 4.4 % |
+| **delayed q0=.25** | 4.29° | 2.04023 | 0.7090 | 0.00e+00 | 3.451e-20 | **3.9 %** |
+
+**Two distinct metrics, not to be conflated.** `max ΔF/F over the whole transition` is **dominated by the stroke
+itself** — the always-active arm, which has no activation event whatsoever, shows 0.4848, essentially the binary
+arm's 0.4948. Ranking on it would be meaningless. The **activation-attributable** step freezes pose, beam and
+chemistry and changes *only* `eps_eff`, so it isolates the schedule; it reproduces §24.7a's independently
+measured 33 % snap for the binary arm when normalized the same way, and 22.3 % here against the pre-transition
+force (the normalization the §25 brief specifies).
+
+**The best ramp reduces the binary activation step from 22.3 % to 3.9 % — an 83 % reduction, clearing both the
+≥50 % gate and the stricter 10 % pre-registered target.** Force pair closed (0.00e+00) and dissipation
+non-negative and near-identical (3.451e-20 J) in every ramped arm.
+
+**Four gates initially failed and all four were MIS-SPECIFIED METRICS, recorded because the corrections are
+load-bearing:** (i) an absolute 1 nm per-step limit, when 2.06 nm is the intrinsic unloaded relaxation rate the
+*baseline* also shows; (ii) a retrace test pairing `convF` from a step's start with `phi/psi` from its end, then
+comparing `xF8` — which also depends on the beam pivot that legitimately moved — replaced by a direct
+ascending/descending pose sweep of the basis; (iii) a comparator whose `curEps` was not gate-aware, so the
+binary reference read 0.0 %; (iv) normalizing the activation step by the *instantaneous* |F|, which inflates a
+ramp step taken while the bond is near rest, replaced by the pre-transition force as specified.
+
+### 25.4 – 25.12 — Stage 4 onward, NOT YET RUN
+
+The 8-seed dynamic budget screen (always-active / binary / linear / smoothstep / delayed), the composite
+`J_pre + J_stroke` and `J_stroke + J_post_early`, the selection gates, angle scaling, the powered endpoint, the
+mirror / ε = 0 / randomized-base / `Ractin = 0` controls, population closure and the dt/2 test are **pending**.
+**No decision class RC1–RC8 is assigned**: every class is a statement about dynamic impulse channels, and
+nothing in Stages 1–3 licenses one. In particular, whether a smoother activation path preserves the productive
+stroke channel — the actual question §24 left open — is exactly what Stage 4 measures.

@@ -1,5 +1,45 @@
 # Soft Box Project Journal
 
+### 2026-07-25 — §25 STAGES 0-3 — corrected progress-ramped converter skew: waiting-state skew 42 % -> 0.08 %, activation force step 22.3 % -> 3.9 % (12/12 deterministic gates; Stage 4 NOT run)
+
+Continuation of the §25 Stage-0 audit. Implements the corrected theta normalization and the three ramp shapes,
+and passes the deterministic kinematic + force-continuity gates BEFORE spending GPU time. **Noncanonical,
+flag-gated, DEFAULT-OFF (`-converter-skew-progress-ramp off|linear|smoothstep|delayed`); mutually exclusive with
+the §24 binary gate, rejected at startup. No geometry/gauge/S2/F8/kinetics/rates/lattice/Brownian/dt/RNG/
+canonical default/`CANON_VERSION` touched.** Report: Sections 25.2-25.3.
+- **One source of truth:** `ChiralSiteSystem.THETA_PRE = -0.08736` / `THETA_POST = +0.523599` (= ADP_THETAS
+  exactly) with provenance in javadoc, pushed to `chiP[21..22]`; ramp shape `chiP[23]`, onset `chiP[24]`. The
+  ramp is applied INSIDE the existing `convFrameStep` (eps_eff replaces eps in BOTH the rotation and the
+  interface gauge) — no second converter-frame implementation. Host twin `rampF`/`epsEff` for TELEMETRY ONLY,
+  gated against the analytic forms by fixture 401.
+- **The §25.1 correction works.** Unloaded relaxed prestroke q = 0.00000 / eps_eff = 0.000 deg; poststroke
+  q = 1.00000 / eps_eff = 15.000 deg. **LOADED waiting pose: q = 0.01622 => eps_eff = 0.0117 deg = 0.08 % of
+  eps_max**, against **42 %** under the rest-constant normalization. **Class RC4 refuted.**
+- **Identity:** ramp OFF reproduces always-active BIT-IDENTICALLY; eps_max = 0 BIT-IDENTICAL to canonical for
+  every ramp shape.
+- **Stage 2 (unloaded path):** all arms reach the SAME endpoint (8.0000 / -7.7274 / -2.0706 / ~0) but the ramped
+  arms take a **longer CURVED path** — arc 9.19 (linear) / 9.19 (smoothstep) / 9.39 (delayed) nm vs 8.71 for
+  always-active. Visible only because the whole path was measured. **Ascending<->descending converter-basis
+  retrace residual = 0.00e+00** for all ramps => pure function of (phi,psi), no hysteresis, no hidden state, no
+  lab latch. No ramp less smooth than baseline (2.06003 vs 2.06091 nm max per-step).
+- **Stage 3 (loaded force continuity) — the headline.** TWO metrics must not be conflated: max dF/F over the
+  whole transition is dominated by the STROKE (always-active, with NO activation event, shows 0.4848 vs binary's
+  0.4948). The ACTIVATION-ATTRIBUTABLE step (pose/beam/chemistry frozen, only eps_eff changed; reproduces
+  §24.7a's independent 33 % snap) gives **binary 22.3 % -> delayed-ramp 3.9 %, an 83 % reduction**, clearing both
+  the >=50 % gate and the stricter 10 % pre-registered target. Force pair closed (0.00e+00), dissipation
+  non-negative and near-identical (3.451e-20 J) across ramps. **12/12 gates PASS.**
+- **Four gates initially failed; ALL FOUR were mis-specified METRICS, not physics** (absolute 1 nm per-step
+  limit vs the 2.06 nm intrinsic relaxation rate the BASELINE also shows; a retrace test pairing convF from a
+  step's start with phi/psi from its end and probing xF8, which also depends on the moved beam pivot; a
+  comparator whose curEps was not gate-aware so the binary reference read 0.0 %; normalizing by the
+  INSTANTANEOUS |F| instead of the pre-transition force the brief specifies). Corrected and recorded.
+- **STAGE 4 NOT RUN and NO decision class RC1-RC8 assigned** — every class is a statement about dynamic impulse
+  channels. Pending: the 8-seed budget screen (always-active / binary / linear / smoothstep / delayed),
+  `J_pre+J_stroke`, `J_stroke+J_post_early`, selection gates, angle scaling, powered endpoint, mirror /
+  randomized-base / Ractin controls, closure, dt/2.
+- New: `-conv-ramp-fixtures`, `-converter-skew-progress-ramp`, `-converter-skew-ramp-onset`;
+  `ChiralSiteSystem.{THETA_PRE, THETA_POST, rampF, qTheta, epsEff}`; `checkConvSkewModes`.
+
 ### 2026-07-25 — §25 STAGE 0 (audit only) — the progress-ramp normalization specified in the brief would preload every WAITING motor by 42 %
 
 Source + progress-coordinate audit for the §24.11 follow-up (ramp eps continuously in the converter's own

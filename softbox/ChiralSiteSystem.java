@@ -92,6 +92,59 @@ public final class ChiralSiteSystem {
     /** Stable acos, PTX-safe (reuses the validated device form). */
     static double cacos(double x) { return TwoBodyBeamAnalyticGpu.dacos(x); }
 
+    // ===================================================================================================
+    // §25 — PROGRESS-RAMPED CONVERTER SKEW: the calibrated theta normalization (ONE source of truth)
+    // ===================================================================================================
+    /**
+     * Relaxed PRE-stroke mechanical pose in the converter coordinate {@code theta = psi − phi}.
+     *
+     * <p><b>This is a CALIBRATION, not a derivation</b> (§25.1). The nominal rest constant
+     * {@code PRESTROKE_THETAS = −0.523599} is NOT the relaxed pose: during the ADP·Pi dwell the head is docked
+     * ({@code psi} pinned near {@code psiActin} ≈ 0) and {@code phi} is held at the binding lean, so the
+     * converter torsional spring sits ≈ 0.436 rad OFF its own rest. Normalizing on the rest constants would put
+     * {@code qTheta = 0.4166} on every WAITING motor — 42 % of eps as a standing preload (class R5).
+     *
+     * <p>Measured by {@code ChiralSiteHarness.runRampAudit} on the unloaded relaxed prestroke pose. The LOADED
+     * value is −0.07745, i.e. 1.6 % of the full range away, so a loaded waiting motor carries a small but
+     * nonzero {@code qTheta}; that residue is measured and reported, never assumed to be zero.
+     */
+    public static final double THETA_PRE  = -0.08736;
+    /** Relaxed POST-stroke pose in {@code theta}. Equals {@code ADP_THETAS} exactly — unlike the pre-stroke
+     *  pose, the converter DOES fully relax after the stroke, so this endpoint falls out of the model. */
+    public static final double THETA_POST = +0.523599;
+
+    /** Ramp shapes for {@code -converter-skew-progress-ramp}. */
+    static final int RAMP_OFF = 0, RAMP_LINEAR = 1, RAMP_SMOOTHSTEP = 2, RAMP_DELAYED = 3;
+
+    /**
+     * The ramp factor {@code f(q)} — the HOST twin of the arithmetic inlined in {@link #convFrameStep}.
+     *
+     * <p>The kernel inlines this rather than calling it (TornadoVM device-side call limits), so the two must be
+     * kept identical; fixture 404 gates that they agree to machine precision at every sampled q. Used host-side
+     * for telemetry only — it is never part of the mechanical path.
+     */
+    public static double rampF(double q, int mode, double onset) {
+        if (q <= 0.0) return 0.0;
+        if (q >= 1.0) return 1.0;
+        if (mode == RAMP_LINEAR) return q;
+        if (mode == RAMP_SMOOTHSTEP) return q * q * (3.0 - 2.0 * q);
+        if (mode == RAMP_DELAYED) {
+            if (q <= onset) return 0.0;
+            double z = (q - onset) / (1.0 - onset);
+            return z * z * (3.0 - 2.0 * z);
+        }
+        return 1.0;   // RAMP_OFF ⇒ always-active: f ≡ 1
+    }
+    /** Normalized mechanical stroke progress from the stored converter coordinate. */
+    public static double qTheta(double phi, double psi) {
+        double q = (psi - phi - THETA_PRE) / (THETA_POST - THETA_PRE);
+        return q < 0.0 ? 0.0 : (q > 1.0 ? 1.0 : q);
+    }
+    /** Effective skew for a BOUND motor. Host twin of the kernel expression (fixture 404). */
+    public static double epsEff(double phi, double psi, double epsMax, int mode, double onset) {
+        return epsMax * rampF(qTheta(phi, psi), mode, onset);
+    }
+
     /** Counter-based Gaussian, identical construction to the Brownian streams already lowering on PTX. */
     static double gauss(long ep, long t, long salt) {
         long h = ((ep * 2654435761L) ^ (t * 40503L) ^ (salt * 0x9E3779B1L)); h ^= (h >>> 13); h *= 0x9E3779B1L; h ^= (h >>> 16);
@@ -461,11 +514,31 @@ public final class ChiralSiteSystem {
         int mode = (int) chiP.get(0);
         double eps = chiP.get(16), gauge = chiP.get(17), phiRef = chiP.get(18), mirror = chiP.get(13);
         double gated = chiP.get(19), thetaDisc = chiP.get(20);
+        double thPre = chiP.get(21), thPost = chiP.get(22);
+        int ramp = (int) chiP.get(23); double onset = chiP.get(24);
         for (@Parallel int m = 0; m < N; m++) {
             int s = boundSeg.get(m);
             if (mode == 0 || eps == 0.0 || s < 0) { convF.set(12 * N + m, 0.0); continue; }
-            // STATE GATE: pre-stroke rest coordinate ⇒ canonical converter frame (exactly the eps=0 motor).
+            // STATE GATE (§24): pre-stroke rest coordinate ⇒ canonical converter frame (exactly the eps=0 motor).
             if (gated != 0.0 && q.get(2 * N + m) <= thetaDisc) { convF.set(12 * N + m, 0.0); continue; }
+            // ---- §25 PROGRESS RAMP: eps_eff = eps · f(qTheta), qTheta from the STORED converter coordinate ----
+            // phi/psi here are the PREVIOUS step's converged solve output (§25.1 audit option B) — a stored state
+            // variable, so this is NOT circular. Inlined rather than calling ChiralSiteSystem.rampF (device-side
+            // call limits); fixture 404 gates the two against each other.
+            double epsE = eps;
+            if (ramp != 0) {
+                double qq = (q.get(N + m) - q.get(m) - thPre) / (thPost - thPre);
+                if (qq < 0.0) qq = 0.0; else if (qq > 1.0) qq = 1.0;
+                double fq;
+                if (ramp == 1) fq = qq;
+                else if (ramp == 2) fq = qq * qq * (3.0 - 2.0 * qq);
+                else {
+                    if (qq <= onset) fq = 0.0;
+                    else { double z = (qq - onset) / (1.0 - onset); fq = z * z * (3.0 - 2.0 * z); }
+                }
+                epsE = eps * fq;
+                if (epsE == 0.0) { convF.set(12 * N + m, 0.0); continue; }   // f = 0 ⇒ exactly the canonical motor
+            }
             double bx = frame.get(m),         by = frame.get(N + m),      bz = frame.get(2 * N + m);
             double ex = frame.get(3 * N + m), ey = frame.get(4 * N + m),  ez = frame.get(5 * N + m);   // econv
             double ux = frame.get(6 * N + m), uy = frame.get(7 * N + m),  uz = frame.get(8 * N + m);   // eup
@@ -483,7 +556,7 @@ public final class ChiralSiteSystem {
             double kl = Math.sqrt(kx * kx + ky * ky + kz * kz);
             if (!(kl > 1e-12)) { convF.set(12 * N + m, 0.0); continue; }
             double ik = 1.0 / kl; kx *= ik; ky *= ik; kz *= ik;
-            double c = Math.cos(eps), sn = Math.sin(eps), omc = 1.0 - c;
+            double c = Math.cos(epsE), sn = Math.sin(epsE), omc = 1.0 - c;
             // ---- Rodrigues of the three base vectors (inlined; no device-side helper allocation) -----------
             double dB = kx * bx + ky * by + kz * bz;
             double rbx = bx * c + (ky * bz - kz * by) * sn + kx * dB * omc;
