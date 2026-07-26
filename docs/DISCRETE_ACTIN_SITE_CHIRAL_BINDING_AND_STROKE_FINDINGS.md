@@ -2633,3 +2633,323 @@ Logs, all under `RUN_LOGS/chiral_sites/`:
 | `f3_final_s2len0.75_controls_n24_gpu.txt` | finalist mirror + randomized-base controls (§23.12) |
 | `f4_dt_baseline_half_n8_gpu.txt`, `f5_dt_s2len0.75_half_n8_gpu.txt` | dt/2 check (§23.13) |
 | `r1_regression_cpu.txt` | `-fixtures` 24/24, `-conv-fixtures` 8/8, `-conv-stage1` 8/8 |
+
+## 24. State-dependent converter skew and removal of the pre-stroke chiral preload
+
+**The question.** §23 decomposed the converter-skew twirl into three channels with three ε-laws and identified
+exactly one loss: the **pre-stroke bound dwell**. `J_pre` is opposite-signed to the stroke and grows FASTER than
+sin ε (×3.40 at 15°, ×7.83 at 30°), cancelling **45 % → 61 % → 77 %** of the sin ε-scaling stroke channel.
+§23.19 named the fix and pre-registered its prediction: apply the skew only from the ADP·Pi → ADP transition
+onward, so the *stroke plane* is chiral without the *waiting* motor being chirally preloaded. This section runs
+that experiment.
+
+**Result in one line: the target was hit exactly and the experiment still failed — `J_pre` was removed and
+`J_stroke` went with it, because they are the loading and release halves of ONE chiral strain cycle. Decision
+class P2.**
+
+Noncanonical, flag-gated, **DEFAULT-OFF**. No converter geometry, skew definition, rotation axis, gauge, S2, F8,
+binding gate, kinetics, rates, lattice, density, filament representation, Brownian setting, dt, RNG stream,
+canonical default or `MotorModel.CANON_VERSION` was touched. The only scientific change is **when** the existing
+rotation becomes active.
+
+### 24.1 Exact state semantics
+
+```
+unbound                      converter skew OFF   (unchanged — flag 0, canonical motor)
+bound, ADP·Pi pre-stroke     converter skew OFF   ← the change
+ADP·Pi → ADP transition      converter skew ON    ← on the SAME step as the thetaS rest switch
+bound, ADP post-stroke       converter skew ON
+detachment                   frame clears exactly as before
+```
+
+**The state predicate is `thetaS` itself** (`q[2N+m]`), which `MatSoaSlice.matCock` writes as
+`nuc == NUC_ADPPI ? PRESTROKE_THETAS : ADP_THETAS`. Gating on it means the skew and the rest-coordinate switch
+are driven by **one quantity from one source** — no duplicated state semantics, no guessed nucleotide integer,
+and (because `q` is already an argument to `convFrameStep`) **no new kernel argument**. `chiP[20]` carries the
+discriminant `½(PRESTROKE_THETAS + ADP_THETAS)`, built host-side from the same `cockP` constants `matCock`
+consumes; `chiP[19]` is the on/off flag.
+
+### 24.2 CPU/GPU task-order audit — and the one-step offset it exposed
+
+The gliding graph and the CPU runner execute, in this order:
+
+```
+1 convFrame   (ChiralSiteSystem.convFrameStep)   ← WRITES convF
+2 beamGeom    (matBeamGeom)                       ← READS convF
+3 bind / siteSnap / siteOcc / surfPrune
+4 chem        (NucleotideCycleSystem)             ← WRITES nucleotideState
+5 cock        (matCock)                           ← WRITES thetaS from the new state
+6 place, bond, headRoll, forces, integrate, derive
+7 s2solve     (matS2SolveStep)                    ← READS convF **and** thetaS
+```
+
+**`convFrame` runs BEFORE `chem`/`cock`.** A naive gate on the state as seen at step 1 therefore reads the
+*previous* step's `thetaS`, while `cock` at step 5 switches the rest angle and `s2solve` at step 7 executes the
+stroke. **The skew would activate one full step LATE and the first — largest — increment of the power stroke
+would be taken in the unrotated plane.** That is decision class P2 by construction and precisely the artifact
+that must not be silently accepted.
+
+**Resolution (smallest sufficient change).** In the gated mode ONLY, `convFrameStep` is invoked a **second**
+time immediately after `cock`, before `place`. `s2solve` — the task that actually realises the stroke — then
+reads a converter frame and a rest angle that describe **one** transition. Nothing is reordered; a task is
+*added*, and only when the feature is on, so the default **task list** and the default **CPU call sequence** are
+byte-unchanged. Mirrored in all three steppers: the GPU graph (`convFrame2`, with its own `WorkerGrid`),
+`stepGlidingCPU`, and the fixture stepper `ChiralSiteHarness.convStep`.
+
+**Scope of the "byte-unchanged" claim, stated precisely.** `convFrameStep` itself gained one comparison and one
+branch, so **its PTX is not byte-identical** to the pre-§24 kernel even when the flag is off — the same class of
+change §21 made when `matBeamGeom`/`matS2SolveStep` gained the `convF` argument on a flag-0 branch, and the same
+class the CLAUDE.md graph-split lesson warns can shift a chaotic basin by an ULP. The claim that is actually
+supported is **behavioural**: on the CPU runner (no PTX, deterministic) the default path is bit-identical, and
+the §23/§24 regression suites reproduce their prior values. That empirical check — not a compile-time
+guarantee — is what §24.12 records.
+
+`beamGeom` at step 2 legitimately keeps the *pre*-stroke frame on the transition step: at that point in the step
+the motor is still ADP·Pi, so the canonical geometry is correct for binding and head placement. The
+always-active path has the same structure (its `place`/`bond` also consume the step-2 geometry).
+
+**Verified, not assumed** — fixture 305 reads `thetaS` and the converter-active flag on the transition step
+itself: `thetaS` −0.52360 → +0.52360 and flag 0 → 1 **on the same step**.
+
+### 24.3 Implementation and default-off behaviour
+
+One early-out was added to the existing `ChiralSiteSystem.convFrameStep`, immediately after the existing
+`mode == 0 || eps == 0 || unbound` early-out:
+
+```java
+if (gated != 0.0 && q.get(2*N + m) <= thetaDisc) { convF.set(12*N + m, 0.0); continue; }
+```
+
+No second converter-frame implementation, no new buffer, no changed signature; when `gated == 0` the condition
+short-circuits on the first term. Flag: `-converter-skew-state-gated <on|off>`, default **off**.
+
+### 24.4 Deterministic Stage-1 fixtures — 20 / 20 PASS [`g1_gated_fixtures_cpu.txt`, `g4_gated_snap_cpu.txt`]
+
+One motor, one fixed site, filament fixed, Brownian OFF, interface gauge, ε = 15°, settle 400 + relax 400.
+
+**[A] The pre-stroke dwell becomes exactly ε-INDEPENDENT — the target of the whole experiment.**
+
+| arm | F8_u nm | F8_t nm | F8_n nm | F_tan N | τ_ax N·m | flag |
+|---|---|---|---|---|---|---|
+| ε = 0 (reference) | 10.8601 | 9.9747 | 1.1809 | −3.8161e-13 | −1.3356e-21 | 0 |
+| always-active +ε | 10.8222 | 9.9403 | 1.1819 | −3.9965e-13 | −1.3988e-21 | 1 |
+| always-active −ε | 10.9248 | 9.9652 | 1.1770 | −1.7666e-13 | −6.1832e-22 | 1 |
+| **STATE-GATED +ε** | **10.8601** | **9.9747** | **1.1809** | **−3.8161e-13** | **−1.3356e-21** | **0** |
+| **STATE-GATED −ε** | **10.8601** | **9.9747** | **1.1809** | **−3.8161e-13** | **−1.3356e-21** | **0** |
+
+ε-ODD pre-stroke: always-active `τ = −3.9023e-22`, `F_t = −1.1149e-13`, `Δx_t = −0.0124 nm`; state-gated
+**`τ = +0.0000e+00`, `F_t = +0.0000e+00`, `Δx_t = +0.0000 nm`**. The ±ε gated rows are *literally identical* —
+the pre-stroke frame is canonical and carries no ε at all.
+
+**[B] Activation is synchronous with the rest switch, and the stroke is bit-preserved.** `thetaS`
+−0.52360 → +0.52360 and flag 0 → 1 on the SAME step. Unloaded stroke, state-gated:
+**8.0000 / −7.7274 / −2.0706 / −0.0000 nm** — identical to always-active and to the analytic
+`−8cos ε / −8sin ε / 0`. Site id, segment and `bindAzim` unchanged.
+
+**[C/D/E]** frame held active 400/400 post-stroke steps; rigid-rotation covariance rel 7.35e-08 (no laboratory
+latch); detachment clears it with **exactly zero pointwise effect on the geometry** (recomputing `matBeamGeom`
+with `convF` forcibly zeroed differs by 0.00e+00, in both modes); a re-bound motor starts its next pre-stroke
+dwell unrotated.
+
+**Stage 2 (loaded, F8 ON, filament fixed)** — the stroke channel untouched, the pre-stroke channel annihilated:
+
+| ε | arm | ODD τ_ax (stroke) | ODD F_tan | EVEN F_ax | **ODD preTau** | fClose | wDiss |
+|---|---|---|---|---|---|---|---|
+| 5° | always | −3.0318e-23 | −8.6622e-15 | −2.6820e-12 | −1.2096e-22 | 0.00e+00 | +3.68e-20 |
+| 5° | **gated** | **−3.0317e-23** | **−8.6620e-15** | −2.6820e-12 | **+0.0000e+00** | 0.00e+00 | +3.53e-20 |
+| 15° | always | −8.9145e-23 | −2.5470e-14 | −2.6110e-12 | −3.9023e-22 | 0.00e+00 | +3.93e-20 |
+| 15° | **gated** | **−8.9145e-23** | **−2.5470e-14** | −2.6110e-12 | **+0.0000e+00** | 0.00e+00 | +3.45e-20 |
+
+Force pair closed (0.00e+00), energy closes with non-negative dissipation, axial channel bit-identical to
+always-active, ±ε reverse, mirror reverses. **Identity gates:** gating OFF reproduces the always-active
+trajectory exactly; ε = 0 is bit-identical with gating ON vs OFF.
+
+**Two fixtures initially failed and both were MIS-SPECIFIED TESTS, not physics** — recorded because the
+correction matters: (i) the detach gate demanded `convF[0..11]` be scrubbed, but clearing sets the FLAG only and
+the components are never read at flag 0 (the §21 fixture-208 contract); the ±ε post-detach trajectory spread it
+then measured (9.8e-4 µm) is **elastic S2 history, present identically in the always-active mechanism**
+(9.6e-4 µm). (ii) the "F_ax stays ε-EVEN" gate applied §21.4's *ensemble* claim to a single frozen
+configuration, where the always-active arm shows the identical odd component. Both were replaced with the
+propositions actually at issue (pointwise clearance; axial channel unchanged by gating).
+
+### 24.5 CPU/GPU equivalence with gating ON [`g2_gated_equiv_gpu.txt`]
+
+Full `buildGlidingGraph` with `convFrame` **and** `convFrame2` wired, device-resident, ε = 15°,
+`-Dtornado.enable.fma=false -Dtornado.recover.bailout=false -Dtornado.tvm.maxbytecodesize=65536` (a lowering
+failure THROWS — no silent fallback), stepped against the CPU runner:
+
+```
+200 device-resident steps:
+  bindMism = 0    convFlagMism = 0    max|dConvFrame| = 1.83e-06    max|dSegTorque| = 1.51e-24 N·m
+  max|dFilCoord| = 5.96e-08 µm    firstDiv = none (bit-close)    bound CPU = 9, GPU = 9    ⇒ PASS
+```
+
+`convFlagMism = 0` is the load-bearing number: **transition detection and the converter-active flag agree
+exactly on both runners**, so the added `convFrame2` task and its CPU mirror describe the same event.
+
+### 24.6 PHASE 1 — the live angle screen (8 matched seeds, 5°/15°/30°) [`g3_gated_sweep_n8_gpu.txt`]
+
+| ε | arm | `J_pre` | `J_stroke` | `J_early` | `J_late` | `J_total` | Ω_odd | v_even | avgB | bad |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 5° | A always | +2.058e-26 | −1.833e-26 | −2.746e-26 | −1.250e-25 | −1.502e-25 | −10.55 ± 4.5 | −3.007 | 2.59 | 0 |
+| 5° | **B gated** | **+1.524e-27** | **+1.559e-28** | −1.644e-26 | −5.520e-26 | −6.996e-26 | −5.22 ± 3.3 | −3.008 | 2.59 | 0 |
+| 15° | A always | +6.999e-26 | −4.563e-26 | −6.851e-26 | −8.818e-26 | −1.323e-25 | −12.68 ± 3.5 | −2.673 | 2.63 | 0 |
+| 15° | **B gated** | **+2.938e-26** | **−1.923e-28** | −5.520e-26 | −3.828e-26 | −6.430e-26 | −7.47 ± 6.7 | −3.078 | 2.62 | 0 |
+| 30° | A always | +1.612e-25 | −8.458e-26 | −1.254e-25 | −1.341e-25 | −1.829e-25 | −19.44 ± 7.1 | −2.729 | 2.80 | 0 |
+| 30° | **B gated** | **−3.992e-26** | **+8.147e-27** | −6.536e-26 | −1.135e-25 | −2.107e-25 | −19.54 ± 4.4 | −2.737 | 2.85 | 0 |
+
+**Matched-seed deltas (B − A):**
+
+| ε | ΔJ_pre | ΔJ_stroke | ΔJ_early | ΔJ_late | ΔJ_total | ΔΩ_odd | Δv_even | ΔavgB |
+|---|---|---|---|---|---|---|---|---|
+| 5° | **−1.905e-26** | +1.849e-26 | +1.102e-26 | +6.981e-26 | +8.026e-26 | +5.34 | −0.002 | +0.00 |
+| 15° | **−4.062e-26** | +4.544e-26 | +1.330e-26 | +4.990e-26 | +6.802e-26 | +5.20 | −0.406 | −0.01 |
+| 30° | **−2.011e-25** | +9.273e-26 | +5.999e-26 | +2.059e-26 | −2.781e-26 | −0.10 | −0.008 | +0.04 |
+
+**The primary target was hit and the experiment still failed.** `ΔJ_pre < 0` at every angle — the opposing
+pre-stroke impulse is reduced by **93 % / 58 %** at 5°/15° and driven through zero at 30°. But `J_stroke`
+collapses with it (**−4.563e-26 → −1.9e-28** at 15°), `J_late` is roughly halved at 5°/15°, and net `J_total`
+gets WORSE at 5° and 15°.
+
+**Measured vs the pre-registered §23.19 prediction:**
+
+| ε | A `J_total` | predicted B | measured B | predicted gain | **measured gain** | predicted Ω | **measured Ω** |
+|---|---|---|---|---|---|---|---|
+| 5° | −1.502e-25 | −1.708e-25 | −6.996e-26 | 1.137 | **0.466** | −12.00 | **−5.22** |
+| 15° | −1.323e-25 | −2.023e-25 | −6.430e-26 | 1.529 | **0.486** | −19.38 | **−7.47** |
+| 30° | −1.829e-25 | −3.441e-25 | −2.107e-25 | 1.882 | **1.152** | −36.58 | **−19.54** |
+
+The prediction assumed only `J_pre` would be removed. It was not: **the additive model is refuted.**
+
+**Angle scaling — the one place gating helps.** |Ω_odd| ratios become **1.00 / 1.43 / 3.74** (A: 1.00 / 1.20 /
+1.84; §23.19 predicted B ≈ 1.00 / 1.62 / 3.05). The scaling *does* steepen roughly as predicted, even though the
+absolute magnitudes fall — because the small-angle arm loses proportionally more.
+
+**Population closure** holds for A (1.032 / 1.044 at 15°/30°, 1.205 at 5°) and for B at 5° (1.213) and 30°
+(0.904), but is **0.587 for B at 15°** — the arm with the largest Ω SEM (±6.7). Flagged, not explained: at n = 8
+it is consistent with noise, but it is the one closure failure in this section.
+
+0 invalid, 0 solver failures, no fallback in any arm.
+
+### 24.7 Why the stroke collapsed — the loading/release entanglement
+
+**(a) The gate-opening discontinuity is small in displacement but large in force** [`g4_gated_snap_cpu.txt`].
+Freezing everything else and flipping only the chemical state:
+
+| ε | \|Δx_F8\| nm | Δx_F8 tangential nm | \|ΔF\| N | \|F\| before N | **ΔF/F** |
+|---|---|---|---|---|---|
+| 0° | 0.00000 | 0.00000 | 0.0000e+00 | 4.8990e-12 | 0.000 |
+| 5° | 0.01582 | 0.01263 | 5.3260e-13 | 4.8990e-12 | 0.109 |
+| 15° | 0.04734 | 0.04013 | 1.5937e-12 | 4.8990e-12 | **0.325** |
+| −15° | 0.04734 | 0.03227 | 1.5937e-12 | 4.8990e-12 | 0.325 |
+
+The interface gauge writes `xF8 = P + x̃_ref + R(x̃ − x̃_ref)`; the offset cancels only AT the reference pose, and
+the bound pose sits 0.147 nm away from it, so switching R from I to R(ε) displaces xF8 by `(R − I)(x̃ − x̃_ref)`.
+The displacement is **0.047 nm = 0.6 % of the 8 nm stroke** — so the **F8 anchor is NOT teleported** (gate 320
+PASS) — but the cross-bridge is stiff enough that it is a **33 % instantaneous step in the bond force**, exactly
+zero at ε = 0. The always-active mechanism never performs this switch on a bound motor.
+
+**(b) `J_pre` and `J_stroke` are the two halves of ONE strain cycle.** Their SUM is nearly invariant under
+gating at the two well-resolved angles:
+
+| ε | A: `J_pre + J_stroke` | B: `J_pre + J_stroke` | ratio |
+|---|---|---|---|
+| 5° | +2.246e-27 | +1.680e-27 | 0.75 |
+| 15° | +2.437e-26 | +2.918e-26 | 1.20 |
+| 30° | +7.663e-26 | −3.177e-26 | −0.41 |
+
+**Reading.** In the always-active motor the pre-stroke dwell *charges* a chiral strain (opposing, `J_pre > 0`)
+and the power stroke *discharges* it (`J_stroke < 0`); the stroke-window impulse is largely the release of a
+strain the dwell built up. Gating removes the charging half — and the release half goes with it, leaving the sum
+roughly where it was. **The pre-stroke preload is not a removable parasite; it is the loading stage of the same
+chiral strain cycle whose unloading is the measured stroke impulse.** §23's channel decomposition was correct as
+*accounting* but wrong as *causal separability*. (At 30° the sum is not preserved and `J_pre` overshoots
+negative — the noisiest arm; its interpretation is held open.)
+
+### 24.8 Controls at 15° with gating ON (8 seeds) [`g5_gated_controls_n8_gpu.txt`]
+
+| arm | τ_odd (N·m) | σ | Ω_odd (rad/s) |
+|---|---|---|---|
+| SHARED native | −3.112e-22 | 1.73 | −7.47 ± 7 |
+| SHARED **MIRROR** | +2.255e-22 | 1.68 | **+6.78 ± 4** — REVERSED |
+| RANDOMIZED base | +1.218e-22 | 1.07 | +5.43 — **sign flips** |
+
+- **Ω_odd mirror-reverses** (−7.47 → +6.78), so the residual twirl is still chiral.
+- **`J_odd[0-7]` does NOT reverse** (native −1.820e-27, mirror −5.103e-28) — but that window's signal has been
+  annihilated by gating (1e-27 vs the always-active −4.8e-26), so this is a test of noise, not a failed control.
+- **The randomized-base sign flips** at 1.07σ — likewise noise-limited.
+
+Honest reading: with the stroke channel gone, the gated arm at n = 8 is under-powered (all arms 1.0–1.7σ), so
+the control battery can neither confirm nor refute the residual mechanism. This is **P7 layered on P2** — but it
+does not change the primary verdict, because that verdict rests on the *deterministic* fixtures (where the
+stroke is bit-preserved) plus the matched-seed live collapse of `J_stroke`, both of which are sharply resolved.
+
+### 24.9 Phase 2 NOT run — the pre-registered stopping rule
+
+Phase 2 (24 matched seeds at 15°) was gated on "substantial reduction in `J_pre`, **preserved `J_stroke`**,
+healthy gliding and engagement, no instability". `J_stroke` is **not** preserved — it is annihilated — so the
+powered endpoint was **not run**, per the rule agreed before the data existed. The timestep check, likewise
+specified for "the state-gated 15° finalist", was not run because there is no finalist. Both omissions are
+choices, not gaps: powering an arm whose target channel has been destroyed would buy precision on the wrong
+quantity. (§23.13a's always-active dt/dt-2 baseline stands unchanged.)
+
+### 24.10 Decision class
+
+**P2 — preload removed but the stroke is weakened**, with **P4** and **P7** as documented secondaries and **P6**
+quantified and excluded on its stated criterion.
+
+| class | verdict |
+|---|---|
+| **P1** selective preload removal succeeds | **NO** — `J_pre` removed, but `J_stroke` → ~0 and `J_total` worsens at 5°/15° |
+| **P2** preload removed, stroke weakened | **YES — primary.** ΔJ_stroke = +1.85e-26 / +4.54e-26 / +9.27e-26 (i.e. toward zero) at 5/15/30°. Not an ordering error (fixture 305 proves synchrony) but a genuine mechanical entanglement (§24.7b) |
+| **P3** preload persists | **NO** — `J_pre` reduced 93 % / 58 %, and deterministically to EXACTLY zero |
+| **P4** preload removal changes the late tail | **YES, secondary** — `J_late` roughly halved at 5°/15° (−1.250e-25 → −5.520e-26; −8.818e-26 → −3.828e-26) ⇒ gating alters the whole bound relaxation path, not just the dwell |
+| **P5** population roll does not follow the cycle budget | **NO in general** — closure 0.90–1.21 in five of six arms; the 15° gated arm (0.587) is flagged as the one exception, n = 8 |
+| **P6** transition impulse artifact | **Excluded on displacement, REAL in force** — 0.047 nm = 0.6 % of the stroke (gate 320 PASS), but a 33 % step in bond force. It is the *mechanism* by which the missing pre-strain manifests, not an independent bug |
+| **P7** mechanistically correct but underpowered | **YES for the residual** — the gated control battery is 1.0–1.7σ at n = 8 (§24.8) |
+| **P8** numerical / GPU failure | **NO** — 0 invalid, 0 solver failures, no fallback anywhere; CPU/GPU `convFlagMism = 0` |
+
+### 24.11 Exact next recommended experiment — ramp ε, do not switch it
+
+Both failure modes have the same root: **ε is switched discontinuously on a loaded bond.** That (a) injects a
+33 % force step and (b) deletes the charging half of a strain cycle whose release is the stroke impulse. The fix
+is to make the rotation *continuous in the converter's own coordinate* rather than in the chemical state:
+
+```
+eps_eff(theta) = eps · clamp( (theta − theta_pre) / (theta_post − theta_pre), 0, 1 )      theta = psi − phi
+```
+
+- At the pre-stroke rest `theta = theta_pre` ⇒ `eps_eff = 0` **exactly** — the §24 target, achieved with **no
+  gauge switch, no discontinuity and no force step**.
+- At the post-stroke rest ⇒ `eps_eff = eps` — the full skew is retained through the bound tail.
+- The stroke plane now rotates **with** the swing, which is also the more defensible statement of "the
+  lever-arm swing is oblique" than a plane that snaps at the swing's start.
+- Cost: `theta` is already available in `q`; the same `cockP`-derived constants give `theta_pre`/`theta_post`.
+  No new argument, no new kernel, ε = 0 still byte-identical, and the ordering fix of §24.2 is retained.
+
+**Pre-registered expectations:** `J_pre` should fall toward zero *without* the ΔF/F step; `J_stroke` should be
+intermediate between A and B (it now has a real, if ramped, chiral swing to release); the discriminator is
+whether `J_pre + J_stroke` — invariant under *switching* (§24.7b) — finally moves. **If the sum still does not
+move, the chiral strain cycle is irreducible and no activation schedule can separate loading from release**;
+that would be the definitive statement that this mechanism's twirl is capped by its own reversibility, and the
+next lever would have to be the duty cycle (detaching before the recoil, atlas class C) rather than the skew
+schedule. Note the unloaded stroke will no longer be exactly `−8 sin ε` tangential (it becomes an integral over
+the ramp), so fixture 306's analytic form must be re-derived before use.
+
+**Do NOT**: power the state-gated arm (§24.9); raise ε (the stroke channel is the part that broke); or read
+`f_retain` for the gated arms — with `J_stroke` ≈ 0 its ratios (−448, +334, −25.9) are meaningless by
+construction and are reported only to make that explicit.
+
+### 24.12 Regression and files
+
+`-conv-gated-fixtures` **20/20 PASS** (incl. the default-off and ε = 0 identity gates); `-conv-equiv` with
+gating ON **PASS** device-resident. The §23 regression set was **re-run after the §24 code changes** and is
+unmoved: `-fixtures` **24/24**, `-conv-fixtures` **8/8** (incl. 209 ε = 0 byte-identity), `-conv-stage1`
+**8/8** — identical to their pre-§24 values (log `g6_regression_post24_cpu.txt`). This is the empirical check
+that the §24.2 "byte-unchanged" claim rests on, given that `convFrameStep`'s own PTX did change.
+
+New: `ExplicitCompleteMatHarness.{CONV_SKEW_STATE_GATED, convSkewStateGated}` + `chiP[19..20]`; one early-out in
+`ChiralSiteSystem.convFrameStep`; the `convFrame2` task in `buildGlidingGraph` + its CPU and fixture mirrors;
+`ChiralSiteHarness.{runGatedFixtures, gatedSnapProbe, gatedDetachResidual, gatedCycleProbe, runGatedSweep,
+budgetRow, gatedComparisonTable}`; flags `-converter-skew-state-gated`, `-conv-gated-fixtures`,
+`-conv-gated-sweep`. Logs `RUN_LOGS/chiral_sites/g1..g5_*`.

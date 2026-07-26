@@ -71,7 +71,7 @@ public final class ChiralSiteHarness {
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
-                convBudget = false, convGaugeCmp = false;
+                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-fixtures" -> fixtures = true;
@@ -103,6 +103,7 @@ public final class ChiralSiteHarness {
                 case "-stroke-skew-deg" -> EPS_ISTEP_DEG = Double.parseDouble(args[++i]);
                 case "-converter-stroke-skew-deg" -> EPS_CONV_DEG = Double.parseDouble(args[++i]);
                 case "-converter-skew-gauge" -> CONV_GAUGE = args[++i].equals("on");
+                case "-converter-skew-state-gated" -> CONV_STATE_GATED = args[++i].equals("on");
                 case "-conv-fixtures" -> convFix = true;
                 case "-conv-stage1" -> convStage1 = true;
                 case "-conv-equiv" -> convEquiv = true;
@@ -120,6 +121,8 @@ public final class ChiralSiteHarness {
                 case "-converter-f8-eccentricity-compensated" -> ExplicitCompleteMatHarness.CONV_ECC_COMP = args[++i].equals("on");
                 case "-converter-transverse-offset-nm" -> ExplicitCompleteMatHarness.CONV_TRANS_NM = Double.parseDouble(args[++i]);
                 case "-conv-geom-sweep" -> convGeom = args[++i];
+                case "-conv-gated-fixtures" -> gatedFix = true;
+                case "-conv-gated-sweep" -> gatedSweep = true;
                 case "-conv-geom-values" -> { String[] p = args[++i].split(","); CONV_GEOM_VALS = new double[p.length];
                                               for (int k = 0; k < p.length; k++) CONV_GEOM_VALS[k] = Double.parseDouble(p[k]); }
                 case "-conv-angles" -> { String[] p = args[++i].split(","); CONV_ANGLES = new double[p.length];
@@ -157,6 +160,8 @@ public final class ChiralSiteHarness {
         else if (convBudget) runConvBudget();
         else if (convGaugeCmp) runConvGaugeCompare();
         else if (convGeom != null) runConvGeomSweep(convGeom);
+        else if (gatedFix)   ok = runGatedFixtures();
+        else if (gatedSweep) runGatedSweep();
         else if (twirlAudit)      ok = runTwirlAudit();
         else if (twirlEquiv) ok = runTwirlEquiv();
         else if (twirlPilot) runTwirlPilot();
@@ -170,7 +175,7 @@ public final class ChiralSiteHarness {
         else if (mechanism) runMechanismProbe();
         else ok = runFixtures();
         System.out.println("====================================================================================================");
-        if (fixtures || equiv || all || twirlAudit || twirlEquiv)
+        if (fixtures || equiv || all || twirlAudit || twirlEquiv || gatedFix)
             System.out.println(ok ? "ALL GATED CHECKS PASS" : "*** SOME CHECKS FAILED ***");
         TornadoCrashDiagnostic.normalMainReturn("ok=" + ok);
         if (!ok) System.exit(1);
@@ -193,6 +198,8 @@ public final class ChiralSiteHarness {
         ExplicitCompleteMatHarness.EPS_STROKE_DEG = epsStrokeDeg;
         ExplicitCompleteMatHarness.CONV_SKEW_DEG = EPS_CONV_ARM;      // set per-arm by the converter-skew modes
         ExplicitCompleteMatHarness.CONV_SKEW_GAUGE = CONV_GAUGE;
+        ExplicitCompleteMatHarness.CONV_SKEW_STATE_GATED =
+                CONV_STATE_GATED_ARM != null ? CONV_STATE_GATED_ARM : CONV_STATE_GATED;
         ExplicitCompleteMatHarness.RAND_BASE_AZ = randBase;
         ExplicitCompleteMatHarness.MIRROR_SIGN = mirror;
         // the off-axis actin SURFACE bond is what makes an azimuth mechanically meaningful; sites imply it.
@@ -212,6 +219,10 @@ public final class ChiralSiteHarness {
     }
     /** the converter skew of the CURRENT arm (set by the -conv-* modes; 0 everywhere else). */
     static double EPS_CONV_ARM = 0.0;
+    /** -converter-skew-state-gated: skew OFF in the ADP·Pi pre-stroke dwell, ON from the stroke transition (§24). */
+    static boolean CONV_STATE_GATED = false;
+    /** per-ARM override of the state gate (set by the §24 drivers; falls back to the CLI flag). */
+    static Boolean CONV_STATE_GATED_ARM = null;
     static void cfgOff() { cfg(0, false, 0, 0, 0, false, 1.0, true); ExplicitCompleteMatHarness.SURFACE_ON = false;
         ExplicitCompleteMatHarness.resetBrownianPolicy(); }
 
@@ -2335,6 +2346,9 @@ public final class ChiralSiteHarness {
                 e.convF, e.chiP, e.exCounts);
         TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
         MatSoaSlice.matCock(mot.nucleotideState, e.q, e.cockP, e.exCounts);
+        if (ExplicitCompleteMatHarness.convSkewStateGated())   // mirrors glide.convFrame2 EXACTLY (§24.2)
+            ChiralSiteSystem.convFrameStep(mot.boundSeg, f.uVec, f.yVec, mot.bindAzim, e.frame, e.params, e.q,
+                    e.convF, e.chiP, e.exCounts);
         TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit(e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec);
         CrossBridgeSystem.bondForcesSurface(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam,
                 f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, mot.nucleotideState, G.bondData, e.xbParamsSurf);
@@ -2433,6 +2447,11 @@ public final class ChiralSiteHarness {
         double fClose, tClose;            // closure residuals
         double strokeMag;                 // |dF8| (nm)
         int seg, site; double bindAzim; double prePhi, prePsi, postPhi, postPsi, rawMag;
+        // ---- §24 state-gating telemetry ------------------------------------------------------------------
+        double preFAx, preFTan, preFRad, preTauAx;   // PRE-stroke (end of the ADP·Pi dwell) loaded response
+        double[] preF8 = new double[3];              // PRE-stroke xF8 − P in the site frame (u,t,n), nm
+        double flagPre, flagAtStroke, flagPost;      // convF[12] at end-of-dwell / on the transition step / at end
+        double thetaSPre, thetaSAtStroke;            // q[2N+m] at the same instants (the matCock rest coordinate)
     }
 
     static ConvStroke convStrokeMeasure(double epsDeg, int seed, boolean randBase, double mirror,
@@ -2470,13 +2489,22 @@ public final class ChiralSiteHarness {
         double uPost = 0.5*r.G.kconvCode*sq(th - TwoBodyConverterMotor.ADP_THETAS);
         cs.eInj = uPost - uPre;
         if (refPreF8 != null) for (int k = 0; k < 3; k++) refPreF8[k] = pre[0][k];
+        // ---- PRE-STROKE (end of the ADP·Pi dwell) state: the quantity §24 must make eps-INDEPENDENT ---------
+        { double[] fsPre = f8Seg(r, m);
+          cs.preFAx = dot(fsPre,U); cs.preFTan = dot(fsPre,T); cs.preFRad = dot(fsPre,Nn);
+          cs.preTauAx = dot(segTorque(r,m), U);
+          double[] d = { pre[0][0]-pPre[0], pre[0][1]-pPre[1], pre[0][2]-pPre[2] };
+          cs.preF8[0] = dot(d,U)*1e3; cs.preF8[1] = dot(d,T)*1e3; cs.preF8[2] = dot(d,Nn)*1e3;
+          cs.flagPre = r.e.convF.get(12*r.N + m); cs.thetaSPre = r.e.q.get(2*r.N + m); }
         // ---- THE STROKE: the nucleotide switch, nothing else -------------------------------------------------
         r.mot.nucleotideState.set(m, MotorStore.NUC_ADP);
         double peak = 0;
         for (int i = 0; i < relax; i++, t++) {
             convStep(r, t, seed, freezeFil);
+            if (i == 0) { cs.flagAtStroke = r.e.convF.get(12*r.N + m); cs.thetaSAtStroke = r.e.q.get(2*r.N + m); }
             double[] fh = f8Head(r, m); double mg = norm(fh); if (mg > peak) peak = mg;
         }
+        cs.flagPost = r.e.convF.get(12*r.N + m);
         cs.peakF = peak;
         double[][] post = geomOf(r, m); double[] pPost = pivotOf(r, m);
         // Measure the converter-driven motion of each point RELATIVE TO THE S2 PIVOT P (the anchor the
@@ -2920,6 +2948,422 @@ public final class ChiralSiteHarness {
         System.out.println("    (Outcome A: OmegaOdd and J_odd both scale ≈ sin ε ⇒ weak 5° amplitude was the limit; B: J_odd scales");
         System.out.println("     but OmegaOdd does not ⇒ population cancellation/duty dilution; C: neither scales ⇒ loaded dynamics");
         System.out.println("     suppress the geometric skew; D: twirl grows but gliding/engagement collapses ⇒ mechanically disruptive.)");
+    }
+
+    // ============================================ §24 — PHASE 1: the always-active vs state-gated angle screen
+    /** The per-channel ODD budget of one matched ±ε pair, as a flat row for the §24 comparison tables. */
+    static double[] budgetRow(TRes[] rp, TRes[] rm) {
+        java.util.List<double[]>[] ap = ledgerOf(rp), am = ledgerOf(rm);
+        double jPre = ConvBudget.msn(ConvBudget.odd(ConvBudget.seedMean(ap, r -> r[ConvBudget.F_JPRE]),
+                                                    ConvBudget.seedMean(am, r -> r[ConvBudget.F_JPRE])))[0];
+        double jStr = ConvBudget.msn(ConvBudget.odd(ConvBudget.seedMean(ap, r -> r[ConvBudget.F_JSTROKE]),
+                                                    ConvBudget.seedMean(am, r -> r[ConvBudget.F_JSTROKE])))[0];
+        double jEar = ConvBudget.msn(ConvBudget.odd(ConvBudget.seedMean(ap, r -> r[ConvBudget.F_JEARLY]),
+                                                    ConvBudget.seedMean(am, r -> r[ConvBudget.F_JEARLY])))[0];
+        double jLat = ConvBudget.msn(ConvBudget.odd(ConvBudget.seedMean(ap, r -> r[ConvBudget.F_JLATE]),
+                                                    ConvBudget.seedMean(am, r -> r[ConvBudget.F_JLATE])))[0];
+        double[] jTot = ConvBudget.msn(ConvBudget.odd(ConvBudget.seedMean(ap, ConvBudget::jTotal),
+                                                      ConvBudget.seedMean(am, ConvBudget::jTotal)));
+        double[] om = oddMS(rp, rm, x -> x.omegaFit);
+        double tau = oddMS(rp, rm, x -> x.tau)[0];
+        double vE = 0.5*(ms(col(rp, x -> x.glide))[0] + ms(col(rm, x -> x.glide))[0]);
+        double vO = oddMS(rp, rm, x -> x.glide)[0];
+        double aB = 0.5*(ms(col(rp, x -> x.avgBound))[0] + ms(col(rm, x -> x.avgBound))[0]);
+        double sr = 0.5*(ms(col(rp, x -> x.strokeRatePerS))[0] + ms(col(rm, x -> x.strokeRatePerS))[0]);
+        double preL = 0.5*(ConvBudget.msn(ConvBudget.seedMean(ap, r -> r[ConvBudget.F_PRELIFE]))[0]
+                         + ConvBudget.msn(ConvBudget.seedMean(am, r -> r[ConvBudget.F_PRELIFE]))[0]);
+        double postL = 0.5*(ConvBudget.msn(ConvBudget.seedMean(ap, r -> r[ConvBudget.F_POSTLIFE]))[0]
+                          + ConvBudget.msn(ConvBudget.seedMean(am, r -> r[ConvBudget.F_POSTLIFE]))[0]);
+        double nEp = 0; for (java.util.List<double[]> l : ap) nEp += l.size();
+        double epRate = nEp / (rp.length * Math.max(1, (int) Math.round((1 - EQUIL_FRAC) * STEPS)) * DTR);
+        double r2 = 0.5*(ms(col(rp, x -> x.rollR2))[0] + ms(col(rm, x -> x.rollR2))[0]);
+        int bad = 0; for (TRes r : rp) bad += r.invalid + r.solverFail; for (TRes r : rm) bad += r.invalid + r.solverFail;
+        double jRec = jTot[0] - jStr;
+        return new double[]{ jPre, jStr, jEar, jLat, jTot[0], jTot[1], jRec, jStr != 0 ? jTot[0]/jStr : Double.NaN,
+                             om[0], om[1], tau, vE, vO, aB, sr, preL, postL, epRate, r2, bad };
+    }
+    static final String[] BR = { "J_pre", "J_stroke", "J_early", "J_late", "J_total", "semTot", "J_recoil",
+                                 "f_retain", "Omega", "semOm", "tauOdd", "vEven", "vOdd", "avgB", "strokeRate",
+                                 "preLife", "postLife", "epRate", "rollR2", "bad" };
+    static int BRi(String k) { for (int i = 0; i < BR.length; i++) if (BR[i].equals(k)) return i; return -1; }
+
+    /** PHASE 1: at each ε, run always-active (A) and state-gated (B) ±ε arms on MATCHED seeds and report the
+     *  per-channel matched-seed differences. The load-bearing statistic is ΔJ_pre → 0 with J_stroke preserved. */
+    static void runGatedSweep() {
+        FIL_SEGS = 1; FIL_BROWN = false; BUDGET = true;
+        boolean savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = true;
+        System.out.printf(Locale.US, "%n--- §24 PHASE 1: ALWAYS-ACTIVE vs STATE-GATED CONVERTER SKEW (angle screen;%n"
+                + "    one rigid segment, filament Brownian OFF; shared bases; native lattice; interface gauge;%n"
+                + "    binding-skew=0, old-stroke-skew=0, registry K=0; runner: %s) ---%n",
+                GPU ? "GPU device-resident" : "CPU sequential");
+        System.out.println("    A = skew active for the whole bound episode (the §22/§23 mechanism)");
+        System.out.println("    B = skew OFF in the ADP·Pi pre-stroke dwell, ON from the thetaS switch onward");
+        cfg(2, true, 0.0, 0.0, 0.0, false, +1, true);
+        dragAudit("assay filament:"); System.out.println();
+        int na = CONV_ANGLES.length;
+        double[][] rowA = new double[na][], rowB = new double[na][];
+        for (int ai = 0; ai < na; ai++) {
+            double eps = CONV_ANGLES[ai];
+            for (int g = 0; g < 2; g++) {
+                CONV_STATE_GATED_ARM = (g == 1);
+                String tag = String.format(Locale.US, "%s eps=%.0f", g == 1 ? "B GATED " : "A always", eps);
+                System.out.printf("%n  ######## %s ########%n", tag);
+                cfg(2, true, 0.0, 0.0, 0.0, false, +1, true);
+                System.out.println("  config: " + ExplicitCompleteMatHarness.chiralConfigString());
+                tHeader();
+                TRes[] rp = runTwirlSeeds(new TArm("S+ " + tag, 0.0, false, +1, false, 1).conv(+eps));
+                TRes[] rm = runTwirlSeeds(new TArm("S- " + tag, 0.0, false, +1, false, 1).conv(-eps));
+                tReport("S+ " + tag, rp); tReport("S- " + tag, rm); tPaired(tag, rp, rm);
+                ConvBudget.budgetTable(tag, ledgerOf(rp), ledgerOf(rm));
+                if (g == 0) rowA[ai] = budgetRow(rp, rm); else rowB[ai] = budgetRow(rp, rm);
+            }
+        }
+        CONV_STATE_GATED_ARM = null;
+        gatedComparisonTable(rowA, rowB);
+        BUDGET = false; ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; cfgOff(); EPS_CONV_ARM = 0;
+    }
+
+    /** The §24 headline table: per-channel ODD budget for A and B at each ε, the matched deltas, and the
+     *  pre-registered §23.19 predictions against which the outcome is scored. */
+    static void gatedComparisonTable(double[][] A, double[][] B) {
+        int na = CONV_ANGLES.length;
+        System.out.println("\n  ================= §24 PHASE 1 — PER-CHANNEL ODD BUDGET, A (always) vs B (gated) =================");
+        System.out.printf("    %5s %4s %12s %12s %12s %12s %13s %9s %11s %8s %8s %6s%n",
+                "eps", "arm", "J_pre", "J_stroke", "J_early", "J_late", "J_total±SEM", "f_retain", "Omega±SEM", "vEven", "avgB", "bad");
+        for (int i = 0; i < na; i++) for (int g = 0; g < 2; g++) {
+            double[] r = g == 0 ? A[i] : B[i];
+            System.out.printf(Locale.US, "    %5.0f %4s %+12.4e %+12.4e %+12.4e %+12.4e %+.3e±%.0e %9.3f %+7.2f±%4.1f %8.3f %8.2f %6.0f%n",
+                    CONV_ANGLES[i], g == 0 ? "A" : "B", r[0], r[1], r[2], r[3], r[4], r[5], r[7], r[8], r[9], r[11], r[13], r[19]);
+        }
+        System.out.println("\n  ---- MATCHED-SEED DELTAS (B − A). Desired: ΔJ_pre < 0 toward zero, J_stroke/J_early PRESERVED ----");
+        System.out.printf("    %5s %13s %13s %13s %13s %13s %11s %10s %9s%n",
+                "eps", "dJ_pre", "dJ_stroke", "dJ_early", "dJ_late", "dJ_total", "dOmega", "dvEven", "davgB");
+        for (int i = 0; i < na; i++)
+            System.out.printf(Locale.US, "    %5.0f %+13.4e %+13.4e %+13.4e %+13.4e %+13.4e %+11.2f %+10.3f %+9.2f%n",
+                    CONV_ANGLES[i], B[i][0]-A[i][0], B[i][1]-A[i][1], B[i][2]-A[i][2], B[i][3]-A[i][3],
+                    B[i][4]-A[i][4], B[i][8]-A[i][8], B[i][11]-A[i][11], B[i][13]-A[i][13]);
+        System.out.println("\n  ---- PRE-REGISTERED §23.19 PREDICTION (assumes ONLY J_pre is removed) vs MEASURED ----");
+        System.out.printf("    %5s %14s %14s %14s %8s %8s %12s %12s%n",
+                "eps", "A J_total", "pred B J_total", "meas B J_total", "predGain", "measGain", "pred Omega", "meas Omega");
+        for (int i = 0; i < na; i++) {
+            double pred = A[i][4] - A[i][0];                       // remove J_pre entirely
+            double predGain = A[i][4] != 0 ? pred/A[i][4] : Double.NaN;
+            System.out.printf(Locale.US, "    %5.0f %+14.4e %+14.4e %+14.4e %8.3f %8.3f %12.2f %12.2f%n",
+                    CONV_ANGLES[i], A[i][4], pred, B[i][4], predGain,
+                    A[i][4] != 0 ? B[i][4]/A[i][4] : Double.NaN, A[i][8]*predGain, B[i][8]);
+        }
+        System.out.println("\n  ---- ANGLE SCALING of |Omega_odd| (relative to the smallest angle) ----");
+        System.out.printf("    %5s %10s %12s %12s%n", "eps", "sin/sin0", "A ratio", "B ratio");
+        double s0 = Math.sin(Math.toRadians(CONV_ANGLES[0]));
+        for (int i = 0; i < na; i++)
+            System.out.printf(Locale.US, "    %5.0f %10.2f %12.2f %12.2f%n", CONV_ANGLES[i],
+                    Math.sin(Math.toRadians(CONV_ANGLES[i]))/s0,
+                    A[0][8] != 0 ? A[i][8]/A[0][8] : Double.NaN, B[0][8] != 0 ? B[i][8]/B[0][8] : Double.NaN);
+        System.out.println("    (§23 measured A = 1.00/1.20/1.84 at 5/15/30°; §23.19 predicted B ≈ 1.00/1.62/3.05)");
+        System.out.println("\n  ---- POPULATION CLOSURE: episode-rate × J_total_odd vs the measured tauOdd ----");
+        System.out.printf("    %5s %4s %12s %14s %14s %9s%n", "eps", "arm", "epRate /s", "pred tauOdd", "meas tauOdd", "closure");
+        for (int i = 0; i < na; i++) for (int g = 0; g < 2; g++) {
+            double[] r = g == 0 ? A[i] : B[i];
+            double pr = r[17]*r[4];
+            System.out.printf(Locale.US, "    %5.0f %4s %12.0f %+14.4e %+14.4e %9.3f%n",
+                    CONV_ANGLES[i], g == 0 ? "A" : "B", r[17], pr, r[10], r[10] != 0 ? pr/r[10] : Double.NaN);
+        }
+    }
+
+    // ============================================ §24 — STATE-DEPENDENT CONVERTER SKEW (deterministic gates)
+    /** Run a deterministic converter-stroke measurement with the state gate forced on/off. */
+    static ConvStroke gatedStroke(double epsDeg, boolean gated, boolean unloaded) {
+        boolean sv = CONV_STATE_GATED_ARM == null ? CONV_STATE_GATED : CONV_STATE_GATED_ARM;
+        Boolean svArm = CONV_STATE_GATED_ARM;
+        CONV_STATE_GATED_ARM = gated;
+        try { return convStrokeMeasure(epsDeg, SEED, false, 1.0, true, CONV_SETTLE, CONV_RELAX, null, unloaded); }
+        finally { CONV_STATE_GATED_ARM = svArm; CONV_STATE_GATED = sv; }
+    }
+
+    /**
+     * §24 STAGE 1 + STAGE 2. Deterministic CPU fixtures for the state-dependent converter skew: one motor, one
+     * fixed site, filament fixed, Brownian off. Proves (A) the pre-stroke dwell is eps-INDEPENDENT, (B) the skew
+     * activates on the SAME step as the thetaS rest switch and the unloaded stroke is the established rotated
+     * stroke, (C) the post-stroke frame stays active and covariant, (D) detachment clears it, (E) the cycle
+     * resets, plus the loaded force/torque/energy accounting and the default-off identity gates.
+     */
+    static boolean runGatedFixtures() {
+        passN = failN = 0;
+        double eps = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0;
+        System.out.println("\n--- §24 STAGE 1/2 — STATE-DEPENDENT CONVERTER SKEW (deterministic; one bound motor,");
+        System.out.println("                one fixed site, filament FIXED, Brownian OFF, interface gauge) ---");
+        System.out.printf(Locale.US, "  eps = %.1f deg   settle = %d   relax = %d   seed = %d%n", eps, CONV_SETTLE, CONV_RELAX, SEED);
+        System.out.println("  state predicate = thetaS (q[2N+m]), the SAME rest coordinate matCock writes from");
+        System.out.printf(Locale.US, "  nucleotideState;  discriminant = 0.5*(PRESTROKE_THETAS + ADP_THETAS) = %.6f rad%n",
+                0.5*(TwoBodyConverterMotor.PRESTROKE_THETAS + TwoBodyConverterMotor.ADP_THETAS));
+
+        // ---------------- FIXTURE A — the pre-stroke dwell must be eps-INDEPENDENT ---------------------------
+        System.out.println("\n  [A] PRE-STROKE BOUND DWELL (ADP·Pi): is the waiting motor chirally preloaded?");
+        System.out.printf("    %-34s %10s %10s %10s %12s %12s %8s%n",
+                "arm", "F8_u nm", "F8_t nm", "F8_n nm", "F_tan N", "tau_ax N·m", "flag");
+        ConvStroke a0  = gatedStroke(0.0,   false, false);
+        ConvStroke aUp = gatedStroke(+eps,  false, false), aUm = gatedStroke(-eps, false, false);
+        ConvStroke aGp = gatedStroke(+eps,  true,  false), aGm = gatedStroke(-eps, true,  false);
+        for (Object[] row : new Object[][]{ {"eps=0 (reference)", a0}, {"always-active +eps", aUp}, {"always-active -eps", aUm},
+                                            {"STATE-GATED +eps", aGp}, {"STATE-GATED -eps", aGm} }) {
+            ConvStroke c = (ConvStroke) row[1];
+            System.out.printf(Locale.US, "    %-34s %10.4f %10.4f %10.4f %12.4e %12.4e %8.0f%n",
+                    row[0], c.preF8[0], c.preF8[1], c.preF8[2], c.preFTan, c.preTauAx, c.flagPre);
+        }
+        double preOddAlways = 0.5*(aUp.preTauAx - aUm.preTauAx), preOddGated = 0.5*(aGp.preTauAx - aGm.preTauAx);
+        double preFtOddAlways = 0.5*(aUp.preFTan - aUm.preFTan), preFtOddGated = 0.5*(aGp.preFTan - aGm.preFTan);
+        double preDispOddAlways = 0.5*(aUp.preF8[1] - aUm.preF8[1]), preDispOddGated = 0.5*(aGp.preF8[1] - aGm.preF8[1]);
+        System.out.printf(Locale.US, "    eps-ODD PRE-STROKE:  always-active tau=%+.4e F_t=%+.4e dF8_t=%+.4f nm%n",
+                preOddAlways, preFtOddAlways, preDispOddAlways);
+        System.out.printf(Locale.US, "                        STATE-GATED   tau=%+.4e F_t=%+.4e dF8_t=%+.4f nm%n",
+                preOddGated, preFtOddGated, preDispOddGated);
+        ck(301, "[A] state-gated pre-stroke converter frame is CANONICAL (flag 0 at both ±eps)",
+                aGp.flagPre == 0.0 && aGm.flagPre == 0.0);
+        ck(302, "[A] state-gated pre-stroke F8 pose == the eps=0 pose (all three components, <1e-6 nm)",
+                Math.abs(aGp.preF8[0]-a0.preF8[0]) < 1e-6 && Math.abs(aGp.preF8[1]-a0.preF8[1]) < 1e-6
+             && Math.abs(aGp.preF8[2]-a0.preF8[2]) < 1e-6);
+        ck(303, "[A] state-gated eps-ODD pre-stroke axial torque is ZERO (and always-active is NOT)",
+                Math.abs(preOddGated) < 1e-30 && Math.abs(preOddAlways) > 1e-30);
+        ck(304, "[A] state-gated eps-ODD pre-stroke tangential force is ZERO",
+                Math.abs(preFtOddGated) < 1e-24);
+
+        // ---------------- FIXTURE B — activation on the SAME transition, stroke preserved --------------------
+        System.out.println("\n  [B] Pi-RELEASE TRANSITION: does the skew switch on the SAME step as thetaS?");
+        ConvStroke bU = gatedStroke(+eps, false, true), bG = gatedStroke(+eps, true, true);
+        ConvStroke b0 = gatedStroke(0.0,  true,  true);
+        System.out.printf(Locale.US, "    %-22s thetaS(dwell)=%+.5f flag=%1.0f  →  thetaS(stroke step)=%+.5f flag=%1.0f  (flagEnd=%1.0f)%n",
+                "always-active", bU.thetaSPre, bU.flagPre, bU.thetaSAtStroke, bU.flagAtStroke, bU.flagPost);
+        System.out.printf(Locale.US, "    %-22s thetaS(dwell)=%+.5f flag=%1.0f  →  thetaS(stroke step)=%+.5f flag=%1.0f  (flagEnd=%1.0f)%n",
+                "STATE-GATED", bG.thetaSPre, bG.flagPre, bG.thetaSAtStroke, bG.flagAtStroke, bG.flagPost);
+        double eR = eps*Math.PI/180.0;
+        double predU = -8.0*Math.cos(eR), predT = -8.0*Math.sin(eR);
+        System.out.printf(Locale.US, "    UNLOADED stroke   always-active: |dr|=%.4f dr_u=%+.4f dr_t=%+.4f dr_n=%+.4f%n",
+                bU.strokeMag, bU.dF8[0], bU.dF8[1], bU.dF8[2]);
+        System.out.printf(Locale.US, "                      STATE-GATED  : |dr|=%.4f dr_u=%+.4f dr_t=%+.4f dr_n=%+.4f%n",
+                bG.strokeMag, bG.dF8[0], bG.dF8[1], bG.dF8[2]);
+        System.out.printf(Locale.US, "                      predicted     : |dr|=%.4f dr_u=%+.4f dr_t=%+.4f dr_n=%+.4f%n",
+                8.0, predU, predT, 0.0);
+        ck(305, "[B] the converter frame becomes ACTIVE on the SAME step thetaS switches to the ADP rest angle",
+                bG.flagPre == 0.0 && bG.flagAtStroke == 1.0
+             && bG.thetaSAtStroke > 0.5*(TwoBodyConverterMotor.PRESTROKE_THETAS + TwoBodyConverterMotor.ADP_THETAS));
+        ck(306, "[B] state-gated UNLOADED stroke == the established rotated stroke (|dr|=8, dr_u=-8cos, dr_t=-8sin; <1e-3 nm)",
+                Math.abs(bG.strokeMag - 8.0) < 1e-3 && Math.abs(bG.dF8[0]-predU) < 1e-3
+             && Math.abs(bG.dF8[1]-predT) < 1e-3 && Math.abs(bG.dF8[2]) < 1e-3);
+        ck(307, "[B] state-gated stroke is NOT degraded vs always-active (same magnitude to <1e-3 nm)",
+                Math.abs(bG.strokeMag - bU.strokeMag) < 1e-3);
+        ck(308, "[B] the actin site is NOT moved by the state gate (same seg + site id + bindAzim)",
+                bG.seg == bU.seg && bG.site == bU.site && bG.bindAzim == bU.bindAzim);
+        ck(309, "[B] eps=0 with gating ON is achiral (no tangential stroke component)", Math.abs(b0.dF8[1]) < 1e-6);
+
+        // ---------------- FIXTURE C/D/E — persistence, covariance, reset ------------------------------------
+        System.out.println("\n  [C/D/E] POST-STROKE PERSISTENCE, DETACHMENT RESET, REPEATED CYCLE");
+        double[] cde = gatedCycleProbe(eps);
+        System.out.printf(Locale.US, "    post-stroke flag held for %.0f/%.0f sampled steps; rigid-rotation covariance rel=%.2e;%n"
+                + "    flag after detach=%.0f (residual |convF|=%.2e); flag on the NEXT pre-stroke attachment=%.0f%n",
+                cde[0], cde[1], cde[2], cde[3], cde[4], cde[5]);
+        ck(310, "[C] the converter frame stays ACTIVE for the whole post-stroke bound dwell", cde[0] == cde[1]);
+        ck(311, "[C] the active frame is COVARIANT under a rigid scene rotation (no laboratory latch, rel<1e-3)", cde[2] < 1e-3);
+        // NOTE: clearing sets the FLAG only; convF[0..11] keep their last values because matBeamGeom /
+        // matS2SolveStep never read them at flag 0 (the §21 fixture-208 contract). The physical gate is
+        // therefore "no lingering impulse": the post-detach unbound trajectory must be bit-identical at ±eps.
+        double[] detG = gatedDetachResidual(eps, true), detA = gatedDetachResidual(eps, false);
+        System.out.printf(Locale.US, "    POINTWISE clearance (recompute geometry with convF forcibly zeroed):"
+                + " gated %.2e µm | always-active %.2e µm%n", detG[0], detA[0]);
+        System.out.printf(Locale.US, "    CONTEXT — post-detach ±eps trajectory spread: gated %.2e µm | always-active"
+                + " %.2e µm  (elastic S2 HISTORY, not a lingering frame: both modes show it)%n", detG[1], detA[1]);
+        ck(312, "[D] detachment clears the frame: flag 0 AND the cleared frame has ZERO pointwise effect on geometry",
+                cde[3] == 0.0 && detG[0] == 0.0);
+        ck(313, "[E] a re-bound motor starts the next PRE-STROKE dwell UNROTATED (gate resets)", cde[5] == 0.0);
+
+        // ---------------- STAGE 2 — loaded force / torque / work / energy -----------------------------------
+        System.out.println("\n  [STAGE 2] LOADED accounting (F8 ON, filament FIXED): eps=0 vs always-active vs state-gated");
+        System.out.printf("    %-26s %12s %12s %12s %12s %11s %11s %10s %10s%n",
+                "arm", "F_ax N", "F_tan N", "tau_ax N·m", "preTau N·m", "Einj J", "dElastic J", "wDiss J", "fClose");
+        for (double a : new double[]{ 5.0, eps }) {
+            if (a == 5.0 && eps == 5.0) continue;
+            for (int g = 0; g < 2; g++) {
+                ConvStroke p = gatedStroke(+a, g == 1, false), n = gatedStroke(-a, g == 1, false);
+                String tag = String.format(Locale.US, "%s eps=%.0f", g == 1 ? "GATED " : "always", a);
+                System.out.printf(Locale.US, "    %-26s %12.4e %12.4e %12.4e %12.4e %11.3e %11.3e %10.3e %10.2e%n",
+                        tag + " (+)", p.fAx, p.fTan, p.tauAx, p.preTauAx, p.eInj, p.dElastic, p.wDiss, p.fClose);
+                System.out.printf(Locale.US, "    %-26s %12.4e %12.4e %12.4e %12.4e %11.3e %11.3e %10.3e %10.2e%n",
+                        tag + " (−)", n.fAx, n.fTan, n.tauAx, n.preTauAx, n.eInj, n.dElastic, n.wDiss, n.fClose);
+                System.out.printf(Locale.US, "    %-26s ODD tau_ax=%+.4e  ODD F_tan=%+.4e  EVEN F_ax=%+.4e  ODD preTau=%+.4e%n",
+                        "", 0.5*(p.tauAx-n.tauAx), 0.5*(p.fTan-n.fTan), 0.5*(p.fAx+n.fAx), 0.5*(p.preTauAx-n.preTauAx));
+                if (g == 1 && a == eps) {
+                    ck(314, "[S2] state-gated STROKE eps-ODD axial torque retains the always-active SIGN",
+                            0.5*(p.tauAx-n.tauAx) * 0.5*(aUp.tauAx-aUm.tauAx) > 0);
+                    // The axial channel must be UNTOUCHED by gating. (A single frozen configuration is NOT
+                    // required to have a small eps-odd F_ax — §21.4's eps-EVEN claim is about the ENSEMBLE
+                    // average, and the always-active arm shows the identical odd component here.)
+                    ck(315, "[S2] state gating leaves the axial (propulsive) force channel bit-identical to always-active",
+                            p.fAx == aUp.fAx && n.fAx == aUm.fAx);
+                    ck(316, "[S2] F8 pair stays CLOSED under state gating (residual < 1e-9)", p.fClose < 1e-9 && n.fClose < 1e-9);
+                    ck(317, "[S2] energy closes with non-negative dissipation under state gating",
+                            p.wDiss > -1e-24 && n.wDiss > -1e-24);
+                }
+            }
+        }
+
+        // ---------------- DEFAULT-OFF / IDENTITY GATES ------------------------------------------------------
+        System.out.println("\n  [IDENTITY] default-off and eps=0 gates");
+        ConvStroke offA = gatedStroke(+eps, false, false), offB = gatedStroke(+eps, false, false);
+        ConvStroke z0g = gatedStroke(0.0, true, false), z0u = gatedStroke(0.0, false, false);
+        ck(318, "[ID] gating OFF reproduces the always-active trajectory bit-identically (repeat run)",
+                offA.strokeMag == offB.strokeMag && offA.tauAx == offB.tauAx && offA.fAx == offB.fAx);
+        ck(319, "[ID] eps=0 is bit-identical with gating ON vs OFF (the gate is never wired at eps=0)",
+                z0g.strokeMag == z0u.strokeMag && z0g.tauAx == z0u.tauAx && z0g.fAx == z0u.fAx
+             && z0g.preTauAx == z0u.preTauAx);
+        // ---------------- THE P2/P6 DISCRIMINATOR — does opening the gate TELEPORT F8? ----------------------
+        System.out.println("\n  [SNAP] TRANSITION DISCONTINUITY: the frame-switch displacement of xF8, everything else frozen");
+        System.out.printf("    %8s %12s %12s %12s %12s %12s %10s%n",
+                "eps deg", "|dxF8| nm", "dxF8_tan nm", "|dF| N", "|F| before", "dF/F", "poseOff nm");
+        double snap15 = 0;
+        for (double a : new double[]{ 0.0, 5.0, eps, -eps }) {
+            double[] sp = gatedSnapProbe(a);
+            System.out.printf(Locale.US, "    %8.1f %12.5f %12.5f %12.4e %12.4e %12.4f %10.4f%n",
+                    a, sp[0], sp[1], sp[2], sp[3], sp[3] > 0 ? sp[2]/sp[3] : 0, sp[4]);
+            if (a == eps) snap15 = sp[0];
+        }
+        System.out.printf(Locale.US, "    ⇒ the gate-opening displacement is %.3f nm = %.1f%% of the 8.000 nm stroke.%n",
+                snap15, 100*snap15/8.0);
+        System.out.println("    The always-active mechanism NEVER performs this switch on a bound motor (it is rotated");
+        System.out.println("    from attachment), so any nonzero value here is introduced by state gating alone.");
+        ck(320, "[SNAP] opening the gate does NOT teleport the F8 anchor (< 1% of the 8 nm stroke)",
+                snap15 < 0.08);
+        System.out.printf(Locale.US, "%n  §24 Stage 1/2: %d PASS, %d FAIL%n", passN, failN);
+        return failN == 0;
+    }
+
+    /**
+     * Post-detach clearance test. After a full gated cycle the motor is detached and stepped unbound; we then
+     * ask the DIRECT question — does the (cleared) converter frame still influence the geometry? — by recomputing
+     * {@code matBeamGeom} from the identical state with {@code convF} forcibly zeroed and comparing xF8.
+     *
+     * <p>This is deliberately NOT a trajectory comparison between +eps and −eps. The explicit-S2 beam is a real
+     * elastic body with history: the two signs drive it to genuinely different node configurations WHILE BOUND,
+     * so their post-detach relaxations differ for physical reasons that have nothing to do with a lingering
+     * frame. That trajectory spread is reported as context; the GATE is the pointwise clearance below.
+     *
+     * @return {pointwise |dxF8| with vs without a zeroed convF (µm), the ±eps post-detach trajectory spread (µm)}
+     */
+    static double[] gatedDetachResidual(double epsDeg, boolean gated) {
+        double[][] traj = new double[2][]; double clear = 0;
+        for (int k = 0; k < 2; k++) {
+            Boolean sv = CONV_STATE_GATED_ARM; CONV_STATE_GATED_ARM = gated;
+            try {
+                Rig r = convRig(k == 0 ? +epsDeg : -epsDeg, SEED, false, 1.0, true);
+                int m = r.closestPair()[0];
+                r.bindTo(m, 0); r.mot.nucleotideState.set(m, MotorStore.NUC_ADPPI);
+                for (int mm = 0; mm < r.N; mm++) if (mm != m) r.mot.boundSeg.set(mm, -1);
+                int t = 0;
+                for (int i = 0; i < 50; i++, t++) convStep(r, t, SEED, true);
+                r.mot.nucleotideState.set(m, MotorStore.NUC_ADP);
+                for (int i = 0; i < 50; i++, t++) convStep(r, t, SEED, true);
+                r.mot.boundSeg.set(m, -1);                                  // DETACH
+                for (int i = 0; i < 50; i++, t++) convStep(r, t, SEED, true);
+                traj[k] = geomOf(r, m)[0].clone();
+                // POINTWISE CLEARANCE: same state, convF zeroed ⇒ the geometry must be bit-identical.
+                DoubleArray live = copyD(r.e.convF);
+                r.e.convF.init(0.0);
+                TwoBodyBeamAnalyticGpu.matBeamGeom(r.e.nodes, r.e.frame, r.e.params, r.e.q, r.e.exCounts,
+                                                   r.e.outGeom, r.e.convF);
+                double[] zeroed = geomOf(r, m)[0].clone();
+                for (int c = 0; c < r.e.convF.getSize(); c++) r.e.convF.set(c, live.get(c));
+                TwoBodyBeamAnalyticGpu.matBeamGeom(r.e.nodes, r.e.frame, r.e.params, r.e.q, r.e.exCounts,
+                                                   r.e.outGeom, r.e.convF);
+                double[] liveGeom = geomOf(r, m)[0];
+                for (int c = 0; c < 3; c++) clear = Math.max(clear, Math.abs(liveGeom[c] - zeroed[c]));
+            } finally { CONV_STATE_GATED_ARM = sv; }
+        }
+        double d = 0; for (int c = 0; c < 3; c++) d = Math.max(d, Math.abs(traj[0][c] - traj[1][c]));
+        return new double[]{ clear, d };
+    }
+
+    /**
+     * THE DECISIVE P2-vs-P6 DIAGNOSTIC: does opening the state gate TELEPORT the F8 anchor?
+     *
+     * <p>The interface gauge writes {@code xF8 = P + x̃_ref + R(x̃ − x̃_ref)}. The gauge offset cancels only AT
+     * the reference binding pose; at any other pose, switching R from I to R(ε) displaces xF8 discontinuously by
+     * {@code (R − I)(x̃ − x̃_ref)}. The always-active mechanism never performs that switch on a BOUND motor — it
+     * is rotated from the moment of attachment — so the discontinuity is introduced by state gating alone.
+     *
+     * <p>Measured with everything else frozen: settle a bound ADP·Pi motor, record xF8 and the bond force, then
+     * flip ONLY the nucleotide state and re-run {@code matCock} + {@code convFrameStep} + {@code matBeamGeom}
+     * (no integration, no solve, no chemistry) and re-record. The difference is the pure frame-switch jump.
+     *
+     * @return {|ΔxF8| nm, |ΔxF8 tangential| nm, |ΔF| N, |F| before N, bound-pose offset from the reference pose nm}
+     */
+    static double[] gatedSnapProbe(double epsDeg) {
+        Boolean sv = CONV_STATE_GATED_ARM; CONV_STATE_GATED_ARM = true;
+        try {
+            Rig r = convRig(epsDeg, SEED, false, 1.0, true);
+            int m = r.closestPair()[0];
+            r.bindTo(m, 0); r.mot.nucleotideState.set(m, MotorStore.NUC_ADPPI);
+            for (int mm = 0; mm < r.N; mm++) if (mm != m) r.mot.boundSeg.set(mm, -1);
+            for (int i = 0; i < CONV_SETTLE; i++) convStep(r, i, SEED, true);
+            double[] before = geomOf(r, m)[0].clone();
+            double[] fBefore = f8Seg(r, m).clone();
+            double[][] sf = r.siteFrame(m);
+            // --- flip ONLY the chemical state and rebuild frame + geometry; integrate nothing ---------------
+            r.mot.nucleotideState.set(m, MotorStore.NUC_ADP);
+            MatSoaSlice.matCock(r.mot.nucleotideState, r.e.q, r.e.cockP, r.e.exCounts);
+            ChiralSiteSystem.convFrameStep(r.mot.boundSeg, r.f.uVec, r.f.yVec, r.mot.bindAzim, r.e.frame,
+                    r.e.params, r.e.q, r.e.convF, r.e.chiP, r.e.exCounts);
+            TwoBodyBeamAnalyticGpu.matBeamGeom(r.e.nodes, r.e.frame, r.e.params, r.e.q, r.e.exCounts,
+                    r.e.outGeom, r.e.convF);
+            TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit(r.e.outGeom, r.mot.boundSeg, r.e.eupP, r.e.exCounts,
+                    r.mot.body.coord, r.mot.body.uVec, r.mot.body.yVec);
+            CrossBridgeSystem.bondForcesSurface(r.mot.body.coord, r.mot.body.uVec, r.mot.body.yVec,
+                    r.mot.body.bRotGam, r.f.coord, r.f.uVec, r.f.yVec, r.f.bRotGam, r.f.segLength,
+                    r.mot.boundSeg, r.mot.bindArc, r.mot.bindAzim, r.mot.nucleotideState, r.G.bondData,
+                    r.e.xbParamsSurf);
+            double[] after = geomOf(r, m)[0];
+            double[] fAfter = f8Seg(r, m);
+            double[] d = { after[0]-before[0], after[1]-before[1], after[2]-before[2] };
+            double[] df = { fAfter[0]-fBefore[0], fAfter[1]-fBefore[1], fAfter[2]-fBefore[2] };
+            double phi = r.e.q.get(m), psi = r.e.q.get(r.N+m);
+            double dPose = Math.hypot(phi - TwoBodyConverterMotor.PHI_PRE_3E, psi - r.e.q.get(3*r.N+m))
+                         * r.G.lb * 1e3;
+            return new double[]{ norm(d)*1e3, Math.abs(dot(d, sf[2]))*1e3, norm(df), norm(fBefore), dPose };
+        } finally { CONV_STATE_GATED_ARM = sv; }
+    }
+
+    /** C/D/E probe: post-stroke persistence + rigid-rotation covariance + detach reset + re-bind reset.
+     *  Returns {heldSteps, sampledSteps, rotCovRel, flagAfterDetach, residual, flagOnNextPreStroke}. */
+    static double[] gatedCycleProbe(double epsDeg) {
+        Boolean sv = CONV_STATE_GATED_ARM; CONV_STATE_GATED_ARM = true;
+        try {
+            Rig r = convRig(epsDeg, SEED, false, 1.0, true);
+            int[] pr = r.closestPair(); int m = pr[0];
+            r.bindTo(m, 0); r.mot.nucleotideState.set(m, MotorStore.NUC_ADPPI);
+            for (int mm = 0; mm < r.N; mm++) if (mm != m) r.mot.boundSeg.set(mm, -1);
+            int t = 0;
+            for (int i = 0; i < CONV_SETTLE; i++, t++) convStep(r, t, SEED, true);
+            r.mot.nucleotideState.set(m, MotorStore.NUC_ADP);
+            int held = 0, sampled = 0;
+            double[] frameAt = null;
+            for (int i = 0; i < CONV_RELAX; i++, t++) {
+                convStep(r, t, SEED, true);
+                sampled++; if (r.e.convF.get(12*r.N + m) == 1.0) held++;
+                if (i == CONV_RELAX/2) { frameAt = new double[12]; for (int c = 0; c < 12; c++) frameAt[c] = r.e.convF.get(c*r.N + m); }
+            }
+            // covariance: rotate the whole scene rigidly and re-derive the frame — the rotated frame must equal
+            // R·(the original frame), i.e. the magnitude of the converter basis is rotation-invariant.
+            double rotRel = rigidRotationCovariance();
+            // detach
+            r.mot.boundSeg.set(m, -1);
+            convStep(r, t++, SEED, true);
+            double flagDet = r.e.convF.get(12*r.N + m);
+            double resid = 0; for (int c = 0; c < 12; c++) resid = Math.max(resid, Math.abs(r.e.convF.get(c*r.N + m)));
+            // re-bind into the PRE-STROKE state: the gate must start closed again
+            r.bindTo(m, 0); r.mot.nucleotideState.set(m, MotorStore.NUC_ADPPI);
+            convStep(r, t++, SEED, true);
+            double flagNext = r.e.convF.get(12*r.N + m);
+            return new double[]{ held, sampled, rotRel, flagDet, resid, flagNext };
+        } finally { CONV_STATE_GATED_ARM = sv; }
     }
 
     // ================================================ PHASE A — the full bound-cycle impulse-budget driver

@@ -428,8 +428,31 @@ public final class ChiralSiteSystem {
      * reads the binding state as of the start of the step: a head that binds during step t gets its converter
      * frame at step t+1 (a one-step establishment lag, identical on both runners).
      *
+     * <h3>STATE-GATED activation (noncanonical, default-off — {@code chiP[19]})</h3>
+     * By default the rotation is active for the WHOLE bound episode, including the ADP·Pi pre-stroke dwell. §23
+     * measured that the pre-stroke dwell contributes an eps-ODD impulse {@code J_pre} of the OPPOSITE sign to the
+     * stroke, growing FASTER than sin(eps) and cancelling 45–77 % of the stroke channel. State gating removes
+     * exactly that: while the motor sits in the pre-stroke rest coordinate the converter frame is CANONICAL, and
+     * the configured skew switches on at the same chemical transition that switches the converter rest angle.
+     *
+     * <p><b>The state predicate is {@code thetaS} itself</b> ({@code q[2N+m]}), which {@link MatSoaSlice#matCock}
+     * writes as {@code nuc == NUC_ADPPI ? PRESTROKE_THETAS : ADP_THETAS}. Reading it here means the skew and the
+     * rest-coordinate switch are driven by ONE quantity from ONE source — no duplicated state semantics, no
+     * guessed nucleotide integer, and no new kernel argument. {@code chiP[20]} carries the pre/post discriminant
+     * {@code ½(PRESTROKE_THETAS + ADP_THETAS)}, built host-side from the SAME {@code cockP} constants.
+     *
+     * <p><b>Ordering (load-bearing — see §24.2).</b> This task runs FIRST in the step, i.e. BEFORE {@code chem}
+     * and {@code cock}, so at that point {@code thetaS} is still the PREVIOUS step's value. The stroke is
+     * physically realised by {@code matS2SolveStep} at the END of the step, using the {@code thetaS} that
+     * {@code cock} wrote during THIS step. So when gating is on, the harness invokes this kernel a SECOND time
+     * immediately after {@code cock}; that second invocation is what makes the converter frame and the rest-angle
+     * switch describe ONE power-stroke event in the solve. Without it the skew would activate one full step late
+     * and the first (largest) stroke increment would be taken unrotated. The second invocation is added ONLY when
+     * gating is on, so the default path's task list is byte-unchanged.
+     *
      * <p>{@code convF} (stride 13, planar c·N+m): [0..2] b*, [3..5] econv*, [6..8] eup*, [9..11] gauge offset
-     * (µm), [12] flag (0 ⇒ the canonical branch). chiP[16]=epsConv (rad), [17]=gauge on, [18]=phiRef.
+     * (µm), [12] flag (0 ⇒ the canonical branch). chiP[16]=epsConv (rad), [17]=gauge on, [18]=phiRef,
+     * [19]=stateGated, [20]=thetaS pre/post discriminant.
      */
     public static void convFrameStep(IntArray boundSeg, FloatArray filUVec, FloatArray filYVec, FloatArray bindAzim,
             DoubleArray frame, DoubleArray params, DoubleArray q, DoubleArray convF,
@@ -437,9 +460,12 @@ public final class ChiralSiteSystem {
         int N = counts.get(0), nSeg = counts.get(3);
         int mode = (int) chiP.get(0);
         double eps = chiP.get(16), gauge = chiP.get(17), phiRef = chiP.get(18), mirror = chiP.get(13);
+        double gated = chiP.get(19), thetaDisc = chiP.get(20);
         for (@Parallel int m = 0; m < N; m++) {
             int s = boundSeg.get(m);
             if (mode == 0 || eps == 0.0 || s < 0) { convF.set(12 * N + m, 0.0); continue; }
+            // STATE GATE: pre-stroke rest coordinate ⇒ canonical converter frame (exactly the eps=0 motor).
+            if (gated != 0.0 && q.get(2 * N + m) <= thetaDisc) { convF.set(12 * N + m, 0.0); continue; }
             double bx = frame.get(m),         by = frame.get(N + m),      bz = frame.get(2 * N + m);
             double ex = frame.get(3 * N + m), ey = frame.get(4 * N + m),  ez = frame.get(5 * N + m);   // econv
             double ux = frame.get(6 * N + m), uy = frame.get(7 * N + m),  uz = frame.get(8 * N + m);   // eup

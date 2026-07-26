@@ -1,5 +1,59 @@
 # Soft Box Project Journal
 
+### 2026-07-25 — STATE-DEPENDENT CONVERTER SKEW — the pre-stroke preload IS removable, but the stroke goes with it: J_pre and J_stroke are one strain cycle (decision P2)
+
+The exact next experiment Section 23.19 named: apply the converter skew only from the ADP.Pi -> ADP transition
+onward, so the STROKE PLANE is chiral without the WAITING motor being chirally preloaded. Target = remove the
+opposing `J_pre` while preserving `J_stroke`/`J_post_early`/`J_post_late`. **Noncanonical, flag-gated,
+DEFAULT-OFF (`-converter-skew-state-gated`); no converter geometry/skew definition/axis/gauge/S2/F8/binding
+gate/kinetics/rates/lattice/density/Brownian/dt/RNG/canonical default/`CANON_VERSION` touched — the only change
+is WHEN the existing rotation is active.** Report: Section 24 of
+`docs/DISCRETE_ACTIN_SITE_CHIRAL_BINDING_AND_STROKE_FINDINGS.md`.
+- **TASK-ORDER AUDIT FOUND A REAL ONE-STEP OFFSET.** `convFrame` runs BEFORE `chem`/`cock`, but `s2solve` (which
+  executes the stroke) runs at the END of the step and reads BOTH `convF` and `thetaS`. A naive gate would have
+  activated the skew **one full step late**, taking the first/largest stroke increment unrotated = P2 by
+  construction. **Fix:** in the gated mode ONLY, invoke `convFrameStep` a SECOND time immediately after `cock`
+  (`convFrame2`), mirrored in the GPU graph, `stepGlidingCPU` and the fixture stepper. Nothing reordered; a task
+  ADDED only when the feature is on => default task list / CPU sequence / PTX byte-unchanged.
+- **State predicate = `thetaS` itself** (`q[2N+m]`), the quantity `matCock` writes from `nucleotideState` — one
+  state source, no guessed nucleotide integer, **no new kernel argument**; `chiP[19]` flag, `chiP[20]`
+  discriminant from the same `cockP` constants.
+- **Deterministic fixtures 20/20 PASS.** Pre-stroke dwell becomes EXACTLY eps-independent: gated +eps and -eps
+  rows are LITERALLY IDENTICAL to the eps=0 row; eps-ODD pre-stroke tau **+0.0000e+00** (vs -3.9023e-22
+  always-active), F_t +0.0000e+00. Activation synchronous with the rest switch (thetaS -0.52360 -> +0.52360 and
+  flag 0 -> 1 on the SAME step). Unloaded stroke bit-preserved (8.0000 / -7.7274 / -2.0706). Loaded stroke ODD
+  tau_ax **-8.9145e-23 in BOTH modes**. Force pair closed, energy closes, detach clears (pointwise 0.00e+00).
+- **CPU/GPU with gating ON: PASS** device-resident, **convFlagMism=0** over 200 steps, dSegTorque 1.51e-24,
+  firstDiv=none, no fallback.
+- **LIVE (8 seeds, 5/15/30 deg): TARGET HIT, EXPERIMENT FAILED.** `J_pre` reduced **93 % / 58 %** at 5/15 deg and
+  driven through zero at 30 — but `J_stroke` collapses with it (**-4.563e-26 -> -1.9e-28** at 15 deg) and
+  `J_late` roughly halves. Measured gain **0.47 / 0.49 / 1.15** vs the pre-registered **1.14 / 1.53 / 1.88**;
+  Omega_odd -12.68 -> -7.47 at 15 deg (WORSE). The additive prediction is REFUTED. One thing did improve as
+  predicted: the eps-scaling of |Omega_odd| steepens to **1.00/1.43/3.74** (A 1.00/1.20/1.84; predicted
+  1.00/1.62/3.05).
+- **WHY — the loading/release entanglement (the finding).** (a) Opening the gate displaces F8 by only 0.047 nm
+  = **0.6 % of the stroke** (so NOT a teleport) but is a **33 % instantaneous step in the bond force**, exactly
+  zero at eps=0. (b) **`J_pre + J_stroke` is nearly INVARIANT under gating** (ratio 0.75 / 1.20 at 5/15 deg)
+  while each channel collapses individually => the pre-stroke dwell CHARGES a chiral strain and the stroke
+  DISCHARGES it. **The preload is not a removable parasite; it is the loading half of the same cycle whose
+  release is the stroke impulse.** Section 23's channel decomposition was right as ACCOUNTING, wrong as CAUSAL
+  SEPARABILITY.
+- **Decision P2** (primary) + **P4** (late tail also changed) + **P7** (gated residual under-powered, all control
+  arms 1.0-1.7 sigma at n=8; Omega_odd mirror DOES reverse -7.47 -> +6.78, but `J_odd[0-7]` reversal and the
+  randomized-base sign are noise-limited once `J_stroke` is annihilated). **P6 excluded on displacement, real in
+  force.** P1/P3/P5/P8 = NO. 0 invalid / 0 solver / no fallback anywhere.
+- **Phase 2 NOT run, by the pre-registered stopping rule** (advance required PRESERVED `J_stroke`); the dt check
+  likewise, since there is no finalist. Stated as choices, not gaps.
+- **Two fixtures initially failed and BOTH were mis-specified TESTS, not physics** (detach gate demanded stale
+  scratch bytes be scrubbed — pointwise clearance is 0.00e+00 in both modes and the +/-eps post-detach spread is
+  elastic S2 history present identically in the always-active mechanism; the eps-EVEN F_ax gate applied an
+  ensemble claim to one frozen configuration). Corrected the tests, recorded the correction.
+- **NEXT: RAMP eps, do not switch it** — `eps_eff(theta) = eps·clamp((theta−theta_pre)/(theta_post−theta_pre),0,1)`
+  with `theta = psi − phi`. Zero at the pre-stroke rest BY CONSTRUCTION (no gauge switch, no force step), full
+  eps post-stroke, plane rotates WITH the swing. Discriminator: does `J_pre + J_stroke` — invariant under
+  SWITCHING — finally move? If not, the chiral strain cycle is irreducible and the next lever is the DUTY CYCLE
+  (atlas class C), not the skew schedule. Fixture 306's analytic `-8 sin eps` must be re-derived for a ramp.
+
 ### 2026-07-25 — CONVERTER-TWIRLING EFFICIENCY + MOTOR-GEOMETRY AUDIT — the chiral impulse is NOT lost (the stroke window under-counts it ~2.6x); the loss channel is the PRE-stroke preload; geometry is NOT a demonstrated lever (decision E5+E2, gain largely dt-numerical)
 
 Diagnostic follow-up to Section 22: WHERE does the converter-generated chiral impulse go between the stroke event

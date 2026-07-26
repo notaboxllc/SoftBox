@@ -139,6 +139,10 @@ public final class ExplicitCompleteMatHarness {
     static double  CONV_SKEW_DEG = 0.0;      // -converter-stroke-skew-deg (signed, degrees)
     static boolean CONV_SKEW_GAUGE = true;   // -converter-skew-gauge on|off: rotation CENTRE = the binding
                                              // interface (on, default) vs the S2 pivot (off = pure basis rotation)
+    // STATE-GATED converter skew (noncanonical, default-off): skew OFF during the ADP·Pi pre-stroke dwell, ON
+    // from the ADP·Pi→ADP transition onward while bound. Removes the opposing pre-stroke chiral preload J_pre
+    // measured in §23 WITHOUT touching the stroke itself. See ChiralSiteSystem.convFrameStep and §24.
+    static boolean CONV_SKEW_STATE_GATED = false;   // -converter-skew-state-gated on|off
     // ---- DIAGNOSTIC MOTOR-GEOMETRY SCALES for the converter-twirling efficiency audit (default-off) ----------
     // ALL FOUR are pure SCENE parameters: the explicit-S2 device kernels read every geometric quantity from the
     // per-motor `params[]` planar buffer (built by ExplicitMatSolveHarness.paramArr from these Glide2D fields) and
@@ -232,9 +236,11 @@ public final class ExplicitCompleteMatHarness {
     static boolean strokeSkewOn() { return SITE_MODE > 0 && EPS_STROKE_DEG != 0.0; }
     /** the converter-frame task is wired only when a lattice provides a site frame AND the angle is nonzero. */
     static boolean convSkewOn() { return SITE_MODE > 0 && CONV_SKEW_DEG != 0.0; }
+    /** the SECOND (post-cock) converter-frame invocation is wired ONLY for the state-gated mode. */
+    static boolean convSkewStateGated() { return convSkewOn() && CONV_SKEW_STATE_GATED; }
     static void resetChiral() { SITE_MODE = 0; HEAD_ROLL = false; HEAD_ROLL_BROWN = true; REG_K = 0; EPS_BIND_DEG = 0;
         EPS_STROKE_DEG = 0; SITE_EXCLUSIVE = true; MIRROR_SIGN = 1.0; SITE_CAPTURE_NM = 12.0; RAND_BASE_AZ = false;
-        CONV_SKEW_DEG = 0; CONV_SKEW_GAUGE = true; }
+        CONV_SKEW_DEG = 0; CONV_SKEW_GAUGE = true; CONV_SKEW_STATE_GATED = false; }
     static String siteModeName(int m) {
         return switch (m) { case 1 -> "native"; case 2 -> "every3"; case 3 -> "every4";
                             case 4 -> "stair9-45"; case 5 -> "stair9-90"; default -> "off"; }; }
@@ -250,12 +256,12 @@ public final class ExplicitCompleteMatHarness {
             "sites=%s(rise=%.3f nm, stair=%.1f deg) headRollDof=%s headRollBrownian=%s registryK=%.3e N·m/rad "
             + "binding-skew-deg=%+.2f [actin-side attachment azimuth] "
             + "stroke-skew-deg=%+.2f [actin-side one-shot interface step] "
-            + "converter-stroke-skew-deg=%+.2f [MOTOR-side converter stroke-plane rotation, gauge=%s] "
+            + "converter-stroke-skew-deg=%+.2f [MOTOR-side converter stroke-plane rotation, gauge=%s, stateGated=%s] "
             + "siteExclusive=%s mirror=%+.0f capture=%.1f nm "
             + "Ractin=%.2f nm randomBaseAzimuth=%s surfaceBond=%s",
             siteModeName(SITE_MODE), siteRise(SITE_MODE) * 1e3, siteStairPhase(SITE_MODE) * 180 / Math.PI,
             HEAD_ROLL ? "ON" : "OFF", HEAD_ROLL_BROWN ? "ON" : "OFF", REG_K, EPS_BIND_DEG, EPS_STROKE_DEG,
-            CONV_SKEW_DEG, CONV_SKEW_GAUGE ? "interface" : "pivot",
+            CONV_SKEW_DEG, CONV_SKEW_GAUGE ? "interface" : "pivot", CONV_SKEW_STATE_GATED ? "ON" : "OFF",
             SITE_EXCLUSIVE ? "ON" : "OFF", MIRROR_SIGN, SITE_CAPTURE_NM, R_ACTIN_NM,
             RAND_BASE_AZ ? "ON" : "OFF", SURFACE_ON ? "ON" : "OFF");
     }
@@ -369,7 +375,11 @@ public final class ExplicitCompleteMatHarness {
                 HEAD_ROLL_BROWN ? 1.0 : 0.0, HEAD_ROLL ? 1.0 : 0.0, SITE_EXCLUSIVE ? 1.0 : 0.0, MIRROR_SIGN,
                 SITE_CAPTURE_NM * 1e-3, SITE_SEARCH_HALF,
                 // [16..18] TRUE converter-stroke-plane rotation (see ChiralSiteSystem.convFrameStep)
-                CONV_SKEW_DEG * Math.PI / 180.0, CONV_SKEW_GAUGE ? 1.0 : 0.0, TwoBodyConverterMotor.PHI_PRE_3E);
+                CONV_SKEW_DEG * Math.PI / 180.0, CONV_SKEW_GAUGE ? 1.0 : 0.0, TwoBodyConverterMotor.PHI_PRE_3E,
+                // [19] state gating on/off; [20] the thetaS pre/post discriminant, built from the SAME cockP
+                // constants matCock uses, so the skew and the rest-coordinate switch share one state source.
+                CONV_SKEW_STATE_GATED ? 1.0 : 0.0,
+                0.5 * (TwoBodyConverterMotor.PRESTROKE_THETAS + TwoBodyConverterMotor.ADP_THETAS));
         // Per-motor CONVERTER FRAME (stride 13, planar): [0..2] b*, [3..5] econv*, [6..8] eup*, [9..11] gauge
         // offset (µm), [12] flag. ALL ZERO ⇒ flag 0 ⇒ matBeamGeom / matS2SolveStep take the VERBATIM canonical
         // branch reading the base frame ⇒ byte-identical when the feature is off (it is never even wired).
@@ -617,6 +627,9 @@ public final class ExplicitCompleteMatHarness {
             TwoBodyBeamAnalyticGpu.matSurfaceStericPrune(mot.boundSeg, e.justBound, e.prevBound, mot.bindArc, mot.bindAzim, f.coord, f.uVec, f.yVec, f.segLength, e.segFilId, e.stericP, e.occStats, e.exCounts);
         }
         MatSoaSlice.matCock(mot.nucleotideState, e.q, e.cockP, e.exCounts);
+        if (convSkewStateGated())   // mirrors the GPU `convFrame2` task EXACTLY (see the graph comment / §24.2)
+            ChiralSiteSystem.convFrameStep(mot.boundSeg, f.uVec, f.yVec, mot.bindAzim, e.frame, e.params, e.q,
+                    e.convF, e.chiP, e.exCounts);
         TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit(e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec);
         if (surfOn())
             CrossBridgeSystem.bondForcesSurface(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, mot.nucleotideState, G.bondData, e.xbParamsSurf);
@@ -694,8 +707,16 @@ public final class ExplicitCompleteMatHarness {
         if (strokeSkewOn())   // askew EFFECTIVE STROKE: local-frame rest-coordinate change at ADP·Pi→ADP
             tg.task("strokeSkew", ChiralSiteSystem::strokeSkew, mot.boundSeg, mot.nucleotideState, e.prevNuc, mot.bindAzim, e.chiP, e.exCounts);
         tg
-          .task("cock", MatSoaSlice::matCock, mot.nucleotideState, e.q, e.cockP, e.exCounts)
-          .task("place", TwoBodyBeamAnalyticGpu::matPlaceHeadExplicit, e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec);
+          .task("cock", MatSoaSlice::matCock, mot.nucleotideState, e.q, e.cockP, e.exCounts);
+        // STATE-GATED converter skew: re-evaluate the converter frame AFTER `cock` so the rotation and the
+        // thetaS rest switch describe ONE power-stroke event in `s2solve` (which runs at the end of the step and
+        // reads BOTH). The first `convFrame` task above ran before `chem`/`cock` and therefore still carried the
+        // previous step's state; without this second evaluation the skew would activate one full step late.
+        // Added ONLY in the gated mode ⇒ the default task list is byte-unchanged. See §24.2.
+        if (convSkewStateGated())
+            tg.task("convFrame2", ChiralSiteSystem::convFrameStep, mot.boundSeg, f.uVec, f.yVec, mot.bindAzim,
+                    e.frame, e.params, e.q, e.convF, e.chiP, e.exCounts);
+        tg.task("place", TwoBodyBeamAnalyticGpu::matPlaceHeadExplicit, e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec);
         if (surfOn())
             tg.task("bond", CrossBridgeSystem::bondForcesSurface, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, mot.nucleotideState, G.bondData, e.xbParamsSurf);
         else
@@ -758,6 +779,7 @@ public final class ExplicitCompleteMatHarness {
         if (siteOn()) { addW(glSched, "glide.siteSnap", pn); addW(glSched, "glide.siteOcc", 64); }   // snap parallel; occupancy single-thread
         if (strokeSkewOn()) addW(glSched, "glide.strokeSkew", pn);
         if (convSkewOn()) addW(glSched, "glide.convFrame", pn);   // converter-frame rotation: parallel over motors
+        if (convSkewStateGated()) addW(glSched, "glide.convFrame2", pn);   // post-cock re-evaluation (state-gated mode)
         if (chiralOn()) addW(glSched, "glide.headRoll", pn);   // head roll DOF + registry: parallel over motors
         if (brownChanOn()) addW(glSched, "glide.brChan", ps);   // per-channel filament Brownian mask: parallel over segments
         addW(glSched, "glide.csrZero", ((Math.max(1, nCh * nSeg) + 63) / 64) * 64);
