@@ -71,7 +71,7 @@ public final class ChiralSiteHarness {
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
-                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false;
+                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false, s2DtCmp = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-fixtures" -> fixtures = true;
@@ -142,6 +142,9 @@ public final class ChiralSiteHarness {
                 case "-s2-lawn-seed" -> ExplicitCompleteMatHarness.S2_LAWN_SEED = Integer.parseInt(args[++i]);
                 case "-s2-fixtures" -> s2Fix = true;
                 case "-s2-map" -> s2Map = true;
+                case "-s2-map-lengths" -> { String[] q = args[++i].split(","); S2_MAP_NM = new double[q.length];
+                                            for (int k = 0; k < q.length; k++) S2_MAP_NM[k] = Double.parseDouble(q[k]); }
+                case "-s2-dt-compare" -> s2DtCmp = true;
                 case "-conv-geom-values" -> { String[] p = args[++i].split(","); CONV_GEOM_VALS = new double[p.length];
                                               for (int k = 0; k < p.length; k++) CONV_GEOM_VALS[k] = Double.parseDouble(p[k]); }
                 case "-conv-angles" -> { String[] p = args[++i].split(","); CONV_ANGLES = new double[p.length];
@@ -188,6 +191,7 @@ public final class ChiralSiteHarness {
         else if (poweredReport) analysePowered(EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0);
         else if (s2Fix)      ok = runS2Fixtures();
         else if (s2Map)      runS2Map();
+        else if (s2DtCmp)    reportS2DtCompare();
         else if (twirlAudit)      ok = runTwirlAudit();
         else if (twirlEquiv) ok = runTwirlEquiv();
         else if (twirlPilot) runTwirlPilot();
@@ -3253,10 +3257,48 @@ public final class ChiralSiteHarness {
             System.out.printf(Locale.US, "    %6.0f %+9.3f±%5.3f %8.2f %+12.3f%n", L, ms[0], ms[1], ConvBudget.sigma(ms), db[0]);
         }
     }
+    /** Production-dt vs dt/2 at matched physical duration — the H3-vs-H6 gate. */
+    static void reportS2DtCompare() {
+        double savedDt = DTR;
+        System.out.println("\n  ============ STUDY A §7 — dt REFINEMENT SUBSET (matched 20 ms physical duration) ============");
+        System.out.printf("    %6s | %-26s | %-26s | %10s%n", "L nm", "production dt (8000 st)", "dt/2 (16000 st)", "dv_even");
+        System.out.printf("    %6s | %12s %12s | %12s %12s | %10s%n", "", "v_even", "Omega_odd", "v_even", "Omega_odd", "half-prod");
+        double[][] prod = new double[S2_MAP_NM.length][], half = new double[S2_MAP_NM.length][];
+        for (int i = 0; i < S2_MAP_NM.length; i++) {
+            double L = S2_MAP_NM[i];
+            DTR = savedDt;   prod[i] = new double[]{ ConvBudget.msn(s2Even(L,"glide"))[0], ConvBudget.msn(s2Odd(L,"omegaFit"))[0] };
+            DTR = savedDt/2; half[i] = new double[]{ ConvBudget.msn(s2Even(L,"glide"))[0], ConvBudget.msn(s2Odd(L,"omegaFit"))[0] };
+            System.out.printf(Locale.US, "    %6.0f | %+12.3f %+12.3f | %+12.3f %+12.3f | %+10.3f%n",
+                    L, prod[i][0], prod[i][1], half[i][0], half[i][1], half[i][0]-prod[i][0]);
+        }
+        // the gate: does the v_even trend vs L keep its sign and rough magnitude at dt/2?
+        for (int h = 0; h < 2; h++) {
+            DTR = h == 0 ? savedDt : savedDt/2;
+            double mL = 0; for (double L : S2_MAP_NM) mL += L; mL /= S2_MAP_NM.length;
+            double sxx = 0; for (double L : S2_MAP_NM) sxx += (L-mL)*(L-mL);
+            double[] sl = new double[SEEDS];
+            for (int k = 0; k < SEEDS; k++) {
+                double my = 0; double[] y = new double[S2_MAP_NM.length];
+                for (int i = 0; i < S2_MAP_NM.length; i++) { y[i] = s2Even(S2_MAP_NM[i],"glide")[k]; my += y[i]; }
+                my /= S2_MAP_NM.length;
+                double num = 0;
+                for (int i = 0; i < S2_MAP_NM.length; i++) num += (S2_MAP_NM[i]-mL)*(y[i]-my);
+                sl[k] = num/sxx;
+            }
+            double[] ms = ConvBudget.msn(sl);
+            System.out.printf(Locale.US, "    %-16s dv_even/dL = %+.5f ± %.5f (µm/s)/nm  %5.2fσ  %3.0f%% seeds%n",
+                    h == 0 ? "production dt:" : "dt/2:", ms[0], ms[1], ConvBudget.sigma(ms), 100*ConvBudget.signFrac(sl));
+        }
+        DTR = savedDt;
+        System.out.println("    GATE: H3 survives only if the dt/2 trend keeps the NEGATIVE sign and a comparable magnitude.");
+        System.out.println("    If it collapses or reverses, the classification becomes H6 (timestep-confounded).");
+    }
+
     /** +eps keeps the original single-sign record name (the 48 completed records); -eps adds an "n" tag. */
     static String s2Id(double L, int sgn, int seed) {
-        return sgn > 0 ? String.format(Locale.US, "s2map_L%.0f_%d", L, seed)
-                       : String.format(Locale.US, "s2map_L%.0f_n_%d", L, seed);
+        String pre = DTR < DT * 0.9 ? "s2maph" : "s2map";      // "h" = half dt; ids can never collide
+        return sgn > 0 ? String.format(Locale.US, "%s_L%.0f_%d", pre, L, seed)
+                       : String.format(Locale.US, "%s_L%.0f_n_%d", pre, L, seed);
     }
     /** Per-seed eps-ODD response at length L; NaN unless BOTH signs of that seed are complete. */
     static double[] s2Odd(double L, String key) {
@@ -3279,7 +3321,7 @@ public final class ChiralSiteHarness {
     static double[] s2Col(double L, String key) {
         int ki = POWK(key); double[] o = new double[SEEDS];
         for (int i = 0; i < SEEDS; i++) {
-            double[] r = powRead(String.format(Locale.US, "s2map_L%.0f_%d", L, SEED + i));
+            double[] r = powRead(s2Id(L, +1, SEED + i));
             o[i] = r != null ? r[ki] : Double.NaN;
         }
         return o;

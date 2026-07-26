@@ -1,5 +1,32 @@
 # Soft Box Project Journal
 
+### 2026-07-26 — STUDY A §7 — the prescribed dt/2 subset (30/40/50 nm) is INCONCLUSIVE BY CONSTRUCTION; H3 stays provisional, Study B stays gated
+
+Ran the dt/2 refinement subset (1.25e-6 s, 16000 steps, matched 20 ms, 8 seeds, both eps signs, dt-tagged
+records `s2maph_*`; 48/48 complete, 0 invalid/solver, no crash). Report §7.
+- **The gate returned NO VERDICT, and the reason is the SUBSET, not the physics.** Trend on {30,40,50}:
+  production dt **-0.00816 +/- 0.01035 (0.79 sigma)**; dt/2 **+0.00329 +/- 0.01703 (0.19 sigma)**. Re-fitting the
+  PRODUCTION-dt 6-point map restricted to those same three lengths reproduces **-0.00815** — i.e. the prescribed
+  subset **sits on the flattest part of the response** and fails to resolve the trend even at the reference
+  timestep, where the full 25-50 nm map resolves it at 2.88 sigma. A test that cannot see the effect at
+  production dt cannot say whether refinement destroys it. **Reporting "the sign flipped at dt/2" as a
+  refutation would be WRONG** — both numbers are consistent with zero and with each other.
+- **What it DOES establish: a per-length dt systematic of 0.08-0.16 µm/s (3-6 % of v)** (30 nm -0.149,
+  40 nm +0.162, 50 nm +0.080). The whole length effect across 30->50 nm is only ~0.26 µm/s, so over that window
+  the dt systematic is COMPARABLE TO THE SIGNAL. Propagated onto the 6-point slope it contributes
+  ~0.008 (µm/s)/nm — the same order as the 0.0075 statistical SEM, so **dt uncertainty roughly doubles the error
+  budget on dv/dL and cannot be neglected.**
+- **Omega_odd** shifts with dt at every length (-17.2->-19.9, -4.0->-9.3, -2.9->-3.1) but keeps its NEGATIVE
+  sign — consistent with §6.3's finding that the twirl is noise-dominated, not length-structured.
+- **Model caveat added:** v_even rises in magnitude to 45 nm then falls at 50 (drop within SEM), so the linear
+  slope is a SUMMARY of a possibly non-monotone response, not a validated functional form.
+- **Classification unchanged: H3 (mean-sensitive), PROVISIONAL. H6 still not excluded. Study B still NOT
+  authorised** — the brief gates it on Study A passing numerical review, and §7 did not pass; it returned no
+  verdict.
+- **NEXT: the dt/2 map at the FULL SIX lengths (25-50 nm), not a 3-point subset** — only a matched lever arm can
+  adjudicate H3 vs H6 (96 records at 16000 steps, ~80 min). Also unrun: density subset, D0-D5 lawns, stratified
+  enrichment, mixed-vs-post-hoc null, mixed-lawn CPU/GPU equivalence.
+
 ### 2026-07-26 — STUDY A (S2 fixture) — per-motor free S2 length implemented DATA-ONLY (10/10 gates); homogeneous map: mean gliding IS length-sensitive, dv/dL = -0.032 (µm/s)/nm at 3.69 sigma (H3, PROVISIONAL pending dt/2)
 
 Implemented Study A and ran the homogeneous response map. Report:

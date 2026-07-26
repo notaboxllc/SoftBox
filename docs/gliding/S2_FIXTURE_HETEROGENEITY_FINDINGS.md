@@ -292,24 +292,59 @@ identity was established for the ONE-segment rigid scene, whereas this map uses 
 Brownian filament where roll is averaged over segments and γ_roll is segment 0's. These Ω_odd values are
 therefore **not** comparable to the §25.7 one-segment numbers.
 
-## 7. dt-refinement subset — NOT RUN
+## 7. dt-refinement subset at 30 / 40 / 50 nm — RUN, and **INCONCLUSIVE BY CONSTRUCTION**
+[`sA_dthalf_n8_gpu.txt`]
 
-**Required before H3 is believed.** §23.13a established that the long post-stroke tail is the dt-sensitive
-channel, and `postLife` trends with L here (+0.67 steps/nm), so the gliding trend's likely carrier is exactly
-the quantity that moved under refinement before. The 30 / 40 / 50 nm dt/2 subset at matched physical duration is
-the immediate next step.
+dt/2 = 1.25e-6 s, 16 000 steps (matched 20 ms), same 8 seeds, both ε signs, dt-tagged records (`s2maph_*`) that
+cannot collide with the production set. 48/48 complete, 0 invalid, 0 solver, no crash.
+
+| L (nm) | v_even (prod dt) | v_even (dt/2) | Δ | Ω_odd (prod dt) | Ω_odd (dt/2) |
+|---|---|---|---|---|---|
+| 30 | −2.656 | −2.805 | **−0.149** | −17.188 | −19.903 |
+| 40 | −2.915 | −2.754 | **+0.162** | −4.014 | −9.335 |
+| 50 | −2.819 | −2.739 | **+0.080** | −2.947 | −3.118 |
+
+| trend on this subset | value | σ | seeds |
+|---|---|---|---|
+| production dt | −0.00816 ± 0.01035 (µm/s)/nm | **0.79** | 50 % |
+| dt/2 | +0.00329 ± 0.01703 (µm/s)/nm | **0.19** | 63 % |
+
+**The gate as specified cannot decide H3 vs H6, and the reason is the subset, not the physics.** Re-fitting the
+*production-dt* 6-point map restricted to {30, 40, 50} reproduces −0.00815 — i.e. **the prescribed subset sits on
+the flattest part of the response**. It fails to resolve the trend even at production dt (0.79σ), where the full
+25–50 nm map resolves it at 2.88σ. A test that cannot see the effect at the reference timestep cannot tell us
+whether refinement destroys it. **Reporting "the trend flipped sign at dt/2" as a refutation would be wrong** —
+both subset numbers are consistent with zero and with each other.
+
+**What the subset does establish** is a per-length dt systematic of **0.08–0.16 µm/s (3–6 % of v)**. The whole
+length effect across 30→50 nm is only ≈0.26 µm/s, so over that window the dt systematic is *comparable to the
+signal*. Propagated onto the 6-point slope, an uncorrelated ±0.15 µm/s per-point shift contributes
+≈0.008 (µm/s)/nm — the same order as the 0.0075 statistical SEM. **So dt uncertainty roughly doubles the error
+budget on dv/dL and cannot be neglected.**
+
+**Ω_odd** shifts with dt at every length (−17.2→−19.9, −4.0→−9.3, −2.9→−3.1) but keeps its **negative sign**,
+consistent with §6.3's conclusion that the twirl is noise-dominated rather than length-structured.
+
+**Decisive test, not yet run:** the dt/2 map at the **full six lengths**, so the lever arm matches the
+production-dt fit (96 records at 16 000 steps, ≈80 min).
 
 ## 8. Homogeneous classification — **H3 (mean-sensitive), PROVISIONAL**
 
 **H3** — free length materially shifts mean speed: dv/dL resolved at 3.69σ, ~37 % over 25–50 nm.
 **Not H1** (mean is not robust). **Not H2** (CV non-monotone, no clean variance dependence). **H4 unresolved** —
 engagement and stroke flux trend with L at 88 % seed agreement but only 1.4σ. **H5 not assessable** — the twirl
-columns are single-sign (§6.3). **H6 not excluded** — this is why the classification is provisional; the dt/2
-subset (§7) must confirm the ranking survives. **Not H7** — the response is smooth and monotone in trend with no
+columns are single-sign (§6.3). **H6 not excluded** — the §7 dt/2 subset was run and is
+**inconclusive by construction** (it sits on the flattest part of the response and resolves nothing even at
+production dt), and it measured a per-length dt systematic comparable to the length effect over that window. **Not H7** — the response is smooth and monotone in trend with no
 isolated extrema or discontinuities, and numerical health is perfect at every length.
 
-**Study B is NOT authorised yet.** The brief's gate is "do not introduce heterogeneous lawns until Study A passes
-numerical and interpretive review", and §7 is outstanding.
+A further caveat on the trend model: v_even reads −2.341, −2.656, −2.715, −2.915, −3.058, −2.819 — rising in
+magnitude to 45 nm then falling at 50. The 45→50 drop (0.24 µm/s) is within the per-point SEMs, so the data are
+consistent with monotone-then-plateau, but **a linear slope is a summary of a possibly non-monotone response**,
+not a validated functional form.
+
+**Study B is NOT authorised.** The brief's gate is "do not introduce heterogeneous lawns until Study A passes
+numerical and interpretive review". §7 did not pass that review — it returned no verdict.
 
 ## 9–19. NOT YET IMPLEMENTED OR RUN
 
@@ -320,8 +355,9 @@ average of homogeneous arms (13); density dependence (14); secondary twirling co
 equivalence on a broad mixed lawn (16); biological interpretation and limits (17); next recommendation (18);
 experiments deliberately not run (19).
 
-**Exact next step:** the §7 dt/2 subset at 30 / 40 / 50 nm. If the dv/dL ranking survives, H3 is confirmed and
-Study B opens; if it does not, the classification becomes **H6 (timestep-confounded)** and the homogeneous
-result must be restated as a numerical sensitivity rather than a fixture result. Also outstanding before any
-heterogeneity claim: the density subset (saturation shift) and mixed-lawn CPU/GPU equivalence. The ±ε twirl map
-is now DONE (§6.3).
+**Exact next step: the dt/2 map at the FULL six lengths (25–50 nm), not a three-point subset.** Only a matched
+lever arm can adjudicate H3 vs H6; the 30/40/50 window provably cannot (§7). 96 records at 16 000 steps, ≈80 min.
+If the six-length dt/2 trend keeps the negative sign at comparable magnitude, H3 is confirmed and Study B opens;
+if it collapses, the result becomes H6. Also outstanding before any heterogeneity claim: the density subset
+(saturation shift) and mixed-lawn CPU/GPU equivalence. The ±ε twirl map is DONE (§6.3) and shows no length
+dependence.
