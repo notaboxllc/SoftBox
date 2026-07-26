@@ -1,5 +1,31 @@
 # Soft Box Project Journal
 
+### 2026-07-25 — §25 STAGE 0 (audit only) — the progress-ramp normalization specified in the brief would preload every WAITING motor by 42 %
+
+Source + progress-coordinate audit for the §24.11 follow-up (ramp eps continuously in the converter's own
+coordinate instead of switching it on chemical state). **AUDIT ONLY — no ramp implemented, no decision class
+assigned; §25.2-25.15 are explicitly pending.** Report: Section 25.1. Log `h1_ramp_audit_cpu.txt`.
+- **No circular dependency (audit option B).** `q[m]=phi`/`q[N+m]=psi` are written ONLY by the solve kernels
+  (beamRelaxAnalytic:290, matS2SolveStep:1175); `convFrameStep` runs FIRST, so the phi/psi it reads are the
+  PREVIOUS step's converged state — a stored state variable. No predictor/corrector needed; no thetaS-derived
+  "rest progress" (that would be the §24 binary switch in disguise).
+- **THE FINDING: theta at the RELAXED PRESTROKE pose is -0.08736 rad, NOT the rest value -0.52360.** The
+  converter spring is not relaxed during the ADP.Pi dwell (head docked, psi pinned near 0, phi at the binding
+  lean, so theta sits ~0.436 rad off rest). Normalizing q on the REST constants — as the brief specifies —
+  gives **q(prestroke) = 0.4166, i.e. 42 % of eps applied to every WAITING motor**: a standing preload, exactly
+  §25 class R5 and a subtler form of the §23.7 pivot-gauge confound.
+- **Resolution:** normalize on the MEASURED relaxed equilibria, theta_pre = -0.08736 (calibrated) and
+  theta_post = +0.52360 (= ADP_THETAS exactly — the converter DOES fully relax post-stroke). Flagged as a
+  CALIBRATION, not a derivation, and mildly load-dependent (loaded prestroke -0.07745 = 1.6 % of range) => the
+  eps=0 achirality control and a no-chiral-docking-displacement check at attachment become mandatory.
+- **Coordinate chosen: theta = psi - phi** — the converter's own generalized coordinate (the one thetaS acts on),
+  monotone 0/399 unloaded, available pre-geometry, reverses with the stroke, not self-referential. `phi` retained
+  as a pre-registered sensitivity check (theta ~ -phi, since psi moves only 0.1185 vs phi's 0.7294). **F8 axial
+  displacement DISQUALIFIED** — written by `beamGeom`, i.e. AFTER `convFrameStep`, so it WOULD be circular.
+- Under load theta acquires 51/399 reversals (F8 axial 130/399) — correct for a REVERSIBLE coordinate-coupled
+  ramp, but it makes the per-step delta-eps_eff continuity metric a first-class observable.
+- New: `-conv-ramp-audit` (`runRampAudit`/`rampAuditTrace`), read-only; no physics, no default, no kernel touched.
+
 ### 2026-07-25 — STATE-DEPENDENT CONVERTER SKEW — the pre-stroke preload IS removable, but the stroke goes with it: J_pre and J_stroke are one strain cycle (decision P2)
 
 The exact next experiment Section 23.19 named: apply the converter skew only from the ADP.Pi -> ADP transition

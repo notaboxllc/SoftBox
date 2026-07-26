@@ -2953,3 +2953,87 @@ New: `ExplicitCompleteMatHarness.{CONV_SKEW_STATE_GATED, convSkewStateGated}` + 
 `ChiralSiteHarness.{runGatedFixtures, gatedSnapProbe, gatedDetachResidual, gatedCycleProbe, runGatedSweep,
 budgetRow, gatedComparisonTable}`; flags `-converter-skew-state-gated`, `-conv-gated-fixtures`,
 `-conv-gated-sweep`. Logs `RUN_LOGS/chiral_sites/g1..g5_*`.
+
+## 25. Progress-ramped converter skew and a curved chiral power-stroke path
+
+**STATUS: STAGE 0 ONLY.** This section currently contains the source and progress-coordinate audit that §25
+requires *before* coding. The ramp implementation, deterministic path fixtures, force-continuity tests, impulse
+budgets, ramp-shape screen, angle scaling, powered finalist, controls, closure and timestep test are **not yet
+run**, and no decision class R1–R8 is assigned. It is written up now because the audit produced a result that
+changes the experiment's design, and that result should not live only in a session transcript.
+
+**Why the experiment exists.** §24 showed that switching the converter skew on at Pi release removes `J_pre`
+and annihilates `J_stroke` with it, because the two are the charging and release halves of one history-dependent
+elastic cycle, and that the switch also produces a 33 % step in the bond force. §24.11's recommendation was to
+make the rotation continuous in the converter's own coordinate: `eps_eff = eps_max · f(q)`.
+
+### 25.1 Stage 0 — source and progress-coordinate audit [`h1_ramp_audit_cpu.txt`]
+
+**Write-order fact, from source.** `q[m] = phi` and `q[N+m] = psi` are written **only** by the solve kernels
+(`TwoBodyBeamAnalyticGpu.beamRelaxAnalytic:290`, `matS2SolveStep:1175`); `matCock` writes `q[2N+m] = thetaS`;
+`q[3N+m] = psiActin` is set at pack time. `convFrameStep` runs FIRST in the step (§24.2), so the `phi`/`psi` it
+reads are the **previous step's converged state** — a stored state variable, not a function of this step's solve.
+
+**⇒ There is no circular dependency, and audit option B applies.** No predictor/corrector (option C) and no
+`thetaS`-derived rest-progress (option D, which would be the §24 binary switch in disguise) are needed. This is
+recorded explicitly because the concern was legitimate: the converter frame is built before the geometry and
+solve that update `phi`/`psi`, and had those been *this* step's values the coupling would have been circular.
+
+**Measured candidate traces** (one bound motor, one fixed site, filament fixed, Brownian OFF, ε = 15°, complete
+prestroke → poststroke transition; "pre"/"post" are the relaxed equilibria, not the rest constants):
+
+| candidate | pre (unloaded) | post (unloaded) | pre (loaded) | range | non-monotone (unloaded) | available pre-geometry? | circular? |
+|---|---|---|---|---|---|---|---|
+| `phi` | +0.20583 | −0.52360 | +0.19161 | 0.7294 | **0 / 399** | YES — `q[m]` | no (previous step) |
+| `psi` | +0.11846 | +0.00000 | +0.11416 | 0.1185 | 0 / 399 | YES — `q[N+m]` | no (previous step) |
+| **`theta = psi − phi`** | **−0.08736** | **+0.52360** | **−0.07745** | **0.6110** | **0 / 399** | YES — `q[N+m] − q[m]` | no (previous step) |
+| `thetaS` | −0.52360 | +0.52360 | −0.52360 | binary | binary switch | YES — `q[2N+m]` | no — but it IS the §24 switch |
+| F8 axial displacement | 0 (ref) | −7.727 nm | 0 (ref) | 5.724 | 0 / 399 | **NO** — written by `beamGeom` | **WOULD BE** |
+
+Under load the same coordinates acquire reversals — `theta` 51/399, F8 axial 130/399 — as the loaded system
+relaxes and retreats. That is **correct behaviour for a reversible coordinate-coupled ramp** (the §25 requirement
+that skew retrace if the stroke reverses), but it means `q` will jitter under load, so the per-step `Δeps_eff`
+continuity metric is a first-class observable rather than a formality.
+
+**THE LOAD-BEARING FINDING — the normalization specified in the §25 brief is unusable as written.**
+`theta` at the **relaxed prestroke pose is −0.08736 rad, not the rest value −0.52360**. The converter torsional
+spring is *not* relaxed during the ADP·Pi dwell: the head is docked (`psi` pinned near `psiActin` ≈ 0) and `phi`
+is held at the binding lean, so `theta` sits ≈ 0.436 rad off its own rest. Consequently
+
+```
+q = clamp((theta − PRESTROKE_THETAS) / (ADP_THETAS − PRESTROKE_THETAS), 0, 1)   ⇒   q(prestroke) = 0.4166
+```
+
+i.e. normalizing on the **rest constants** would apply **42 % of ε to every waiting motor** — manufacturing
+precisely the standing preload that §25's own class **R5** says to reject, and re-creating in a subtler form the
+§23.7 pivot-gauge confound.
+
+**Resolution.** The endpoints must be the **measured relaxed equilibria**:
+
+```
+theta_pre  = −0.08736 rad      (measured, unloaded relaxed prestroke pose)
+theta_post = +0.52360 rad      (= ADP_THETAS exactly — the converter DOES fully relax post-stroke)
+```
+
+Only the prestroke endpoint requires calibration; the poststroke endpoint falls out of the model. **This is a
+calibration, not a derivation, and it is mildly load-dependent**: the loaded prestroke equilibrium is
+−0.07745 rad, **1.6 % of the full range** away from the unloaded value. So `q` at a loaded waiting motor will sit
+a little above 0 rather than exactly 0, and the ε = 0 achirality control plus a "no chiral docking displacement"
+check at attachment become mandatory rather than optional.
+
+**Coordinate chosen: `theta = psi − phi`.** It is the converter's own generalized coordinate — the one the
+chemical rest switch `thetaS` acts on — it is monotone through the unloaded transition (0/399), it is available
+before geometry construction, it reverses naturally with the stroke, and it is not self-referential. `phi` is a
+near-equivalent alternative (since `psi` moves only 0.1185 rad against `phi`'s 0.7294, `theta ≈ −phi` up to a
+small offset) and is arguably the more *mechanical* choice given §23.6's finding that the stroke is the neck-lever
+swing at radius `lb`; it is retained as the pre-registered sensitivity check. The F8 axial displacement is the
+most physically direct coordinate but is **disqualified**: it is written by `beamGeom`, i.e. *after*
+`convFrameStep`, so using it would create exactly the circular dependency the audit was run to exclude.
+
+### 25.2 – 25.15 — not yet run
+
+Ramp equations and implementation, default-off and identity gates, deterministic forward/reverse path fixtures,
+loaded force-continuity and energy accounting, the impulse budget with ramp-specific episode fields, the
+ramp-shape screen (linear / smoothstep / delayed q0 = 0.25, 0.50), angle scaling, the powered 15° finalist, the
+mirror / ε = 0 / randomized-base / `Ractin = 0` controls, population closure, the timestep test, the decision
+class and the next recommendation are all **pending**. Nothing in §25 should be cited as a result until they are.

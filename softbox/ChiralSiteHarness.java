@@ -71,7 +71,7 @@ public final class ChiralSiteHarness {
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
-                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false;
+                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-fixtures" -> fixtures = true;
@@ -123,6 +123,7 @@ public final class ChiralSiteHarness {
                 case "-conv-geom-sweep" -> convGeom = args[++i];
                 case "-conv-gated-fixtures" -> gatedFix = true;
                 case "-conv-gated-sweep" -> gatedSweep = true;
+                case "-conv-ramp-audit" -> rampAudit = true;
                 case "-conv-geom-values" -> { String[] p = args[++i].split(","); CONV_GEOM_VALS = new double[p.length];
                                               for (int k = 0; k < p.length; k++) CONV_GEOM_VALS[k] = Double.parseDouble(p[k]); }
                 case "-conv-angles" -> { String[] p = args[++i].split(","); CONV_ANGLES = new double[p.length];
@@ -162,6 +163,7 @@ public final class ChiralSiteHarness {
         else if (convGeom != null) runConvGeomSweep(convGeom);
         else if (gatedFix)   ok = runGatedFixtures();
         else if (gatedSweep) runGatedSweep();
+        else if (rampAudit)  runRampAudit();
         else if (twirlAudit)      ok = runTwirlAudit();
         else if (twirlEquiv) ok = runTwirlEquiv();
         else if (twirlPilot) runTwirlPilot();
@@ -2948,6 +2950,107 @@ public final class ChiralSiteHarness {
         System.out.println("    (Outcome A: OmegaOdd and J_odd both scale ≈ sin ε ⇒ weak 5° amplitude was the limit; B: J_odd scales");
         System.out.println("     but OmegaOdd does not ⇒ population cancellation/duty dilution; C: neither scales ⇒ loaded dynamics");
         System.out.println("     suppress the geometric skew; D: twirl grows but gliding/engagement collapses ⇒ mechanically disruptive.)");
+    }
+
+    // ==================================================== §25 STAGE 0 — progress-coordinate audit (read-only)
+    /**
+     * §25 STAGE 0. Trace every candidate stroke-progress coordinate through a complete prestroke→poststroke
+     * transition, unloaded and loaded, and answer the audit questions BEFORE any ramp is implemented:
+     * equilibrium endpoints, monotonicity, behaviour under load, availability before geometry construction,
+     * reversibility, and whether the coordinate is algebraically self-referential.
+     */
+    static void runRampAudit() {
+        double eps = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0;
+        System.out.println("\n--- §25 STAGE 0 — STROKE-PROGRESS COORDINATE AUDIT (one bound motor, one fixed site,");
+        System.out.println("                filament FIXED, Brownian OFF; candidates traced through the transition) ---");
+        System.out.printf(Locale.US, "  thetaS rest coordinates: PRESTROKE = %+.6f rad (%.1f deg)   ADP = %+.6f rad (%.1f deg)%n",
+                TwoBodyConverterMotor.PRESTROKE_THETAS, Math.toDegrees(TwoBodyConverterMotor.PRESTROKE_THETAS),
+                TwoBodyConverterMotor.ADP_THETAS, Math.toDegrees(TwoBodyConverterMotor.ADP_THETAS));
+        System.out.println("\n  WRITE-ORDER FACT (from source): q[m]=phi and q[N+m]=psi are written ONLY by the solve");
+        System.out.println("  kernels (beamRelaxAnalytic:290, matS2SolveStep:1175). matCock writes q[2N+m]=thetaS.");
+        System.out.println("  convFrameStep runs FIRST in the step, so the phi/psi it reads are the PREVIOUS step's");
+        System.out.println("  converged state — a stored state variable, NOT a function of this step's solve.");
+        System.out.println("  ⇒ using theta = psi − phi there is AUDIT OPTION B and is NOT circular.\n");
+        for (int loaded = 0; loaded < 2; loaded++) {
+            System.out.printf("  ======== %s ========%n", loaded == 0 ? "UNLOADED (F8 spring OFF)" : "LOADED (F8 ON, filament fixed)");
+            double[][] tr = rampAuditTrace(eps, loaded == 1);
+            System.out.printf("    %6s %10s %10s %10s %10s %12s %12s%n",
+                    "step", "phi rad", "psi rad", "theta rad", "thetaS", "q(theta)", "F8axial nm");
+            int n = tr.length;
+            for (int i : new int[]{ 0, 1, 2, 3, 5, 10, 20, 40, 80, 160, n-1 }) {
+                if (i >= n) continue;
+                System.out.printf(Locale.US, "    %6.0f %10.5f %10.5f %10.5f %10.5f %12.5f %12.5f%n",
+                        tr[i][0], tr[i][1], tr[i][2], tr[i][3], tr[i][4], tr[i][5], tr[i][6]);
+            }
+            // monotonicity of theta and of the axial F8 displacement over the transition
+            int badTh = 0, badAx = 0; double thMin = 9e9, thMax = -9e9;
+            for (int i = 1; i < n; i++) {
+                if ((tr[i][3] - tr[i-1][3]) < -1e-9) badTh++;
+                if ((tr[i][6] - tr[i-1][6]) > +1e-9) badAx++;
+                thMin = Math.min(thMin, tr[i][3]); thMax = Math.max(thMax, tr[i][3]);
+            }
+            System.out.printf(Locale.US, "    theta: start %+.5f → end %+.5f (range %+.5f … %+.5f); non-monotone steps: %d/%d%n",
+                    tr[0][3], tr[n-1][3], thMin, thMax, badTh, n-1);
+            System.out.printf(Locale.US, "    q(theta) at start = %.5f, at end = %.5f   |   F8 axial non-monotone steps: %d/%d%n",
+                    tr[0][5], tr[n-1][5], badAx, n-1);
+        }
+        // ---- the audit table, computed from both traces (col: 1=phi 2=psi 3=theta 6=F8axial) ----------------
+        double[][] u = rampAuditTrace(eps, false), L = rampAuditTrace(eps, true);
+        System.out.println("\n  ---- AUDIT TABLE (measured; 'pre' = relaxed prestroke, 'post' = relaxed poststroke) ----");
+        System.out.printf("  %-12s %10s %10s %10s %8s %8s %-10s %-9s%n",
+                "candidate", "pre(unld)", "post(unld)", "pre(load)", "range", "nonMono", "pre-geom?", "circular?");
+        String[] nm = { "phi", "psi", "theta=psi-phi", "F8 axial nm" };
+        int[] cix = { 1, 2, 3, 6 };
+        String[] avail = { "YES q[m]", "YES q[N+m]", "YES q[N+m]-q[m]", "NO (beamGeom)" };
+        for (int k = 0; k < 4; k++) {
+            int c = cix[k];
+            int nonMono = 0;
+            for (int i = 1; i < u.length; i++) {
+                double d = u[i][c] - u[i-1][c], dEnd = u[u.length-1][c] - u[0][c];
+                if (d * dEnd < -1e-12) nonMono++;
+            }
+            System.out.printf(Locale.US, "  %-12s %10.5f %10.5f %10.5f %8.4f %8d %-10s %-9s%n",
+                    nm[k], u[0][c], u[u.length-1][c], L[0][c],
+                    Math.abs(u[u.length-1][c] - u[0][c]), nonMono, avail[k],
+                    c == 6 ? "WOULD BE" : "no (prev step)");
+        }
+        double thPre = TwoBodyConverterMotor.PRESTROKE_THETAS, thPost = TwoBodyConverterMotor.ADP_THETAS;
+        System.out.printf(Locale.US, "%n  ** NORMALIZATION WARNING ** theta at the RELAXED PRESTROKE pose is %+.5f rad,"
+                + " NOT the rest value %+.5f.%n", u[0][3], thPre);
+        System.out.printf(Locale.US, "     Normalizing on the REST constants would give q(prestroke) = %.4f — i.e. %.0f%% of"
+                + " eps applied%n     to every WAITING motor (a standing preload; §25 class R5). The endpoints must be the"
+                + " MEASURED%n     relaxed equilibria: theta_pre = %+.5f, theta_post = %+.5f (the latter equals ADP_THETAS"
+                + " exactly,%n     because the converter DOES fully relax post-stroke). Loaded prestroke is %+.5f"
+                + " (%.1f%% of range).%n",
+                Math.max(0, Math.min(1, (u[0][3]-thPre)/(thPost-thPre))),
+                100*Math.max(0, Math.min(1, (u[0][3]-thPre)/(thPost-thPre))),
+                u[0][3], u[u.length-1][3], L[0][3],
+                100*Math.abs(L[0][3]-u[0][3])/Math.abs(u[u.length-1][3]-u[0][3]));
+    }
+
+    /** One transition trace: {step, phi, psi, theta, thetaS, q(theta), F8 axial displacement nm}. */
+    static double[][] rampAuditTrace(double epsDeg, boolean loaded) {
+        Rig r = convRig(epsDeg, SEED, false, 1.0, true);
+        int m = r.closestPair()[0];
+        r.bindTo(m, 0); r.mot.nucleotideState.set(m, MotorStore.NUC_ADPPI);
+        for (int mm = 0; mm < r.N; mm++) if (mm != m) r.mot.boundSeg.set(mm, -1);
+        if (!loaded) { r.e.xbParamsSurf.set(0, 0f); r.e.params.set(5*r.N + m, 0.0); }
+        int t = 0;
+        for (int i = 0; i < CONV_SETTLE; i++, t++) convStep(r, t, SEED, true);
+        double[] p0 = pivotOf(r, m); double[][] g0 = geomOf(r, m); double[][] sf = r.siteFrame(m);
+        double thPre = TwoBodyConverterMotor.PRESTROKE_THETAS, thPost = TwoBodyConverterMotor.ADP_THETAS;
+        java.util.List<double[]> out = new java.util.ArrayList<>();
+        r.mot.nucleotideState.set(m, MotorStore.NUC_ADP);
+        for (int i = 0; i < CONV_RELAX; i++, t++) {
+            convStep(r, t, SEED, true);
+            double phi = r.e.q.get(m), psi = r.e.q.get(r.N + m), th = psi - phi, ths = r.e.q.get(2*r.N + m);
+            double q = Math.max(0, Math.min(1, (th - thPre)/(thPost - thPre)));
+            double[] pp = pivotOf(r, m); double[][] gg = geomOf(r, m);
+            double[] d = { (gg[0][0]-pp[0])-(g0[0][0]-p0[0]), (gg[0][1]-pp[1])-(g0[0][1]-p0[1]),
+                           (gg[0][2]-pp[2])-(g0[0][2]-p0[2]) };
+            out.add(new double[]{ i, phi, psi, th, ths, q, dot(d, sf[0])*1e3 });
+        }
+        return out.toArray(new double[0][]);
     }
 
     // ============================================ §24 — PHASE 1: the always-active vs state-gated angle screen
