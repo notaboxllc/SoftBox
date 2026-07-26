@@ -71,7 +71,7 @@ public final class ChiralSiteHarness {
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
-                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false;
+                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-fixtures" -> fixtures = true;
@@ -133,6 +133,8 @@ public final class ChiralSiteHarness {
                 case "-conv-ramp-audit" -> rampAudit = true;
                 case "-conv-ramp-fixtures" -> rampFix = true;
                 case "-conv-ramp-screen" -> rampScreen = true;
+                case "-conv-powered" -> powered = true;
+                case "-conv-powered-report" -> poweredReport = true;
                 case "-conv-geom-values" -> { String[] p = args[++i].split(","); CONV_GEOM_VALS = new double[p.length];
                                               for (int k = 0; k < p.length; k++) CONV_GEOM_VALS[k] = Double.parseDouble(p[k]); }
                 case "-conv-angles" -> { String[] p = args[++i].split(","); CONV_ANGLES = new double[p.length];
@@ -175,6 +177,8 @@ public final class ChiralSiteHarness {
         else if (rampAudit)  runRampAudit();
         else if (rampFix)    ok = runRampFixtures();
         else if (rampScreen) runRampScreen();
+        else if (powered)    runPoweredConfirm();
+        else if (poweredReport) analysePowered(EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0);
         else if (twirlAudit)      ok = runTwirlAudit();
         else if (twirlEquiv) ok = runTwirlEquiv();
         else if (twirlPilot) runTwirlPilot();
@@ -3011,6 +3015,308 @@ public final class ChiralSiteHarness {
         System.out.println("    (Outcome A: OmegaOdd and J_odd both scale ≈ sin ε ⇒ weak 5° amplitude was the limit; B: J_odd scales");
         System.out.println("     but OmegaOdd does not ⇒ population cancellation/duty dilution; C: neither scales ⇒ loaded dynamics");
         System.out.println("     suppress the geometric skew; D: twirl grows but gliding/engagement collapses ⇒ mechanically disruptive.)");
+    }
+
+    // ============================================ §25.7 — RESUME-SAFE POWERED CONFIRMATION OF THE LINEAR RAMP
+    /** One atomic result artifact per (mechanism, lattice, sign, seed). */
+    static final String POW_DIR = "RUN_LOGS/chiral_sites/s25powered";
+    /** The saved per-seed record schema. Order is the file order; read/write are symmetric by construction. */
+    static final String[] POW_KEYS = {
+        "tau", "omega", "omegaFit", "glide", "avgBound", "rollR2", "qOmega", "turns", "strokeRatePerS",
+        "invalid", "solverFail", "measSteps",
+        "nEp", "nCensored", "epRate",
+        "jPre", "jStroke", "jEarly", "jLate",
+        "qAtt", "epsAtt", "qPre", "epsPre", "qL0", "epsL0", "qL7", "epsL7", "qMax", "epsMax",
+        "epsInt", "dEpsAbs", "dEpsPeak", "preLife", "postLife",
+    };
+    /** A powered-campaign arm: mechanism × lattice × ε-sign. */
+    record PowArm(String mech, int ramp, double mirror, double epsSign) {
+        String lattice() { return mirror < 0 ? "mirror" : "native"; }
+        String signTag() { return epsSign > 0 ? "p" : (epsSign < 0 ? "m" : "z"); }
+        String id(int seed) { return String.format("%s_%s_%s_%d", mech, lattice(), signTag(), seed); }
+    }
+
+    /** Extract the saved record from a completed run. */
+    static double[] powValues(TRes r) {
+        java.util.List<double[]> eps = new java.util.ArrayList<>();
+        int cens = 0;
+        for (double[] e : r.episodes) { if (e[ConvBudget.F_CENSORED] == 0) eps.add(e); else cens++; }
+        java.util.function.ToDoubleFunction<java.util.function.ToDoubleFunction<double[]>> mean = g -> {
+            double s = 0; int n = 0;
+            for (double[] e : eps) { double v = g.applyAsDouble(e); if (Double.isFinite(v)) { s += v; n++; } }
+            return n > 0 ? s/n : Double.NaN;
+        };
+        double meas = Math.max(1, (int) Math.round((1 - EQUIL_FRAC) * STEPS)) * DTR;
+        return new double[]{
+            r.tau, r.omega, r.omegaFit, r.glide, r.avgBound, r.rollR2, r.qOmega, r.turns, r.strokeRatePerS,
+            r.invalid, r.solverFail, meas/DTR,
+            eps.size(), cens, eps.size()/meas,
+            mean.applyAsDouble(e -> e[ConvBudget.F_JPRE]), mean.applyAsDouble(e -> e[ConvBudget.F_JSTROKE]),
+            mean.applyAsDouble(e -> e[ConvBudget.F_JEARLY]), mean.applyAsDouble(e -> e[ConvBudget.F_JLATE]),
+            mean.applyAsDouble(e -> e[ConvBudget.F_Q_ATT]), mean.applyAsDouble(e -> Math.toDegrees(e[ConvBudget.F_EPS_ATT])),
+            mean.applyAsDouble(e -> e[ConvBudget.F_Q_PRE]), mean.applyAsDouble(e -> Math.toDegrees(e[ConvBudget.F_EPS_PRE])),
+            mean.applyAsDouble(e -> e[ConvBudget.F_Q_L0]),  mean.applyAsDouble(e -> Math.toDegrees(e[ConvBudget.F_EPS_L0])),
+            mean.applyAsDouble(e -> e[ConvBudget.F_Q_L7]),  mean.applyAsDouble(e -> Math.toDegrees(e[ConvBudget.F_EPS_L7])),
+            mean.applyAsDouble(e -> e[ConvBudget.F_Q_MAX]), mean.applyAsDouble(e -> Math.toDegrees(e[ConvBudget.F_EPS_MAX])),
+            mean.applyAsDouble(e -> e[ConvBudget.F_EPS_INT]), mean.applyAsDouble(e -> e[ConvBudget.F_DEPS_ABS]),
+            mean.applyAsDouble(e -> Math.toDegrees(e[ConvBudget.F_DEPS_PEAK])),
+            mean.applyAsDouble(e -> e[ConvBudget.F_PRELIFE]), mean.applyAsDouble(e -> e[ConvBudget.F_POSTLIFE]),
+        };
+    }
+
+    /** Atomic write: temp file + fsync + rename, so a crash can never leave a half-written record. */
+    static void powWrite(String id, double[] v, String provenance) throws java.io.IOException {
+        java.io.File dir = new java.io.File(POW_DIR); dir.mkdirs();
+        java.io.File tmp = new java.io.File(dir, id + ".tmp"), fin = new java.io.File(dir, id + ".tsv");
+        try (java.io.PrintWriter w = new java.io.PrintWriter(tmp)) {
+            w.println("# " + provenance);
+            for (int i = 0; i < POW_KEYS.length; i++) w.printf(Locale.US, "%s\t%.10e%n", POW_KEYS[i], v[i]);
+            w.println("COMPLETE\t1");
+            w.flush();
+        }
+        if (!tmp.renameTo(fin)) throw new java.io.IOException("could not finalise " + fin);
+    }
+    /** Read a COMPLETE record, or null when absent/partial (a partial record is never trusted). */
+    static double[] powRead(String id) {
+        java.io.File f = new java.io.File(POW_DIR, id + ".tsv");
+        if (!f.exists()) return null;
+        double[] v = new double[POW_KEYS.length]; java.util.Arrays.fill(v, Double.NaN); boolean complete = false;
+        try (java.util.Scanner sc = new java.util.Scanner(f)) {
+            while (sc.hasNextLine()) {
+                String[] p = sc.nextLine().split("\t");
+                if (p.length != 2) continue;
+                if (p[0].equals("COMPLETE")) { complete = true; continue; }
+                for (int i = 0; i < POW_KEYS.length; i++) if (POW_KEYS[i].equals(p[0])) v[i] = Double.parseDouble(p[1]);
+            }
+        } catch (Exception e) { return null; }
+        return complete ? v : null;
+    }
+    static int POWK(String k) { for (int i = 0; i < POW_KEYS.length; i++) if (POW_KEYS[i].equals(k)) return i; return -1; }
+
+    /**
+     * §25.7. Resume-safe powered confirmation: 24 (optionally 48) matched seeds over always-active native,
+     * linear-ramp native, linear-ramp MIRRORED and the ε = 0 control. Each (mechanism, lattice, sign, seed) is
+     * an atomic record flushed to disk immediately, so an Xid-79 freeze costs at most the seed in flight.
+     */
+    static void runPoweredConfirm() {
+        double eps = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0;
+        FIL_SEGS = 1; FIL_BROWN = false; BUDGET = true;
+        boolean savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = true;
+        String prov = powProvenance();
+        System.out.printf(Locale.US, "%n--- §25.7 POWERED CONFIRMATION OF THE LINEAR PROGRESS RAMP (%d matched seeds,%n"
+                + "    ε = ±%.0f°, one rigid segment, filament Brownian OFF, shared bases, interface gauge;%n"
+                + "    runner: %s) ---%n", SEEDS, eps, GPU ? "GPU device-resident" : "CPU sequential");
+        System.out.println("  RESUME-SAFE: one atomic record per (mechanism, lattice, sign, seed) under " + POW_DIR);
+        System.out.println("  provenance: " + prov);
+        PowArm[] arms = {
+            new PowArm("always", ChiralSiteSystem.RAMP_OFF,    +1, +1),
+            new PowArm("always", ChiralSiteSystem.RAMP_OFF,    +1, -1),
+            new PowArm("linear", ChiralSiteSystem.RAMP_LINEAR, +1, +1),
+            new PowArm("linear", ChiralSiteSystem.RAMP_LINEAR, +1, -1),
+            new PowArm("linear", ChiralSiteSystem.RAMP_LINEAR, -1, +1),
+            new PowArm("linear", ChiralSiteSystem.RAMP_LINEAR, -1, -1),
+            new PowArm("zero",   ChiralSiteSystem.RAMP_LINEAR, +1,  0),
+        };
+        int done = 0, ran = 0;
+        for (PowArm A : arms) {
+            for (int i = 0; i < SEEDS; i++) {
+                int seed = SEED + i; String id = A.id(seed);
+                if (powRead(id) != null) { done++; continue; }
+                CONV_RAMP_ARM = A.ramp(); CONV_STATE_GATED_ARM = false;
+                double armEps = A.epsSign() * eps;
+                TArm T = new TArm(id, 0.0, false, A.mirror(), false, 1).conv(armEps);
+                long t0 = System.currentTimeMillis();
+                TRes r = runTwirlArm(T, seed, STEPS);
+                try { powWrite(id, powValues(r), prov); }
+                catch (java.io.IOException e) { throw new RuntimeException("record write failed for " + id, e); }
+                ran++;
+                System.out.printf(Locale.US, "    [%3d] %-28s omegaFit=%+8.3f tau=%+.3e avgB=%.2f  (%.1f s)%n",
+                        ran + done, id, r.omegaFit, r.tau, r.avgBound, (System.currentTimeMillis()-t0)/1000.0);
+            }
+        }
+        System.out.printf("%n  records: %d reused (already COMPLETE), %d newly run, %d total expected%n",
+                done, ran, arms.length*SEEDS);
+        CONV_RAMP_ARM = null; CONV_STATE_GATED_ARM = null;
+        BUDGET = false; ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; cfgOff(); EPS_CONV_ARM = 0;
+        analysePowered(eps);
+    }
+
+    static String powProvenance() {
+        String rev = "unknown", boot = "unknown";
+        try { Process p = new ProcessBuilder("git", "rev-parse", "HEAD").start();
+              rev = new String(p.getInputStream().readAllBytes()).trim(); } catch (Exception ignored) {}
+        try { boot = new String(java.nio.file.Files.readAllBytes(
+                java.nio.file.Paths.get("/proc/sys/kernel/random/boot_id"))).trim(); } catch (Exception ignored) {}
+        return String.format(Locale.US, "rev=%s boot=%s recorder=%s dt=%.3e steps=%d equil=%.2f blocks=%d density=%.0f",
+                rev, boot, System.getenv().getOrDefault("GPU_RECORDER_SESSION", "n/a"), DTR, STEPS, EQUIL_FRAC, NBLK, DENSITY);
+    }
+
+    /** §25.7 report: the twirl endpoint first, then the budget, mirror, closure and health. */
+    static void analysePowered(double eps) {
+        int n = SEEDS;
+        System.out.println("\n  ================= §25.7 SEED COMPLETION =================");
+        System.out.printf("    %-12s %-8s %8s %8s %10s%n", "mechanism", "lattice", "+eps", "-eps", "paired");
+        for (String[] ml : new String[][]{ {"always","native"}, {"linear","native"}, {"linear","mirror"} }) {
+            int np = 0, nm = 0, pr = 0;
+            for (int i = 0; i < n; i++) {
+                boolean a = powRead(ml[0]+"_"+ml[1]+"_p_"+(SEED+i)) != null;
+                boolean b = powRead(ml[0]+"_"+ml[1]+"_m_"+(SEED+i)) != null;
+                if (a) np++; if (b) nm++; if (a && b) pr++;
+            }
+            System.out.printf("    %-12s %-8s %8d %8d %10d%n", ml[0], ml[1], np, nm, pr);
+        }
+        int nz = 0; for (int i = 0; i < n; i++) if (powRead("zero_native_z_"+(SEED+i)) != null) nz++;
+        System.out.printf("    %-12s %-8s %8s %8s %10d%n", "zero (ε=0)", "native", "-", "-", nz);
+
+        System.out.println("\n  ################ ACTUAL TWIRLING RESULT ################");
+        double[] omA = powOdd("always","native","omegaFit",n), omL = powOdd("linear","native","omegaFit",n);
+        double[] omM = powOdd("linear","mirror","omegaFit",n);
+        double[] enA = powOdd("always","native","omega",n),   enL = powOdd("linear","native","omega",n);
+        statLine("always-active  Omega_odd slope", omA, "%+8.3f");
+        statLine("LINEAR RAMP    Omega_odd slope", omL, "%+8.3f");
+        statLine("linear MIRROR  Omega_odd slope", omM, "%+8.3f");
+        statLine("always-active  Omega_odd endpt", enA, "%+8.3f");
+        statLine("LINEAR RAMP    Omega_odd endpt", enL, "%+8.3f");
+        double[] zw = new double[n];
+        for (int i = 0; i < n; i++) { double[] z = powRead("zero_native_z_"+(SEED+i)); zw[i] = z != null ? z[POWK("omegaFit")] : Double.NaN; }
+        statLine("eps=0 control   Omega slope", zw, "%+8.3f");
+        double mA = ConvBudget.msn(omA)[0], mL = ConvBudget.msn(omL)[0], mM = ConvBudget.msn(omM)[0];
+        System.out.printf(Locale.US, "%n    DIRECTION: always-active %s | linear %s | mirror %s%n",
+                mA < 0 ? "NEGATIVE (twirls)" : "positive", mL < 0 ? "NEGATIVE (twirls)" : "positive",
+                mM > 0 ? "POSITIVE (REVERSED)" : "negative (NOT reversed)");
+
+        System.out.println("\n  ---- PRIMARY ENDPOINT: paired Delta Omega_odd (linear − always), per seed ----");
+        statLine("Delta Omega_odd (slope)  [PRIMARY]", paired(omL, omA), "%+8.3f");
+        statLine("Delta Omega_odd (endpoint)", paired(enL, enA), "%+8.3f");
+        System.out.println("    (negative Delta ⇒ linear is MORE twirling-productive; the expected sign is negative)");
+
+        System.out.println("\n  ---- CO-PRIMARY: paired Delta J_total, and the population torque ----");
+        double[] jtA = powJ(n,"always","native"), jtL = powJ(n,"linear","native"), jtM = powJ(n,"linear","mirror");
+        statLine("J_total_odd  always-active", jtA, "%+.4e");
+        statLine("J_total_odd  LINEAR", jtL, "%+.4e");
+        statLine("J_total_odd  linear MIRROR", jtM, "%+.4e");
+        statLine("Delta J_total (linear − always) [CO-PRIM]", paired(jtL, jtA), "%+.4e");
+        double[] tA = powOdd("always","native","tau",n), tL = powOdd("linear","native","tau",n), tM = powOdd("linear","mirror","tau",n);
+        statLine("tauOdd  always-active", tA, "%+.4e");
+        statLine("tauOdd  LINEAR", tL, "%+.4e");
+        statLine("tauOdd  linear MIRROR", tM, "%+.4e");
+        statLine("Delta tauOdd (linear − always)", paired(tL, tA), "%+.4e");
+
+        System.out.println("\n  ---- FULL EPISODE BUDGET (ε-ODD per stroke-bearing episode, N·m·s) ----");
+        for (String[] ml : new String[][]{ {"always","native"}, {"linear","native"}, {"linear","mirror"} }) {
+            System.out.printf("    == %s / %s ==%n", ml[0], ml[1]);
+            double[] jp = powOdd(ml[0],ml[1],"jPre",n), js = powOdd(ml[0],ml[1],"jStroke",n);
+            double[] je = powOdd(ml[0],ml[1],"jEarly",n), jl = powOdd(ml[0],ml[1],"jLate",n);
+            statLine("J_pre", jp, "%+.4e"); statLine("J_stroke", js, "%+.4e");
+            statLine("J_post_early", je, "%+.4e"); statLine("J_post_late", jl, "%+.4e");
+            double[] tot = new double[n], chg = new double[n], prod = new double[n], rec = new double[n];
+            for (int i = 0; i < n; i++) { tot[i] = jp[i]+js[i]+je[i]+jl[i]; chg[i] = jp[i]+js[i];
+                                          prod[i] = js[i]+je[i]; rec[i] = tot[i]-js[i]; }
+            statLine("J_total", tot, "%+.4e"); statLine("J_recoil", rec, "%+.4e");
+            statLine("J_charge_release (pre+stroke)", chg, "%+.4e");
+            statLine("J_productive_early (str+early)", prod, "%+.4e");
+        }
+
+        System.out.println("\n  ---- MIRROR REVERSAL (linear ramp) ----");
+        for (String[] kv : new String[][]{ {"jPre","J_pre"}, {"jStroke","J_stroke"}, {"tau","tauOdd"}, {"omegaFit","Omega_odd"} }) {
+            double a = ConvBudget.msn(powOdd("linear","native",kv[0],n))[0];
+            double b = ConvBudget.msn(powOdd("linear","mirror",kv[0],n))[0];
+            System.out.printf(Locale.US, "    %-20s native %+.4e   mirror %+.4e   %s%n",
+                    kv[1], a, b, a*b < 0 ? "REVERSED" : "*** NOT reversed ***");
+        }
+        double pn = ConvBudget.msn(powOdd("linear","native","jPre",n))[0] + ConvBudget.msn(powOdd("linear","native","jStroke",n))[0]
+                  + ConvBudget.msn(powOdd("linear","native","jEarly",n))[0] + ConvBudget.msn(powOdd("linear","native","jLate",n))[0];
+        double pm = ConvBudget.msn(powOdd("linear","mirror","jPre",n))[0] + ConvBudget.msn(powOdd("linear","mirror","jStroke",n))[0]
+                  + ConvBudget.msn(powOdd("linear","mirror","jEarly",n))[0] + ConvBudget.msn(powOdd("linear","mirror","jLate",n))[0];
+        System.out.printf(Locale.US, "    %-20s native %+.4e   mirror %+.4e   %s%n",
+                "J_total", pn, pm, pn*pm < 0 ? "REVERSED" : "*** NOT reversed ***");
+
+        System.out.println("\n  ---- WAITING-STATE / PATH TELEMETRY (ε-EVEN descriptors) ----");
+        System.out.printf("    %-16s %8s %9s %8s %9s %8s %9s %8s %9s %9s %9s%n",
+                "arm", "q@att", "eps@att", "q@pre", "eps@pre", "q@lag0", "eps@lag0", "qMax", "epsMax", "preLife", "postLife");
+        for (String[] ml : new String[][]{ {"always","native"}, {"linear","native"}, {"linear","mirror"} })
+            System.out.printf(Locale.US, "    %-16s %8.4f %9.4f %8.4f %9.4f %8.4f %9.4f %8.4f %9.4f %9.1f %9.1f%n",
+                    ml[0]+"/"+ml[1],
+                    ConvBudget.msn(powEven(ml[0],ml[1],"qAtt",n))[0], ConvBudget.msn(powEven(ml[0],ml[1],"epsAtt",n))[0],
+                    ConvBudget.msn(powEven(ml[0],ml[1],"qPre",n))[0], ConvBudget.msn(powEven(ml[0],ml[1],"epsPre",n))[0],
+                    ConvBudget.msn(powEven(ml[0],ml[1],"qL0",n))[0],  ConvBudget.msn(powEven(ml[0],ml[1],"epsL0",n))[0],
+                    ConvBudget.msn(powEven(ml[0],ml[1],"qMax",n))[0], ConvBudget.msn(powEven(ml[0],ml[1],"epsMax",n))[0],
+                    ConvBudget.msn(powEven(ml[0],ml[1],"preLife",n))[0], ConvBudget.msn(powEven(ml[0],ml[1],"postLife",n))[0]);
+
+        System.out.println("\n  ---- GLIDING, ENGAGEMENT, CLOSURE, HEALTH ----");
+        System.out.printf("    %-16s %10s %10s %10s %12s %12s %10s %9s %9s%n",
+                "arm", "vEven", "vOdd", "avgBound", "epRate /s", "pred tauOdd", "meas tau", "closure", "bad");
+        for (String[] ml : new String[][]{ {"always","native"}, {"linear","native"}, {"linear","mirror"} }) {
+            double vE = ConvBudget.msn(powEven(ml[0],ml[1],"glide",n))[0];
+            double vO = ConvBudget.msn(powOdd(ml[0],ml[1],"glide",n))[0];
+            double aB = ConvBudget.msn(powEven(ml[0],ml[1],"avgBound",n))[0];
+            double er = ConvBudget.msn(powEven(ml[0],ml[1],"epRate",n))[0];
+            double jt = ConvBudget.msn(ml[0].equals("always") ? jtA : (ml[1].equals("native") ? jtL : jtM))[0];
+            double tm = ConvBudget.msn(powOdd(ml[0],ml[1],"tau",n))[0];
+            double bad = ConvBudget.msn(powEven(ml[0],ml[1],"invalid",n))[0]
+                       + ConvBudget.msn(powEven(ml[0],ml[1],"solverFail",n))[0];
+            double cl = tm != 0 ? er*jt/tm : Double.NaN;
+            System.out.printf(Locale.US, "    %-16s %10.3f %10.3f %10.2f %12.0f %+12.4e %+10.3e %9.3f %9.1f  %s%n",
+                    ml[0]+"/"+ml[1], vE, vO, aB, er, er*jt, tm, cl, bad,
+                    cl >= 0.85 && cl <= 1.15 ? "good" : (cl >= 0.70 && cl <= 1.30 ? "CAUTION" : "FAILURE"));
+        }
+        double vEa = ConvBudget.msn(powEven("always","native","glide",n))[0];
+        double vEl = ConvBudget.msn(powEven("linear","native","glide",n))[0];
+        double aBa = ConvBudget.msn(powEven("always","native","avgBound",n))[0];
+        double aBl = ConvBudget.msn(powEven("linear","native","avgBound",n))[0];
+        System.out.printf(Locale.US, "    linear vs always: vEven %+.1f%%  avgBound %+.1f%%  (gates: both within 15%%)%n",
+                100*(vEl-vEa)/Math.abs(vEa), 100*(aBl-aBa)/Math.abs(aBa));
+        double[] dOm = paired(omL, omA); double[] msD = ConvBudget.msn(dOm);
+        double[] ciD = ConvBudget.bootCI(dOm, 4000, 0x25D0L);
+        System.out.printf(Locale.US, "%n  >> PRIMARY: Delta Omega_odd = %+.3f ± %.3f rad/s (%.2fσ), 95%% CI [%+.3f, %+.3f], %.0f%% of seeds negative%n",
+                msD[0], msD[1], ConvBudget.sigma(msD), ciD[0], ciD[1],
+                100*(ConvBudget.signFrac(dOm) * (msD[0] < 0 ? 1 : 0) + (msD[0] >= 0 ? 1-ConvBudget.signFrac(dOm) : 0)));
+        System.out.printf(Locale.US, "  >> the n=8 screen difference was %+.3f rad/s (linear −15.97 vs always −12.68)%n", -3.30);
+    }
+    /** Per-seed ODD J_total assembled from its four phases (never from a stored total). */
+    static double[] powJ(int n, String mech, String lat) {
+        double[] jp = powOdd(mech,lat,"jPre",n), js = powOdd(mech,lat,"jStroke",n);
+        double[] je = powOdd(mech,lat,"jEarly",n), jl = powOdd(mech,lat,"jLate",n);
+        double[] o = new double[n];
+        for (int i = 0; i < n; i++) o[i] = jp[i]+js[i]+je[i]+jl[i];
+        return o;
+    }
+
+    // ============================================ §25.7 analysis: paired odd responses and difference-in-differences
+    /** Per-seed ODD response of key k for a mechanism/lattice; NaN where either sign's record is missing. */
+    static double[] powOdd(String mech, String lat, String key, int n) {
+        int ki = POWK(key); double[] o = new double[n];
+        for (int i = 0; i < n; i++) {
+            double[] p = powRead(String.format("%s_%s_p_%d", mech, lat, SEED + i));
+            double[] m = powRead(String.format("%s_%s_m_%d", mech, lat, SEED + i));
+            o[i] = (p != null && m != null) ? 0.5*(p[ki] - m[ki]) : Double.NaN;   // never pair unmatched records
+        }
+        return o;
+    }
+    /** Per-seed EVEN (mean of the two signs) — for gliding, engagement and the ε-even descriptors. */
+    static double[] powEven(String mech, String lat, String key, int n) {
+        int ki = POWK(key); double[] o = new double[n];
+        for (int i = 0; i < n; i++) {
+            double[] p = powRead(String.format("%s_%s_p_%d", mech, lat, SEED + i));
+            double[] m = powRead(String.format("%s_%s_m_%d", mech, lat, SEED + i));
+            o[i] = (p != null && m != null) ? 0.5*(p[ki] + m[ki]) : Double.NaN;
+        }
+        return o;
+    }
+    static void statLine(String label, double[] x, String fmt) {
+        double[] ms = ConvBudget.msn(x); double[] q = ConvBudget.iqr(x);
+        double[] ci = ConvBudget.bootCI(x, 4000, label.hashCode());
+        System.out.printf(Locale.US, "    %-30s " + fmt + " ± " + fmt + "  %5.2fσ  med " + fmt
+                + "  IQR[" + fmt + "," + fmt + "]  sgn %3.0f%%  n=%2.0f  CI[" + fmt + "," + fmt + "]%n",
+                label, ms[0], ms[1], ConvBudget.sigma(ms), ConvBudget.median(x), q[0], q[1],
+                100*ConvBudget.signFrac(x), ms[2], ci[0], ci[1]);
+    }
+    static double[] paired(double[] a, double[] b) {
+        int n = Math.min(a.length, b.length); double[] d = new double[n];
+        for (int i = 0; i < n; i++) d[i] = (Double.isFinite(a[i]) && Double.isFinite(b[i])) ? a[i] - b[i] : Double.NaN;
+        return d;
     }
 
     // ================================================ §25 STAGE 4 — the 8-seed dynamic full-cycle budget screen

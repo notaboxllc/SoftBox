@@ -3283,3 +3283,177 @@ the mirror reverses the ramped signal (untested — no ramped chirality control 
 
 **Do NOT** raise ε, adopt the pivot gauge, or add ramp shapes before that resolves; and **do not** re-use gate 2
 as written — it presumes a picture that §25.4.3 refuted.
+
+### 25.7 Powered confirmation of the linear progress ramp (24 matched seeds)
+
+**Question.** Is the linear ramp's n = 8 advantage real, does it twirl chirally, and is it a cleaner realisation
+of the same mechanism? Pre-registered rules P1–P7 and the adaptive extension rule were fixed before the run.
+
+**Arms** (24 matched seeds, ε = ±15°, §§22–25 assay verbatim, shared bases, interface gauge,
+`-converter-skew-state-gated off`): **A±** always-active native, **L±** linear ramp native, **LM±** linear ramp
+**mirrored lattice**, **Z** ε = 0 native control. 7 arms × 24 seeds = **168/168 records complete**.
+
+**Device residency, monitoring and crash resilience.** GPU device-resident throughout via
+`run_gpu_monitored.sh`, recorder RUNNING, `-Dtornado.enable.fma=false -Dtornado.recover.bailout=false
+-Dtornado.tvm.maxbytecodesize=65536`. Pre-run validation at this revision: ramp fixtures **12/12 PASS**;
+incompatible `state-gated + ramp` **rejected at startup**; full-graph CPU↔GPU equivalence with the **linear**
+ramp **PASS** (`bindMism = 0`, `convFlagMism = 0`, `max|dSegTorque| = 1.51e-24 N·m`, `firstDiv = none`, no
+fallback — `p1_linear_equiv_gpu.txt`).
+
+*Crash-resume conditions are satisfied.* One atomic record per (mechanism, lattice, sign, seed) under
+`RUN_LOGS/chiral_sites/s25powered/`, written temp-file + rename so a freeze cannot leave a partial record; a
+record counts only with an explicit `COMPLETE` marker. Each carries git revision, boot id, recorder session, dt,
+steps, equilibration and density. Restart skips only COMPLETE records. Pairing is reconstructed at analysis time
+and yields NaN unless **both** signs of a seed exist, so unmatched ± pairs can never combine. All statistics are
+recomputed from the saved records (`-conv-powered-report`). The wrapper stops on failure and collects the crash
+case before retrying. This campaign completed in one attempt (no freeze).
+
+#### ACTUAL TWIRLING RESULT
+
+| arm | Ω_odd (slope) rad/s | σ | seed sign | bootstrap 95 % CI |
+|---|---|---|---|---|
+| always-active native | −6.956 ± 3.170 | 2.19 | 67 % | [−13.37, −1.17] |
+| **LINEAR RAMP native** | **−9.729 ± 2.682** | **3.63** | **75 %** | **[−15.07, −4.62]** |
+| **linear MIRRORED** | **+11.962 ± 3.050** | **3.92** | **83 %** | **[+5.72, +17.73]** |
+| ε = 0 control | +2.824 ± 5.122 | 0.55 | 50 % | [−7.23, +12.94] |
+
+**The filament twirls, and the linear ramp twirls chirally.** Native linear gives a resolved **negative** roll at
+3.63σ (endpoint −10.331, 3.43σ); the **mirrored lattice reverses it to +11.962 at 3.92σ**; ε = 0 is achiral at
+0.55σ. The direction is the same as always-active.
+
+**But linear is NOT demonstrably more productive than always-active.** The paired estimator:
+
+| paired estimator (linear − always, per seed) | value | σ | 95 % CI | seeds |
+|---|---|---|---|---|
+| **ΔΩ_odd (slope) — PRIMARY** | **−2.773 ± 4.485** | **0.62** | **[−11.07, +6.23]** | 63 % negative |
+| ΔΩ_odd (endpoint) | −3.836 ± 4.054 | 0.95 | [−11.24, +3.86] | 67 % |
+| **ΔJ_total — CO-PRIMARY** | **−1.461e-26 ± 4.529e-26** | **0.32** | [−1.01e-25, +7.36e-26] | 58 % |
+| Δτ_odd | −1.244e-22 ± 1.314e-22 | 0.95 | [−3.74e-22, +1.38e-22] | 67 % |
+
+Both primaries retain the favourable **negative** sign and the central ΔΩ_odd keeps **84 %** of the n = 8
+difference (−2.77 vs −3.30 rad/s), but **neither excludes zero**. P1 fails on requirement 2.
+
+#### Episode budget — what the ramp demonstrably does and does not do
+
+Paired deltas (the correct estimator; per-seed linear − always):
+
+| paired Δ | value | σ | seeds |
+|---|---|---|---|
+| **ΔJ_pre** | **−7.967e-26 ± 1.576e-26** | **5.06** | 79 % |
+| **ΔJ_stroke** | **+3.407e-26 ± 3.837e-27** | **8.88** | **100 %** |
+| **ΔJ_productive_early** | **+5.894e-26 ± 9.384e-27** | **6.28** | 92 % |
+| **ΔJ_charge_release** | **−4.560e-26 ± 1.601e-26** | **2.85** | 75 % |
+
+Arm-level ε-ODD budget (N·m·s per stroke-bearing episode):
+
+| component | always native | linear native | linear MIRROR |
+|---|---|---|---|
+| `J_pre` | **+7.468e-26 (7.75σ, 96 %)** | **−4.983e-27 (0.45σ, 46 %)** | +1.496e-26 (1.46σ) |
+| `J_stroke` | −4.708e-26 (19.76σ, 100 %) | −1.301e-26 (4.13σ, 67 %) | +7.754e-27 (3.17σ) |
+| `J_post_early` | −6.255e-26 (12.11σ) | −3.767e-26 (7.23σ) | +2.495e-26 (5.78σ) |
+| `J_post_late` | −3.359e-26 (1.12σ) | −2.747e-26 (1.41σ) | +6.407e-26 (2.56σ) |
+| **`J_total`** | −6.853e-26 (2.05σ) | **−8.313e-26 (3.34σ)** | **+1.117e-25 (3.52σ)** |
+| `J_recoil` | −2.145e-26 (0.65σ) | −7.012e-26 (2.82σ) | +1.040e-25 (3.36σ) |
+| `J_charge_release` | +2.761e-26 (2.61σ) | −1.799e-26 (1.59σ) | +2.271e-26 (2.09σ) |
+| `J_productive_early` | −1.096e-25 (18.26σ) | −5.068e-26 (7.32σ) | +3.270e-26 (6.20σ) |
+
+**Three findings, one of which CORRECTS §25.4.**
+
+1. **The ramp abolishes the opposing pre-stroke preload — decisively.** `J_pre` goes from +7.468e-26 at 7.75σ
+   (96 % of seeds) to **−4.983e-27 at 0.45σ (46 % of seeds)**, a paired change of **−7.967e-26 at 5.06σ**.
+2. **§25.4's claimed SIGN INVERSION of `J_pre` is NOT reproducible.** At n = 8 linear's `J_pre` read −2.694e-26;
+   at n = 24 it is −4.98e-27 with 46 % seed sign — **statistically indistinguishable from zero**. What is
+   established is *abolition*, not inversion. The n = 8 inversion was a small-sample artifact and the §25.4
+   headline is corrected here.
+3. **RC5 (charge-release invariance) remains refuted, now on a proper paired statistic.**
+   `ΔJ_charge_release = −4.560e-26 at 2.85σ` (always +2.761e-26 → linear −1.799e-26): the composite that was
+   invariant under the §24 binary switch **does move** under a continuous ramp.
+
+The cost is equally clear and equally significant: **ΔJ_stroke = +3.407e-26 at 8.88σ with 100 % of seeds** — the
+stroke window is weakened to 28 % of always-active — and ΔJ_productive_early = +5.894e-26 at 6.28σ. The two
+effects nearly cancel in `J_total`, which is exactly why ΔJ_total is 0.32σ.
+
+#### Mirror reversal — every chirally signed quantity reverses
+
+| quantity | native | mirror | |
+|---|---|---|---|
+| `J_pre` | −4.983e-27 | +1.496e-26 | REVERSED |
+| `J_stroke` | −1.301e-26 | +7.754e-27 | REVERSED |
+| `J_total` | −8.313e-26 | +1.117e-25 | REVERSED |
+| τ_odd | −3.349e-22 | +3.863e-22 | REVERSED |
+| Ω_odd | −9.729 | +11.962 | REVERSED |
+
+**P5 excluded.** Magnitudes are not required to match (the mirror changes bound-site statistics) and do not.
+
+#### Waiting-state and progression telemetry — the plausibility evidence
+
+| arm | eps@attach | eps@last-waiting-step | eps@lag0 | eps_max | pre-life | post-life |
+|---|---|---|---|---|---|---|
+| always-active | **15.0000°** | **15.0000°** | 15.0000° | 15.0000° | 39.7 | 275.8 |
+| **linear** | **0.0003°** | **0.0005°** | 1.3946° | **14.8528°** | 39.7 | 269.9 |
+| linear mirror | 0.0007° | 0.0014° | 1.4050° | 14.9327° | 40.6 | 274.5 |
+
+The waiting motor is unskewed to **0.0005°** — four orders of magnitude below the configured 15° — and the skew
+develops to 14.85° through the mechanochemical transition. (This uses the corrected `q@pre` sampling; §25.4's
+table pre-dated that fix and bracketed the dwell instead.)
+
+#### Gliding, engagement, closure and health
+
+| arm | v_even | v_odd | avgBound | episode rate | predicted τ_odd | measured τ_odd | closure | |
+|---|---|---|---|---|---|---|---|---|
+| always native | −2.688 | −0.123 | 2.72 | 3099 /s | −2.123e-22 | −2.105e-22 | **1.008** | good |
+| linear native | −2.862 | +0.095 | 2.61 | 3026 /s | −2.516e-22 | −3.349e-22 | **0.751** | CAUTION |
+| linear mirror | −2.878 | +0.021 | 2.67 | 3043 /s | +3.400e-22 | +3.863e-22 | **0.880** | good |
+
+Linear vs always: **v_even −6.5 %, avgBound −4.1 %** — both well inside the 15 % gates. **0 invalid, 0 solver
+failures, no fallback** across all 168 records.
+
+**Closure investigated, not repaired.** Always-active closes at 1.008 (reproducing §23.5); linear native sits at
+0.751, inside the CAUTION band. **Censoring is not the explanation:** right-censored fractions are essentially
+identical across arms (always 4.6 %, linear 5.1 %, mirror 4.4 %), as are episode counts (46.5 / 45.4 / 45.6 per
+seed) and post-stroke lifetimes (275.8 / 269.9 / 274.5 steps). The linear episode population is not
+systematically truncated relative to always-active, so the under-closure is **unexplained** and flagged as a
+partial **P7**. Note that the mirror arm — the same mechanism — closes at 0.880, so this is not a fixed property
+of the ramp. No rescaling was applied.
+
+#### Decision class
+
+**P2 primary — twirl-capable but not more productive**, with **P3 secondary** (the paired central estimate
+favours linear and retains 84 % of the n = 8 effect but does not exclude zero at 24 seeds), and a **partial P7**
+on the linear-native closure. **P1 fails** (ΔΩ_odd 0.62σ, CI spans zero). **P4 is not supported** — the central
+effect did not collapse. **P5 excluded** — every chiral quantity reverses. **P6 does not apply** — directed
+twirling is retained and resolved at 3.63σ, not weakened.
+
+**The adaptive extension rule does NOT license 48 seeds.** It requires the result to lie between 1.5σ and 3σ;
+ΔΩ_odd is **0.62σ**. Conditions 1, 2, 5 and 6 are met (sign retained, 84 % of the n = 8 magnitude, health fine,
+mirror already reversing), but the rule is conjunctive. Resolving a 2.8 rad/s difference against a 4.5 rad/s
+per-seed spread would need roughly 13× more seeds — a different experiment, not an extension.
+
+#### Bounded biological-plausibility statement
+
+The linear ramp is a **cleaner realisation of the same converter-skew mechanism**, in this restricted sense
+only: the waiting motor is effectively unskewed (0.0005° vs 15°); orientation develops continuously with the
+converter coordinate rather than being imposed as a standing pre-stroke deformation; there is no instantaneous
+state-triggered pose switch (activation force step 5.6 % vs 22.3 %, §25.3); the path is local-frame, reversible
+and hysteresis-free; and gliding and engagement are preserved.
+
+**It is not evidence of improved biological agreement.** `f(q) = q` is not derived from structural data; 15° is
+a diagnostic, non-biological skew; the one-segment, filament-Brownian-off scene is not a motility assay; the
+quoted turns/µm is not a pitch prediction; and matching a myosin-II experiment would require matched construct,
+surface attachment, filament flexibility, Brownian motion, solution conditions and observable estimator. That
+the mechanism is smoother is not an argument that it is more correct.
+
+#### Exact next recommendation
+
+**Do not power this comparison further.** On this evidence the two schedules are equally productive
+(ΔJ_total 0.32σ): the ramp trades a decisively weaker stroke channel (ΔJ_stroke 8.88σ) against a decisively
+removed preload (ΔJ_pre 5.06σ), and the trade nets to zero. The useful next step is the **closure audit** —
+instrument the ledger to account for left-censored episodes and for torque from bound heads that never stroke,
+and determine why linear native closes at 0.751 while the same mechanism mirrored closes at 0.880. Until that is
+understood, `J_total` comparisons *between schedules* carry an unquantified systematic.
+
+#### Experiments NOT run
+
+5° / 30° angle scaling; the 48-seed extension (rule not met); randomized-base control; `Ractin = 0` control;
+dt/2 campaign; roll-coherence / `RollSpringSystem`; filament Brownian motion; multisegment mechanics; any new
+ramp shape or ε value.

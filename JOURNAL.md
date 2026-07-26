@@ -1,5 +1,46 @@
 # Soft Box Project Journal
 
+### 2026-07-26 — §25.7 POWERED CONFIRMATION (24 matched seeds) — the linear ramp TWIRLS and mirror-reverses, but is NOT more productive than always-active; the n=8 J_pre "inversion" does not reproduce (P2 + P3)
+
+24 matched seeds, eps = +/-15 deg, 7 arms x 24 = **168/168 atomic records**, GPU device-resident, resume-safe.
+Report: Section 25.7.
+- **ACTUAL TWIRLING RESULT.** always-active Omega_odd(slope) **-6.956 +/- 3.170 (2.19 sigma)**; LINEAR
+  **-9.729 +/- 2.682 (3.63 sigma)**, CI[-15.07,-4.62]; linear MIRROR **+11.962 +/- 3.050 (3.92 sigma)** =>
+  **REVERSED**; eps=0 control +2.824 (0.55 sigma) = achiral. **The filament twirls and the linear ramp twirls
+  chirally, in the same direction as always-active.**
+- **PRIMARY paired Delta Omega_odd = -2.773 +/- 4.485 rad/s (0.62 sigma), CI[-11.07,+6.23], 63 % of seeds
+  negative.** Favourable SIGN retained and 84 % of the n=8 central effect retained, but **does NOT exclude
+  zero**. Co-primary **Delta J_total = -1.461e-26 (0.32 sigma)**. **P1 FAILS.**
+- **What the ramp demonstrably DOES (paired, per seed):** **Delta J_pre = -7.967e-26 (5.06 sigma)** — the
+  opposing preload is ABOLISHED (+7.468e-26 at 7.75 sigma -> -4.983e-27 at 0.45 sigma).
+  **Delta J_charge_release = -4.560e-26 (2.85 sigma)** => **RC5 still refuted, now on a proper paired statistic.**
+- **What it COSTS:** **Delta J_stroke = +3.407e-26 (8.88 sigma, 100 % of seeds)** — the stroke window drops to
+  28 % of always-active; Delta J_productive_early = +5.894e-26 (6.28 sigma). The two nearly cancel in J_total,
+  which is exactly why Delta J_total is 0.32 sigma.
+- **CORRECTION TO §25.4:** the claimed **J_pre SIGN INVERSION does NOT reproduce**. n=8 read -2.694e-26; n=24
+  gives **-4.983e-27 at 0.45 sigma with 46 % seed sign** = indistinguishable from zero. Established is
+  ABOLITION, not inversion. The n=8 inversion was a small-sample artifact; §25.4's headline is corrected in place.
+- **Mirror: ALL chiral quantities reverse** (J_pre, J_stroke, J_total, tauOdd, Omega_odd) => **P5 excluded**.
+- **Waiting state (corrected q@pre sampling):** linear carries **0.0003 deg at attachment, 0.0005 deg at the
+  last waiting step**, rising to 1.395 deg at lag 0 and 14.85 deg max; always-active sits at 15.0000 throughout.
+- **Health:** vEven -6.5 %, avgBound -4.1 % (both inside the 15 % gates); **0 invalid / 0 solver / no fallback**
+  in all 168 records. Pre-run validation at this revision: fixtures 12/12, incompatible-mode rejection throws,
+  linear-ramp full-graph CPU<->GPU equivalence PASS (convFlagMism=0, dSegTorque 1.51e-24).
+- **Closure investigated, NOT repaired — partial P7.** always 1.008 (good), linear native **0.751 (CAUTION)**,
+  linear mirror 0.880 (good). **Censoring is NOT the explanation**: censored fractions 4.6/5.1/4.4 %, episodes
+  46.5/45.4/45.6 per seed, postLife 275.8/269.9/274.5 steps — the linear population is not truncated. Unexplained.
+- **Adaptive extension rule NOT met** (requires 1.5-3 sigma; got 0.62) => **did not extend to 48 seeds**.
+  Conditions 1,2,5,6 met but the rule is conjunctive.
+- **Resume-safe driver** (new): atomic temp+rename record per (mechanism, lattice, sign, seed) with COMPLETE
+  marker, git rev / boot id / recorder session; restart skips only COMPLETE; pairing returns NaN unless BOTH
+  signs exist; statistics recomputed from records via `-conv-powered-report`. Built after the Xid-79 freeze
+  destroyed the first Stage-4 attempt. This campaign completed in one attempt.
+- **Classification: P2 primary (twirl-capable, not more productive) + P3 secondary + partial P7.**
+- **NEXT: do NOT power this further** — the schedules are equally productive. Do the **closure audit**
+  (left-censored episodes; torque from bound heads that never stroke; why linear native 0.751 vs mirror 0.880).
+  NOT RUN: 5/30 deg scaling, 48 seeds, randomized base, Ractin=0, dt/2, roll coherence, filament Brownian,
+  multisegment, new ramp shapes.
+
 ### 2026-07-26 — §25 STAGE 4 — the progress ramp INVERTS the pre-stroke preload and §24's charge-release invariance does NOT generalise (RC1 qualified / RC3 / RC5 refuted)
 
 Eight-seed, five-schedule full-cycle budget screen at eps = +/-15 deg (A always-active, B binary gated, C linear,
