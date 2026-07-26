@@ -24,9 +24,19 @@ Implemented Study A and ran the homogeneous response map. Report:
 - **Classification H3 (mean-sensitive), PROVISIONAL.** Not H1/H2/H7. **H6 NOT excluded** — the dt/2 subset is
   outstanding, and the trend's likely carrier (postLife, +0.67 steps/nm) is exactly the dt-sensitive channel of
   §23.13a. **Study B is NOT authorised** until that resolves.
-- **Twirl columns in this map are SINGLE-SIGN** => raw (eps-EVEN + eps-ODD), NOT the eps-ODD quantities of
-  §§23-25, and NOT a twirl amplitude. `Q_omega` 0.08-0.17 is EXPECTED here (12-segment filament; the transport
-  identity was established for the ONE-segment rigid scene), not a defect. No twirling conclusion drawn.
+- **+/-eps ARM ADDED (96/96 records) => the twirl map is now eps-ODD.** Code byte-identical to the +eps run
+  (`git diff` over softbox/ empty), so the signs pair legitimately; the 48 +eps records were reused.
+  **SECONDARY TWIRLING RESULT: NO resolved length dependence.** Omega_odd = -12.0/-17.2/-17.1/-4.0/-12.7/-2.9
+  rad/s looks jagged but **chi2 = 8.14 on 5 dof (chi2/dof = 1.63) => consistent with PURE SEED NOISE** about
+  -11.34 rad/s; trend dOmega_odd/dL = +0.410 +/- 0.210 (1.95 sigma), unresolved (tauOdd 1.09, J_stroke 1.33,
+  J_total 1.19 sigma with 38 % seed agreement = random). **Sign NEGATIVE at all six lengths (preserved).**
+  **H5 REFUTED.** Because no S2-dependent twirl peak survives, the mandated mirror control was DELIBERATELY NOT
+  SPENT — there is no peak to credit. vOdd small/sign-inconsistent vs vEven => propulsion stays eps-even (§21.4).
+  `Q_omega` 0.08-0.17 is EXPECTED (12-segment filament vs the one-segment rigid scene the identity was built on),
+  so these Omega_odd values are NOT comparable to §25.7.
+- **CORE GLIDING RESTATED with the proper eps-EVEN estimator: dv_even/dL = -0.02171 +/- 0.00754 (µm/s)/nm,
+  2.88 sigma, 88 % seeds, ~20 % over 25-50 nm** (-2.341 -> -2.819). The single-sign +eps arm had read
+  3.69 sigma / 37 %; the eps-even value is smaller, correct, and SUPERSEDES it.
 - New: `-s2-lawn`, `-s2-lawn-weights`, `-s2-lawn-seed`, `-s2-fixtures`, `-s2-map`;
   `ExplicitCompleteMatHarness.{applyS2Lawn, s2LawnString, s2LawnOn, resetS2Lawn}`; `Glide2D.g4{Lnm,l0,ks,kb}Arr`;
   §3.5 guard in `TwoBodyConverterMotor.s2NodeForcesM`. Records `RUN_LOGS/chiral_sites/s25powered/s2map_L*_*.tsv`.

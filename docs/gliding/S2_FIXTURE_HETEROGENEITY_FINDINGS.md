@@ -10,13 +10,21 @@ auxiliary phenotype read from the same runs and never used to select a distribut
 
 **STATUS: AUDIT + STUDY-A IMPLEMENTATION + HOMOGENEOUS MAP COMPLETE. Study B not started.**
 
-**CORE GLIDING RESULT — mean gliding speed IS sensitive to mechanically free S2 length.** The per-seed trend
-across 25–50 nm is **dv/dL = −0.0319 ± 0.0087 (µm/s)/nm, 3.69σ, 88 % of seeds** — i.e. |v| *rises* with free
-length, from −2.25 µm/s at 25 nm to −3.09 µm/s at 50 nm, a **37 % change across the plausible range**. The
-widest paired contrast (50 − 25 nm) is −0.844 ± 0.333 µm/s (2.54σ, 6/8 seeds). **Provisional classification H3
-(mean-sensitive)** — provisional because the dt/2 subset is not yet run and the effect's likely carrier (the
-post-stroke tail) is exactly the dt-sensitive channel of §23.13a. Velocity *variability* shows no clean length
-dependence (CV 0.19–0.39, non-monotone), so this is **not** H2. Density dependence is **unmeasured**.
+**CORE GLIDING RESULT — mean gliding speed IS sensitive to mechanically free S2 length.** With both ε signs
+present the proper ε-EVEN estimator gives **dv_even/dL = −0.02171 ± 0.00754 (µm/s)/nm, 2.88σ, 88 % of seeds** —
+|v| *rises* with free length, −2.341 µm/s at 25 nm → −2.819 at 50 nm, **≈ 20 % across the plausible range**.
+(The single-ε arm alone read 3.69σ / 37 %; the ε-even value is the smaller and correct one and supersedes it.)
+Pairwise comparisons against 40 nm resolve nothing (≤1.82σ) — only the matched-seed trend test resolves this.
+**Provisional classification H3 (mean-sensitive)** — provisional because the dt/2 subset is not yet run and the
+likely carrier (the post-stroke tail) is exactly the dt-sensitive channel of §23.13a. Velocity *variability*
+shows no clean length dependence (CV 0.19–0.39, non-monotone) ⇒ **not H2**. Density dependence **unmeasured**.
+
+**SECONDARY TWIRLING RESULT — there is NO resolved length dependence of twirling.** The ε-ODD map looks jagged
+(Ω_odd = −12.0, −17.2, −17.1, −4.0, −12.7, −2.9 rad/s at 25–50 nm) but a χ² test against a single common value
+gives **χ²/dof = 1.63 on 5 dof — consistent with pure seed noise** about −11.3 rad/s; the trend is
+dΩ_odd/dL = +0.410 ± 0.210 (1.95σ), unresolved. **The twirl sign is NEGATIVE at every length** (preserved), and
+no S2-dependent twirl peak exists to be believed — so the mirror control the brief requires before crediting
+such a peak was **deliberately not spent**. **H5 (twirling-sensitive only) is REFUTED.**
 
 The audit was the gating deliverable and it **passes decisively on feasibility**: per-motor free S2 length is a
 **data-only** change. `params` is already a per-motor planar buffer and both runners already read it per motor,
@@ -243,15 +251,46 @@ Widest paired contrast, 50 − 25 nm: **−0.844 ± 0.333 µm/s (2.54σ), 6/8 se
 Velocity CV is **0.19–0.39 with no monotone length dependence** — the fluctuation magnitude is not obviously an
 L effect, so **H2 is not supported**. Engagement stays within ~15 % across a 2× span of free length.
 
-### 6.3 Secondary twirling — reported, but NOT an ε-ODD measurement
+### 6.3 Secondary twirling — the ε-ODD map (both signs, 96/96 records)
 
-The map runs a **single ε sign**, so its `tau`, `OmegaFit`, `J_stroke` and `J_total` columns are raw
-(ε-EVEN + ε-ODD) values, **not** the ε-ODD chiral quantities of §§23–25, and cannot be read as a twirl
-amplitude. They are recorded for completeness only. A true ε-ODD twirl-vs-L map requires ±ε at every length —
-double the campaign — and has **not** been run. Additionally `Q_omega` here is 0.08–0.17 rather than ≈1: that is
-**expected**, not a defect — the §§22–25 transport identity `Ω = ⟨τ⟩/γ_roll` was established for the ONE-segment
-rigid scene, whereas this map uses the 12-segment filament where roll is averaged over segments and γ_roll is
-segment 0's. **No twirling conclusion is drawn from this map.**
+The −ε arm was added at the identical code revision (`git diff` over `softbox/` empty against the commit that
+produced the +ε arm), so the signs pair legitimately; the resume logic reused all 48 +ε records.
+
+| L (nm) | τ_odd ± SEM (N·m) | Ω_odd ± SEM (rad/s) | σ | seed sign | J_stroke_odd | J_total_odd |
+|---|---|---|---|---|---|---|
+| 25 | −2.998e-22 ± 2e-22 | −11.995 ± 5.684 | 2.11 | 88 % | −3.818e-27 | −9.876e-26 |
+| 30 | −6.087e-22 ± 1e-22 | −17.188 ± 5.481 | 3.14 | 75 % | −6.880e-27 | −1.758e-25 |
+| 35 | −4.940e-22 ± 1e-22 | −17.123 ± 4.432 | 3.86 | 100 % | −9.310e-27 | −1.494e-25 |
+| 40 | −1.564e-22 ± 2e-22 | −4.014 ± 6.537 | 0.61 | 75 % | −5.169e-27 | −6.839e-26 |
+| 45 | −4.377e-22 ± 2e-22 | −12.728 ± 3.369 | 3.78 | 88 % | −9.423e-27 | −1.215e-25 |
+| 50 | −2.382e-22 ± 1e-22 | −2.947 ± 4.273 | 0.69 | 63 % | −1.116e-26 | −5.394e-26 |
+
+**The jaggedness is noise, not structure.** χ² of the six Ω_odd against one common value = **8.14 on 5 dof
+(χ²/dof = 1.63)** — consistent with pure seed scatter about **−11.34 rad/s**. The trend is
+**dΩ_odd/dL = +0.410 ± 0.210 (1.95σ)**, unresolved; `dτ_odd/dL` 1.09σ; `dJ_stroke_odd/dL` 1.33σ;
+`dJ_total_odd/dL` 1.19σ with only 38 % seed agreement (i.e. random). **Sign is NEGATIVE at all six lengths.**
+
+ε-ODD phase budget (N·m·s per episode) — `J_post_late` dominates `J_total` and carries the scatter:
+
+| L | J_pre | J_stroke | J_post_early | J_post_late |
+|---|---|---|---|---|
+| 25 | +9.884e-27 | −3.818e-27 | −3.154e-26 | −7.328e-26 |
+| 30 | −1.673e-26 | −6.880e-27 | −3.459e-26 | −1.176e-25 |
+| 35 | −8.795e-27 | −9.310e-27 | −3.562e-26 | −9.565e-26 |
+| 40 | +5.719e-27 | −5.169e-27 | −4.344e-26 | −2.550e-26 |
+| 45 | −1.198e-26 | −9.423e-27 | −3.156e-26 | −6.853e-26 |
+| 50 | −1.060e-26 | −1.116e-26 | −1.943e-26 | −1.275e-26 |
+
+`v_odd` is small and sign-inconsistent (+0.09 … −0.27 µm/s against `v_even` ≈ −2.3…−3.1), confirming the
+propulsive channel stays ε-even as §21.4 requires.
+
+**Because no S2-dependent twirl peak survives the χ² test, the mirror control the brief mandates before
+crediting such a peak was deliberately not run** — there is no peak to credit. **H5 is refuted.**
+
+*Scene caveat:* `Q_omega` here is 0.08–0.17, not ≈1. That is **expected**, not a defect — the §§22–25 transport
+identity was established for the ONE-segment rigid scene, whereas this map uses the canonical 12-segment
+Brownian filament where roll is averaged over segments and γ_roll is segment 0's. These Ω_odd values are
+therefore **not** comparable to the §25.7 one-segment numbers.
 
 ## 7. dt-refinement subset — NOT RUN
 
@@ -284,5 +323,5 @@ experiments deliberately not run (19).
 **Exact next step:** the §7 dt/2 subset at 30 / 40 / 50 nm. If the dv/dL ranking survives, H3 is confirmed and
 Study B opens; if it does not, the classification becomes **H6 (timestep-confounded)** and the homogeneous
 result must be restated as a numerical sensitivity rather than a fixture result. Also outstanding before any
-heterogeneity claim: the density subset (saturation shift), a true ±ε twirl-vs-L map, and mixed-lawn CPU/GPU
-equivalence.
+heterogeneity claim: the density subset (saturation shift) and mixed-lawn CPU/GPU equivalence. The ±ε twirl map
+is now DONE (§6.3).

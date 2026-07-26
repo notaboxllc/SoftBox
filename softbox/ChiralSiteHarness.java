@@ -3166,13 +3166,15 @@ public final class ChiralSiteHarness {
         System.out.println("  lengths (nm): " + java.util.Arrays.toString(S2_MAP_NM));
         System.out.println("  provenance: " + prov);
         int done = 0, ran = 0;
+        double epsMax = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0;
         for (double L : S2_MAP_NM) {
+            for (int sgn = +1; sgn >= -1; sgn -= 2) {
             for (int i = 0; i < SEEDS; i++) {
                 int seed = SEED + i;
-                String id = String.format(Locale.US, "s2map_L%.0f_%d", L, seed);
+                String id = s2Id(L, sgn, seed);
                 if (powRead(id) != null) { done++; continue; }
                 ExplicitCompleteMatHarness.S2_LAWN_NM = new double[]{ L };
-                TArm T = new TArm(id, 0.0, false, +1, true, TwoBodyConverterMotor.G4_NSEG).conv(EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0);
+                TArm T = new TArm(id, 0.0, false, +1, true, TwoBodyConverterMotor.G4_NSEG).conv(sgn * epsMax);
                 long t0 = System.currentTimeMillis();
                 TRes r = runTwirlArm(T, seed, STEPS);
                 try { powWrite(id, powValues(r), prov + " L=" + L); }
@@ -3182,8 +3184,9 @@ public final class ChiralSiteHarness {
                         done + ran, id, r.glide, r.avgBound, r.strokeRatePerS, r.invalid, (System.currentTimeMillis()-t0)/1000.0);
                 ExplicitCompleteMatHarness.resetS2Lawn();
             }
+            }
         }
-        System.out.printf("%n  records: %d reused, %d newly run, %d expected%n", done, ran, S2_MAP_NM.length*SEEDS);
+        System.out.printf("%n  records: %d reused, %d newly run, %d expected%n", done, ran, 2*S2_MAP_NM.length*SEEDS);
         CONV_RAMP_ARM = null; BUDGET = false; ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem;
         ExplicitCompleteMatHarness.resetS2Lawn(); FIL_BROWN = true; cfgOff(); EPS_CONV_ARM = 0;
         reportS2Map();
@@ -3211,18 +3214,35 @@ public final class ChiralSiteHarness {
                     ConvBudget.msn(s2Col(L,"epRate"))[0], ConvBudget.msn(s2Col(L,"preLife"))[0],
                     ConvBudget.msn(s2Col(L,"postLife"))[0], ConvBudget.msn(s2Col(L,"rollR2"))[0],
                     ConvBudget.msn(s2Col(L,"invalid"))[0] + ConvBudget.msn(s2Col(L,"solverFail"))[0]);
-        System.out.println("\n  #### SECONDARY: TWIRLING (single-sign arm — NOT an eps-ODD measurement) ####");
-        System.out.printf("    %6s %12s %12s %14s %14s %14s%n", "L nm", "tau N·m", "OmegaFit", "J_stroke", "J_total", "Qomega");
-        for (double L : S2_MAP_NM) {
-            double[] jp = s2Col(L,"jPre"), js = s2Col(L,"jStroke"), je = s2Col(L,"jEarly"), jl = s2Col(L,"jLate");
-            double[] tot = new double[jp.length];
-            for (int i = 0; i < jp.length; i++) tot[i] = jp[i]+js[i]+je[i]+jl[i];
-            System.out.printf(Locale.US, "    %6.0f %+12.4e %+12.3f %+14.4e %+14.4e %14.3f%n", L,
-                    ConvBudget.msn(s2Col(L,"tau"))[0], ConvBudget.msn(s2Col(L,"omegaFit"))[0],
-                    ConvBudget.msn(js)[0], ConvBudget.msn(tot)[0], ConvBudget.msn(s2Col(L,"qOmega"))[0]);
+        boolean haveBoth = powRead(s2Id(40, -1, SEED)) != null;
+        if (!haveBoth) {
+            System.out.println("\n  #### SECONDARY TWIRLING: -eps arm NOT PRESENT — eps-ODD cannot be formed. ####");
+        } else {
+            System.out.println("\n  #### SECONDARY: eps-ODD TWIRLING vs FREE S2 LENGTH ####");
+            System.out.printf("    %6s %16s %16s %8s %8s %14s %14s%n",
+                    "L nm", "tauOdd ± SEM", "OmegaOdd ± SEM", "sigma", "sgn%", "J_stroke_odd", "J_total_odd");
+            for (double L : S2_MAP_NM) {
+                double[] to = s2Odd(L,"tau"), om = s2Odd(L,"omegaFit");
+                double[] jp = s2Odd(L,"jPre"), js = s2Odd(L,"jStroke"), je = s2Odd(L,"jEarly"), jl = s2Odd(L,"jLate");
+                double[] tot = new double[SEEDS];
+                for (int i = 0; i < SEEDS; i++) tot[i] = jp[i]+js[i]+je[i]+jl[i];
+                double[] mt = ConvBudget.msn(to), mo = ConvBudget.msn(om);
+                System.out.printf(Locale.US, "    %6.0f %+.3e±%.0e %+8.3f±%5.3f %8.2f %8.0f %+14.4e %+14.4e%n",
+                        L, mt[0], mt[1], mo[0], mo[1], ConvBudget.sigma(mo), 100*ConvBudget.signFrac(om),
+                        ConvBudget.msn(js)[0], ConvBudget.msn(tot)[0]);
+            }
+            System.out.println("\n    eps-ODD budget phases:");
+            System.out.printf("    %6s %14s %14s %14s %14s%n", "L nm", "J_pre", "J_stroke", "J_post_early", "J_post_late");
+            for (double L : S2_MAP_NM)
+                System.out.printf(Locale.US, "    %6.0f %+14.4e %+14.4e %+14.4e %+14.4e%n", L,
+                        ConvBudget.msn(s2Odd(L,"jPre"))[0], ConvBudget.msn(s2Odd(L,"jStroke"))[0],
+                        ConvBudget.msn(s2Odd(L,"jEarly"))[0], ConvBudget.msn(s2Odd(L,"jLate"))[0]);
+            System.out.println("\n    v_even / v_odd (gliding with both signs present):");
+            System.out.printf("    %6s %14s %14s%n", "L nm", "vEven", "vOdd");
+            for (double L : S2_MAP_NM)
+                System.out.printf(Locale.US, "    %6.0f %+14.3f %+14.3f%n", L,
+                        ConvBudget.msn(s2Even(L,"glide"))[0], ConvBudget.msn(s2Odd(L,"glide"))[0]);
         }
-        System.out.println("    NOTE: this map runs a SINGLE eps sign, so these are raw (eps-EVEN + eps-ODD) values,");
-        System.out.println("    NOT the eps-ODD chiral quantities of §§23-25. They cannot be read as a twirl amplitude.");
         double[] v40 = s2Col(40, "glide");
         System.out.println("\n  ---- paired differences vs the 40 nm reference (matched seeds) ----");
         System.out.printf("    %6s %16s %8s %12s%n", "L nm", "dV ± SEM", "sigma", "davgBound");
@@ -3232,6 +3252,29 @@ public final class ChiralSiteHarness {
             double[] db = ConvBudget.msn(paired(s2Col(L,"avgBound"), s2Col(40,"avgBound")));
             System.out.printf(Locale.US, "    %6.0f %+9.3f±%5.3f %8.2f %+12.3f%n", L, ms[0], ms[1], ConvBudget.sigma(ms), db[0]);
         }
+    }
+    /** +eps keeps the original single-sign record name (the 48 completed records); -eps adds an "n" tag. */
+    static String s2Id(double L, int sgn, int seed) {
+        return sgn > 0 ? String.format(Locale.US, "s2map_L%.0f_%d", L, seed)
+                       : String.format(Locale.US, "s2map_L%.0f_n_%d", L, seed);
+    }
+    /** Per-seed eps-ODD response at length L; NaN unless BOTH signs of that seed are complete. */
+    static double[] s2Odd(double L, String key) {
+        int ki = POWK(key); double[] o = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            double[] p = powRead(s2Id(L, +1, SEED + i)), m = powRead(s2Id(L, -1, SEED + i));
+            o[i] = (p != null && m != null) ? 0.5*(p[ki] - m[ki]) : Double.NaN;
+        }
+        return o;
+    }
+    /** Per-seed eps-EVEN response (the proper gliding measure with both signs present). */
+    static double[] s2Even(double L, String key) {
+        int ki = POWK(key); double[] o = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            double[] p = powRead(s2Id(L, +1, SEED + i)), m = powRead(s2Id(L, -1, SEED + i));
+            o[i] = (p != null && m != null) ? 0.5*(p[ki] + m[ki]) : Double.NaN;
+        }
+        return o;
     }
     static double[] s2Col(double L, String key) {
         int ki = POWK(key); double[] o = new double[SEEDS];
