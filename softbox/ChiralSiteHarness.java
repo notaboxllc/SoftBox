@@ -95,7 +95,7 @@ public final class ChiralSiteHarness {
         TornadoCrashDiagnostic.init("chiral-actin-sites", args);
         boolean fixtures = false, equiv = false, campaign = false, lattice = false, mechanism = false, all = false; String jsDir = null;
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
-        boolean etaAudit = false;
+        boolean etaAudit = false, etaControls = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
                 convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false, s2DtCmp = false, studyB = false, studyBRep = false;
@@ -185,6 +185,7 @@ public final class ChiralSiteHarness {
                 case "-eta" -> ETA = Double.parseDouble(args[++i]);
                 case "-eta-fixed-dt" -> ETA_FIXED_DT = true;
                 case "-eta-audit" -> etaAudit = true;
+                case "-eta-controls" -> etaControls = true;
                 default -> { }
             }
         }
@@ -208,6 +209,7 @@ public final class ChiralSiteHarness {
             if (twirlMode) makeTwirlMovies(jsDir); else makeMovies(jsDir);
             TornadoCrashDiagnostic.normalMainReturn("mode=3js"); return; }
         if (etaAudit)        ok = runEtaAudit();
+        else if (etaControls) ok = runEtaControls();
         else if (convStage1) { EPS_CONV_DEG = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 5.0; runConvStage1(); }
         else if (convFix)    ok = runConvFixtures();
         else if (convEquiv)  ok = runConvEquiv();
@@ -421,6 +423,137 @@ public final class ChiralSiteHarness {
     /** Stiffness / geometry quantities that viscosity must NOT touch. */
     static double[] stiff(Glide2D G) {
         return new double[] { G.kF8Code, G.kconvCode, G.kbindCode, G.g4ks, G.g4kb, G.g4kfloor, G.g4l0, G.kzCode };
+    }
+
+    // ============================================================ STAGE 2 — analytic / deterministic controls
+    /**
+     * Verifies the viscosity implementation END-TO-END, through the real systems, before any campaign:
+     * (A) bare-filament forced axial translation — zeta proportional to eta; (B) forced axial rotation —
+     * gamma_roll proportional to eta; (C) Brownian diffusion — D proportional to 1/eta (the FDT check that
+     * cannot be passed by scaling drag alone); (D) passive S2-beam relaxation with chemistry frozen —
+     * tau proportional to eta. Motors are never stepped in A-C. CPU, seconds.
+     */
+    static boolean runEtaControls() {
+        double[] etas = { 0.10, 0.05, 0.02, 0.01 };
+        double savedEta = ETA, savedDt = DTR; int savedSegs = FIL_SEGS;
+        FIL_SEGS = 1;                     // ONE rigid rod ⇒ clean rigid-body controls (no chain/joint confound)
+        System.out.println("\n=== STAGE 2 — ANALYTIC / DETERMINISTIC VISCOSITY CONTROLS ===\n");
+        System.out.println("Motors are never stepped in A-C; chemistry is frozen in D. All arms use the mechanically");
+        System.out.println("similar timestep dt(eta) = dt0*eta/eta0 and matched PHYSICAL duration.\n");
+        System.out.printf(Locale.US, "%-8s %-10s | %-12s %-9s | %-12s %-9s | %-12s %-9s | %-11s %-9s%n",
+                "eta", "dt (s)", "zeta_ax", "vs 1/eta", "gamma_roll", "vs 1/eta", "D_par", "vs 1/eta", "tau_S2 (s)", "vs eta");
+        System.out.println("-".repeat(122));
+        double z0 = 0, gr0 = 0, d0 = 0, t0 = 0; boolean ok = true;
+        for (double eta : etas) {
+            ETA = eta; DTR = DT * eta / Constants.aeta;
+            double phys = 4000 * DT;                       // matched PHYSICAL duration (s)
+            int M = (int) Math.round(phys / DTR);          // ⇒ more steps at lower eta
+            double[] A = forcedTranslation(build(SEED), DTR, M);
+            double[] B = forcedRotation(build(SEED), DTR, M);
+            double   C = brownianDiffusion(build(SEED), DTR, 20000);
+            double   D = s2RelaxTau(DTR);
+            if (eta == 0.10) { z0 = A[1]; gr0 = B[1]; d0 = C; t0 = D; }
+            double r = eta / Constants.aeta;
+            // zeta, gamma_roll ∝ eta ; D ∝ 1/eta ; tau ∝ eta   — each reported as the ratio to its ideal
+            double rz = (A[1] / z0) / r, rg = (B[1] / gr0) / r, rd = (C / d0) * r, rt = (D / t0) / r;
+            System.out.printf(Locale.US, "%-8.3g %-10.4g | %-12.5g %-9.4f | %-12.5g %-9.4f | %-12.5g %-9.4f | %-11.5g %-9.4f%n",
+                    eta, DTR, A[1], rz, B[1], rg, C, rd, D, rt);
+            if (Math.abs(rz - 1) > 1e-3 || Math.abs(rg - 1) > 1e-3) ok = false;   // deterministic ⇒ tight
+            if (Math.abs(rd - 1) > 0.05) ok = false;                             // stochastic ⇒ 5 %
+            if (Math.abs(rt - 1) > 0.02) ok = false;
+        }
+        System.out.printf(Locale.US, "%n(\"vs\" columns are the measured ratio divided by the ideal scaling ⇒ 1.0000 is exact.)%n");
+        System.out.printf(Locale.US, "%n=== STAGE 2 CONTROLS: %s ===%n", ok ? "PASS" : "FAIL");
+        ETA = savedEta; DTR = savedDt; FIL_SEGS = savedSegs;
+        return ok;
+    }
+
+    /** (A) known axial force on a bare rod ⇒ steady velocity; returns {v (µm/s), zeta (N·s/m)}. */
+    static double[] forcedTranslation(Glide2D G, double dt, int M) {
+        FilamentStore f = G.fil; int nSeg = G.nSeg; final double Fn = 1.0e-12;   // 1 pN
+        f.brownTransScale.set(0, 0f); f.brownRotScale.set(0, 0f);
+        double ux = f.uVec.get(0), uy = f.uVec.get(nSeg), uz = f.uVec.get(2 * nSeg);
+        double x0 = f.coord.get(0), y0 = f.coord.get(nSeg), zz0 = f.coord.get(2 * nSeg);
+        for (int t = 0; t < M; t++) {
+            ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+            f.forceSum.set(0, (float) (Fn * ux)); f.forceSum.set(nSeg, (float) (Fn * uy)); f.forceSum.set(2 * nSeg, (float) (Fn * uz));
+            RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum,
+                    f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+            DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
+            DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        }
+        double disp = (f.coord.get(0) - x0) * ux + (f.coord.get(nSeg) - y0) * uy + (f.coord.get(2 * nSeg) - zz0) * uz;
+        double v = disp / (M * dt);              // µm/s
+        return new double[] { v, 1.0e6 * Fn / v };   // v = 1e6*F/zeta
+    }
+
+    /** (B) known axial torque on a bare rod ⇒ steady roll rate; returns {Omega (rad/s), gamma_roll (N·m·s)}. */
+    static double[] forcedRotation(Glide2D G, double dt, int M) {
+        FilamentStore f = G.fil; int nSeg = G.nSeg; final double Tn = 1.0e-21;   // N·m
+        f.brownTransScale.set(0, 0f); f.brownRotScale.set(0, 0f);
+        double ux = f.uVec.get(0), uy = f.uVec.get(nSeg), uz = f.uVec.get(2 * nSeg);
+        double ay0 = f.yVec.get(0), by0 = f.yVec.get(nSeg), cy0 = f.yVec.get(2 * nSeg);
+        for (int t = 0; t < M; t++) {
+            ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+            f.torqueSum.set(0, (float) (Tn * ux)); f.torqueSum.set(nSeg, (float) (Tn * uy)); f.torqueSum.set(2 * nSeg, (float) (Tn * uz));
+            RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum,
+                    f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+            DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
+            DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        }
+        double dot = ay0 * f.yVec.get(0) + by0 * f.yVec.get(nSeg) + cy0 * f.yVec.get(2 * nSeg);
+        double ang = Math.acos(Math.max(-1, Math.min(1, dot)));      // total roll (kept < pi by construction)
+        double om = ang / (M * dt);
+        return new double[] { om, Tn / om };
+    }
+
+    /** (C) free Brownian rod ⇒ axial MSD slope; returns D_par (µm²/s). The end-to-end FDT check. */
+    static double brownianDiffusion(Glide2D G, double dt, int M) {
+        FilamentStore f = G.fil; int nSeg = G.nSeg;
+        f.brownTransScale.set(0, 1f); f.brownRotScale.set(0, 1f);
+        f.setParams(dt, Constants.brownianForceMag(dt));    // sqrt(2kT/dt) — the single-source-dt rule
+        double ux = f.uVec.get(0), uy = f.uVec.get(nSeg), uz = f.uVec.get(2 * nSeg);
+        double x0 = f.coord.get(0), y0 = f.coord.get(nSeg), zz0 = f.coord.get(2 * nSeg);
+        for (int t = 0; t < M; t++) {
+            f.counts.set(1, t); f.counts.set(2, SEED);
+            ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+            BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam,
+                    f.brownTransScale, f.brownRotScale, f.params, f.counts);
+            RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum,
+                    f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+            DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
+            DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        }
+        double disp = (f.coord.get(0) - x0) * ux + (f.coord.get(nSeg) - y0) * uy + (f.coord.get(2 * nSeg) - zz0) * uz;
+        return disp * disp / (2.0 * M * dt);     // <x²> = 2 D t (single realization ⇒ noisy; ratio is the gate)
+    }
+
+    /** (D) passive S2-beam relaxation with chemistry frozen and Brownian OFF; returns tau (s). */
+    static double s2RelaxTau(double dt) {
+        Glide2D G = build(SEED);
+        ExplicitCompleteMatHarness.ExMat e = ExplicitCompleteMatHarness.packExMat(G, 0);   // Brownian OFF
+        MotorStore mot = G.mot; int N = G.N, Mb = G.g4M;
+        for (int m = 0; m < N; m++) mot.boundSeg.set(m, -1);
+        for (int i = 0; i < G.bondData.getSize(); i++) G.bondData.set(i, 0f);
+        for (int t = 0; t < 400; t++) beamOnly(e, G, t);                 // settle to rest
+        int nd = (3 * Mb + 2) * N;                                        // distal node, z component
+        double rest = e.nodes.get(nd);
+        e.nodes.set(nd, rest + 5.0e-3);                                   // 5 nm perturbation
+        double dPrev = 5.0e-3; int t1 = 0, t2 = 0; double d1 = 0, d2 = 0;
+        for (int t = 0; t < 4000; t++) {
+            beamOnly(e, G, 400 + t);
+            double d = Math.abs(e.nodes.get(nd) - rest);
+            if (t1 == 0 && d < dPrev * 0.9) { t1 = t; d1 = d; }           // early window start
+            if (t1 != 0 && d < d1 / Math.E) { t2 = t; d2 = d; break; }    // 1/e crossing
+        }
+        if (t2 == 0) return Double.NaN;
+        return (t2 - t1) * dt / Math.log(d1 / d2);
+    }
+    static void beamOnly(ExplicitCompleteMatHarness.ExMat e, Glide2D G, int t) {
+        e.matc.set(0, t);
+        TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
+        TwoBodyBeamAnalyticGpu.matS2SolveStep(e.nodes, e.frame, e.q, G.bondData, G.mot.boundSeg, e.params,
+                e.sys, e.outGeom, G.mot.forceDotFil, G.mot.forceMag, e.matc, e.exCounts, e.convF);
     }
 
     // =============================================================================== deterministic fixtures
@@ -1007,7 +1140,7 @@ public final class ChiralSiteHarness {
             System.out.println("  FULL chiral graph did NOT lower: " + oneLine(root(ex).getMessage())
                     + "   (needs -Dtornado.enable.fma=false)"); return false; }
         TornadoCrashDiagnostic.planConstructionEnd(plan, "arm=equiv");
-        int K = 200, firstDiv = -1, siteMism = 0, bindMism = 0; double maxFil = 0, maxOm = 0, maxTau = 0, maxAz = 0;
+        int K = 200, firstDiv = -1, siteMism = 0, bindMism = 0; double maxFil = 0, maxOm = 0, maxTau = 0, maxAz = 0, maxAbsOm = 0;
         boolean lowered = true;
         TornadoCrashDiagnostic.executeLoopBegin("glide", 0, K-1, "arm=equiv executeCallsPlanned=" + K);
         for (int t = 0; t < K; t++) {
@@ -1024,6 +1157,7 @@ public final class ChiralSiteHarness {
                     if (Gc.mot.boundSeg.get(m) != Gd.mot.boundSeg.get(m)) bindMism++;
                     if (ec.bindSite.get(m) != ed.bindSite.get(m)) siteMism++;
                     maxOm = Math.max(maxOm, Math.abs(ec.headOmega.get(m) - ed.headOmega.get(m)));
+                    maxAbsOm = Math.max(maxAbsOm, Math.abs(ec.headOmega.get(m)));   // magnitude ⇒ RELATIVE divergence
                     maxTau = Math.max(maxTau, Math.abs(ec.headTau.get(m) - ed.headTau.get(m)));
                     maxAz = Math.max(maxAz, Math.abs(Gc.mot.bindAzim.get(m) - Gd.mot.bindAzim.get(m)));
                 }
@@ -1037,8 +1171,8 @@ public final class ChiralSiteHarness {
         boolean ok = lowered && fin && siteMism == 0 && bindMism == 0 && maxOm < 1e-5 && maxAz < 1e-5 && maxFil < 1e-1;
         System.out.printf(Locale.US,
                 "  %d device-resident steps: siteIdMism=%d bindMism=%d max|dOmega|=%.2e max|dTau|=%.2e max|dAzim|=%.2e "
-                + "max|dFilCoord|=%.2e µm firstDiv=%s bound CPU=%d GPU=%d finite=%b ⇒ %s%n",
-                K, siteMism, bindMism, maxOm, maxTau, maxAz, maxFil,
+                + "max|dFilCoord|=%.2e µm |Omega|max=%.2e rel=%.2e firstDiv=%s bound CPU=%d GPU=%d finite=%b ⇒ %s%n",
+                K, siteMism, bindMism, maxOm, maxTau, maxAz, maxFil, maxAbsOm, maxAbsOm > 0 ? maxOm / maxAbsOm : 0.0,
                 firstDiv < 0 ? "none (bit-close)" : ("t=" + firstDiv + " (chaotic float op-order)"), nbC, nbD, fin,
                 ok ? "PASS (device-resident, no fallback)" : "*FAIL*");
         TornadoCrashDiagnostic.gpuWorkDeclaredFinished("arm=equiv");
