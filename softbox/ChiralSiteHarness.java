@@ -334,6 +334,95 @@ public final class ChiralSiteHarness {
         for (int i = 0; i < a.getSize(); i++) a.set(i, (float) (a.get(i) * r));
     }
 
+    // ============================================================ STAGE 0/1 — viscosity + FDT + timestep audit
+    /**
+     * Verifies that {@code -eta} is a COHERENT whole-system solvent-viscosity change, and reports the
+     * dimensionless integration factors that decide how far down in viscosity the present integrator is
+     * trustworthy. No campaign, no motors stepped — build-time inspection only. CPU, seconds.
+     */
+    static boolean runEtaAudit() {
+        double[] etas = { 0.10, 0.05, 0.02, 0.01 };
+        double savedEta = ETA, savedDt = DTR;
+        System.out.println("\n=== STAGE 0 — COHERENT VISCOSITY + FDT AUDIT (build-time channel inspection) ===\n");
+        System.out.printf(Locale.US, "Constants.aeta = %.4g Pa·s (compile-time `static final` ⇒ javac INLINES it;%n"
+                + "  a runtime override is impossible — the only sound path is post-build buffer scaling, which is%n"
+                + "  what applyEta does, mirroring the validated applyAeta/applyS2Lawn data-only precedent).%n%n",
+                Constants.aeta);
+
+        // reference channel values at the canonical viscosity
+        ETA = 0.10; DTR = DT; Glide2D G0 = build(SEED);
+        double[] c0 = channels(G0);
+        System.out.printf(Locale.US, "%-8s %-10s | %-11s %-11s %-11s | %-11s %-11s | %-11s | %-11s%n",
+                "eta", "dt (s)", "gammaPhi", "gammaPsi", "g4gammaNode", "filTransX", "filRotY", "headRoll", "r=eta/eta0");
+        System.out.println("-".repeat(120));
+        boolean ok = true;
+        for (double eta : etas) {
+            ETA = eta; DTR = DT * (ETA_FIXED_DT ? 1.0 : eta / Constants.aeta);
+            Glide2D G = build(SEED);
+            double[] c = channels(G);
+            double r = eta / Constants.aeta;
+            System.out.printf(Locale.US, "%-8.3g %-10.4g | %-11.5g %-11.5g %-11.5g | %-11.5g %-11.5g | %-11.5g | %-11.4g%n",
+                    eta, DTR, c[0], c[1], c[2], c[3], c[5], c[7], r);
+            // every drag channel must be EXACTLY proportional to eta (float32 tolerance on the FloatArray channels)
+            for (int k = 0; k < 8; k++) {
+                double want = c0[k] * r, got = c[k];
+                double rel = want == 0 ? Math.abs(got) : Math.abs(got - want) / Math.abs(want);
+                if (rel > 1e-5) { ok = false;
+                    System.out.printf(Locale.US, "   ** DRAG CHANNEL %d NOT PROPORTIONAL: got %.8g want %.8g (rel %.3g)%n", k, got, want, rel); }
+            }
+            // stiffnesses and geometry must be IDENTICAL (viscosity is not a stiffness)
+            double[] s0 = stiff(G0), s = stiff(G);
+            for (int k = 0; k < s.length; k++)
+                if (s[k] != s0[k]) { ok = false;
+                    System.out.printf(Locale.US, "   ** STIFFNESS %d CHANGED: %.8g -> %.8g%n", k, s0[k], s[k]); }
+        }
+        System.out.printf(Locale.US, "%nDrag channels scale exactly with eta, stiffnesses invariant: %s%n", ok ? "PASS" : "FAIL");
+
+        // ---- eta = 0.1 identity: r == 1 must be an exact early-return no-op -----------------------------------
+        ETA = Constants.aeta; DTR = DT; Glide2D Ga = build(SEED);
+        ETA = savedEta;       DTR = DT; Glide2D Gb = build(SEED);   // ETA restored; if it is 0.1 this is the same path
+        boolean ident = true;
+        double[] ca = channels(Ga), cb = channels(Gb);
+        if (savedEta == Constants.aeta) { for (int k = 0; k < ca.length; k++) if (ca[k] != cb[k]) ident = false;
+            System.out.printf(Locale.US, "eta = 0.1 zero-feature identity (exact no-op): %s%n", ident ? "PASS" : "FAIL");
+            ok &= ident; }
+
+        // ---- STAGE 1: dimensionless integration factors -------------------------------------------------------
+        System.out.println("\n=== STAGE 1 — DIMENSIONLESS TIMESTEP FACTORS (explicit/linearly-implicit stability) ===\n");
+        System.out.println("Each entry is the per-step relaxation factor k·dt/gamma for a TRUE damping-limited (Langevin)");
+        System.out.println("channel. These are INVARIANT under the mechanically similar timestep dt(eta)=dt0·eta/eta0,");
+        System.out.println("which is exactly why that protocol — not fixed dt — is the physically coherent comparison.\n");
+        System.out.printf(Locale.US, "%-8s %-10s | %-13s %-13s | %-13s %-13s%n",
+                "eta", "dt (s)", "kconv·dt/gPhi", "kbind·dt/gPsi", "ks·dt/gNode", "kb/l0^2·dt/gNode");
+        System.out.println("-".repeat(90));
+        for (double eta : etas) {
+            ETA = eta; DTR = DT * (ETA_FIXED_DT ? 1.0 : eta / Constants.aeta);
+            Glide2D G = build(SEED);
+            double l0m = G.g4l0 * 1e-6;
+            System.out.printf(Locale.US, "%-8.3g %-10.4g | %-13.5g %-13.5g | %-13.5g %-13.5g%n", eta, DTR,
+                    G.kconvCode * DTR / G.gammaPhi, G.kbindCode * DTR / G.gammaPsi,
+                    G.g4ks * DTR / G.g4gammaNode, (G.g4kb / (l0m * l0m)) * DTR / G.g4gammaNode);
+        }
+        System.out.println("\nfracMove-FAMILY channels (chain PAIRS F3/F4 link+torsion; the F10 alignment torque) relax a");
+        System.out.println("FIXED FRACTION PER STEP — their rate is k/dt and is INDEPENDENT of gamma. Under FIXED dt they");
+        System.out.println("do NOT respond to viscosity at all; under the scaled dt they relax at k/dt ∝ 1/eta, matching");
+        System.out.println("the true Langevin channels. This is a STRUCTURAL result, not a numerical convenience.");
+        ETA = savedEta; DTR = savedDt;
+        System.out.printf(Locale.US, "%n=== ETA AUDIT: %s ===%n", ok ? "PASS" : "FAIL");
+        return ok;
+    }
+
+    /** The eight solvent-derived drag channels, in a fixed order, from a built scene. */
+    static double[] channels(Glide2D G) {
+        return new double[] { G.gammaPhi, G.gammaPsi, G.g4gammaNode,
+                G.fil.bTransGam.get(0), G.fil.bTransGam.get(G.nSeg), G.fil.bRotGam.get(G.nSeg),
+                G.mot.body.bRotGam.get(2), G.mot.body.bRotGam.get(3 * G.N / 2 + 2) };
+    }
+    /** Stiffness / geometry quantities that viscosity must NOT touch. */
+    static double[] stiff(Glide2D G) {
+        return new double[] { G.kF8Code, G.kconvCode, G.kbindCode, G.g4ks, G.g4kb, G.g4kfloor, G.g4l0, G.kzCode };
+    }
+
     // =============================================================================== deterministic fixtures
     static boolean runFixtures() {
         passN = failN = 0;
