@@ -76,8 +76,13 @@ COMPLETE** (one gliding assay, 4 η × 8 seeds × both ε signs, 64/64 records, 
 > attachment **flux**, not residence (pre-stroke lifetime is viscosity-invariant in physical time).
 > **Twirling is where viscosity really bites:** at the canonical η₀ = 0.1 the twirl is **unresolved
 > (0.61σ)**; by η = 0.02 it is 3.83σ with 100 % seed sign agreement, and turns-per-µm rises **14×**.
-> That gain is **mobility + engagement**, not demonstrably more generated chiral impulse (τ_odd and
-> J_total_odd show no monotone trend). **⇒ V1 refuted, V2 confirmed, V3 partial, V5 excluded, V6 refuted.**
+> **CONFIRMED AT n = 24:** turns-per-µm differs by **−2.347 ± 0.661 (3.55σ)**, and the η₀ twirl is
+> **still unresolved (1.06σ, 58 % seed sign)** — at the canonical viscosity twirling is not merely weak,
+> it is **undetectable with 24 seeds**. The mechanism is clean: **rotation is drag-limited
+> (`Ω ∝ η^−1.2`, τ_odd flat) while translation is not (`v ∝ η^−0.232`)**, so turns-per-distance rises as
+> the ratio — **mobility, not chirality**. Pre-stroke lifetime is viscosity-invariant in physical time to
+> **0.2 %**. **⇒ V1 refuted for gliding, V2 confirmed, V3 NOT supported (twirling obeys V1), V5 excluded,
+> V6 refuted.** The mirror control at η = 0.01 remains required before crediting a *chiral* origin.
 > **No canonical value is changed.**
 
 > **Part I above (the 2026-07-09 three-point probe) is preserved as historical context and is NOT
@@ -361,6 +366,55 @@ the engagement rise. Ω tracks `τ/γ_roll` with `γ_roll ∝ η`, while τ_odd 
 viscosity trend. The twirl is **not** limited by a viscosity-dependent deficit in generated chiral
 torque; it is limited by rotational drag, and secondarily lifted by the 2.3× larger bound population.
 
+## 12b. CONFIRMATION AT n = 24 (the adaptive-powering extension)
+
+The brief's adaptive trigger was met for **twirling only** (gliding was already 4.8–7.8σ). η = 0.10 and
+η = 0.01 were extended to **24 matched seeds**; the 32 existing 8-seed records were reused, 64 newly run,
+96/96 total, **0 invalid, 0 solver failures**, 2.23 h.
+Raw: `RUN_LOGS/2026-07-27_eta_twirl_n24.txt`.
+
+**The twirling effect HELD AND SHARPENED — it did not regress.**
+
+| quantity | n = 8 | **n = 24** | verdict |
+|---|---:|---:|---|
+| **d(turns per µm)** vs η₀ | −3.188 ± 1.570 (**2.03σ**) | **−2.347 ± 0.661 (3.55σ)** | **CONFIRMED** |
+| Ω_odd @ η = 0.01 | −91.34 ± 39.84 (2.29σ) | **−76.99 ± 16.25 (4.74σ)** | sharpened |
+| Ω_odd @ η = 0.10 | −4.01 ± 6.54 (0.61σ) | −4.89 ± 4.60 (**1.06σ**) | **still UNRESOLVED** |
+| seed-sign @ η = 0.01 | 75 % | 83 % | strengthened |
+| d(η·\|v_even\|) vs η₀ | −0.245 ± 0.031 (7.84σ) | **−0.240 ± 0.014 (17.07σ)** | overwhelming |
+
+The central value of d(turns/µm) moved −3.19 → −2.35 (−26 %) while the SEM tightened 2.4×, which is the
+signature of a **real effect being measured more precisely**, not of a small-sample artifact decaying.
+
+**The η = 0.10 twirl remains consistent with zero even at n = 24** (1.06σ, 58 % seed sign — a coin flip).
+This is now a strong statement rather than an underpowered one: **at the canonical viscosity the twirling
+phenotype is not merely weak, it is undetectable with 24 seeds**, while at η = 0.01 the same measurement
+on the same scene reaches 4.74σ.
+
+### The mechanism, now decisive
+
+| η | v_even (µm/s) | avgBound | strokes/s | preLife (µs, PHYSICAL) | postLife (µs) | turns per µm |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0.10 | −2.895 ± 0.135 | 3.033 | 3 867 | **99.25** | 650.5 | −0.2690 |
+| 0.01 | −4.942 ± 0.145 | 5.822 | 9 450 | **99.45** | 498.0 | −2.4794 |
+
+- **Pre-stroke lifetime is viscosity-invariant in physical time to 0.2 %** (99.25 vs 99.45 µs) — a
+  near-exact confirmation of the n = 8 reading, and precisely what a chemistry-limited phase must do.
+  Post-stroke falls 23 %, total residence falls 20 %, while avgBound rises 92 % ⇒ **the carrier is
+  attachment flux** (episode rate +149 %), not residence.
+- `v ∝ η^−0.232` (1.71× over a 10× span) — translation is **NOT** drag-limited.
+- Ω_odd is consistent with `τ_odd/γ_roll` and `γ_roll ∝ η` — rotation **IS** drag-limited.
+- **τ_odd (−1.6e-22 → −2.3e-22, overlapping) and J_total_odd (−4.2e-26 → −2.2e-26) still show no
+  monotone increase** ⇒ **no evidence of increased generated chiral impulse.**
+
+**⇒ The clean mechanistic statement:** *rotation is drag-limited while translation is not.* Lowering
+viscosity therefore buys far more rotation (`η^−1.2`) than translation (`η^−0.23`), and turns-per-distance
+rises as the **ratio** of those two exponents (`η^−0.97`). The twirl gain is **mobility**, not chirality.
+
+**Still required before this twirling result is credited:** the **mirror control** at η = 0.01 (§18) —
+the signed twirling quantities must reverse on a mirrored actin lattice. Until that is run, the
+per-distance twirling result is **confirmed as a measurement but not yet established as chiral in origin.**
+
 ## 13. Brownian/coherence control
 
 **NOT RUN** (optional arm). Not needed for the premise verdict: the *mean* normalized quantities moved
@@ -425,10 +479,19 @@ Different classes apply to the two phenotypes.
 |---|---|---|
 | **V1** mobility/time-rescaling dominant | **REFUTED (decisively)** | η·v collapses 6.3× at **7.84σ**; η·Ω not flat; engagement +126 %, flux +184 % |
 | **V2** gliding mechanochemistry viscosity-sensitive | **CONFIRMED** | avgBound `η^−0.355`, strokes/s `η^−0.442`, episode rate `η^−0.453`, η·v at 7.84σ |
-| **V3** twirling mechanochemistry viscosity-sensitive | **PARTIAL** | turns-per-µm rises 14×, resolved at η ≤ 0.02 (2.44σ, 2.03σ) — but τ_odd and J_total_odd show **no monotone trend**, so this is mobility + engagement, **not** demonstrably increased generated chiral impulse |
+| **V3** twirling mechanochemistry viscosity-sensitive | **NOT SUPPORTED — the effect is V1-for-rotation** | turns-per-µm confirmed at **3.55σ (n=24)**, but τ_odd and J_total_odd show **no monotone trend** ⇒ the gain is **rotational mobility**, not generated chiral impulse. The *mechanochemistry* of twirling is NOT shown to be viscosity-sensitive |
 | **V4** coherence/noise only | **NOT the explanation** | mean normalized quantities moved far beyond noise |
 | **V5** low-viscosity numerical confound | **EXCLUDED to η = 0.01** | 0 invalid, 0 solver failures across 64 runs; Stage-1 factors exactly invariant; Stage-2 controls exact; CPU/GPU clean. *Caveat: the fixed-dt arm was not run — see §14 for why it is not required.* |
 | **V6** weak sensitivity below 0.1 | **REFUTED** | sensitivity is strong and resolved throughout 0.10 → 0.01 |
+
+**The sharpest way to state the whole result (n = 24).** The two phenotypes sit in *different* classes
+because they are limited by different things:
+
+- **Rotation is drag-limited** (`Ω ∝ η^−1.2`, τ_odd flat) ⇒ twirling obeys **V1 mobility scaling**.
+- **Translation is NOT drag-limited** (`v ∝ η^−0.232`, engagement +92 %, flux +149 %) ⇒ gliding is **V2**.
+- **Turns-per-distance is the RATIO of the two**, so it rises `η^−0.97` at **3.55σ** — a real, confirmed
+  change in rotation per unit distance that is nonetheless **entirely accounted for by the two different
+  limiting regimes**, with no appeal to viscosity-dependent chirality.
 
 **The subtlety worth stating explicitly.** Two true things that sound contradictory:
 gliding **SPEED** is nearly viscosity-insensitive (`η^−0.203` — 10× less drag buys 1.6× speed), yet the
@@ -458,20 +521,21 @@ extra recruitment is largely absorbed rather than converted into transport.
 
 ## 18. Exact next recommendation
 
-**The brief's adaptive-powering trigger is MET for twirling and NOT needed for gliding.**
+**Gliding: SETTLED.** 17.07σ at n = 24. No further work.
 
-- **Gliding: do not extend.** Already 4.8–7.8σ, far above the 1.5–3σ extension band. Settled.
-- **Twirling: extend η = 0.10 and η = 0.01 to 24 matched seeds.** d(turns/µm) sits at **2.44σ / 2.03σ**
-  — squarely inside the brief's 1.5–3σ trigger — with a stable central sign, clean numerical health, and
-  a scientifically meaningful normalized quantity. Cost ≈ **2.3 h** GPU device-resident (16 extra seeds ×
-  2 ε × (8 000 + 80 000) steps), resume-safe. This is the single highest-value follow-up.
-- **Then, if twirling survives at n = 24:** run the **mirror control** at η = 0.01 (the brief requires it
-  before crediting a twirling result), which the S2 study deliberately did not spend because there was no
-  resolved peak to credit. Here there *is* one.
-- **Optional, lower priority:** add propulsive/opposing force columns to the record to test the
-  tug-of-war reading in §9 directly; and probe η > 0.1 to check Part I's claimed knee on the current
-  motor.
-- **Do NOT** descend to 0.003 / 0.001 Pa·s on this evidence alone.
+**Twirling: the per-distance effect is CONFIRMED (3.55σ) but its CHIRAL ORIGIN is not yet established.**
+The one remaining gating experiment is the **mirror control at η = 0.01**: run the same scene on a
+**mirrored actin lattice** (`TArm` already carries a `mirror` field; the eta-map arms currently pass +1)
+and require the signed twirling quantities to **reverse**. Ω_odd = −76.99 ± 16.25 at n = 24 implies a
+mirror arm at **n = 8** would land near **+77 ± 28 (≈2.7σ)** — adequate for a *sign* test, at
+**≈1 h** GPU. n = 24 would cost ≈3.1 h and is not needed for a sign test.
+
+Until that runs, report the twirling result as **"a confirmed viscosity dependence of rotation per unit
+distance, of mobility origin"** — and NOT as evidence about the motor's chirality.
+
+**Lower priority:** add propulsive/opposing force columns to test the §9 tug-of-war reading directly;
+probe η > 0.1 to check Part I's claimed knee on the current motor.
+**Do NOT** descend below 0.01 Pa·s on this evidence.
 
 ## 19. Experiments deliberately not run
 
@@ -481,9 +545,10 @@ extra recruitment is largely absorbed rather than converted into transport.
 - **Fixed-dt vs scaled-dt (Stage 5)** — see §14: at fixed dt the `fracMove` family is drag-independent, so
   that arm measures a *different* system. Not required to defend these results.
 - **Brownian-ON/OFF coherence control (§13)** — unnecessary; the mean effects far exceed noise.
-- **Extension to 24 seeds** — the trigger is met for **twirling only** and is the top recommendation
-  (§18); deliberately not auto-run.
-- **The twirling mirror control** — gated behind the n = 24 twirling confirmation (§18).
+- **Extension to 24 seeds — RUN** for twirling (η = 0.10 and η = 0.01); see §12b. Gliding needed none.
+- **The twirling mirror control — NOT YET RUN.** It is now the single gating experiment (§18): the
+  per-distance twirling effect is confirmed as a *measurement*, but its **chiral origin is unestablished**
+  until the signed quantities are shown to reverse on a mirrored lattice.
 - **η > 0.1** — Part I's claimed knee above the canonical value is **untested on the current motor**.
 - **η = 0.003 / 0.001 Pa·s** — excluded by the brief for this task; not recommended on this evidence.
 - **Force decomposition (propulsive vs opposing)** — not in the record; the §9 tug-of-war reading is
