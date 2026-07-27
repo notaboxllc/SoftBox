@@ -544,3 +544,11 @@ informative next move is powering the one comparison that is currently blind, no
 D1/D2/D3 lawns; D5-vs-D4 at other densities; the density panel; a mirror control (§14 — unwarranted); 48-seed
 extension (adaptive rule not met: Δ_mean central effect is ~0, not 1.5–3σ); dt/2 for Study B; skewed or
 continuous distributions; any tuning of fractions or lengths.
+
+---
+
+**Cross-reference (2026-07-27):** the assay-fixture *solvent viscosity* (η₀ = 0.1 Pa·s), a separate
+fixture axis from free S2 length, is treated in `docs/VISCOSITY_SENSITIVITY_FINDINGS.md` **Part II**.
+Its Stage 0 audit reached the same data-only verdict as §3 here (viscosity touches only 3 of the 17
+per-motor `params` entries), and its Stage 0–2 gates pass to η = 0.01 Pa·s. No gliding or twirling
+viscosity sensitivity is claimed there yet, and nothing in this report is affected.

@@ -462,6 +462,37 @@ preserved (~4 %), 0 invalid. Rolled through `nearestSeg2D`/`gate2D`/g7 sites, `m
 ./scripts/run_lasertrap.sh -motor-regression          # Gates A–F  |  -motor-compare → cross-model table
 ```
 
+**SOLVENT VISCOSITY (assay-fixture sensitivity, 2026-07-27) — STAGES 0–2 DONE; NO SENSITIVITY CLAIMED YET.**
+Bounded reconnaissance of the standing solvent viscosity `Constants.aeta = 0.1 Pa·s` (~100× water) on the CURRENT
+explicit-S2/discrete-site/linear-ramp motor. Report: `docs/VISCOSITY_SENSITIVITY_FINDINGS.md` **Part II** (Part I,
+the 2026-07-09 three-point probe, is preserved as history and **does NOT transfer** — it ran on the OLD
+`GlidingHarness` whose `-aeta` rescales the **filament drag ONLY**, a partial diagnostic rescale, not solvent
+viscosity). **`Constants.aeta` is a compile-time `static final` ⇒ javac INLINES it ⇒ a runtime override is
+impossible; the only sound path is post-build buffer scaling.** New `-eta <Pa·s>` on `ChiralSiteHarness` is
+**DATA-ONLY** (the `applyS2Lawn` precedent): only 3 of the 17 per-motor `params` are viscosity-bearing
+(`gammaPhi[8]`, `gammaPsi[9]`, `g4gammaNode[16]`), plus the filament + motor-body drag tensors — no kernel edit,
+no buffer resize, no TaskGraph change. **Stiffnesses untouched; FDT preserved BY CONSTRUCTION** (all four Brownian
+amplitudes are built `sqrt(2kT·γ/dt)` from the same γ that is scaled). **Default-off; η=0.1 is an exact no-op.**
+**LOAD-BEARING STRUCTURAL FINDING — two force-law families:** Class I (S2 beam, φ/ψ, head roll, filament rigid
+body) relaxes ∝ η; **Class II, the `fracMove` family** (chain PAIRS F3/F4, the F10 alignment torque) relaxes a
+**FIXED FRACTION PER STEP, γ-INDEPENDENT**. Under **fixed dt** Class II does not respond to viscosity at all (a
+*different physical system*, not merely under-resolved); under `dt(η)=dt₀·η/η₀` it relaxes at `k/dt ∝ 1/η` and
+matches Class I ⇒ **the scaled-dt protocol is REQUIRED for coherence, not hygiene** — never compare viscosities at
+fixed dt. Gates: Stage 0 all 8 drag channels exactly ∝ η + stiffnesses invariant + η=0.1 no-op; Stage 1
+dimensionless factors **exactly invariant** 0.10→0.01 (⇒ no new numerical regime; the per-step Brownian
+displacement is *invariant*, vs ×3.16 growth at fixed dt); Stage 2 ζ,γ_roll ∝ η, D ∝ 1/η, τ_S2 ∝ η, all exact.
+**Lowest trustworthy η = 0.01 Pa·s** — the twirl CPU/GPU equivalence PASSES there on a longer horizon and cleaner
+than at η=0.1; the gliding equivalence trips ONLY the **absolute** `max|dOmega|<1e-5` gate on a diagnostic
+accumulator (~29 vs 11 float32 ULP) with **every decision channel exact** — **the gate was NOT relaxed to pass**.
+```
+./scripts/run_chiral_sites.sh -eta-audit        # Stage 0/1: drag+FDT channel audit + dimensionless factors
+./scripts/run_chiral_sites.sh -eta-controls     # Stage 2: forced drag / rotation / diffusion / S2 relaxation
+./scripts/run_gpu_monitored.sh ./scripts/run_chiral_sites.sh -equiv -eta 0.01   # CPU/GPU at the low-eta floor
+```
+**OPEN:** Stages 3–5 (the powered 8-seed gliding + twirling viscosity screens, both ε signs, scaled dt, plus the
+fixed-dt vs scaled-dt discrimination) are **NOT RUN** — sized at ~5–6 h GPU device-resident. **No viscosity
+sensitivity of gliding or twirling is claimed. Canonical viscosity UNCHANGED.**
+
 **S2 FIXTURE HETEROGENEITY (new study, 2026-07-26) — AUDIT ONLY.** Separately bounded investigation of the
 assay fixture *mechanically free S2 length*: does a heterogeneous lawn change the core GLIDING predictions,
 their variability or their density dependence? (Twirling is auxiliary and never selects a distribution.)
