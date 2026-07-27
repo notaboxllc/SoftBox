@@ -1,5 +1,29 @@
 # Soft Box Project Journal
 
+### 2026-07-26 — STUDY A COMPLETE — H3 CONFIRMED under dt refinement (pooled dv/dL = -0.0179 +/- 0.0055, 3.28 sigma); H6 excluded, H5 refuted; **Study B now AUTHORISED**
+
+Ran the dt/2 map at the FULL six lengths (96/96 records; the 30/40/50 subset was reused, only 25/35/45 newly
+run). Report §7.1.
+- **THE GATE IS MET. H3 CONFIRMED.** production dt **-0.02171 +/- 0.00754 (2.88 sigma)**; dt/2
+  **-0.01406 +/- 0.00815 (1.73 sigma)**; **paired change under refinement +0.00764 +/- 0.01412 = 0.54 sigma**
+  (i.e. the 65 % magnitude ratio is NOT a resolved reduction); **pooled over both timesteps
+  -0.01788 +/- 0.00545 = 3.28 sigma**. Sign preserved at both timesteps. **H6 EXCLUDED.**
+- **Stated honestly:** the dt/2 arm ALONE is 1.73 sigma and does not independently establish the effect. The
+  confirmation rests on the conjunction of (a) sign preservation, (b) no resolved slope change, (c) pooled
+  3.28 sigma — not on the dt/2 arm standing alone.
+- **Why the earlier 3-point gate failed:** {30,40,50} sits on the flattest part of the response and reproduces
+  -0.00815 even at PRODUCTION dt, so it could not adjudicate anything. The full lever arm was required.
+- **TWIRL — a further nail in H5.** Omega_odd at 35 nm **FLIPS SIGN** under refinement (-17.12 -> +4.22) while
+  the other five lengths keep sign. A per-length twirl that is not even SIGN-STABLE under dt at n=8 confirms
+  §6.3 (chi2/dof 1.63 about a common value): the twirl is noise, not a length-structured response.
+- **STUDY A COMPLETE; STUDY B NOW AUTHORISED.** Numerical review passed: smooth response, 0 invalid / 0 solver
+  across 192 records, effect survives dt refinement.
+- **NEXT (Study B):** the D0-D5 quenched lawns — mechanism + 10 validation gates already built (§5.1). Sharpest
+  first comparison is **D4 (25 %@30 + 75 %@40, mean 37.5) vs D5 (homogeneous 37.5)**: a resolved difference is
+  direct evidence of mixed-population mechanical interaction, since Study A establishes that the MEAN matters.
+  The post-hoc mixture null `X_posthoc = sum p_k X_homog(L_k)` builds directly from the homogeneous map in hand.
+  Still unrun: density subset (saturation shift), mixed-lawn CPU/GPU equivalence.
+
 ### 2026-07-26 — STUDY A §7 — the prescribed dt/2 subset (30/40/50 nm) is INCONCLUSIVE BY CONSTRUCTION; H3 stays provisional, Study B stays gated
 
 Ran the dt/2 refinement subset (1.25e-6 s, 16000 steps, matched 20 ms, 8 seeds, both eps signs, dt-tagged

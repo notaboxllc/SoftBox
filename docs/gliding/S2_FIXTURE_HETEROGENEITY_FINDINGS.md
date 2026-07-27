@@ -325,17 +325,47 @@ budget on dv/dL and cannot be neglected.**
 **Ω_odd** shifts with dt at every length (−17.2→−19.9, −4.0→−9.3, −2.9→−3.1) but keeps its **negative sign**,
 consistent with §6.3's conclusion that the twirl is noise-dominated rather than length-structured.
 
-**Decisive test, not yet run:** the dt/2 map at the **full six lengths**, so the lever arm matches the
-production-dt fit (96 records at 16 000 steps, ≈80 min).
+### 7.1 The full six-length dt/2 map — **H3 CONFIRMED** [`sA_dthalf6_n8_gpu.txt`]
+
+96/96 dt/2 records (the 30/40/50 subset was reused; only 25/35/45 were newly run). Matched lever arm, matched
+seeds, matched 20 ms physical duration.
+
+| L (nm) | v_even (prod dt) | v_even (dt/2) | Δ | Ω_odd (prod) | Ω_odd (dt/2) |
+|---|---|---|---|---|---|
+| 25 | −2.341 | −2.246 | +0.095 | −11.99 | −9.42 |
+| 30 | −2.656 | −2.805 | −0.149 | −17.19 | −19.90 |
+| 35 | −2.715 | −2.603 | +0.111 | −17.12 | **+4.22 (SIGN FLIP)** |
+| 40 | −2.915 | −2.754 | +0.162 | −4.01 | −9.33 |
+| 45 | −3.058 | −2.753 | +0.305 | −12.73 | −16.23 |
+| 50 | −2.819 | −2.739 | +0.080 | −2.95 | −3.12 |
+
+| estimator | dv_even/dL (µm/s)/nm | σ | seeds |
+|---|---|---|---|
+| production dt | **−0.02171 ± 0.00754** | 2.88 | 88 % |
+| dt/2 | **−0.01406 ± 0.00815** | 1.73 | 75 % |
+| **paired change under refinement** | **+0.00764 ± 0.01412** | **0.54** | 6/8 |
+| **pooled over both timesteps** | **−0.01788 ± 0.00545** | **3.28** | — |
+
+**The gate is met.** The sign is **preserved** (negative at both timesteps); the slope **does not significantly
+change** under refinement (paired Δ = 0.54σ, i.e. the 65 % magnitude ratio is not a resolved reduction); and
+pooling both timesteps resolves the effect at **3.28σ**. **⇒ H3 CONFIRMED; H6 excluded.**
+
+*Stated honestly:* the dt/2 arm **alone** is 1.73σ and does not independently establish the effect. The
+confirmation rests on the conjunction of (a) sign preservation, (b) no resolved slope change, and (c) the pooled
+3.28σ — not on the dt/2 arm standing by itself.
+
+**Twirl under refinement — a further nail in H5.** Ω_odd at 35 nm **flips sign** (−17.12 → +4.22) while the other
+five lengths keep sign. A per-length twirl value that is not even *sign-stable* under timestep refinement at
+n = 8 confirms §6.3: the twirl here is noise about a common value, not a length-structured response.
 
 ## 8. Homogeneous classification — **H3 (mean-sensitive), PROVISIONAL**
 
 **H3** — free length materially shifts mean speed: dv/dL resolved at 3.69σ, ~37 % over 25–50 nm.
 **Not H1** (mean is not robust). **Not H2** (CV non-monotone, no clean variance dependence). **H4 unresolved** —
 engagement and stroke flux trend with L at 88 % seed agreement but only 1.4σ. **H5 not assessable** — the twirl
-columns are single-sign (§6.3). **H6 not excluded** — the §7 dt/2 subset was run and is
-**inconclusive by construction** (it sits on the flattest part of the response and resolves nothing even at
-production dt), and it measured a per-length dt systematic comparable to the length effect over that window. **Not H7** — the response is smooth and monotone in trend with no
+columns are single-sign (§6.3). **H6 EXCLUDED** — the full six-length dt/2 map (§7.1) preserves the
+sign, shows no resolved slope change (0.54σ) and pools to 3.28σ. (The earlier three-point subset was
+inconclusive by construction, §7.) **Not H7** — the response is smooth and monotone in trend with no
 isolated extrema or discontinuities, and numerical health is perfect at every length.
 
 A further caveat on the trend model: v_even reads −2.341, −2.656, −2.715, −2.915, −3.058, −2.819 — rising in
@@ -343,8 +373,9 @@ magnitude to 45 nm then falling at 50. The 45→50 drop (0.24 µm/s) is within t
 consistent with monotone-then-plateau, but **a linear slope is a summary of a possibly non-monotone response**,
 not a validated functional form.
 
-**Study B is NOT authorised.** The brief's gate is "do not introduce heterogeneous lawns until Study A passes
-numerical and interpretive review". §7 did not pass that review — it returned no verdict.
+**Study B is now AUTHORISED.** Study A has passed numerical and interpretive review: the homogeneous response is
+smooth (no discontinuities), numerically healthy at every length (0 invalid / 0 solver in 192 records), and the
+mean-gliding effect survives dt refinement (§7.1).
 
 ## 9–19. NOT YET IMPLEMENTED OR RUN
 
@@ -355,9 +386,11 @@ average of homogeneous arms (13); density dependence (14); secondary twirling co
 equivalence on a broad mixed lawn (16); biological interpretation and limits (17); next recommendation (18);
 experiments deliberately not run (19).
 
-**Exact next step: the dt/2 map at the FULL six lengths (25–50 nm), not a three-point subset.** Only a matched
-lever arm can adjudicate H3 vs H6; the 30/40/50 window provably cannot (§7). 96 records at 16 000 steps, ≈80 min.
-If the six-length dt/2 trend keeps the negative sign at comparable magnitude, H3 is confirmed and Study B opens;
-if it collapses, the result becomes H6. Also outstanding before any heterogeneity claim: the density subset
+**Exact next step: Study B.** Study A is complete and H3 is confirmed, so the D0–D5 quenched lawns may now be
+run — the mechanism and its 10 validation gates are already built (§5.1). The scientifically sharpest first
+comparison is **D4 (25 % @ 30 nm + 75 % @ 40 nm, mean 37.5) versus D5 (homogeneous 37.5 nm)**: a resolved
+difference there is direct evidence of mixed-population mechanical interaction, since Study A establishes that
+the mean matters. The post-hoc mixture null `X_posthoc = Σ p_k X_homog(L_k)` can be built directly from the
+homogeneous map already in hand. Also outstanding before any heterogeneity claim: the density subset
 (saturation shift) and mixed-lawn CPU/GPU equivalence. The ±ε twirl map is DONE (§6.3) and shows no length
 dependence.
