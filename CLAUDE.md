@@ -489,9 +489,36 @@ accumulator (~29 vs 11 float32 ULP) with **every decision channel exact** — **
 ./scripts/run_chiral_sites.sh -eta-controls     # Stage 2: forced drag / rotation / diffusion / S2 relaxation
 ./scripts/run_gpu_monitored.sh ./scripts/run_chiral_sites.sh -equiv -eta 0.01   # CPU/GPU at the low-eta floor
 ```
-**OPEN:** Stages 3–5 (the powered 8-seed gliding + twirling viscosity screens, both ε signs, scaled dt, plus the
-fixed-dt vs scaled-dt discrimination) are **NOT RUN** — sized at ~5–6 h GPU device-resident. **No viscosity
-sensitivity of gliding or twirling is claimed. Canonical viscosity UNCHANGED.**
+**PREMISE TEST COMPLETE (2026-07-27) — viscosity dependence is REAL and is NOT clock rescaling.** ONE gliding
+assay across η (both phenotypes from the SAME runs: gliding = ε-EVEN, twirling = ε-ODD ⇒ the separate twirling
+scene was **dropped**), 4 η × 8 seeds × both ε signs, matched **20 ms physical** duration (dt AND steps scaled),
+GPU device-resident, 64/64 records, **0 invalid/solver**, 1.85 h. `-eta-map` (reuses the S2-map machinery
+verbatim; record ids tag the base step count so different durations can't collide).
+- **Gliding SPEED is nearly viscosity-INSENSITIVE — a 10× drop in η buys only 1.60× (v ∝ η^−0.203)**,
+  reproducing the standing cycle/tug-of-war-limited η^−0.18 verdict and confirming Part I's **low-η** branch.
+  **But η·v collapses 6.3× (paired 7.84σ) ⇒ pure mobility rescaling (V1) is REFUTED.**
+- **The MECHANISM is viscosity-sensitive:** avgBound **+126 %**, strokes/s +177 %, episode rate +184 %. **Carrier
+  = attachment FLUX, not residence** — in PHYSICAL time pre-stroke lifetime is **invariant** (~100 µs,
+  chemistry-limited), post-stroke falls 21 %, total residence falls 19 % while bound population rises 126 % ⇒
+  ~2.8× more attachments/s. Coherent with **recruitment is REACH-limited**.
+- **TWIRLING: at the CANONICAL η the twirl is NOT RESOLVED (0.61σ, consistent with zero)**; it becomes 2.53 /
+  **3.83** / 2.29σ as η falls (100 % seed sign at 0.02), **Ω_odd rises 22.8× (η^−1.358, steeper than mobility)**
+  and **turns-per-µm rises 14×**. **τ_odd / J_total_odd show NO monotone trend ⇒ the gain is MOBILITY +
+  engagement, NOT more generated chiral impulse** — the twirl is **drag-limited, not chiral-torque-limited**.
+- **Classes: V1 REFUTED (7.8σ) · V2 CONFIRMED · V3 PARTIAL · V5 EXCLUDED to η=0.01 · V6 REFUTED.**
+- **ASSAY IMPLICATION (load-bearing):** η₀=0.1 Pa·s does **NOT** materially bias gliding-**speed** conclusions,
+  but it **DOES** bias engagement/flux (avgBound 2.3× lower) and **actively SUPPRESSES twirling below
+  detectability**. **0.1 Pa·s is a poor operating point for studying twirling** — quote η with any duty-ratio,
+  recruitment or twirl claim.
+```
+./scripts/run_gpu_monitored.sh ./scripts/run_chiral_sites.sh -eta-map -gpu -seeds 8 -steps 8000   # the premise test
+./scripts/run_chiral_sites.sh -eta-report -seeds 8 -steps 8000                                    # re-report from records
+```
+**OPEN:** the adaptive-powering trigger is met for **twirling only** (d(turns/µm) 2.44σ / 2.03σ): extend η=0.10
+and η=0.01 to **24 seeds** (~2.3 h, resume-safe), then the **mirror control** at η=0.01. Gliding needs no
+extension. Not run: force decomposition (propulsive vs opposing — the tug-of-war reading is consistent with but
+NOT demonstrated by these data), η > 0.1 (Part I's knee is untested on the current motor), η < 0.01.
+**Canonical viscosity UNCHANGED; nothing tuned; frozen model untouched.**
 
 **S2 FIXTURE HETEROGENEITY (new study, 2026-07-26) — AUDIT ONLY.** Separately bounded investigation of the
 assay fixture *mechanically free S2 length*: does a heterogeneous lawn change the core GLIDING predictions,

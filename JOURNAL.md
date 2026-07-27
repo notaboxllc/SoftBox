@@ -1,5 +1,45 @@
 # Soft Box Project Journal
 
+### 2026-07-27 — VISCOSITY PREMISE TEST (one gliding assay): dependence is REAL and is NOT clock rescaling — V1 refuted at 7.8 sigma; the canonical 0.1 Pa·s SUPPRESSES twirling below detectability
+
+**What was done.** Per jba's rescope, the premise "is there ANY viscosity dependence for gliding and
+twirling" was tested with a **SINGLE gliding assay**: both phenotypes read from the SAME runs (gliding =
+ε-EVEN, twirling = ε-ODD), so the brief's separate twirling scene was **dropped** — halving the compute
+and removing a cross-scene confound. 4 η (0.10/0.05/0.02/0.01) × 8 matched seeds × both ε signs, matched
+**20 ms physical** duration (dt AND steps scaled), GPU device-resident, monitored, no fallback. 64/64
+records, **0 invalid, 0 solver failures**, 1.85 h. Report: `docs/VISCOSITY_SENSITIVITY_FINDINGS.md` §§7–19.
+
+**What was learned.**
+- **Gliding SPEED is nearly viscosity-insensitive:** a **10× drop in viscosity buys only 1.60×** in speed
+  (−2.915 → −4.652 µm/s), **v ∝ η^−0.203**. Independently reproduces the standing "cycle/tug-of-war-limited,
+  η^−0.18" verdict and **confirms Part I's low-η branch** even though Part I's lever was filament-only.
+  (Part I's claimed knee **above** 0.1 remains untested on the current motor.)
+- **But η·v is NOT flat — it collapses 6.3×** (paired 4.84 / 7.14 / 7.84σ) ⇒ **pure mobility rescaling
+  (V1) is REFUTED.** The **mechanism** is viscosity-sensitive: avgBound **+126 %**, strokes/s +177 %,
+  episode rate +184 %.
+- **The carrier is attachment FLUX, not residence.** Converted to PHYSICAL time, pre-stroke lifetime is
+  **invariant** (~100 µs ±4 %, chemistry-limited) and post-stroke falls 21 %; total residence **falls 19 %**
+  while the bound population **rises 126 %** ⇒ heads attach ~2.8× more often (matches the 2.84× episode
+  rate). Coherent with the standing **"recruitment is REACH-limited"** finding.
+- **TWIRLING is where viscosity bites.** At the **canonical η the twirl is NOT RESOLVED (0.61σ**;
+  Ω_odd = −4.01 ± 6.54, consistent with zero). It becomes strongly resolved as η falls (2.53 / **3.83** /
+  2.29σ; **100 % seed sign agreement at η=0.02**); **Ω_odd rises 22.8×** (η^−1.358, *steeper* than pure
+  mobility) and **turns-per-µm rises 14×** (η^−1.154), resolved at η ≤ 0.02. **τ_odd and J_total_odd show
+  NO monotone trend** ⇒ the gain is **mobility + engagement, NOT more generated chiral impulse**. The twirl
+  is limited by **rotational drag**, not a chiral-torque deficit.
+- **Classes:** V1 **REFUTED** (7.8σ), V2 **CONFIRMED**, V3 **PARTIAL**, V4 not the explanation,
+  V5 **EXCLUDED** to η=0.01, V6 **REFUTED**.
+- **Assay implication:** η₀ = 0.1 Pa·s does **not** materially bias gliding-**speed** conclusions (1.6× over
+  10×), but it **does** bias engagement/flux (avgBound 2.3× lower) and it **actively suppresses twirling
+  below detectability**. **0.1 Pa·s is a poor operating point for studying twirling.**
+
+**What's open.** The brief's adaptive-powering trigger is **met for twirling only** (d(turns/µm) at
+2.44σ / 2.03σ, inside the 1.5–3σ band, stable sign, clean health): extend η=0.10 and η=0.01 to **24 seeds**
+(~2.3 h, resume-safe), then the **mirror control** at η=0.01 if it survives. Gliding needs no extension
+(already 4.8–7.8σ). Not run: force decomposition (the §9 tug-of-war reading is consistent with but not
+demonstrated by these data), η > 0.1, η < 0.01. **No canonical value changed; nothing tuned; frozen model
+untouched.**
+
 ### 2026-07-27 — Viscosity Part II Stages 0–2: a COHERENT solvent-viscosity path (`-eta`), and the gate that it is trustworthy to 0.01 Pa·s
 
 **What was done.** Stage 0/1/2 of the lower-viscosity reconnaissance on the CURRENT explicit-S2 /
