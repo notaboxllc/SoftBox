@@ -514,9 +514,19 @@ verbatim; record ids tag the base step count so different durations can't collid
 ./scripts/run_gpu_monitored.sh ./scripts/run_chiral_sites.sh -eta-map -gpu -seeds 8 -steps 8000   # the premise test
 ./scripts/run_chiral_sites.sh -eta-report -seeds 8 -steps 8000                                    # re-report from records
 ```
-**OPEN:** the adaptive-powering trigger is met for **twirling only** (d(turns/µm) 2.44σ / 2.03σ): extend η=0.10
-and η=0.01 to **24 seeds** (~2.3 h, resume-safe), then the **mirror control** at η=0.01. Gliding needs no
-extension. Not run: force decomposition (propulsive vs opposing — the tug-of-war reading is consistent with but
+**CONFIRMED AT n=24 (2026-07-27, 96/96 records, 0 invalid, 2.23 h):** the twirling effect **HELD AND SHARPENED** —
+d(turns/µm) **−2.347 ± 0.661 (3.55σ)** (was 2.03σ at n=8), Ω_odd@0.01 **4.74σ**, d(η·|v|) **17.07σ**. **The
+canonical η is BLIND to twirling even at n=24** (Ω_odd@0.10 = −4.89 ± 4.60, **1.06σ**, 58 % seed sign = coin
+flip). **DECISIVE MECHANISM — the phenotypes are in DIFFERENT classes: ROTATION IS DRAG-LIMITED** (Ω ∝ η^−1.2,
+**τ_odd FLAT**) ⇒ twirling obeys **V1**; **TRANSLATION IS NOT** (v ∝ η^−0.232) ⇒ gliding is **V2**;
+turns-per-distance is the **RATIO** ⇒ η^−0.97, fully explained **with NO viscosity-dependent chirality**.
+**⇒ V3 NOT SUPPORTED** (τ_odd/J_total_odd show no monotone increase). Pre-stroke lifetime viscosity-invariant
+in PHYSICAL time **to 0.2 %** (99.25 vs 99.45 µs); carrier is attachment **FLUX** (+149 %), not residence (−20 %).
+**OPEN — ONE gating experiment: the MIRROR CONTROL at η=0.01.** The per-distance twirl is confirmed as a
+**measurement**; its **chiral ORIGIN is unestablished** until the signed quantities reverse on a mirrored lattice
+(`TArm` already carries `mirror`; the eta-map arms pass +1). **n=8 suffices for a sign test (~1 h).** Until then
+report it as *"a confirmed viscosity dependence of rotation per unit distance, of MOBILITY origin"* — **NOT** as
+evidence about motor chirality. Gliding needs no extension (17.07σ). Not run: force decomposition (propulsive vs opposing — the tug-of-war reading is consistent with but
 NOT demonstrated by these data), η > 0.1 (Part I's knee is untested on the current motor), η < 0.01.
 **Canonical viscosity UNCHANGED; nothing tuned; frozen model untouched.**
 

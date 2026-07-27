@@ -1,5 +1,40 @@
 # Soft Box Project Journal
 
+### 2026-07-27 — TWIRLING CONFIRMED at n=24 (3.55σ) — and it is MOBILITY, not chirality; the canonical 0.1 Pa·s is BLIND to twirling even with 24 seeds
+
+**What was done.** The brief's adaptive-powering extension (twirling only — gliding was already 4.8–7.8σ):
+η = 0.10 and η = 0.01 to **24 matched seeds**, both ε signs. 32 records reused, 64 newly run, **96/96,
+0 invalid/solver**, 2.23 h, GPU device-resident. Raw `RUN_LOGS/2026-07-27_eta_twirl_n24.txt`; report
+`docs/VISCOSITY_SENSITIVITY_FINDINGS.md` §12b.
+
+**What was learned.**
+- **The effect HELD AND SHARPENED — it did not regress.** d(turns per µm) **−3.188 ± 1.570 (2.03σ, n=8)
+  → −2.347 ± 0.661 (3.55σ, n=24)**; Ω_odd @ η=0.01 **−91.3 ± 39.8 (2.29σ) → −77.0 ± 16.3 (4.74σ)**,
+  seed-sign 75→83 %; d(η·|v|) **7.84 → 17.07σ**. The central value moved −26 % while the SEM tightened
+  2.4× — a real effect measured more precisely, not a small-sample artifact decaying.
+- **The canonical viscosity is BLIND to twirling.** Ω_odd @ η=0.10 = **−4.89 ± 4.60 (1.06σ, 58 % seed
+  sign — a coin flip) even at n=24**. At 0.1 Pa·s twirling is not merely weak, it is **undetectable with
+  24 seeds**, while the SAME measurement on the SAME scene reaches 4.74σ at η=0.01.
+- **THE MECHANISM IS NOW DECISIVE — the two phenotypes are in DIFFERENT classes because different things
+  limit them.** **Rotation is DRAG-LIMITED** (Ω ∝ η^−1.2, **τ_odd FLAT**) ⇒ twirling obeys **V1 mobility
+  scaling**. **Translation is NOT** (v ∝ η^−0.232, engagement +92 %, flux +149 %) ⇒ gliding is **V2**.
+  Turns-per-distance is the **RATIO** of the two ⇒ rises η^−0.97 at 3.55σ, **fully accounted for by the
+  two limiting regimes with NO appeal to viscosity-dependent chirality**.
+- **⇒ V3 is NOT SUPPORTED.** τ_odd (−1.6e-22 → −2.3e-22, overlapping) and J_total_odd (−4.2e-26 →
+  −2.2e-26) show **no monotone increase** ⇒ **no evidence of increased generated chiral impulse**. The
+  *mechanochemistry* of twirling is not viscosity-sensitive; its **mobility** is.
+- **Pre-stroke lifetime is viscosity-invariant in PHYSICAL time to 0.2 %** (99.25 vs 99.45 µs) — a
+  near-exact confirmation of the n=8 reading, and exactly what a chemistry-limited phase must do.
+  Post-stroke −23 %, total residence −20 %, while avgBound **+92 %** ⇒ the carrier is attachment **FLUX**.
+
+**What's open — ONE gating experiment.** The **mirror control at η = 0.01**: the per-distance twirling
+effect is confirmed as a **measurement**, but its **chiral ORIGIN is unestablished** until the signed
+quantities reverse on a mirrored actin lattice. `TArm` already carries the `mirror` field (the eta-map
+arms pass +1); **n=8 suffices for a sign test** (Ω_odd would land ≈ +77 ± 28, ≈2.7σ) at **≈1 h**. Until
+then this must be reported as *"a confirmed viscosity dependence of rotation per unit distance, of
+MOBILITY origin"* and **NOT** as evidence about motor chirality. Lower priority: force decomposition;
+η > 0.1 (Part I's knee, untested on the current motor). **Canonical viscosity UNCHANGED; nothing tuned.**
+
 ### 2026-07-27 — VISCOSITY PREMISE TEST (one gliding assay): dependence is REAL and is NOT clock rescaling — V1 refuted at 7.8 sigma; the canonical 0.1 Pa·s SUPPRESSES twirling below detectability
 
 **What was done.** Per jba's rescope, the premise "is there ANY viscosity dependence for gliding and
