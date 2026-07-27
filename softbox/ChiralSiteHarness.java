@@ -42,6 +42,32 @@ public final class ChiralSiteHarness {
     static int     FIL_SEGS  = TwoBodyConverterMotor.G4_NSEG;   // -filament-segments <n> (1 ⇒ rigid single rod)
     static boolean FIL_BROWN = true;                            // -filament-brownian on|off
     static double  DTR       = DT;                              // -halfdt ⇒ DT/2 (timestep refinement check)
+
+    // ---------------------------------------------------------------------------------------------------------
+    // COHERENT WHOLE-SYSTEM SOLVENT VISCOSITY (noncanonical, DEFAULT-OFF; docs/VISCOSITY_SENSITIVITY_FINDINGS.md).
+    //
+    // `-eta <Pa·s>` scales EVERY solvent-derived drag channel the assay owns by r = eta/Constants.aeta:
+    //     per-motor  params[8]=gammaPhi, [9]=gammaPsi, [16]=g4gammaNode   (via the Glide2D scalars, pre-packExMat)
+    //     filament   fil.bTransGam / fil.bRotGam                          (+ the kT/gamma diffusion mirrors)
+    //     motor body mot.body.bTransGam / bRotGam  — the head-roll drag ChiralSiteSystem.headRollStep reads
+    // This is DATA-ONLY: no kernel edit, no buffer resize, no TaskGraph change (the S2-lawn precedent).
+    //
+    // STIFFNESSES ARE DELIBERATELY NOT TOUCHED (kF8Code / kconvCode / kbindCode / g4ks / g4kb / g4kfloor / kzCode):
+    // viscosity is not a stiffness. Chemistry rates are per-second constants consumed as k·dt ⇒ fixed in PHYSICAL
+    // time under the dt rescale.
+    //
+    // FDT IS PRESERVED BY CONSTRUCTION, not by hand: every Brownian amplitude in this assay is built as
+    // sqrt(2·kT·gamma/dt) from the SAME gamma this scales —
+    //     filament    BrownianForceSystem: params[1]=sqrt(2kT/dt) times sqrt(bTransGam/bRotGam)
+    //     phi/psi     TwoBodyConverterMotor.brownTorque(gammaPhi/gammaPsi, dt, …)
+    //     S2 nodes    TwoBodyConverterMotor.brownTorque(g4gammaNode, dt, …)
+    //     head roll   ChiralSiteSystem.headRollStep: sqrt(2·kT·gam/dt), gam = body bRotGam
+    // ⇒ no noise term is hand-scaled and D = kT/gamma tracks 1/eta automatically.
+    //
+    // r == 1 ⇒ EXACT early-return no-op ⇒ eta = 0.1 reproduces the unflagged path BIT-IDENTICALLY.
+    // ---------------------------------------------------------------------------------------------------------
+    static double  ETA = Constants.aeta;      // -eta <Pa·s>  (0.1 ⇒ no-op)
+    static boolean ETA_FIXED_DT = false;      // -eta-fixed-dt: keep dt at DT (the Stage-5 fixed-dt diagnostic arm)
     static double  EQUIL_FRAC = 0.25;                           // -equil-frac: startup transient discarded
     static int     NBLK      = 5;                               // measurement blocks for the block-SEM
     static int     NTRACE    = 60;                              // stationarity trace samples in the measure window
@@ -69,6 +95,7 @@ public final class ChiralSiteHarness {
         TornadoCrashDiagnostic.init("chiral-actin-sites", args);
         boolean fixtures = false, equiv = false, campaign = false, lattice = false, mechanism = false, all = false; String jsDir = null;
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
+        boolean etaAudit = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
                 convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false, s2DtCmp = false, studyB = false, studyBRep = false;
@@ -155,9 +182,17 @@ public final class ChiralSiteHarness {
                 case "-randomize-motor-base-azimuth" -> ExplicitCompleteMatHarness.RAND_BASE_AZ = args[++i].equals("on");
                 case "-gpu" -> GPU = true;
                 case "-mech-mirror" -> MECH_MIRROR = -1.0;
+                case "-eta" -> ETA = Double.parseDouble(args[++i]);
+                case "-eta-fixed-dt" -> ETA_FIXED_DT = true;
+                case "-eta-audit" -> etaAudit = true;
                 default -> { }
             }
         }
+        // COHERENT VISCOSITY: the mechanically similar timestep dt(eta) = dt0·eta/eta0 keeps dt/gamma — and hence
+        // EVERY fracMove-family relaxation (chain PAIRS F3/F4, the F10 alignment torque), which relaxes a fixed
+        // FRACTION PER STEP and is therefore drag-INDEPENDENT — scaling coherently with the true Langevin channels.
+        // Composes with -halfdt (which has already set DTR). -eta-fixed-dt suppresses it (the Stage-5 diagnostic arm).
+        if (!ETA_FIXED_DT) DTR *= ETA / Constants.aeta;
         System.out.println("######## Discrete actin sites + head roll DOF + chiral bind/stroke (noncanonical, default-off) ########");
         System.out.printf(Locale.US, "dt=%.2e  density=%.0f heads/µm²  seed=%d  seeds=%d  steps=%d  Ractin=%.2f nm  registryK=%.2e N·m/rad%n",
                 DT, DENSITY, SEED, SEEDS, STEPS, R_NM, REG_K);
@@ -172,7 +207,8 @@ public final class ChiralSiteHarness {
         if (jsDir != null) {
             if (twirlMode) makeTwirlMovies(jsDir); else makeMovies(jsDir);
             TornadoCrashDiagnostic.normalMainReturn("mode=3js"); return; }
-        if (convStage1)      { EPS_CONV_DEG = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 5.0; runConvStage1(); }
+        if (etaAudit)        ok = runEtaAudit();
+        else if (convStage1) { EPS_CONV_DEG = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 5.0; runConvStage1(); }
         else if (convFix)    ok = runConvFixtures();
         else if (convEquiv)  ok = runConvEquiv();
         else if (convPilot)  runConvPilot();
@@ -279,8 +315,23 @@ public final class ChiralSiteHarness {
             // no-op at the defaults, applied BEFORE packExMat reads paramArr/g4Node.
             ExplicitCompleteMatHarness.applyGeomScales(G);
             ExplicitCompleteMatHarness.applyS2Lawn(G);   // §S2-FIXTURE quenched per-motor free S2 length (default-off)
+            applyEta(G);                                 // §VISCOSITY coherent whole-system solvent viscosity (default-off)
             return G;
         } finally { TwoBodyConverterMotor.G4_NSEG_RUN = saved; }
+    }
+
+    /** COHERENT whole-system solvent viscosity — see the ETA field block. r==1 ⇒ exact no-op. */
+    static void applyEta(Glide2D G) {
+        double r = ETA / Constants.aeta;
+        if (r == 1.0) return;                                  // exact no-op ⇒ byte-identical to the unflagged path
+        G.gammaPhi *= r; G.gammaPsi *= r; G.g4gammaNode *= r;   // per-motor params[8]/[9]/[16] (paramArr reads these)
+        etaScale(G.fil.bTransGam, r);       etaScale(G.fil.bRotGam, r);
+        etaScale(G.fil.bTransDiff, 1.0/r);  etaScale(G.fil.bRotDiff, 1.0/r);   // D = kT/gamma
+        etaScale(G.mot.body.bTransGam, r);      etaScale(G.mot.body.bRotGam, r);
+        etaScale(G.mot.body.bTransDiff, 1.0/r); etaScale(G.mot.body.bRotDiff, 1.0/r);
+    }
+    static void etaScale(FloatArray a, double r) {
+        for (int i = 0; i < a.getSize(); i++) a.set(i, (float) (a.get(i) * r));
     }
 
     // =============================================================================== deterministic fixtures

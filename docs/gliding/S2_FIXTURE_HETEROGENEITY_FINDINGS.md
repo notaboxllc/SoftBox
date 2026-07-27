@@ -8,15 +8,17 @@ auxiliary phenotype read from the same runs and never used to select a distribut
 
 ## 1. Executive conclusion
 
-**STATUS: AUDIT + STUDY-A IMPLEMENTATION + HOMOGENEOUS MAP COMPLETE. Study B not started.**
+**STATUS: COMPLETE — audit, Study A (homogeneous map, H3 confirmed under dt refinement) and Study B
+(first heterogeneous test, D4 vs D5) are all run and written up. §§9–19 report Study B.**
 
 **CORE GLIDING RESULT — mean gliding speed IS sensitive to mechanically free S2 length.** With both ε signs
 present the proper ε-EVEN estimator gives **dv_even/dL = −0.02171 ± 0.00754 (µm/s)/nm, 2.88σ, 88 % of seeds** —
 |v| *rises* with free length, −2.341 µm/s at 25 nm → −2.819 at 50 nm, **≈ 20 % across the plausible range**.
 (The single-ε arm alone read 3.69σ / 37 %; the ε-even value is the smaller and correct one and supersedes it.)
 Pairwise comparisons against 40 nm resolve nothing (≤1.82σ) — only the matched-seed trend test resolves this.
-**Provisional classification H3 (mean-sensitive)** — provisional because the dt/2 subset is not yet run and the
-likely carrier (the post-stroke tail) is exactly the dt-sensitive channel of §23.13a. Velocity *variability*
+**Classification H3 (mean-sensitive), CONFIRMED under dt refinement** — the likely carrier (the post-stroke
+tail) is exactly the dt-sensitive channel of §23.13a, so the full six-length dt/2 map was run (§7.1): the sign
+is preserved, the paired slope change is 0.54σ and the pooled slope is 3.28σ. Velocity *variability*
 shows no clean length dependence (CV 0.19–0.39, non-monotone) ⇒ **not H2**. Density dependence **unmeasured**.
 
 **SECONDARY TWIRLING RESULT — there is NO resolved length dependence of twirling.** The ε-ODD map looks jagged
@@ -32,8 +34,13 @@ so heterogeneity needs **no kernel edit, no buffer-size change and no TaskGraph 
 surfaced **one real hazard** — a legacy scalar-assuming code path that would silently ignore heterogeneity —
 which must be guarded before any campaign.
 
-Nothing about gliding, variance, density saturation or twirling is claimed here. Sections 6–19 are scaffolded
-and explicitly unrun.
+**STUDY B HEADLINE (§§9–19): a heterogeneous lawn behaves like its MEAN.** D4 (25 % @ 30 nm + 75 % @ 40 nm)
+versus mean-matched homogeneous D5 (37.5 nm), 24 matched seeds, 96/96 records, gives
+**Δ_mean(v) = +0.005 ± 0.152 µm/s (0.03σ)**, 50 % seed sign ⇒ **B1**. Within D4 the short class is
+under-recruited 13–15 % and under-propulsive 19 % yet carries **38 % more axial torque than its deposited
+share** — a selection signature that never reaches the population endpoints (partial B4). **Δ_mix (1.08σ,
+n = 8) is underpowered, so B3 is untested rather than refuted.** Density dependence remains **unmeasured and
+explicitly not gated**.
 
 ## 2. Scientific scope and restraint
 
@@ -225,9 +232,13 @@ dt = 2.5e-6 s, 8000 steps, 25 % equilibration, 8 matched seeds, GPU device-resid
 **The matched-seed TREND test does resolve it**, and is the correct statistic here because every length shares
 the same seed set:
 
-| per-seed slope vs L | value | σ | seeds same sign |
+*This table is the **single-ε (+ε only)** arm, retained as the record of what was measured first. Its dv/dL is
+**superseded by the ε-EVEN value in §6.3** (−0.02171 ± 0.00754, 2.88σ), which is the correct and smaller estimate
+and the one carried into §1 and §8.*
+
+| per-seed slope vs L (single-ε arm) | value | σ | seeds same sign |
 |---|---|---|---|
-| **dv/dL** | **−0.03194 ± 0.00866 (µm/s)/nm** | **3.69** | **88 %** |
+| **dv/dL** *(superseded — see §6.3)* | **−0.03194 ± 0.00866 (µm/s)/nm** | **3.69** | **88 %** |
 | d(avgBound)/dL | +0.01074 ± 0.00733 /nm | 1.46 | 88 % |
 | d(strokes/s)/dL | +13.10 ± 9.50 (1/s)/nm | 1.38 | 88 % |
 | d(postLife)/dL | +0.668 ± 0.523 steps/nm | 1.28 | 50 % |
@@ -358,12 +369,15 @@ confirmation rests on the conjunction of (a) sign preservation, (b) no resolved 
 five lengths keep sign. A per-length twirl value that is not even *sign-stable* under timestep refinement at
 n = 8 confirms §6.3: the twirl here is noise about a common value, not a length-structured response.
 
-## 8. Homogeneous classification — **H3 (mean-sensitive), PROVISIONAL**
+## 8. Homogeneous classification — **H3 (mean-sensitive), CONFIRMED**
 
-**H3** — free length materially shifts mean speed: dv/dL resolved at 3.69σ, ~37 % over 25–50 nm.
+**H3** — free length materially shifts mean speed: the ε-EVEN slope is
+**dv_even/dL = −0.02171 ± 0.00754 (µm/s)/nm, 2.88σ, ~20 % over 25–50 nm**. (The single-ε arm read 3.69σ / 37 %;
+that figure is SUPERSEDED — the ε-even estimator is the correct one and is the smaller of the two.)
 **Not H1** (mean is not robust). **Not H2** (CV non-monotone, no clean variance dependence). **H4 unresolved** —
-engagement and stroke flux trend with L at 88 % seed agreement but only 1.4σ. **H5 not assessable** — the twirl
-columns are single-sign (§6.3). **H6 EXCLUDED** — the full six-length dt/2 map (§7.1) preserves the
+engagement and stroke flux trend with L at 88 % seed agreement but only 1.4σ. **H5 REFUTED** — with both ε
+signs run (§6.3), the twirl map is consistent with a single common value (χ²/dof = 1.63 on 5 dof) and the
+trend is 1.95σ, unresolved. **H6 EXCLUDED** — the full six-length dt/2 map (§7.1) preserves the
 sign, shows no resolved slope change (0.54σ) and pools to 3.28σ. (The earlier three-point subset was
 inconclusive by construction, §7.) **Not H7** — the response is smooth and monotone in trend with no
 isolated extrema or discontinuities, and numerical health is perfect at every length.
@@ -377,23 +391,13 @@ not a validated functional form.
 smooth (no discontinuities), numerically healthy at every length (0 invalid / 0 solver in 192 records), and the
 mean-gliding effect survives dt refinement (§7.1).
 
-## 9–19. NOT YET IMPLEMENTED OR RUN
-
-The D0–D5 distribution campaign (9–10, the mechanism is built and gated but no heterogeneous lawn has been
-RUN);
-mean-matched lawns (11); stratified recruitment/load/torque enrichment (12); mixed lawn versus post-hoc weighted
-average of homogeneous arms (13); density dependence (14); secondary twirling consequences (15); CPU/GPU
-equivalence on a broad mixed lawn (16); biological interpretation and limits (17); next recommendation (18);
-experiments deliberately not run (19).
-
-**Exact next step: Study B.** Study A is complete and H3 is confirmed, so the D0–D5 quenched lawns may now be
-run — the mechanism and its 10 validation gates are already built (§5.1). The scientifically sharpest first
-comparison is **D4 (25 % @ 30 nm + 75 % @ 40 nm, mean 37.5) versus D5 (homogeneous 37.5 nm)**: a resolved
-difference there is direct evidence of mixed-population mechanical interaction, since Study A establishes that
-the mean matters. The post-hoc mixture null `X_posthoc = Σ p_k X_homog(L_k)` can be built directly from the
-homogeneous map already in hand. Also outstanding before any heterogeneity claim: the density subset
-(saturation shift) and mixed-lawn CPU/GPU equivalence. The ±ε twirl map is DONE (§6.3) and shows no length
-dependence.
+**Study B was AUTHORISED on this basis and is now COMPLETE** — Study A passed numerical and interpretive
+review (smooth response, 0 invalid / 0 solver in 192 records, effect surviving dt refinement), and the sharpest
+first comparison — **D4 (25 % @ 30 nm + 75 % @ 40 nm, mean 37.5) versus D5 (homogeneous 37.5 nm)** — was run and
+is reported in §§9–19. Because Study A establishes that the mean matters, a resolved difference there would have
+been direct evidence of mixed-population mechanical interaction; **none was found (0.03σ)**. Still outstanding
+after Study B: the **density subset** (saturation shift), which §15 records as explicitly NOT gated, and a
+**24-seed post-hoc null** to power Δ_mix (§18). The ±ε twirl map is DONE (§6.3) and shows no length dependence.
 
 ## 9. Study B implementation and campaign
 
