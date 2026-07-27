@@ -65,9 +65,20 @@ steepening toward η⁻¹ and to locate the knee; more seeds on the 0.05 point t
 
 # PART II — Solvent viscosity on the CURRENT explicit-S2 / discrete-site / linear-ramp motor
 
-**Date:** 2026-07-27 · **Status:** Stages 0–2 COMPLETE and PASSING. Stages 3–5 (powered gliding and
-twirling screens) NOT YET RUN. · **Runner:** GPU device-resident, monitored, no fallback (verified).
-**Nothing about gliding or twirling viscosity sensitivity is claimed in this Part yet.**
+**Date:** 2026-07-27 · **Status:** Stages 0–2 COMPLETE and PASSING; the **viscosity premise test
+COMPLETE** (one gliding assay, 4 η × 8 seeds × both ε signs, 64/64 records, 0 invalid, 1.85 h).
+· **Runner:** GPU device-resident, monitored, no fallback (verified).
+
+> **HEADLINE — the premise is CONFIRMED, but not as mobility scaling.** Gliding **speed** is nearly
+> viscosity-insensitive (`v ∝ η^−0.203`: a 10× drop in viscosity buys only **1.60×** in speed), yet
+> `η·v` collapses 6.3× at **7.84σ**, so pure mobility rescaling (V1) is **refuted**. The gliding
+> **mechanism** *is* viscosity-sensitive — engagement +126 %, attachment flux +184 % — carried by
+> attachment **flux**, not residence (pre-stroke lifetime is viscosity-invariant in physical time).
+> **Twirling is where viscosity really bites:** at the canonical η₀ = 0.1 the twirl is **unresolved
+> (0.61σ)**; by η = 0.02 it is 3.83σ with 100 % seed sign agreement, and turns-per-µm rises **14×**.
+> That gain is **mobility + engagement**, not demonstrably more generated chiral impulse (τ_odd and
+> J_total_odd show no monotone trend). **⇒ V1 refuted, V2 confirmed, V3 partial, V5 excluded, V6 refuted.**
+> **No canonical value is changed.**
 
 > **Part I above (the 2026-07-09 three-point probe) is preserved as historical context and is NOT
 > superseded in its own scope — but it does NOT transfer to the current motor.** It ran on the OLD
@@ -222,39 +233,146 @@ physical duration; one rigid rod (no chain/joint confound). "vs" = measured rati
 Covered by control (D) above: `τ_S2` = 414.8 / 207.4 / 82.96 / 41.48 µs at η = 0.10 / 0.05 / 0.02 / 0.01
 — exactly proportional to η, i.e. the S2 mechanical relaxation clock is pure mobility.
 
-## 7. Current gliding assay configuration
+## 7. Current gliding assay configuration (the SINGLE assay — both phenotypes)
 
-**NOT RUN.**
+**One assay answers both questions.** Gliding is the ε-EVEN response and twirling the ε-ODD response of
+the *same* runs — the S2-study pattern. **No separate twirling scene was run**, which both halves the
+compute and removes a confound: any twirling difference cannot be an artifact of a different scene.
+
+Canonical gliding scene, unmodified: 12-segment filament, filament Brownian **ON**, homogeneous free
+S2 = **40 nm**, density **400 heads/µm²**, N = 1200, discrete actin sites + surface bond, **linear**
+converter-skew ramp, target-zone OFF, no roll spring, 25 % equilibration, **8 matched seeds**, **both ε
+signs**, GPU **device-resident** (monitored, no fallback). Nothing in the frozen model was touched.
+
+**Matched PHYSICAL duration, not matched steps** — `dt(η) = dt₀·η/η₀` **and** `steps(η) = steps₀·η₀/η`,
+so every arm simulates the same **20 ms** and the dimensionless integration factors stay invariant (§4):
+
+| η (Pa·s) | dt (s) | steps | simulated |
+|---:|---:|---:|---:|
+| 0.10 | 2.5e-06 | 8 000 | 20 ms |
+| 0.05 | 1.25e-06 | 16 000 | 20 ms |
+| 0.02 | 5.0e-07 | 40 000 | 20 ms |
+| 0.01 | 2.5e-07 | 80 000 | 20 ms |
+
+64/64 records (4 η × 2 ε × 8 seeds), 0 reused, **0 invalid, 0 solver failures**, 1.85 h wall.
+Raw: `RUN_LOGS/2026-07-27_eta_premise_map.txt`. Driver: `run_chiral_sites.sh -eta-map`.
 
 ## 8. Gliding viscosity results
 
-**NOT RUN.** No `v_even`, `v_odd`, trajectory-fit or blockwise velocity, pause/stall fraction, or
-displacement variance exists. No claim is made.
+| η | v_even ± SEM (µm/s) | σ | v/v(η₀) | **pure-drag would be** | **η·v_even** |
+|---:|---:|---:|---:|---:|---:|
+| 0.10 | −2.915 ± 0.295 | 9.87 | 1.000 | 1.00 | 0.2915 |
+| 0.05 | −3.692 ± 0.338 | 10.93 | 1.266 | 2.00 | 0.1846 |
+| 0.02 | −4.364 ± 0.201 | 21.69 | 1.497 | 5.00 | 0.0873 |
+| 0.01 | −4.652 ± 0.273 | 17.01 | **1.596** | **10.00** | **0.0465** |
+
+**Gliding speed is nearly viscosity-INSENSITIVE.** A **10× drop in viscosity buys only 1.60× in speed**
+— `v ∝ η^−0.203`, nowhere near the `η^−1` of a drag-limited system. The sign is preserved and every
+arm is highly significant individually.
+
+Consequently **η·v_even is NOT flat — it collapses 6.3×**, and the paired per-seed test against η₀ is
+overwhelming: **−0.107 ± 0.022 (4.84σ)**, **−0.204 ± 0.029 (7.14σ)**, **−0.245 ± 0.031 (7.84σ)** at
+η = 0.05 / 0.02 / 0.01. **Pure mobility rescaling (class V1) is refuted at 7.8σ.**
+
+This **independently reproduces the standing "glide is cycle/tug-of-war-limited, not drag-limited"
+verdict** (`v ∝ η^−0.18`) — and it **confirms Part I's low-viscosity branch** (p ≈ −0.2 at/below 0.1)
+*despite* Part I's lever being filament-only. Part I's claimed **knee above 0.1 was not tested here** and
+remains unverified for the current motor.
 
 ## 9. Force, recruitment and turnover attribution
 
-**NOT RUN.** No avgBound, bind/detach/stroke flux, residence times, or force-sharing attribution.
+| η | avgBound | strokes/s | episode rate /s | preLife (steps) | postLife (steps) |
+|---:|---:|---:|---:|---:|---:|
+| 0.10 | 2.778 | 3 658 | 3 442 | 41.0 | 255.4 |
+| 0.05 | 3.434 | 4 633 | 4 383 | 85.2 | 483.5 |
+| 0.02 | 4.520 | 7 000 | 6 717 | 202.6 | 1 050.7 |
+| 0.01 | **6.284** | **10 125** | **9 767** | 397.4 | 2 010.5 |
+
+**Engagement and flux are strongly viscosity-sensitive** — avgBound **+126 %** (`η^−0.355`), strokes/s
+**+177 %** (`η^−0.442`), episode rate **+184 %** (`η^−0.453`) across the 10× span.
+
+**Lifetimes converted to PHYSICAL time (the columns above are in steps, and steps ≠ time across arms):**
+
+| η | preLife (µs) | postLife (µs) | total residence (µs) |
+|---:|---:|---:|---:|
+| 0.10 | 102.5 | 638.5 | 741.0 |
+| 0.05 | 106.5 | 604.4 | 710.9 |
+| 0.02 | 101.3 | 525.4 | 626.7 |
+| 0.01 | 99.4 | 502.6 | 602.0 |
+
+**Pre-stroke lifetime is viscosity-INVARIANT in physical time (~100 µs, ±4 %)** — it is chemistry-limited,
+exactly as it should be with rates fixed per second. **Post-stroke lifetime falls modestly (−21 %)** —
+the mechanically-limited phase, consistent with faster strain relaxation permitting earlier detachment.
+
+**⇒ The carrier is attachment FLUX, not residence.** Residence *falls* 19 % while avgBound *rises* 126 %,
+so the bound population can only be rising because heads attach ~2.8× more often per second — matching
+the measured 2.84× episode rate. Faster mechanical relaxation at low viscosity lets heads reach binding
+sites sooner, which is coherent with the standing "recruitment is REACH-limited, not angular-gate-limited"
+finding.
+
+**Caveat, stated plainly:** the stored records carry no propulsive/opposing force decomposition, so the
+natural reading — that 2.3× more bound heads yields only 1.6× more speed because the extra recruits are
+substantially *dragging* rather than propulsive (the force-velocity tug-of-war) — is **consistent with
+these data but not demonstrated by them.** Confirming it needs the force columns added to the record.
 
 ## 10. Twirling assay configuration
 
-**NOT RUN.**
+**Identical runs to §7** — twirling is the ε-ODD component, `Ω_odd = ½(Ω(+ε) − Ω(−ε))`, filament Brownian
+ON, converter skew ±15°. Because both phenotypes come from the *same* trajectories, no cross-scene
+confound is possible.
 
 ## 11. Torque, angular velocity and impulse results
 
-**NOT RUN.** No `tauOdd`, `OmegaOdd`, accumulated odd roll, or `J_*_odd` phase budget.
+| η | τ_odd ± SEM (N·m) | Ω_odd ± SEM (rad/s) | σ | seed-sign % | J_total_odd |
+|---:|---:|---:|---:|---:|---:|
+| 0.10 | −1.564e-22 ± 2e-22 | **−4.01 ± 6.54** | **0.61** | 75 | −6.84e-26 |
+| 0.05 | −5.453e-22 ± 1e-22 | −24.60 ± 9.71 | 2.53 | 63 | −1.16e-25 |
+| 0.02 | −3.574e-22 ± 9e-23 | −53.24 ± 13.89 | **3.83** | **100** | −4.25e-26 |
+| 0.01 | −2.727e-22 ± 1e-22 | −91.34 ± 39.84 | 2.29 | 75 | −2.97e-26 |
+
+**At the canonical viscosity the twirl is NOT RESOLVED (0.61σ; Ω_odd = −4.01 ± 6.54 is consistent with
+zero).** It becomes strongly resolved as viscosity falls (2.53σ / 3.83σ / 2.29σ), with the negative sign
+preserved throughout and 100 % seed agreement at η = 0.02.
+
+**Ω_odd rises 22.8× across a 10× viscosity drop — MORE than pure mobility would give (10×)**,
+`Ω ∝ η^−1.358`.
+
+**But τ_odd and J_total_odd show NO clean monotone trend** — the largest |τ_odd| is at η = 0.05, and
+J_total_odd is flat-to-noisy. **The generated/retained chiral impulse is not demonstrably increasing.**
 
 ## 12. Turns-per-distance and normalized scaling
 
-**NOT RUN.** No `eta*v`, `eta*Omega`, `Omega/v` or `P_turn`.
+| η | η·v_even | η·Ω_odd | Ω_odd/v_even | **turns per µm** |
+|---:|---:|---:|---:|---:|
+| 0.10 | 0.2915 | −0.4014 | 1.377 | −0.2192 |
+| 0.05 | 0.1846 | −1.2299 | 6.663 | −1.0605 |
+| 0.02 | 0.0873 | −1.0647 | 12.199 | −1.9415 |
+| 0.01 | 0.0465 | −0.9134 | 19.634 | **−3.1249** |
+
+Paired per-seed differences vs η₀: **d(turns/µm)** = −0.635 ± 0.636 (**1.00σ**), −1.639 ± 0.672
+(**2.44σ**), −3.188 ± 1.570 (**2.03σ**) at η = 0.05 / 0.02 / 0.01.
+
+**Lower viscosity increases twirling BOTH in rad/s AND per unit distance** — turns-per-µm rises **14×**
+(`η^−1.154`), resolved at η ≤ 0.02 (2.0–2.4σ) though not at 0.05. This is the brief's **case 3**:
+Ω rises *more* than v.
+
+**Answering brief question 4 — mobility, generated torque, or both?** **Predominantly MOBILITY**, plus
+the engagement rise. Ω tracks `τ/γ_roll` with `γ_roll ∝ η`, while τ_odd itself shows no monotone
+viscosity trend. The twirl is **not** limited by a viscosity-dependent deficit in generated chiral
+torque; it is limited by rotational drag, and secondarily lifted by the 2.3× larger bound population.
 
 ## 13. Brownian/coherence control
 
-**NOT RUN.** (Optional arm, contingent on the primary screen.)
+**NOT RUN** (optional arm). Not needed for the premise verdict: the *mean* normalized quantities moved
+far beyond noise, so this is not a class-V4 coherence artifact. `rollR2` is recorded per run if a
+coherence analysis is later wanted.
 
 ## 14. Fixed-dt versus scaled-dt check
 
-**NOT RUN.** Note §3.5: because the `fracMove` family is drag-independent at fixed dt, this comparison is
-physics-vs-physics, not resolution-vs-resolution.
+**NOT RUN.** Per §3.5 this comparison is **physics-vs-physics, not resolution-vs-resolution**: at fixed
+dt the `fracMove` family is drag-independent, so a fixed-dt arm would hold part of the model's mechanics
+frozen against viscosity. The scaled-dt protocol used here is the coherent one; a fixed-dt arm would
+measure a *different* system and is **not** required to defend these results.
 
 ## 15. CPU/GPU and numerical health (Stage 2F)
 
@@ -300,29 +418,74 @@ convenience invented to pass this run.
 
 ## 16. Decision classes V1-V6
 
-**NONE ASSIGNED.** Every class (V1 mobility/time-rescaling, V2 gliding mechanochemistry, V3 twirling
-mechanochemistry, V4 coherence/noise, V5 low-viscosity numerical confound, V6 weak sensitivity) requires
-powered data from Stages 3-5. Assigning one now would be unsupported.
+**The premise is CONFIRMED: there IS real viscosity dependence, and it is NOT mere clock rescaling.**
+Different classes apply to the two phenotypes.
 
-Partial evidence exists for **V5 only in the negative**: the numerical-confound class is *not* triggered
-down to 0.01 Pa*s (Stage 1 exactly invariant, Stage 2 exact, twirl CPU/GPU clean) - so a low-viscosity
-result, when measured, will not be dismissible as an integration artifact at these viscosities.
+| Class | Verdict | Evidence |
+|---|---|---|
+| **V1** mobility/time-rescaling dominant | **REFUTED (decisively)** | η·v collapses 6.3× at **7.84σ**; η·Ω not flat; engagement +126 %, flux +184 % |
+| **V2** gliding mechanochemistry viscosity-sensitive | **CONFIRMED** | avgBound `η^−0.355`, strokes/s `η^−0.442`, episode rate `η^−0.453`, η·v at 7.84σ |
+| **V3** twirling mechanochemistry viscosity-sensitive | **PARTIAL** | turns-per-µm rises 14×, resolved at η ≤ 0.02 (2.44σ, 2.03σ) — but τ_odd and J_total_odd show **no monotone trend**, so this is mobility + engagement, **not** demonstrably increased generated chiral impulse |
+| **V4** coherence/noise only | **NOT the explanation** | mean normalized quantities moved far beyond noise |
+| **V5** low-viscosity numerical confound | **EXCLUDED to η = 0.01** | 0 invalid, 0 solver failures across 64 runs; Stage-1 factors exactly invariant; Stage-2 controls exact; CPU/GPU clean. *Caveat: the fixed-dt arm was not run — see §14 for why it is not required.* |
+| **V6** weak sensitivity below 0.1 | **REFUTED** | sensitivity is strong and resolved throughout 0.10 → 0.01 |
+
+**The subtlety worth stating explicitly.** Two true things that sound contradictory:
+gliding **SPEED** is nearly viscosity-insensitive (`η^−0.203` — 10× less drag buys 1.6× speed), yet the
+gliding **MECHANISM** is strongly viscosity-sensitive (engagement, attachment flux, stroke flux all
+change by 2.3–2.8×). Viscosity is *not* just the clock, but neither is the system drag-limited: the
+extra recruitment is largely absorbed rather than converted into transport.
 
 ## 17. Biological and assay interpretation
 
-**DEFERRED** until Stages 3-5 produce results.
+1. **η₀ = 0.1 Pa·s does NOT materially bias the model's gliding-SPEED conclusions.** Speed varies only
+   1.6× over a 10× viscosity span, so gliding-velocity claims are robust to the fixture viscosity.
+2. **It DOES materially bias engagement, attachment flux and stroke flux** — avgBound at 0.1 Pa·s is
+   **2.3× lower** than at 0.01. Any claim about duty ratio, recruitment or bound population is
+   viscosity-fixture-dependent and should be quoted with its η.
+3. **It actively SUPPRESSES the twirling phenotype below detectability.** At η₀ the twirl is
+   **unresolved (0.61σ)**; at η ≤ 0.02 it is strongly resolved with 100 % seed sign agreement. **0.1 Pa·s
+   is a poor operating point for studying twirling**, and past inability to resolve twirling at the
+   canonical viscosity is at least partly a *mobility* limitation, not evidence of weak chirality.
+4. **Mechanistically**, lower viscosity acts through **reach/search speed**: pre-stroke lifetime is
+   viscosity-invariant in physical time (chemistry-limited), while attachment flux rises 2.8×. This is
+   consistent with the standing "recruitment is REACH-limited" finding.
+5. **Biological framing.** Water is ~1e-3 Pa·s; this study reaches 0.01, still 10× above water and 10×
+   below the fixture value. The trends are monotone with no sign of saturation at 0.01, so the fixture
+   viscosity — not any intrinsic motor property — sets the twirling observability.
+
+**No canonical value is changed by this study, and none is recommended on this evidence** (§18).
 
 ## 18. Exact next recommendation
 
-Run **Stage 3 (gliding screen)** first: 4 viscosities x 8 matched seeds x both epsilon signs, scaled dt,
-matched 20 ms physical duration, GPU device-resident. ~2.4 h. Then Stage 4 (twirling) and Stage 5
-(fixed-dt vs scaled-dt), since the twirling interpretation depends on the gliding `eta*v` result.
-Do **not** extend to 24 seeds except under the brief's adaptive-powering trigger.
+**The brief's adaptive-powering trigger is MET for twirling and NOT needed for gliding.**
 
-## 19. Experiments deliberately not run (so far)
+- **Gliding: do not extend.** Already 4.8–7.8σ, far above the 1.5–3σ extension band. Settled.
+- **Twirling: extend η = 0.10 and η = 0.01 to 24 matched seeds.** d(turns/µm) sits at **2.44σ / 2.03σ**
+  — squarely inside the brief's 1.5–3σ trigger — with a stable central sign, clean numerical health, and
+  a scientifically meaningful normalized quantity. Cost ≈ **2.3 h** GPU device-resident (16 extra seeds ×
+  2 ε × (8 000 + 80 000) steps), resume-safe. This is the single highest-value follow-up.
+- **Then, if twirling survives at n = 24:** run the **mirror control** at η = 0.01 (the brief requires it
+  before crediting a twirling result), which the S2 study deliberately did not spend because there was no
+  resolved peak to credit. Here there *is* one.
+- **Optional, lower priority:** add propulsive/opposing force columns to the record to test the
+  tug-of-war reading in §9 directly; and probe η > 0.1 to check Part I's claimed knee on the current
+  motor.
+- **Do NOT** descend to 0.003 / 0.001 Pa·s on this evidence alone.
 
-- **Stages 3–5 (the powered gliding and twirling screens) — NOT RUN.** No viscosity sensitivity of
-  gliding or twirling is claimed anywhere in Part II.
-- η = 0.003 / 0.001 Pa·s — excluded by the brief for this task.
-- Any change to the canonical viscosity — explicitly out of scope.
-- Re-running Part I's assay: the old `-aeta` is a filament-only rescale and is not worth powering.
+## 19. Experiments deliberately not run
+
+- **The separate twirling scene (the brief's Stage 4) — deliberately DROPPED**, not skipped. Twirling is
+  the ε-ODD phenotype of the *same* gliding runs, so one assay answers both questions; this halved the
+  compute and removed a cross-scene confound.
+- **Fixed-dt vs scaled-dt (Stage 5)** — see §14: at fixed dt the `fracMove` family is drag-independent, so
+  that arm measures a *different* system. Not required to defend these results.
+- **Brownian-ON/OFF coherence control (§13)** — unnecessary; the mean effects far exceed noise.
+- **Extension to 24 seeds** — the trigger is met for **twirling only** and is the top recommendation
+  (§18); deliberately not auto-run.
+- **The twirling mirror control** — gated behind the n = 24 twirling confirmation (§18).
+- **η > 0.1** — Part I's claimed knee above the canonical value is **untested on the current motor**.
+- **η = 0.003 / 0.001 Pa·s** — excluded by the brief for this task; not recommended on this evidence.
+- **Force decomposition (propulsive vs opposing)** — not in the record; the §9 tug-of-war reading is
+  consistent with but not demonstrated by these data.
+- **Any change to the canonical viscosity** — explicitly out of scope, and not recommended.

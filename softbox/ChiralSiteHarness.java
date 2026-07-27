@@ -67,6 +67,7 @@ public final class ChiralSiteHarness {
     // r == 1 ⇒ EXACT early-return no-op ⇒ eta = 0.1 reproduces the unflagged path BIT-IDENTICALLY.
     // ---------------------------------------------------------------------------------------------------------
     static double  ETA = Constants.aeta;      // -eta <Pa·s>  (0.1 ⇒ no-op)
+    static double[] ETA_MAP = { 0.10, 0.05, 0.02, 0.01 };   // -eta-map: the premise-test ladder (eta0 FIRST)
     static boolean ETA_FIXED_DT = false;      // -eta-fixed-dt: keep dt at DT (the Stage-5 fixed-dt diagnostic arm)
     static double  EQUIL_FRAC = 0.25;                           // -equil-frac: startup transient discarded
     static int     NBLK      = 5;                               // measurement blocks for the block-SEM
@@ -95,7 +96,7 @@ public final class ChiralSiteHarness {
         TornadoCrashDiagnostic.init("chiral-actin-sites", args);
         boolean fixtures = false, equiv = false, campaign = false, lattice = false, mechanism = false, all = false; String jsDir = null;
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
-        boolean etaAudit = false, etaControls = false;
+        boolean etaAudit = false, etaControls = false, etaMap = false, etaReport = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
                 convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false, s2DtCmp = false, studyB = false, studyBRep = false;
@@ -186,6 +187,10 @@ public final class ChiralSiteHarness {
                 case "-eta-fixed-dt" -> ETA_FIXED_DT = true;
                 case "-eta-audit" -> etaAudit = true;
                 case "-eta-controls" -> etaControls = true;
+                case "-eta-map" -> etaMap = true;
+                case "-eta-report" -> etaReport = true;
+                case "-eta-points" -> { String[] p = args[++i].split(","); ETA_MAP = new double[p.length];
+                                        for (int k = 0; k < p.length; k++) ETA_MAP[k] = Double.parseDouble(p[k]); }
                 default -> { }
             }
         }
@@ -210,6 +215,8 @@ public final class ChiralSiteHarness {
             TornadoCrashDiagnostic.normalMainReturn("mode=3js"); return; }
         if (etaAudit)        ok = runEtaAudit();
         else if (etaControls) ok = runEtaControls();
+        else if (etaMap)     runEtaMap();
+        else if (etaReport)  reportEtaMap();
         else if (convStage1) { EPS_CONV_DEG = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 5.0; runConvStage1(); }
         else if (convFix)    ok = runConvFixtures();
         else if (convEquiv)  ok = runConvEquiv();
@@ -3722,6 +3729,159 @@ public final class ChiralSiteHarness {
     }
 
     /** +eps keeps the original single-sign record name (the 48 completed records); -eps adds an "n" tag. */
+    // ==================================================== VISCOSITY PREMISE TEST — ONE gliding assay, both phenotypes
+    /**
+     * Tests the PREMISE that gliding or twirling depends on solvent viscosity AT ALL, beyond trivial mobility
+     * rescaling. ONE assay: the canonical gliding scene, run across eta, from which BOTH the core gliding
+     * (eps-EVEN) and the auxiliary twirling (eps-ODD) phenotypes are read — the S2-study pattern. No separate
+     * twirling scene is run.
+     *
+     * <p>Matched PHYSICAL duration: dt(eta) = dt0*eta/eta0 and steps(eta) = steps0*eta0/eta, so every arm
+     * simulates the same 20 ms and the dimensionless integration factors are invariant (Stage 1).
+     *
+     * <p>The discrimination is NOT on v or Omega, which must rise as drag falls under ANY hypothesis. It is on
+     * the NORMALIZED quantities: if eta*v, eta*Omega and Omega/v are flat while engagement and flux are flat,
+     * viscosity sets the CLOCK ONLY (class V1). If they move, the ensemble operating point is viscosity-sensitive.
+     */
+    static void runEtaMap() {
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; BUDGET = true;
+        boolean savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;      // the confirmed mechanism, unmodified
+        double savedEta = ETA, savedDt = DTR; int savedSteps = STEPS;
+        ETA_BASE_STEPS = savedSteps;                       // pins the id's duration tag for the whole map
+        String prov = powProvenance();
+        System.out.printf(Locale.US, "%n--- VISCOSITY PREMISE TEST: ONE GLIDING ASSAY ACROSS eta (canonical scene:%n"
+                + "    %d-segment filament, filament Brownian ON, homogeneous S2 = 40 nm, density %.0f heads/µm²,%n"
+                + "    %d matched seeds, both eps signs, matched %.1f ms physical duration; runner: %s) ---%n",
+                TwoBodyConverterMotor.G4_NSEG, DENSITY, SEEDS, savedSteps * DT * 1e3,
+                GPU ? "GPU device-resident" : "CPU");
+        System.out.println("  eta (Pa·s): " + java.util.Arrays.toString(ETA_MAP));
+        System.out.println("  provenance: " + prov);
+        System.out.println("  BOTH phenotypes come from these same runs: gliding = eps-EVEN, twirling = eps-ODD.");
+        int done = 0, ran = 0;
+        double epsMax = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0;
+        for (double eta : ETA_MAP) {
+            ETA = eta; DTR = DT * eta / Constants.aeta;
+            STEPS = (int) Math.round(savedSteps * Constants.aeta / eta);   // matched PHYSICAL duration
+            for (int sgn = +1; sgn >= -1; sgn -= 2) {
+            for (int i = 0; i < SEEDS; i++) {
+                int seed = SEED + i;
+                String id = etaId(eta, sgn, seed);
+                if (powRead(id) != null) { done++; continue; }
+                TArm T = new TArm(id, 0.0, false, +1, true, TwoBodyConverterMotor.G4_NSEG).conv(sgn * epsMax);
+                long t0 = System.currentTimeMillis();
+                TRes r = runTwirlArm(T, seed, STEPS);
+                try { powWrite(id, powValues(r), prov + " eta=" + eta + " dt=" + DTR + " steps=" + STEPS); }
+                catch (java.io.IOException e) { throw new RuntimeException("record write failed: " + id, e); }
+                ran++;
+                System.out.printf(Locale.US, "    [%3d] %-24s glide=%+7.3f µm/s  Omega=%+8.2f rad/s  avgB=%5.2f  inv=%d (%.1f s)%n",
+                        done + ran, id, r.glide, r.omegaFit, r.avgBound, r.invalid, (System.currentTimeMillis()-t0)/1000.0);
+            }
+            }
+        }
+        System.out.printf("%n  records: %d reused, %d newly run, %d expected%n", done, ran, 2*ETA_MAP.length*SEEDS);
+        ETA = savedEta; DTR = savedDt; STEPS = savedSteps;
+        CONV_RAMP_ARM = null; BUDGET = false; ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem;
+        FIL_BROWN = true; cfgOff(); EPS_CONV_ARM = 0;
+        reportEtaMap();
+    }
+
+    /** The premise verdict: raw response, then the NORMALIZED quantities that actually decide it. */
+    static void reportEtaMap() {
+        double e0 = ETA_MAP[0];
+        System.out.println("\n  ================= VISCOSITY PREMISE TEST — ONE GLIDING ASSAY =================");
+        System.out.println("  #### CORE GLIDING (eps-EVEN) ####");
+        System.out.printf("    %8s %16s %8s %10s %12s %12s%n",
+                "eta", "v_even ± SEM", "sigma", "v/v(eta0)", "pure-drag", "eta*v_even");
+        for (double eta : ETA_MAP) {
+            double[] ve = ConvBudget.msn(etaEven(eta, "glide"));
+            double[] v0 = ConvBudget.msn(etaEven(e0, "glide"));
+            System.out.printf(Locale.US, "    %8.3g %+9.3f±%5.3f %8.2f %10.3f %12.3f %12.4f%n",
+                    eta, ve[0], ve[1], ConvBudget.sigma(ve), v0[0] != 0 ? ve[0]/v0[0] : Double.NaN,
+                    e0/eta, eta*Math.abs(ve[0]));
+        }
+        System.out.println("\n  #### ENGAGEMENT AND EVENT FLUX (per SECOND — physical time) ####");
+        System.out.printf("    %8s %10s %12s %12s %12s %10s %8s%n",
+                "eta", "avgBound", "strokes/s", "epRate /s", "preLife", "postLife", "bad");
+        for (double eta : ETA_MAP)
+            System.out.printf(Locale.US, "    %8.3g %10.3f %12.0f %12.0f %12.1f %10.1f %8.1f%n", eta,
+                    ConvBudget.msn(etaCol(eta,"avgBound"))[0], ConvBudget.msn(etaCol(eta,"strokeRatePerS"))[0],
+                    ConvBudget.msn(etaCol(eta,"epRate"))[0], ConvBudget.msn(etaCol(eta,"preLife"))[0],
+                    ConvBudget.msn(etaCol(eta,"postLife"))[0],
+                    ConvBudget.msn(etaCol(eta,"invalid"))[0] + ConvBudget.msn(etaCol(eta,"solverFail"))[0]);
+        System.out.println("\n  #### SECONDARY TWIRLING (eps-ODD, SAME RUNS) ####");
+        System.out.printf("    %8s %16s %16s %8s %8s %14s%n",
+                "eta", "tauOdd ± SEM", "OmegaOdd ± SEM", "sigma", "sgn%", "J_total_odd");
+        for (double eta : ETA_MAP) {
+            double[] to = etaOdd(eta,"tau"), om = etaOdd(eta,"omegaFit");
+            double[] jp = etaOdd(eta,"jPre"), js = etaOdd(eta,"jStroke"), je = etaOdd(eta,"jEarly"), jl = etaOdd(eta,"jLate");
+            double[] tot = new double[SEEDS];
+            for (int i = 0; i < SEEDS; i++) tot[i] = jp[i]+js[i]+je[i]+jl[i];
+            double[] mt = ConvBudget.msn(to), mo = ConvBudget.msn(om);
+            System.out.printf(Locale.US, "    %8.3g %+.3e±%.0e %+8.2f±%5.2f %8.2f %8.0f %+14.4e%n",
+                    eta, mt[0], mt[1], mo[0], mo[1], ConvBudget.sigma(mo), 100*ConvBudget.signFrac(om),
+                    ConvBudget.msn(tot)[0]);
+        }
+        System.out.println("\n  #### THE PREMISE TEST — NORMALIZED (these decide it, NOT v or Omega alone) ####");
+        System.out.println("    Under PURE MOBILITY SCALING (class V1) eta*v, eta*Omega and turns-per-distance are FLAT.");
+        System.out.printf("    %8s %12s %14s %14s %14s%n",
+                "eta", "eta*v_even", "eta*OmegaOdd", "OmegaOdd/vEven", "turns per µm");
+        for (double eta : ETA_MAP) {
+            double v = ConvBudget.msn(etaEven(eta,"glide"))[0], om = ConvBudget.msn(etaOdd(eta,"omegaFit"))[0];
+            System.out.printf(Locale.US, "    %8.3g %12.4f %14.4f %14.3f %14.4f%n",
+                    eta, eta*Math.abs(v), eta*om, v != 0 ? om/v : Double.NaN,
+                    v != 0 ? om/(2*Math.PI*Math.abs(v)) : Double.NaN);
+        }
+        // paired per-seed tests of the normalized quantities against the eta0 reference
+        System.out.println("\n  ---- paired per-seed differences vs eta = " + e0 + " (the premise verdict) ----");
+        System.out.printf("    %8s %20s %8s | %20s %8s%n", "eta", "d(eta*|v_even|)", "sigma", "d(turns per µm)", "sigma");
+        for (double eta : ETA_MAP) {
+            if (eta == e0) continue;
+            double[] a = etaEven(eta,"glide"), b = etaEven(e0,"glide");
+            double[] oa = etaOdd(eta,"omegaFit"), ob = etaOdd(e0,"omegaFit");
+            double[] dv = new double[SEEDS], dt2 = new double[SEEDS];
+            for (int i = 0; i < SEEDS; i++) {
+                dv[i]  = eta*Math.abs(a[i]) - e0*Math.abs(b[i]);
+                dt2[i] = (a[i] != 0 ? oa[i]/(2*Math.PI*Math.abs(a[i])) : Double.NaN)
+                       - (b[i] != 0 ? ob[i]/(2*Math.PI*Math.abs(b[i])) : Double.NaN);
+            }
+            double[] m1 = ConvBudget.msn(dv), m2 = ConvBudget.msn(dt2);
+            System.out.printf(Locale.US, "    %8.3g %+13.4f±%5.4f %8.2f | %+13.4f±%5.4f %8.2f%n",
+                    eta, m1[0], m1[1], ConvBudget.sigma(m1), m2[0], m2[1], ConvBudget.sigma(m2));
+        }
+        System.out.println("\n    Read: |sigma| < 2 on BOTH normalized columns at every eta ⇒ premise REFUTED for that");
+        System.out.println("    phenotype (viscosity sets the clock, not the mechanism) ⇒ class V1/V6.");
+    }
+    /** Base (eta0-equivalent) step count, tagged into the id so runs of DIFFERENT physical duration can never
+     *  collide — a smoke run must not be silently reused as a campaign record (the s2Id "h" precedent). */
+    static int ETA_BASE_STEPS = -1;
+    static String etaId(double eta, int sgn, int seed) {
+        int base = ETA_BASE_STEPS > 0 ? ETA_BASE_STEPS : STEPS;
+        return String.format(Locale.US, "etamap_s%d_e%04.0f_%s%d", base, eta*10000, sgn > 0 ? "" : "n_", seed);
+    }
+    static double[] etaOdd(double eta, String key) {
+        int ki = POWK(key); double[] o = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            double[] p = powRead(etaId(eta, +1, SEED + i)), m = powRead(etaId(eta, -1, SEED + i));
+            o[i] = (p != null && m != null) ? 0.5*(p[ki] - m[ki]) : Double.NaN;
+        }
+        return o;
+    }
+    static double[] etaEven(double eta, String key) {
+        int ki = POWK(key); double[] o = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            double[] p = powRead(etaId(eta, +1, SEED + i)), m = powRead(etaId(eta, -1, SEED + i));
+            o[i] = (p != null && m != null) ? 0.5*(p[ki] + m[ki]) : Double.NaN;
+        }
+        return o;
+    }
+    static double[] etaCol(double eta, String key) {
+        int ki = POWK(key); double[] o = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) { double[] r = powRead(etaId(eta, +1, SEED + i)); o[i] = r != null ? r[ki] : Double.NaN; }
+        return o;
+    }
+
     static String s2Id(double L, int sgn, int seed) {
         String pre = DTR < DT * 0.9 ? "s2maph" : "s2map";      // "h" = half dt; ids can never collide
         return sgn > 0 ? String.format(Locale.US, "%s_L%.0f_%d", pre, L, seed)
