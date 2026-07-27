@@ -83,6 +83,13 @@ unit distance, generated vs retained chiral impulse). This is an **assay-fixture
 not a gliding-speed calibration and not a twirling-strength optimisation. Viscosity is not a free
 fitting parameter, and no canonical value is changed here.
 
+## 2. Historical 0.05 / 0.10 / 0.20 probe
+
+**Part I above, preserved verbatim.** Not superseded in its own scope, but it does **not** transfer to the
+current motor: it ran on the old `GlidingHarness` (springs path, dt = 1e-5) and its `-aeta` rescales the
+**filament drag only** (see §3.1). Treat it as a filament-drag sensitivity probe, not a solvent-viscosity
+result, and do not quote its knee or exponents for the current motor.
+
 ## 3. Source-code viscosity and FDT audit (Stage 0 — COMPLETE, PASS)
 
 ### 3.1 There was NO coherent viscosity path, and none at all in the current assay
@@ -215,6 +222,40 @@ physical duration; one rigid rod (no chain/joint confound). "vs" = measured rati
 Covered by control (D) above: `τ_S2` = 414.8 / 207.4 / 82.96 / 41.48 µs at η = 0.10 / 0.05 / 0.02 / 0.01
 — exactly proportional to η, i.e. the S2 mechanical relaxation clock is pure mobility.
 
+## 7. Current gliding assay configuration
+
+**NOT RUN.**
+
+## 8. Gliding viscosity results
+
+**NOT RUN.** No `v_even`, `v_odd`, trajectory-fit or blockwise velocity, pause/stall fraction, or
+displacement variance exists. No claim is made.
+
+## 9. Force, recruitment and turnover attribution
+
+**NOT RUN.** No avgBound, bind/detach/stroke flux, residence times, or force-sharing attribution.
+
+## 10. Twirling assay configuration
+
+**NOT RUN.**
+
+## 11. Torque, angular velocity and impulse results
+
+**NOT RUN.** No `tauOdd`, `OmegaOdd`, accumulated odd roll, or `J_*_odd` phase budget.
+
+## 12. Turns-per-distance and normalized scaling
+
+**NOT RUN.** No `eta*v`, `eta*Omega`, `Omega/v` or `P_turn`.
+
+## 13. Brownian/coherence control
+
+**NOT RUN.** (Optional arm, contingent on the primary screen.)
+
+## 14. Fixed-dt versus scaled-dt check
+
+**NOT RUN.** Note §3.5: because the `fracMove` family is drag-independent at fixed dt, this comparison is
+physics-vs-physics, not resolution-vs-resolution.
+
 ## 15. CPU/GPU and numerical health (Stage 2F)
 
 Recorder verified active before all GPU work; every run through `run_gpu_monitored.sh`; all runs
@@ -256,6 +297,27 @@ convenience invented to pass this run.
 
 **Lowest numerically trustworthy viscosity: 0.01 Pa·s** (the brief's floor for this task). Descent to
 0.003 / 0.001 Pa·s remains **out of scope** and is not recommended on this evidence alone.
+
+## 16. Decision classes V1-V6
+
+**NONE ASSIGNED.** Every class (V1 mobility/time-rescaling, V2 gliding mechanochemistry, V3 twirling
+mechanochemistry, V4 coherence/noise, V5 low-viscosity numerical confound, V6 weak sensitivity) requires
+powered data from Stages 3-5. Assigning one now would be unsupported.
+
+Partial evidence exists for **V5 only in the negative**: the numerical-confound class is *not* triggered
+down to 0.01 Pa*s (Stage 1 exactly invariant, Stage 2 exact, twirl CPU/GPU clean) - so a low-viscosity
+result, when measured, will not be dismissible as an integration artifact at these viscosities.
+
+## 17. Biological and assay interpretation
+
+**DEFERRED** until Stages 3-5 produce results.
+
+## 18. Exact next recommendation
+
+Run **Stage 3 (gliding screen)** first: 4 viscosities x 8 matched seeds x both epsilon signs, scaled dt,
+matched 20 ms physical duration, GPU device-resident. ~2.4 h. Then Stage 4 (twirling) and Stage 5
+(fixed-dt vs scaled-dt), since the twirling interpretation depends on the gliding `eta*v` result.
+Do **not** extend to 24 seeds except under the brief's adaptive-powering trigger.
 
 ## 19. Experiments deliberately not run (so far)
 
