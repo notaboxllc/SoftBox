@@ -65,8 +65,9 @@ final class ConvBudget {
             F_Q_MAX = 39, F_EPS_MAX = 40,      // episode maxima
             F_Q_FIN = 41, F_EPS_FIN = 42,      // ... final value before detachment
             F_EPS_INT = 43,                    // integral of eps_eff dt over the episode (rad·s)
-            F_DEPS_ABS = 44, F_DEPS_PEAK = 45; // integral |d eps_eff| and the peak per-step |d eps_eff|
-    static final int NF = 46;
+            F_DEPS_ABS = 44, F_DEPS_PEAK = 45, // integral |d eps_eff| and the peak per-step |d eps_eff|
+            F_LNM = 46;                        // §Study-B: this motor's quenched free S2 length (nm), 0 when off
+    static final int NF = 47;
 
     static double jTotal(double[] r) { return r[F_JPRE] + r[F_JSTROKE] + r[F_JEARLY] + r[F_JLATE]; }
     static double jRecoil(double[] r) { return jTotal(r) - r[F_JSTROKE]; }

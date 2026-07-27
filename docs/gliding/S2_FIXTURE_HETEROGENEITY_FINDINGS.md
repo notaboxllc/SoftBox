@@ -394,3 +394,149 @@ the mean matters. The post-hoc mixture null `X_posthoc = Σ p_k X_homog(L_k)` ca
 homogeneous map already in hand. Also outstanding before any heterogeneity claim: the density subset
 (saturation shift) and mixed-lawn CPU/GPU equivalence. The ±ε twirl map is DONE (§6.3) and shows no length
 dependence.
+
+## 9. Study B implementation and campaign
+
+D4 = 25 % @ 30 nm + 75 % @ 40 nm (realised **exactly 300/900**, mean **exactly 37.5000 nm**);
+D5 = homogeneous 37.5 nm. Canonical Study-A gliding scene verbatim (12-segment filament, filament Brownian ON,
+400 heads/µm², N = 1200, dt = 2.5e-6 s, 8000 steps, 25 % equilibration), confirmed linear converter ramp at
+ε = ±15°, **24 matched seeds, both ε signs**, GPU device-resident, monitored, resume-safe (one atomic record per
+(arm, ε sign, seed)). **96/96 records; 0 invalid, 0 solver failures, no fallback, no crash.**
+
+Class-stratified telemetry was added: each episode carries its motor's quenched `L_i` (`F_LNM`), and per-step
+accumulators split binding events, bound motor-steps, stroke events, axial propulsive force, total |axial force|
+and axial torque by class. Class membership is decided by the lawn's own midpoint, so it is exact for any
+two-class lawn.
+
+## 10. D4/D5 validation and CPU/GPU equivalence
+
+All twelve gates pass at the unchanged revision. The ten standing Study-A gates (§5.1) plus:
+
+| gate | result |
+|---|---|
+| D4 class counts exactly 300 / 900 | **PASS** |
+| D4 realised mean exactly 37.5000 nm | **PASS** |
+| **broad mixed-lawn full-graph CPU/GPU equivalence** | **PASS** — `bindMism = 0`, `convFlagMism = 0`, `max\|dSegTorque\| = 2.18e-24 N·m`, `max\|dFilCoord\| = 5.96e-08 µm`, `firstDiv = none`, bound CPU = GPU = **12**, no fallback (`sB_equiv_gpu.txt`) |
+
+## 11. Mean-matched D4 versus D5 gliding — **CORE RESULT**
+
+| arm | v_even (µm/s) | σ | median | IQR | 95 % CI | n |
+|---|---|---|---|---|---|---|
+| **D4 heterogeneous** | **−2.766 ± 0.133** | 20.79 | −2.722 | [−3.014, −2.372] | [−3.027, −2.517] | 24 |
+| **D5 homogeneous 37.5** | **−2.771 ± 0.148** | 18.72 | −2.777 | [−3.125, −2.374] | [−3.070, −2.485] | 24 |
+| post-hoc 0.25·L30 + 0.75·L40 | −2.850 ± 0.219 | 13.01 | −2.892 | [−3.198, −2.627] | [−3.218, −2.414] | **8** |
+
+| comparison | value | σ | 95 % CI | seed sign | n |
+|---|---|---|---|---|---|
+| **Δ_mean = D4 − D5 [PRIMARY]** | **+0.005 ± 0.152** | **0.03** | [−0.291, +0.293] | 50 % | 24 |
+| Δ_mix = D4 − post-hoc | −0.152 ± 0.140 | 1.08 | [−0.406, +0.111] | 75 % | 8 |
+| Δ_curve = D5 − post-hoc | −0.117 ± 0.177 | 0.66 | [−0.464, +0.187] | 50 % | 8 |
+
+**Heterogeneity does not matter beyond the mean.** Δ_mean is **0.03σ** with 50 % seed sign — about as close to an
+exact null as this assay produces — and its CI excludes any effect larger than ±0.29 µm/s (≈10 % of v).
+
+Variability and flux are likewise unchanged: CV(v) 0.236 (D4) vs 0.262 (D5); avgBound 2.847 vs 2.965;
+strokes/s 3642 vs 3725; episode rate 3457 vs 3528 /s.
+
+**Power limitation, stated rather than buried:** the post-hoc null requires seed-matched homogeneous 30 and
+40 nm records, and the Study-A map has **8** seeds against this campaign's **24**. Δ_mix and Δ_curve are
+therefore strictly paired on the **8 overlapping seeds only** (`sbPosthoc` returns NaN beyond that, so pairing
+can never be manufactured). **Δ_mix at 1.08σ is unresolved because it is underpowered, not because interaction
+is excluded.** B3 is untested, not refuted.
+
+## 12. Class-specific recruitment and load sharing
+
+Within D4, per-seed class shares against the 25 % / 75 % deposited fractions (E > 1 ⇒ over-represented):
+
+| quantity | 30 nm share | 40 nm share | **E(30)** | **E(40)** |
+|---|---|---|---|---|
+| deposited | 0.2500 | 0.7500 | 1.000 | 1.000 |
+| binding events | 0.2133 | 0.7867 | **0.853** | 1.049 |
+| bound motor-steps | 0.2166 | 0.7834 | **0.866** | 1.045 |
+| stroke events | 0.2163 | 0.7837 | **0.865** | 1.045 |
+| **axial propulsive force** | 0.2035 | 0.7965 | **0.814** | 1.062 |
+| total \|axial force\| | 0.2186 | 0.7814 | **0.874** | 1.042 |
+| **axial torque** | 0.3456 | 0.6544 | **1.383** | 0.872 |
+| stroke episodes | 0.2176 | 0.7824 | 0.870 | 1.043 |
+
+**A modest, highly consistent selection effect exists even though the population endpoints do not move.** The
+short (30 nm) class is **under-recruited by 13–15 %** (binding, bound time, strokes, episodes all E ≈ 0.85–0.87)
+and **under-propulsive by 19 %** (E = 0.814) — the long class dominates recruitment and propulsion in proportion
+slightly above its deposited share.
+
+**The exception is chiral torque: the short class carries 38 % MORE axial torque than its deposited share**
+(E = 1.383 vs 0.872). So the 30 nm motors bind less and push less, yet contribute disproportionately to the
+chiral channel. That asymmetry nevertheless does **not** propagate to a population twirl difference (§14).
+
+*The `J_total` enrichment row is omitted as uninterpretable:* the two classes' per-seed summed `J_total` have
+opposite signs, so their "shares" (2.33 / −1.33) leave [0,1] and the ratio is degenerate. Class-resolved
+`J_total` needs a signed-magnitude treatment, not a share.
+
+## 13. Mixed lawn versus post-hoc homogeneous prediction
+
+Δ_mix = −0.152 ± 0.140 µm/s (1.08σ, 75 % seed sign, n = 8) and Δ_curve = −0.117 ± 0.177 (0.66σ, n = 8). Both
+central values are negative — the mixed lawn and the mean-matched homogeneous lawn each glide slightly *faster*
+than the weighted homogeneous prediction — but **neither is resolved**, and at n = 8 neither could be. **No
+mixed-population interaction is claimed, and none is excluded.** The post-hoc construction is a weighted average
+of independent homogeneous simulations and is **not** a simulated mixed lawn.
+
+## 14. Secondary twirling consequences
+
+| arm | Ω_odd (rad/s) | σ | τ_odd (N·m) | σ |
+|---|---|---|---|---|
+| D4 | −9.786 ± 3.478 | 2.81 | −3.244e-22 ± 9.19e-23 | 3.53 |
+| D5 | −8.358 ± 3.120 | 2.68 | −3.658e-22 ± 1.10e-22 | 3.33 |
+| post-hoc (n = 8) | −7.308 ± 4.805 | 1.52 | — | — |
+
+Δ_mean(Ω_odd) = **−1.428 ± 4.805 (0.30σ)**; Δ_mix(Ω_odd) = −6.502 ± 8.718 (0.75σ, n = 8);
+Δ_mean(τ_odd) = +4.14e-23 ± 1.42e-22 (0.29σ). Both arms twirl negative at ≈2.7–2.8σ, consistent with the
+established converter mechanism. **No resolved change in mean twirling, no broadening of variability.** The
+short class's torque over-representation (§12) does not translate into a population effect. **No mirror control
+is warranted** — nothing here is resolved or unexpectedly large.
+
+## 15. Study-B decision and density-follow-up gate
+
+**B1 — no heterogeneity effect** on the primary endpoint: Δ_mean(v) = 0.03σ with a tight CI, and no resolved
+change in variability, engagement or event flux. **Partial B4** as a secondary observation: a consistent but
+modest class asymmetry (short class E ≈ 0.81–0.87 in recruitment and propulsion, E = 1.38 in torque) that does
+not reach the population endpoints — it is a *selection signature*, not a selection-*dominated* lawn.
+**B3 is untested, not refuted** (§11 power limitation). Not B5, not B6, not B8.
+
+**Density follow-up: NOT gated.** None of the four triggers fired — no resolved Δ_mean, no resolved Δ_mix, no
+strong class-specific dominance, no saturation-approach signal.
+
+## 16. Numerical health and provenance
+
+96/96 records, 0 invalid, 0 solver failures, no fallback, no crash. Each record carries git revision, boot id,
+recorder session, dt, steps, equilibration, density and the realised lawn. **Defect found and corrected during
+this study:** the first Study-B pass shipped a silently-failed source edit — an indentation mismatch meant the
+per-step class accumulators were computed but never copied onto the result, so every per-step class field
+persisted as 0. It was caught because the enrichment table printed `NaN` rather than a plausible number. D4 was
+re-run with the fix; the 48 records were verified **bit-identical to the originals across all 10 physics fields**
+(`glide`, `tau`, `omegaFit`, `avgBound`, `strokeRatePerS`, the four `J` phases, `nEp`), confirming the fix was
+inert and that §11's gliding result was never affected.
+
+## 17. Biological interpretation and limits
+
+D4/D5 is a **fixture-sensitivity construct**, not a calibrated adsorption distribution. The result — that a
+two-class 30/40 nm lawn behaves like its mean — licenses only the modelling statement that *for this assay, at
+this density, over this length range*, the fixed-length idealisation at the correct mean is adequate. It says
+nothing about real HMM adsorption geometry, and a broader, skewed, or continuous distribution could behave
+differently. The twirl numbers remain non-biological (15° is a diagnostic skew; this is not a motility assay;
+turns/µm is not a pitch prediction).
+
+## 18. Exact next recommendation
+
+**Raise the post-hoc null to 24 seeds by extending the homogeneous 30 and 40 nm arms from 8 to 24 matched
+seeds** (32 records ≈ 15 min). That is the cheapest way to convert Δ_mix from "unresolved because underpowered"
+into an actual test of mixed-population interaction, and it reuses the existing D4/D5 campaign unchanged. Only
+if Δ_mix then resolves does B3 become live and the density panel worth gating.
+
+Do **not** widen the distribution, add classes, or run the density panel first: Δ_mean is a tight null, so the
+informative next move is powering the one comparison that is currently blind, not adding new arms.
+
+## 19. Experiments deliberately not run
+
+D1/D2/D3 lawns; D5-vs-D4 at other densities; the density panel; a mirror control (§14 — unwarranted); 48-seed
+extension (adaptive rule not met: Δ_mean central effect is ~0, not 1.5–3σ); dt/2 for Study B; skewed or
+continuous distributions; any tuning of fractions or lengths.

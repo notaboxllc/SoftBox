@@ -71,7 +71,7 @@ public final class ChiralSiteHarness {
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
-                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false, s2DtCmp = false;
+                convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false, s2DtCmp = false, studyB = false, studyBRep = false;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-fixtures" -> fixtures = true;
@@ -145,6 +145,8 @@ public final class ChiralSiteHarness {
                 case "-s2-map-lengths" -> { String[] q = args[++i].split(","); S2_MAP_NM = new double[q.length];
                                             for (int k = 0; k < q.length; k++) S2_MAP_NM[k] = Double.parseDouble(q[k]); }
                 case "-s2-dt-compare" -> s2DtCmp = true;
+                case "-s2-studyb" -> studyB = true;
+                case "-s2-studyb-report" -> studyBRep = true;
                 case "-conv-geom-values" -> { String[] p = args[++i].split(","); CONV_GEOM_VALS = new double[p.length];
                                               for (int k = 0; k < p.length; k++) CONV_GEOM_VALS[k] = Double.parseDouble(p[k]); }
                 case "-conv-angles" -> { String[] p = args[++i].split(","); CONV_ANGLES = new double[p.length];
@@ -192,6 +194,8 @@ public final class ChiralSiteHarness {
         else if (s2Fix)      ok = runS2Fixtures();
         else if (s2Map)      runS2Map();
         else if (s2DtCmp)    reportS2DtCompare();
+        else if (studyB)     runStudyB();
+        else if (studyBRep)  reportStudyB();
         else if (twirlAudit)      ok = runTwirlAudit();
         else if (twirlEquiv) ok = runTwirlEquiv();
         else if (twirlPilot) runTwirlPilot();
@@ -1274,6 +1278,8 @@ public final class ChiralSiteHarness {
         // no-stroke control for the budget (a stroke-free bound head must contribute no chiral impulse).
         double noStrokeJ; long noStrokeN;
         double wF8Abs; long wF8N;              // mean |F8 work| per stroke window (J) — the eta_energy denominator
+        // §Study-B class-stratified totals, [0]=short [1]=long
+        double[] clsDep, clsBound, clsFprop, clsFabs, clsTau, clsBinds, clsStrokes;
         double strokeRatePerS;                 // strokes per SECOND over the whole population
     }
     static final int EV_BINS = 7;
@@ -1394,6 +1400,15 @@ public final class ChiralSiteHarness {
             Ledger L = BUDGET ? new Ledger(N, G, e, seed - SEED, a.convSkew) : null;
             double[] dRoll = new double[nSeg];      // this step's transported roll increment per segment (for W_chiral)
             int prevNb = 0;
+            // §Study-B class-stratified per-step accumulators: [0] = SHORT class, [1] = LONG class.
+            // Class boundary is the lawn's own midpoint, so it is exact for any two-class D4-style lawn.
+            double[] lawn = G.g4LnmArr; double clsSplit = 0;
+            if (lawn != null) { double lo = 1e9, hi = -1e9;
+                for (double v : lawn) { lo = Math.min(lo, v); hi = Math.max(hi, v); } clsSplit = 0.5*(lo+hi); }
+            double[] clsBound = new double[2], clsFprop = new double[2], clsFabs = new double[2],
+                     clsTau = new double[2], clsBinds = new double[2], clsStrokes = new double[2];
+            double[] clsDep = new double[2];
+            if (lawn != null) for (double v : lawn) clsDep[v <= clsSplit ? 0 : 1]++;
             for (int m = 0; m < N; m++) { prevBs[m] = G.mot.boundSeg.get(m); prevNu[m] = G.mot.nucleotideState.get(m);
                                          age[m] = prevBs[m] >= 0 ? 0 : -1; strokeLag[m] = -1; }
             double rollAtEquil = 0, glideAtEquil = 0, legacyAtEquil = 0;
@@ -1429,10 +1444,10 @@ public final class ChiralSiteHarness {
                 double sn = 0, sa = 0; int nb = 0;
                 for (int m = 0; m < N; m++) {
                     int bs = G.mot.boundSeg.get(m), nu = G.mot.nucleotideState.get(m);
-                    if (bs >= 0 && prevBs[m] < 0) binds++;
+                    if (bs >= 0 && prevBs[m] < 0) { binds++; if (lawn != null) clsBinds[lawn[m] <= clsSplit ? 0 : 1]++; }
                     if (bs < 0 && prevBs[m] >= 0) detach++;
                     boolean stroked = bs >= 0 && prevBs[m] == bs && prevNu[m] == MotorStore.NUC_ADPPI && nu == MotorStore.NUC_ADP;
-                    if (stroked) strokes++;
+                    if (stroked) { strokes++; if (lawn != null) clsStrokes[lawn[m] <= clsSplit ? 0 : 1]++; }
                     // ---- PHASE A episode boundaries: close a finished episode, open a fresh one ----------------
                     if (L != null) {
                         if (L.open(m) && (bs < 0 || bs != prevBs[m])) L.close(m, t, false);
@@ -1466,6 +1481,8 @@ public final class ChiralSiteHarness {
                     faxAcc += fax;
                     // ---- PHASE A: route this step's axial angular impulse into its bound-cycle bucket -----------
                     if (L != null) L.accumulate(m, t, bs, tau, fax, ftan, dRoll[bs], stroked, prevNb, a.mirror);
+                    if (lawn != null) { int c = lawn[m] <= clsSplit ? 0 : 1;
+                        clsBound[c]++; clsFprop[c] += fax; clsFabs[c] += Math.abs(fax); clsTau[c] += tau; }
                     misAcc += Math.abs(e.headMis.get(m)); nBoundSamp++;
                 }
                 tauAcc += sn; tauAbsAcc += sa; boundAcc += nb; measSteps++; prevNb = nb;
@@ -1510,6 +1527,11 @@ public final class ChiralSiteHarness {
             r.detachPerStep = measSteps > 0 ? (double) detach/measSteps : 0;
             r.strokesPerStep = measSteps > 0 ? (double) strokes/measSteps : 0;
             r.strokeRatePerS = DTR > 0 ? r.strokesPerStep/DTR : 0;   // whole-population strokes per SECOND
+            // §Study-B: publish the per-step class-stratified accumulators onto the result so powValues can
+            // persist them. (This assignment was silently missing in the first Study-B run — the locals were
+            // accumulated correctly but never copied out, so every per-step class field wrote 0.)
+            r.clsDep = clsDep; r.clsBound = clsBound; r.clsFprop = clsFprop; r.clsFabs = clsFabs;
+            r.clsTau = clsTau; r.clsBinds = clsBinds; r.clsStrokes = clsStrokes;
             r.tauPerStroke = strokes > 0 ? tauAcc/strokes : 0;
             for (int b = 0; b < AGE_BINS; b++) if (r.ageN[b] > 0) r.ageTau[b] /= r.ageN[b];   // → per-head mean
             for (int b = 0; b < EV_BINS; b++) if (r.evN[b] > 0) r.evTau[b] /= r.evN[b];      // → per-head stroke-lag mean
@@ -1559,7 +1581,7 @@ public final class ChiralSiteHarness {
         final double[] jPre, jStr, jEarly, jLate, wF8, wCh, prevF8;
         // §25 ramp telemetry per open episode
         final double[] qAtt, eAtt, qPre, ePre, qL0, eL0, qL7, eL7, qMax, eMax, qFin, eFin, eInt, dAbs, dPeak, ePrev;
-        final double epsMaxRad; final int rampMode; final double rampOnset;
+        final double epsMaxRad; final int rampMode; final double rampOnset; final double[] lnm;
         static final int SN = 13;
         final double[] snap;                       // per motor: the at-stroke state (stride SN)
         final java.util.List<double[]> done = new java.util.ArrayList<>();
@@ -1583,6 +1605,7 @@ public final class ChiralSiteHarness {
             epsMaxRad = Math.abs(convSkew) * Math.PI / 180.0;
             rampMode = ExplicitCompleteMatHarness.CONV_SKEW_RAMP;
             rampOnset = ExplicitCompleteMatHarness.CONV_SKEW_RAMP_ONSET;
+            lnm = G.g4LnmArr;
         }
         boolean open(int m) { return att[m] >= 0; }
         void begin(int m, int t, int bs) {
@@ -1765,6 +1788,7 @@ public final class ChiralSiteHarness {
             r[ConvBudget.F_Q_MAX] = qMax[m];  r[ConvBudget.F_EPS_MAX] = eMax[m];
             r[ConvBudget.F_Q_FIN] = qFin[m];  r[ConvBudget.F_EPS_FIN] = eFin[m];
             r[ConvBudget.F_EPS_INT] = eInt[m]; r[ConvBudget.F_DEPS_ABS] = dAbs[m]; r[ConvBudget.F_DEPS_PEAK] = dPeak[m];
+            r[ConvBudget.F_LNM] = lnm != null ? lnm[m] : 0.0;
             done.add(r);
             if (Double.isFinite(wF8[m]) && wF8[m] != 0) { wF8Abs += Math.abs(wF8[m]); wF8N++; }
         }
@@ -3031,6 +3055,135 @@ public final class ChiralSiteHarness {
         System.out.println("     suppress the geometric skew; D: twirl grows but gliding/engagement collapses ⇒ mechanically disruptive.)");
     }
 
+    // ============================================ STUDY B — D4 (heterogeneous) vs D5 (mean-matched homogeneous)
+    record LawnArm(String tag, double[] nm, double[] w) {}
+    static final LawnArm D4 = new LawnArm("D4", new double[]{ 30.0, 40.0 }, new double[]{ 0.25, 0.75 });
+    static final LawnArm D5 = new LawnArm("D5", new double[]{ 37.5 }, new double[]{ 1.0 });
+
+    /** Resume-safe D4/D5 campaign: one atomic record per (arm, ε sign, seed). */
+    static void runStudyB() {
+        double eps = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; BUDGET = true;
+        boolean savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        String prov = powProvenance();
+        System.out.printf(Locale.US, "%n--- STUDY B — D4 (25%%@30 + 75%%@40, mean 37.5) vs D5 (homogeneous 37.5):%n"
+                + "    does a heterogeneous lawn differ from a homogeneous one at the SAME MEAN?%n"
+                + "    canonical gliding scene, %d matched seeds, both ε signs; runner: %s ---%n",
+                SEEDS, GPU ? "GPU device-resident" : "CPU");
+        System.out.println("  provenance: " + prov);
+        int done = 0, ran = 0;
+        for (LawnArm A : new LawnArm[]{ D4, D5 }) {
+            for (int sgn = +1; sgn >= -1; sgn -= 2) {
+                for (int i = 0; i < SEEDS; i++) {
+                    int seed = SEED + i;
+                    String id = String.format(Locale.US, "sB_%s_%s_%d", A.tag(), sgn > 0 ? "p" : "n", seed);
+                    if (powRead(id) != null) { done++; continue; }
+                    ExplicitCompleteMatHarness.S2_LAWN_NM = A.nm(); ExplicitCompleteMatHarness.S2_LAWN_W = A.w();
+                    TArm T = new TArm(id, 0.0, false, +1, true, TwoBodyConverterMotor.G4_NSEG).conv(sgn*eps);
+                    long t0 = System.currentTimeMillis();
+                    TRes r = runTwirlArm(T, seed, STEPS);
+                    try { powWrite(id, powValues(r), prov + " lawn=" + A.tag()); }
+                    catch (java.io.IOException e) { throw new RuntimeException("record write failed: " + id, e); }
+                    ran++;
+                    System.out.printf(Locale.US, "    [%3d] %-18s glide=%+7.3f avgB=%5.2f (%.1f s)%n",
+                            done+ran, id, r.glide, r.avgBound, (System.currentTimeMillis()-t0)/1000.0);
+                    ExplicitCompleteMatHarness.resetS2Lawn();
+                }
+            }
+        }
+        System.out.printf("%n  records: %d reused, %d newly run, %d expected%n", done, ran, 4*SEEDS);
+        CONV_RAMP_ARM = null; BUDGET = false; ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem;
+        ExplicitCompleteMatHarness.resetS2Lawn(); cfgOff(); EPS_CONV_ARM = 0;
+        reportStudyB();
+    }
+
+    static double[] sbEven(String arm, String k) {
+        int ki = POWK(k); double[] o = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            double[] p = powRead("sB_"+arm+"_p_"+(SEED+i)), m = powRead("sB_"+arm+"_n_"+(SEED+i));
+            o[i] = (p != null && m != null) ? 0.5*(p[ki]+m[ki]) : Double.NaN;
+        }
+        return o;
+    }
+    static double[] sbOdd(String arm, String k) {
+        int ki = POWK(k); double[] o = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            double[] p = powRead("sB_"+arm+"_p_"+(SEED+i)), m = powRead("sB_"+arm+"_n_"+(SEED+i));
+            o[i] = (p != null && m != null) ? 0.5*(p[ki]-m[ki]) : Double.NaN;
+        }
+        return o;
+    }
+    /** Post-hoc non-interacting prediction 0.25·X(30) + 0.75·X(40) from the Study-A homogeneous records.
+     *  Returns NaN beyond the homogeneous map's seed count — pairing is NEVER manufactured. */
+    static double[] sbPosthoc(String k, boolean odd) {
+        int ki = POWK(k); double[] o = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            double[] p30 = powRead(s2Id(30, +1, SEED+i)), m30 = powRead(s2Id(30, -1, SEED+i));
+            double[] p40 = powRead(s2Id(40, +1, SEED+i)), m40 = powRead(s2Id(40, -1, SEED+i));
+            if (p30 == null || m30 == null || p40 == null || m40 == null) { o[i] = Double.NaN; continue; }
+            double v30 = odd ? 0.5*(p30[ki]-m30[ki]) : 0.5*(p30[ki]+m30[ki]);
+            double v40 = odd ? 0.5*(p40[ki]-m40[ki]) : 0.5*(p40[ki]+m40[ki]);
+            o[i] = 0.25*v30 + 0.75*v40;
+        }
+        return o;
+    }
+
+    static void reportStudyB() {
+        System.out.println("\n  ################ STUDY B — CORE GLIDING RESULT ################");
+        double[] v4 = sbEven("D4","glide"), v5 = sbEven("D5","glide"), vp = sbPosthoc("glide", false);
+        statLine("D4 heterogeneous  v_even", v4, "%+8.3f");
+        statLine("D5 homogeneous    v_even", v5, "%+8.3f");
+        statLine("post-hoc 0.25*L30+0.75*L40", vp, "%+8.3f");
+        System.out.println("  ---- the three distinct comparisons (paired per seed) ----");
+        statLine("Delta_mean  = D4 - D5   [PRIMARY]", paired(v4, v5), "%+8.3f");
+        statLine("Delta_mix   = D4 - posthoc", paired(v4, vp), "%+8.3f");
+        statLine("Delta_curve = D5 - posthoc", paired(v5, vp), "%+8.3f");
+        System.out.println("  (Delta_mix is the ONLY test of mixed-population interaction; Delta_curve isolates");
+        System.out.println("   nonlinearity of the homogeneous response. D4-D5 alone cannot distinguish them.)");
+
+        System.out.println("\n  ---- variability, engagement and flux ----");
+        System.out.printf("    %-10s %10s %10s %12s %12s %10s%n", "arm", "avgBound", "CV(v)", "strokes/s", "epRate", "bad");
+        for (String a : new String[]{ "D4", "D5" }) {
+            double[] v = sbEven(a,"glide"), ms = ConvBudget.msn(v);
+            double sd = ms[2] > 1 ? ms[1]*Math.sqrt(ms[2]) : Double.NaN;
+            System.out.printf(Locale.US, "    %-10s %10.3f %10.3f %12.0f %12.0f %10.1f%n", a,
+                    ConvBudget.msn(sbEven(a,"avgBound"))[0], Math.abs(sd/ms[0]),
+                    ConvBudget.msn(sbEven(a,"strokeRatePerS"))[0], ConvBudget.msn(sbEven(a,"epRate"))[0],
+                    ConvBudget.msn(sbEven(a,"invalid"))[0] + ConvBudget.msn(sbEven(a,"solverFail"))[0]);
+        }
+
+        System.out.println("\n  ---- CLASS ENRICHMENT within D4 (deposited 25 % @30 nm, 75 % @40 nm) ----");
+        System.out.printf("    %-22s %12s %12s   %s%n", "quantity", "30 nm share", "40 nm share", "enrichment E(30) / E(40)");
+        String[][] q = { {"bind0","bind1","binding events"}, {"bnd0","bnd1","bound motor-steps"},
+                         {"str0","str1","stroke events"}, {"fpr0","fpr1","axial propulsive force"},
+                         {"fab0","fab1","total |axial force|"}, {"tau0","tau1","axial torque"},
+                         {"nEp0","nEp1","stroke episodes"}, {"jTot0","jTot1","J_total"} };
+        double dep0 = ConvBudget.msn(sbEven("D4","dep0"))[0], dep1 = ConvBudget.msn(sbEven("D4","dep1"))[0];
+        double fdep0 = dep0/(dep0+dep1);
+        System.out.printf(Locale.US, "    %-22s %12.4f %12.4f   (deposited fractions)%n", "deposited", fdep0, 1-fdep0);
+        for (String[] kk : q) {
+            double[] a = sbEven("D4",kk[0]), b = sbEven("D4",kk[1]);
+            double[] fr = new double[SEEDS];
+            for (int i = 0; i < SEEDS; i++) { double t = a[i]+b[i]; fr[i] = t != 0 ? a[i]/t : Double.NaN; }
+            double[] ms = ConvBudget.msn(fr);
+            System.out.printf(Locale.US, "    %-22s %12.4f %12.4f   E(30)=%.3f  E(40)=%.3f%n",
+                    kk[2], ms[0], 1-ms[0], ms[0]/fdep0, (1-ms[0])/(1-fdep0));
+        }
+
+        System.out.println("\n  ################ STUDY B — SECONDARY TWIRLING ################");
+        double[] o4 = sbOdd("D4","omegaFit"), o5 = sbOdd("D5","omegaFit"), op = sbPosthoc("omegaFit", true);
+        statLine("D4 Omega_odd", o4, "%+8.3f");
+        statLine("D5 Omega_odd", o5, "%+8.3f");
+        statLine("post-hoc Omega_odd", op, "%+8.3f");
+        statLine("Delta_mean  Omega_odd", paired(o4, o5), "%+8.3f");
+        statLine("Delta_mix   Omega_odd", paired(o4, op), "%+8.3f");
+        double[] t4 = sbOdd("D4","tau"), t5 = sbOdd("D5","tau");
+        statLine("D4 tauOdd", t4, "%+.4e"); statLine("D5 tauOdd", t5, "%+.4e");
+        statLine("Delta_mean  tauOdd", paired(t4, t5), "%+.4e");
+    }
+
     // ==================================================== STUDY A — per-motor free S2 length: validation gates
     /**
      * Study-A validation fixtures. Proves the per-motor lawn is data-only, consistent, quenched, deterministic,
@@ -3338,6 +3491,10 @@ public final class ChiralSiteHarness {
         "jPre", "jStroke", "jEarly", "jLate",
         "qAtt", "epsAtt", "qPre", "epsPre", "qL0", "epsL0", "qL7", "epsL7", "qMax", "epsMax",
         "epsInt", "dEpsAbs", "dEpsPeak", "preLife", "postLife",
+        // §Study-B class-stratified (0 when the lawn is off): dep = deposited count, bnd = bound motor-steps,
+        // fpr = summed axial propulsive force, fab = summed |axial force|, tau = summed axial torque
+        "dep0","dep1","bnd0","bnd1","fpr0","fpr1","fab0","fab1","tau0","tau1","bind0","bind1","str0","str1",
+        "nEp0","nEp1","jTot0","jTot1",
     };
     /** A powered-campaign arm: mechanism × lattice × ε-sign. */
     record PowArm(String mech, int ramp, double mirror, double epsSign) {
@@ -3371,7 +3528,30 @@ public final class ChiralSiteHarness {
             mean.applyAsDouble(e -> e[ConvBudget.F_EPS_INT]), mean.applyAsDouble(e -> e[ConvBudget.F_DEPS_ABS]),
             mean.applyAsDouble(e -> Math.toDegrees(e[ConvBudget.F_DEPS_PEAK])),
             mean.applyAsDouble(e -> e[ConvBudget.F_PRELIFE]), mean.applyAsDouble(e -> e[ConvBudget.F_POSTLIFE]),
+            z(r.clsDep,0), z(r.clsDep,1), z(r.clsBound,0), z(r.clsBound,1),
+            z(r.clsFprop,0), z(r.clsFprop,1), z(r.clsFabs,0), z(r.clsFabs,1),
+            z(r.clsTau,0), z(r.clsTau,1), z(r.clsBinds,0), z(r.clsBinds,1), z(r.clsStrokes,0), z(r.clsStrokes,1),
+            clsEpN(eps,0), clsEpN(eps,1), clsEpJ(eps,0), clsEpJ(eps,1),
         };
+    }
+    static double z(double[] a, int i) { return a != null && i < a.length ? a[i] : 0.0; }
+    /** episode COUNT for class c, where c is decided by the episode's own recorded L vs the lawn midpoint. */
+    static double clsEpN(java.util.List<double[]> eps, int c) {
+        double lo = 1e9, hi = -1e9;
+        for (double[] e : eps) { lo = Math.min(lo, e[ConvBudget.F_LNM]); hi = Math.max(hi, e[ConvBudget.F_LNM]); }
+        if (hi <= 0 || hi == lo) return c == 0 ? eps.size() : 0;
+        double mid = 0.5*(lo+hi); int n = 0;
+        for (double[] e : eps) if ((e[ConvBudget.F_LNM] <= mid ? 0 : 1) == c) n++;
+        return n;
+    }
+    /** summed J_total for class c (per-seed class aggregate — the statistical primitive for enrichment). */
+    static double clsEpJ(java.util.List<double[]> eps, int c) {
+        double lo = 1e9, hi = -1e9;
+        for (double[] e : eps) { lo = Math.min(lo, e[ConvBudget.F_LNM]); hi = Math.max(hi, e[ConvBudget.F_LNM]); }
+        if (hi <= 0 || hi == lo) return c == 0 ? eps.stream().mapToDouble(ConvBudget::jTotal).sum() : 0;
+        double mid = 0.5*(lo+hi); double t = 0;
+        for (double[] e : eps) if ((e[ConvBudget.F_LNM] <= mid ? 0 : 1) == c) t += ConvBudget.jTotal(e);
+        return t;
     }
 
     /** Atomic write: temp file + fsync + rename, so a crash can never leave a half-written record. */

@@ -1,5 +1,39 @@
 # Soft Box Project Journal
 
+### 2026-07-26 — STUDY B (D4 vs D5) — a heterogeneous S2 lawn behaves like its MEAN: Delta_mean(v) = +0.005 +/- 0.152 µm/s (0.03 sigma) => B1; short class under-recruited but carries 38 % MORE torque
+
+First heterogeneous-lawn test. D4 (25 %@30 + 75 %@40, realised exactly 300/900, mean exactly 37.5000 nm) vs D5
+(homogeneous 37.5). Canonical gliding scene, 24 matched seeds, both eps signs, 96/96 records, 0 invalid/solver,
+no crash. Report §§9-19.
+- **CORE: heterogeneity does NOT matter beyond the mean.** D4 v_even **-2.766 +/- 0.133**, D5 **-2.771 +/- 0.148**,
+  **Delta_mean = +0.005 +/- 0.152 (0.03 sigma)**, 50 % seed sign, CI [-0.291,+0.293] — excludes anything beyond
+  ~10 % of v. Variability/flux unchanged (CV 0.236 vs 0.262; avgB 2.85 vs 2.97; strokes/s 3642 vs 3725).
+- **Delta_mix = -0.152 +/- 0.140 (1.08 sigma, n=8), Delta_curve = -0.117 +/- 0.177 (0.66 sigma, n=8).** The
+  post-hoc null needs seed-matched homogeneous 30/40 records and the Study-A map has only 8 seeds vs this
+  campaign's 24, so **Delta_mix is unresolved because UNDERPOWERED, not because interaction is excluded.
+  B3 is UNTESTED, not refuted.** Pairing is never manufactured (sbPosthoc returns NaN beyond seed 8).
+- **CLASS ENRICHMENT (the new stratified telemetry):** short 30 nm class **under-recruited 13-15 %**
+  (E_bind 0.853, E_bound 0.866, E_stroke 0.865) and **under-propulsive 19 %** (E_prop 0.814) — but carries
+  **38 % MORE axial torque than its deposited share (E_torque = 1.383 vs 0.872)**. Consistent selection
+  signature that does NOT reach the population endpoints. J_total enrichment row OMITTED as uninterpretable
+  (class sums have opposite signs => shares leave [0,1]).
+- **TWIRL:** D4 Omega_odd -9.786 +/- 3.478 (2.81 sigma), D5 -8.358 +/- 3.120 (2.68 sigma),
+  **Delta_mean 0.30 sigma**, Delta_mean(tauOdd) 0.29 sigma. Both twirl negative, consistent with the converter
+  mechanism. No resolved change, no broadening => **no mirror control warranted.**
+- **Validation 12/12** incl. exact 300/900 counts, mean exactly 37.5000, and **broad mixed-lawn full-graph
+  CPU/GPU equivalence** (bindMism=0, convFlagMism=0, dSegTorque 2.18e-24, bound CPU=GPU=12, no fallback).
+- **DEFECT FOUND AND CORRECTED:** the first Study-B pass shipped a **silently-failed source edit** (indentation
+  mismatch) so the per-step class accumulators were computed but never copied onto the result — every per-step
+  class field persisted as 0. Caught because the enrichment table printed NaN rather than a plausible number.
+  D4 re-run with the fix; 48 records verified **BIT-IDENTICAL across all 10 physics fields**, confirming the fix
+  was inert and §11's gliding result was never affected.
+- **B1 primary + partial B4** (selection signature, not selection-dominated). Density follow-up **NOT gated**.
+  Distributed S2 length currently rates as an **optional assay uncertainty model**, not a mechanically
+  consequential fixture feature.
+- **NEXT: extend the homogeneous 30/40 nm arms from 8 to 24 seeds (~15 min, 32 records)** to power Delta_mix —
+  the cheapest way to turn the one blind comparison into a real test of mixed-population interaction. Do NOT
+  widen the distribution or run the density panel first.
+
 ### 2026-07-26 — STUDY A COMPLETE — H3 CONFIRMED under dt refinement (pooled dv/dL = -0.0179 +/- 0.0055, 3.28 sigma); H6 excluded, H5 refuted; **Study B now AUTHORISED**
 
 Ran the dt/2 map at the FULL six lengths (96/96 records; the 30/40/50 subset was reused, only 25/35/45 newly
