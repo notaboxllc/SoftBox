@@ -8,7 +8,7 @@ diagnostic figures into ANALYSIS/vilfan_target_zone/.
 The independent statistical unit is the SEED (or the starting azimuth, where that is the arm variable).
 Nothing is filtered: null starting phases and non-twirling seeds are plotted with the rest.
 
-Usage:  python3 ANALYSIS/vilfan_target_zone/analyze_target_zone.py [RUN_LOGS/vilfan_target_zone]
+Usage:  python3 ANALYSIS/vilfan_target_zone/analyze_target_zone.py [RUN_DIR] [OUT_DIR]
 """
 import csv, glob, math, os, sys
 import numpy as np
@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 RUN = sys.argv[1] if len(sys.argv) > 1 else "RUN_LOGS/vilfan_target_zone"
-OUT = "ANALYSIS/vilfan_target_zone"
+OUT = sys.argv[2] if len(sys.argv) > 2 else "ANALYSIS/vilfan_target_zone"
 os.makedirs(OUT, exist_ok=True)
 
 # a single restrained palette, readable in both light and dark

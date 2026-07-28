@@ -12,7 +12,56 @@ changed.
 
 ## 1. Executive conclusion
 
-[RESULTS PENDING]
+**The Vilfan target-zone mechanism IS reproduced inside SoftBox under favourable deterministic assumptions
+— on an idealized monotone helix. It is NOT reproduced on actin's true 13/6 lattice.** Both halves are
+established under the *most permissive* conditions the mechanism will ever see in this model: zero handed
+component in the working stroke, all mechanical Brownian motion off, prescribed translation, constrained
+geometry, free axial roll.
+
+**On the idealized monotone lattice** (actin's real azimuthal quantization, rise and repeat, visited in
+monotone order — a declared idealization of the *ordering* only), with converter skew pinned at 0°, the full
+causal chain closes and every element reverses correctly:
+
+| link in the chain | result |
+|---|---|
+| biased attachment before vs after the zone centre | `A_TZ = +0.171 ± 0.025` (**6.8σ**), and `+0.176 ± 0.018` (9.8σ) mirrored |
+| the bias is *caused by the gate* | `A_TZ` falls to `−0.040 ± 0.030` (1.3σ) and `−0.025 ± 0.033` (0.8σ) with the zone OFF |
+| signed axial torque | `⟨τ⟩ = +4.702e-21 ± 8.0e-22 N·m` (5.9σ) |
+| signed filament rotation | `Ω = +134.5 ± 29 rad/s` (4.6σ); turns/µm `+10.70 ± 2.28` |
+| **mirror reversal** | `⟨δ⟩`, `⟨τ⟩`, `Ω`, turns/µm **all reverse** (4.6–17σ); `A_TZ` invariant by construction (§8.2) |
+| the fixture itself | exerts **exactly zero** axial torque (kinematic; gate D) |
+| an achiral lattice | gives a clean null: `τ` 0.14σ, `Ω` 0.79σ (gates F3/F4) |
+| per-seed reproducibility | torque and rotation signs unanimous, **8/8 seeds**, in every control arm |
+| starting-azimuth robustness | six azimuths over a full repeat: `A_TZ` +0.156…+0.212, all resolved |
+
+**On the faithful native actin 13/6 lattice the attachment asymmetry disappears**: `A_TZ` = −0.037 (1.5σ),
+−0.085 (3.0σ), −0.095 (3.0σ), +0.065 (2.0σ) across the same four arms — small, inconsistent in sign, and
+**not separating zone-ON from zone-OFF**. The filament still twirls, strongly and chirally (`Ω` = −218.8
+rad/s, reversing under mirroring), but by a *different* channel — a helical lattice with off-axis
+attachment is chiral on its own, as gates F1–F4 establish independently.
+
+**The reason is structural and was predicted in advance (§5.2), not discovered post hoc.** Actin advances
+−166.5° per monomer, so consecutive sites are near-antipodal; a site's zone offset is *constant* under pure
+axial translation and accessible sites arrive in scrambled azimuthal order. There is no coherent passage
+through the zone for a first-passage bias to act on. The mechanism needs monotone azimuthal passage, and
+actin's real lattice does not provide it.
+
+**Two further findings the design forced into the open:**
+
+1. **The task's literal zero-chirality null (gates F1/F2) fails, and correctly so.** Switching the target
+   zone off leaves a helical lattice and off-axis attachment in place, which are already chiral (3.5σ). The
+   added achiral control — 180° per site, a mirror-invariant site set — is what actually isolates fixture
+   bias, and it passes at 0.14σ/0.79σ. Any future study of this kind should use the achiral control, not
+   the zone-off arm, as its null.
+2. **Rotation here is chemistry-limited, not transit-limited.** Attachment counts are flat across a 16×
+   speed range, so `Ω` is speed-insensitive and turns/µm falls as 1/v — a qualitative difference from the
+   published picture, reported rather than tuned away. No biological pitch is claimed.
+
+**Bottom line for the next step:** the mechanism is real and implementable, but its *requirement* is
+monotone helical passage. Before investing in the Brownian restoration ladder, the open question is not
+"does thermal noise destroy it" (it will only make things harder) but "does anything in the real actin
+geometry — axial compliance, a wider zone, multi-site reach — restore coherent passage on a 13/6 lattice".
+The §14 ladder is built and smoke-tested and is ready either way.
 
 ## 2. The exact scientific question
 
