@@ -2003,7 +2003,15 @@ public final class ChiralSiteHarness {
             for (int b = 0; b < AGE_BINS; b++) if (r.ageN[b] > 0) r.ageTau[b] /= r.ageN[b];   // → per-head mean
             for (int b = 0; b < EV_BINS; b++) if (r.evN[b] > 0) r.evTau[b] /= r.evN[b];      // → per-head stroke-lag mean
             r.meanResidenceSteps = r.detachPerStep > 0 ? r.avgBound/r.detachPerStep : 0;
-            r.omegaPred = r.gammaRoll > 0 ? r.tau/r.gammaRoll : 0;
+            // WHOLE-FILAMENT roll drag. r.tau is the time-average of the SUM of axial torque over all bound
+            // heads — the torque on the entire filament — so the prediction must divide by the entire
+            // filament's roll drag, which is ADDITIVE in length (nSeg segments of equal drag; see dragAudit).
+            // FIXED 2026-07-28: this previously divided by gammaRollOf(G) = ONE segment's drag, so omegaPred
+            // was high by nSeg and qOmega low by nSeg. Diagnostic-only — no claim in this study or the
+            // viscosity campaign uses omegaPred/qOmega (rotation results use omegaFit, the direct LS slope).
+            // Records written before this fix carry qOmega LOW BY A FACTOR nSeg; multiply by nSeg to compare.
+            double gammaRollFil = r.gammaRoll * nSeg;
+            r.omegaPred = gammaRollFil > 0 ? r.tau/gammaRollFil : 0;
             r.qOmega = Math.abs(r.omegaPred) > 1e-30 ? r.omega/r.omegaPred : 0;
             r.coherence = sdRoll > 1e-12 ? Math.abs(meanRollEnd - rollAtEquil)/sdRoll : (nSeg == 1 ? Double.POSITIVE_INFINITY : 0);
             r.blkTau = new double[blocks.size()]; r.blkOmega = new double[blocks.size()];
@@ -4338,10 +4346,15 @@ public final class ChiralSiteHarness {
                 boolean g1 = t[k][5] >= 100;
                 boolean g2 = t[k][4] >= 0.02;
                 boolean g3 = rel(t[k][7], t[k][1]) <= 0.20;
-                // G4: vs the NEXT LONGER window (the last window compares against the previous one)
+                // G4: vs the NEXT LONGER window (the last window compares against the previous one).
+                // The preregistered rule carries an exemption — "UNLESS their confidence intervals include
+                // zero" — because a window-to-window comparison of an UNRESOLVED quantity is uninformative.
+                // FIXED 2026-07-28: the exemption was previously not implemented, which made the evaluator
+                // report failure at the high-[ATP] end purely because Omega_odd is unresolved there at n=2.
+                boolean ciZero = omegaCiIncludesZero(en.getKey(), t[k][0]);
                 int j = k + 1 < t.length ? k + 1 : k - 1;
-                boolean g4o = j < 0 || rel(t[k][2], t[j][2]) <= 0.25;
-                boolean g4t = j < 0 || rel(t[k][3], t[j][3]) <= 0.25;
+                boolean g4o = ciZero || j < 0 || rel(t[k][2], t[j][2]) <= 0.25;
+                boolean g4t = ciZero || j < 0 || rel(t[k][3], t[j][3]) <= 0.25;
                 boolean all = g1 && g2 && g3 && g4o && g4t;
                 System.out.printf(Locale.US, "    %10.4g %8.0f %8s %8s %10s %10s %10s %8s%n",
                         en.getKey(), t[k][0]*1e3, yn(g1), yn(g2), yn(g3), yn(g4o), yn(g4t), all ? "PASS" : "-");
@@ -4369,6 +4382,30 @@ public final class ChiralSiteHarness {
         System.out.println("    from the window-to-window trend of v_finalHalf/rollR2 and avgBound above.");
     }
     static String yn(boolean b) { return b ? "ok" : "NO"; }
+    /** The preregistered G4 exemption: is Omega_odd's two-sided 95 % t interval consistent with zero at this
+     *  window? A stability gate on an unresolved quantity carries no information, so G4 is waived when it is. */
+    static boolean omegaCiIncludesZero(double uM, double windowS) {
+        java.util.List<double[]>[] plus = readNested(uM, +1, ATP_DUR_MS > 0 ? ATP_DUR_MS*1e-3 : windowS);
+        java.util.List<double[]>[] minus = readNested(uM, -1, ATP_DUR_MS > 0 ? ATP_DUR_MS*1e-3 : windowS);
+        if (plus == null || minus == null) return false;
+        java.util.List<Double> odd = new java.util.ArrayList<>();
+        for (int i = 0; i < SEEDS; i++) {
+            if (plus[i] == null || minus[i] == null) continue;
+            for (int k = 0; k < Math.min(plus[i].size(), minus[i].size()); k++)
+                if (Math.abs(plus[i].get(k)[0] - windowS) < 1e-12)
+                    odd.add(0.5*(plus[i].get(k)[2] - minus[i].get(k)[2]));
+        }
+        int n = odd.size();
+        if (n < 2) return true;                       // cannot resolve anything from fewer than two seeds
+        double m = 0; for (double v : odd) m += v; m /= n;
+        double var = 0; for (double v : odd) var += (v-m)*(v-m);
+        double sem = Math.sqrt(var/(n-1)/n);
+        double t = T95_TWO_SIDED[Math.min(n-1, T95_TWO_SIDED.length-1)];
+        return (m - t*sem) * (m + t*sem) <= 0;        // interval straddles zero
+    }
+    /** Two-sided 95 % t quantiles indexed by degrees of freedom (index 0 unused; tail -> normal limit). */
+    static final double[] T95_TWO_SIDED = { 0, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306,
+            2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086, 1.960 };
     static double rel(double a, double b) {
         double d = Math.max(Math.abs(a), Math.abs(b));
         return d > 0 ? Math.abs(a - b) / d : 0.0;
@@ -4637,6 +4674,11 @@ public final class ChiralSiteHarness {
                 natP[m] = nv != 0 ? natO[m]/(2*Math.PI*Math.abs(nv)) : Double.NaN;
                 mirP[m] = mv != 0 ? mirO[m]/(2*Math.PI*Math.abs(mv)) : Double.NaN;
                 m++;
+            }
+            if (m == 0) {   // mirror records exist but their NATIVE partners do not: nothing is comparable
+                System.out.printf(Locale.US, "%n    [ATP] = %.4g µM : no matched native/mirror seed pairs — "
+                        + "NOT COMPARABLE (a verdict here would be an artifact of missing native records).%n", uM);
+                continue;
             }
             double[] mo = ConvBudget.msn(natO), mm2 = ConvBudget.msn(mirO), ms = ConvBudget.msn(sum);
             double[] mt = ConvBudget.msn(natT), mt2 = ConvBudget.msn(mirT);

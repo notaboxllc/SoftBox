@@ -14,7 +14,48 @@ ladder, analysis, controls, health and closeout all live here; there is no separ
 
 ## 0. Executive conclusion
 
-*(filled in after the production analysis is frozen — see §7)*
+**Status: stopped at the pilot checkpoint by direction.** Stage 0 (audit), Stage 1 (19/19 validation gates) and
+Stage 2 (duration pilot, 16 arms) are complete; the n = 8 production campaign and the controls were **not**
+launched, and the pilot was converted into an analysis-only mechanism study (§5A). All 16 arms are complete,
+device-resident, and carry **zero invalid states, zero solver failures, zero rate-cap warnings**.
+
+1. **The ATP condition transfers into the model through one number, with no new biochemistry.** `nucParams[1]`
+   (`atpOn`, NONE→ATP) is the sole [ATP]-dependent transition; it is a pseudo-first-order hazard frozen at
+   2.0×10⁴ s⁻¹ for saturating ATP, and a linear scaling interface was already declared in-repo. The absolute
+   axis is anchored on the repository's own declared saturating condition (2 mM, Rossi et al. 2012), so no rate
+   constant is invented or fitted; every record also carries the effective hazard in s⁻¹, so the whole study can
+   be relabelled under a different anchor by a pure rescale (§2.5).
+
+2. **Gliding transfers, and it is the solid result.** v_even falls **25.7×** monotonically from the reference to
+   5 µM (−4.19 → −0.163 µm/s) with tight seed agreement (1.15–1.32×), placing 5 and 10 µM inside the
+   experimentally reported 0.1–0.5 µm/s band **with nothing tuned**. The engagement account is equally clean:
+   bound population 4.5 → 34.7, rigor occupancy 0.08 → 0.94, residence 1.1 → 21.1 ms, 100 % ATP-triggered
+   detachment, and a pre-stroke lifetime invariant at ~100 µs.
+
+3. **Rotation does not follow, and that is a real torque statement, not an observable artifact.** Ω_odd stays
+   between −40 and −71 rad/s across a 400× ATP range, and **measured rotation closes against independently
+   accumulated torque at 1.033 ± 0.031 with 8/8 sign agreement** (§5A.4). Turns-per-µm therefore rises from
+   −2.53 ± 0.28 at the reference to −58.8 ± 18.9 at 5 µM purely because v_even collapses. In plain terms: **ATP slows translation appropriately, but
+   rotation and translation stop scaling together** — interpretation class B.
+
+4. **The plateau is not established at n = 2.** The across-ATP variation in both Ω_odd and τ_odd is *smaller
+   than* the seed-to-seed scatter within a single concentration (ratio 1.12 and 0.92); 9/16 arms fail
+   window-stability; the ε-even rotational background reaches 1.08× the odd signal; and every n = 2 confidence
+   interval includes zero. The direction and order of the pitch shift are supported; its magnitude is not.
+
+5. **Two defects were found by the analysis, and one of them matters for anyone reading the records.** A
+   *diagnostic* field (`qOmega`/`omegaPred`) divided whole-filament torque by one-segment drag, understating
+   closure by exactly NSEG = 12 — no claim ever used it, and it is fixed. A genuine *analysis* artifact was
+   found in the episode-impulse route: right-censoring of bound episodes rises 0.28 % → 16.6 % as ATP falls and
+   removes precisely the longest, highest-impulse episodes, which is why that route closes to 2 % at the
+   reference and inverts sign at 5 µM. The flux/impulse compensation is therefore coherent but **unproven**.
+
+6. **Recommendation: a targeted extension to n = 4, then stop** (§5A.11). n = 4 is where Ω_odd itself becomes
+   resolved at every ATP (95 % half-width 44 rad/s against |Ω_odd| ≈ 55); ~11 h. The *plateau* question needs
+   n ≈ 16 (~76 h) and should be reserved for publication work, and only if ATP-independence of chiral torque is
+   a claim the paper intends to make. Three cheap instrumentation fixes should precede any extension — two are
+   already applied, and the third (eight per-head reduction fields) is the difference between "cancellation and
+   puller/dragger not diagnosable" and a decisive mechanism test.
 
 ---
 
@@ -410,12 +451,340 @@ gave no evidence that a longer fixed equilibration is required. No 50 µM bridge
 
 ---
 
-## 6. Stage 3 — production configuration and results
+## 5A. Pilot torque-mechanism analysis
 
-### 6.1 Configuration — inherited verbatim from the completed viscosity campaign
+**Analysis-only. No parameter was changed and no arm was rerun.** The study was stopped at the pilot
+checkpoint by direction; the n=8 production campaign was **not** launched. All numbers below come from the
+16 completed pilot arms.
 
-Everything below is the controlling starting point, unchanged. **The only variable that moves across arms is
-[ATP].**
+Tooling: `scripts/lowatp_torque_mechanism.py` (this section), `scripts/lowatp_pilot_report.py` (inventory and
+reuse), `scripts/lowatp_analysis.py` (primary ladder). Outputs: `RUN_LOGS/lowatp/torque_mechanism_full.txt`,
+`RUN_LOGS/lowatp/pilot_checkpoint_report.txt`, `RUN_LOGS/lowatp/pilot_primary_analysis.txt`,
+`RUN_LOGS/lowatp/torque_mechanism/*.png`, `RUN_LOGS/lowatp/lowatp_d200ms_{per_seed,summary}.csv`.
+
+### 5A.1 The question
+
+The pilot means suggested that gliding speed changes strongly with ATP while the ε-odd **rotation rate** stays
+roughly constant. Is that apparent rotational plateau a real torque plateau, a flux/impulse compensation,
+saturation or cancellation among bound motors, axial–rotational decoupling, or an artifact?
+
+### 5A.2 STEP 1 — record inventory and what is analysable
+
+All **16** arms are atomically complete (temp-file + rename, `COMPLETE` sentinel), 4 ATP × 2 ε × 2 seeds, all
+device-resident GPU with no fallback, **zero invalid states and zero solver failures**, zero rate-cap
+warnings. Configuration is invariant across every arm: η = 0.01, dt = 2.5×10⁻⁷ s, duration 0.2 s,
+equilibration 0.25, measSteps 600 000, mirror = +1. Effective hazards: 2000 µM → 2.0×10⁴ /s, 20 → 200,
+10 → 100, 5 → 50.
+
+| availability | quantities |
+|---|---|
+| **Directly stored** | `tau` (mean TOTAL axial torque = time-average of the signed sum over bound heads); `omega`, `omegaFit`, `turns`, `rollR2`, `qOmega`; `glide`, `measSteps`, `dt`; `avgBound`; bound-head and all-head nucleotide occupancy; `nEp`, `nCensored`, `epRate`, `strokeRatePerS`, `bindsPerS`, `detachPerS`; `detachAtp`/`detachRigor`/`detachOther`/`ruptureEvents`/`rateCapWarns`; `jPre`/`jStroke`/`jEarly`/`jLate` (mean per-**episode** phase-resolved axial angular impulse); `preLifeS`, `postLifeS`, `residenceS` |
+| **Exactly reconstructable** | `gammaRoll_segment = tau·qOmega/omega` (verified to give **one identical value** across all 16 arms); `gammaRoll_filament = NSEG · gammaRoll_segment`; cumulative unwrapped body-fixed roll vs time (4001-sample `<id>.trace.tsv` per arm); full- and late-window roll slopes and R²; odd impulse per second, per attachment, per stroke; odd torque per bound head; cumulative binds/strokes/detachments/bound-steps vs time |
+| **Unavailable without new instrumentation** | signed **per-head** axial torque ⇒ positive/negative torque sums, contributing-head counts, per-head magnitude, torque-by-nucleotide-state; **per-head axial force** ⇒ puller/dragger classification; per-head residence conditioned on torque sign |
+
+The class-stratified fields (`dep*`/`bnd*`/`fpr*`/`fab*`/`tau*`/`bind*`/`str*`) are all **zero** here — they
+populate only for a heterogeneous S2 lawn, and this study uses a homogeneous 40 nm lawn.
+
+⇒ **STEP 5 is possible only at the episode-phase level; STEP 6 is not possible at all.** No per-head
+decomposition is inferred from aggregates anywhere below.
+
+### 5A.3 STEP 2 — is the rotational plateau real?
+
+Per-seed, ε signs kept separate (rad/s; roll in rad accumulated over the 150 ms measurement window):
+
+| [ATP] | seed | Ω(+ε) | Ω(−ε) | Ω_even | **Ω_odd** | rev/s odd | roll | R²(+) | R²(−) |
+|---|---|---|---|---|---|---|---|---|---|
+| 2000 | 101 | −146.06 | −33.83 | −89.95 | **−56.12** | −8.93 | 11.86 | 0.977 | 0.699 |
+| 2000 | 102 | −150.73 | +22.66 | −64.04 | **−86.69** | −13.80 | 11.62 | 0.972 | 0.461 |
+| 20 | 101 | −63.56 | −7.77 | −35.66 | **−27.90** | −4.44 | 5.65 | 0.876 | 0.078 |
+| 20 | 102 | −119.11 | +37.96 | −40.57 | **−78.53** | −12.50 | 11.64 | 0.974 | 0.750 |
+| 10 | 101 | −22.38 | +11.58 | −5.40 | **−16.98** | −2.70 | 2.07 | 0.363 | 0.195 |
+| 10 | 102 | −61.30 | +66.29 | +2.50 | **−63.80** | −10.15 | 9.85 | 0.888 | 0.895 |
+| 5 | 101 | −71.20 | +21.58 | −24.81 | **−46.39** | −7.38 | 6.91 | 0.893 | 0.623 |
+| 5 | 102 | −78.86 | +57.93 | −10.47 | **−68.40** | −10.89 | 10.39 | 0.968 | 0.866 |
+
+| [ATP] | Ω_odd mean ± SEM | seed spread | sign | Ω_even mean | \|even\|/\|odd\| |
+|---|---|---|---|---|---|
+| 2000 | −71.41 ± 15.29 | 1.54× | same | −76.99 | **1.08** |
+| 20 | −53.22 ± 25.32 | 2.82× | same | −38.12 | 0.72 |
+| 10 | −40.39 ± 23.41 | 3.76× | same | −1.45 | 0.04 |
+| 5 | −57.40 ± 11.01 | 1.47× | same | −17.64 | 0.31 |
+
+**All 8 seed-pairs are same-signed (negative)** at every concentration, and Ω_odd spans only −40 to −71 rad/s
+across a **400×** range in [ATP]. But:
+
+- **9 of 16 arms fail window stability** (late-vs-full slope > 25 % or roll R² < 0.5).
+- The **ε-even rotational background is large** — at the reference it *exceeds* the odd signal
+  (|even|/|odd| = 1.08). Ω_odd is therefore a difference of two comparable, noisy raw rotations.
+- **The across-condition variation is smaller than the within-condition seed scatter**: pooled
+  within-condition SD = 27.78 rad/s against an across-ATP spread of only 31.02 rad/s ⇒ **ratio 1.12**.
+- At n = 2 the *t*-quantile is 12.706, so every 95 % CI is enormous and **includes zero** at every
+  concentration (e.g. 5 µM: [−197, +82]).
+
+⇒ On this evidence the ATP-independence of rotation is **suggestive but underpowered**, not established.
+
+**Gate-evaluator defect — found, fixed, re-verified.** The harness's automated Stage-2 verdict initially
+printed "EXTEND the pilot", because gate G4 (Ω and turns/µm within 25 % of the adjacent window) failed at the
+*high*-ATP end. The preregistered rule carries the clause *"unless their confidence intervals include zero"*,
+which the `reportAtpPilot` evaluator did not implement — and a window-to-window stability gate applied to an
+**unresolved** quantity carries no information. With the clause implemented
+(`omegaCiIncludesZero`, two-sided 95 % *t*), re-running the evaluator over the **same 16 records** (16 reused,
+0 newly run — pure re-analysis, no simulation) gives:
+
+```
+[ATP] =    5 µM : shortest window passing all gates = 200 ms
+[ATP] =   10 µM : shortest window passing all gates = 200 ms
+[ATP] =   20 µM : shortest window passing all gates =  50 ms
+[ATP] = 2000 µM : shortest window passing all gates =  20 ms
+⇒ SHORTEST COMMON PRODUCTION DURATION = 200 ms
+```
+
+confirming the duration decision independently. The lesson generalises: at n = 2 every Ω_odd CI includes zero,
+so **G4 cannot discriminate at this sample size at any concentration** — which is itself part of the §5A.9
+verdict.
+
+### 5A.4 STEP 3 — torque–rotation closure
+
+`gammaRoll` per segment reconstructs to **2.701612×10⁻²⁵ N·m·s**, with **exactly one distinct value across all
+16 arms** — confirming both that the reconstruction is exact and that the configuration is invariant.
+
+> **Bookkeeping defect found — in a DIAGNOSTIC field only.** `ChiralSiteHarness.gammaRollOf()` returns
+> `fil.bRotGam[0]`, the roll drag of **one** segment, while `r.tau` is the torque on the **whole 12-segment**
+> filament. The stored `omegaPred = tau/gamma_SEGMENT` therefore over-predicts by NSEG and `qOmega`
+> under-reports closure by the same factor. Roll drag is additive in length (the harness's own `dragAudit`
+> states this), so the correct whole-filament drag is **NSEG · gamma_segment = 3.241935×10⁻²⁴ N·m·s**.
+> **No claim in this study or in the viscosity campaign uses `qOmega`/`omegaPred`** — every rotation result
+> uses `omegaFit`, the direct LS slope of measured body-fixed roll. Fix recorded in §5A.9.
+
+| [ATP] | seed | τ(+ε) | τ(−ε) | τ_even | **τ_odd** | Ω_odd measured | Ω_odd predicted | meas/pred |
+|---|---|---|---|---|---|---|---|---|
+| 2000 | 101 | −3.3333e-22 | +3.7309e-23 | −1.4801e-22 | −1.8532e-22 | −56.12 | −57.16 | **0.982** |
+| 2000 | 102 | −3.4336e-22 | +1.5971e-22 | −9.1823e-23 | −2.5153e-22 | −86.69 | −77.59 | **1.117** |
+| 20 | 101 | −1.1840e-22 | +4.9699e-23 | −3.4351e-23 | −8.4050e-23 | −27.90 | −25.93 | **1.076** |
+| 20 | 102 | −3.4997e-22 | +1.5772e-22 | −9.6130e-23 | −2.5384e-22 | −78.53 | −78.30 | **1.003** |
+| 10 | 101 | +7.8168e-25 | +9.2644e-23 | +4.6713e-23 | −4.5931e-23 | −16.98 | −14.17 | **1.199** |
+| 10 | 102 | −1.8370e-22 | +2.5642e-22 | +3.6358e-23 | −2.2006e-22 | −63.80 | −67.88 | **0.940** |
+| 5 | 101 | −1.2796e-22 | +1.8230e-22 | +2.7168e-23 | −1.5513e-22 | −46.39 | −47.85 | **0.970** |
+| 5 | 102 | −2.6321e-22 | +1.8944e-22 | −3.6886e-23 | −2.2633e-22 | −68.40 | −69.81 | **0.980** |
+
+**Closure: measured/predicted = 1.033 ± 0.031 (n = 8), range 0.940–1.199, sign agreement 8 of 8.**
+
+This is the single strongest result in the pilot. The measured body-fixed rotation reproduces the
+independently accumulated axial torque divided by the filament's own roll drag, to ~3 %, at every ATP and
+every seed. **The rotation observable is therefore not an artifact, and the rotational plateau is exactly a
+torque plateau — Ω_odd is flat because τ_odd is flat, not because of any observable defect.**
+
+Independent route — cumulative odd angular impulse per second vs mean odd torque:
+
+| [ATP] | seed | J_odd/s | τ_odd | ratio | censoring |
+|---|---|---|---|---|---|
+| 2000 | 101 | −1.8888e-22 | −1.8532e-22 | **1.019** | 0.40 % |
+| 2000 | 102 | −2.4629e-22 | −2.5153e-22 | **0.979** | 0.17 % |
+| 20 | 101 | −2.2076e-22 | −8.4050e-23 | 2.627 | 4.37 % |
+| 20 | 102 | −3.8928e-22 | −2.5384e-22 | 1.534 | 3.75 % |
+| 10 | 101 | +7.4041e-23 | −4.5931e-23 | **−1.612** | 8.91 % |
+| 10 | 102 | −7.9653e-22 | −2.2006e-22 | 3.620 | 6.77 % |
+| 5 | 101 | −4.2179e-23 | −1.5513e-22 | 0.272 | 15.79 % |
+| 5 | 102 | +2.3511e-21 | −2.2633e-22 | **−10.388** | 16.03 % |
+
+The impulse route closes to **within 2 % at the reference** and degrades monotonically with censoring until
+it inverts sign at low ATP — see §5A.5.
+
+### 5A.5 STEP 4 — event flux vs angular impulse per event
+
+Directly recorded flux and lifetimes (per-seed means):
+
+| [ATP] | episodes/s | attach/s | strokes/s | ATP-detach/s | rigor-rupture/s | avgBound | residence | **pre-stroke life** | **post-stroke life** |
+|---|---|---|---|---|---|---|---|---|---|
+| 20 | 3472 | 3635 | 3627 | 3610 | **0** | 21.8 | 6.04 ms | 101.6 µs | 5.75 ms |
+| 10 | 2323 | 2535 | 2525 | 2520 | **0** | 29.0 | 11.47 ms | 103.9 µs | 10.53 ms |
+| 5 | 1410 | 1690 | 1689 | 1643 | **0** | 34.7 | 21.09 ms | **98.7 µs** | **17.72 ms** |
+
+Nucleotide occupancy of bound heads:
+
+| [ATP] | NONE (rigor) | ATP | ADP·Pi | ADP |
+|---|---|---|---|---|
+| 20 | 0.8175 | 0.0000 | 0.0169 | 0.1656 |
+| 10 | 0.8921 | 0.0000 | 0.0091 | 0.0988 |
+| 5 | 0.9404 | 0.0000 | 0.0049 | 0.0546 |
+
+Event flux falls **2.46×** from 20 → 5 µM while residence rises **3.5×**, and the entire increase is in the
+**post-stroke limb** (3.1×) — the pre-stroke lifetime is invariant at ~100 µs, reproducing the
+viscosity campaign's finding that the pre-stroke dwell is chemistry-limited. **Rigor mechanical rupture
+contributes exactly zero detachments at every condition** (it is OFF on this lineage, §2.7), so detachment is
+100 % ATP-triggered throughout.
+
+Episode-phase decomposition of the odd impulse (the only cancellation-relevant split available):
+
+| [ATP] | J_pre odd | J_stroke odd | J_early odd | **J_late odd** | J_total odd |
+|---|---|---|---|---|---|
+| 20 | +3.74e-27 | −4.95e-28 | −3.79e-27 | **−8.61e-26** | −8.67e-26 |
+| 10 | +9.76e-27 | −5.87e-28 | −2.80e-27 | **−1.31e-25** | −1.25e-25 |
+| 5 | −9.73e-28 | −1.03e-27 | −3.67e-27 | +7.29e-25 | +7.24e-25 |
+
+The odd impulse is carried **almost entirely (≈99 %) in the late post-stroke/rigor limb**, which is exactly
+the limb that lengthens as ATP falls. At the one concentration step where the estimator is still usable
+(20 → 10 µM) the compensation is close to exact: episode rate ÷1.49 against J_late ×1.52, i.e. flat to ~2 %.
+
+**But this cannot be promoted to a demonstrated mechanism, because the estimator is ATP-dependently biased:**
+
+| [ATP] | mean censored episodes |
+|---|---|
+| 2000 µM | **0.28 %** |
+| 20 µM | 4.23 % |
+| 10 µM | 7.97 % |
+| 5 µM | **16.56 %** |
+
+Right-censoring rises monotonically (**59×**) as ATP falls, and the censored episodes are precisely the
+**longest** ones — the ones carrying the dominant late-phase impulse. The bias therefore removes the dominant
+contribution exactly where the compensation claim would be made. Its footprint is visible directly: the 5 µM
++ε seed-102 arm returns `jLate = +1.675e-24`, opposite in sign to every other 5 µM arm and contradicting the
+sign of **its own** τ_odd and Ω_odd (both negative), and it alone flips the 5 µM ensemble mean positive.
+`tau` and `omegaFit` are per-step accumulations over all bound heads and are **never censored**, which is why
+they close at 1.033 while the impulse route inverts.
+
+⇒ The residence-time-compensation picture is **mechanistically coherent and consistent with the data, but
+not established by it.**
+
+### 5A.6 STEP 5 — torque cancellation and saturation
+
+**Not diagnosable from this pilot.** Only the **net** axial torque is stored. Positive-torque sum,
+negative-torque sum, contributing-head counts, per-head magnitude and torque-by-nucleotide-state are not
+recorded and must not be inferred from an aggregate. What can be said: odd torque **per bound head** is
+−7.56e-24 (20 µM), −4.13e-24 (10 µM), −5.46e-24 (5 µM) — no monotone trend, and dominated by seed scatter, so
+even the load-sharing sub-question is unresolved. The episode-phase split above is the only cancellation-
+adjacent decomposition available.
+
+### 5A.7 STEP 6 — axial puller/dragger vs torque sign
+
+**Not possible from this pilot** — per-head axial force and per-head axial torque are not stored. Not rerun,
+per instruction. Exact schema additions for a later targeted study (all are per-step reductions over values
+the measurement loop **already computes**, so no new physics and no kernel change is required):
+
+```
+tauPos, tauNeg        summed positive / negative per-head axial torque
+nTauPos, nTauNeg      counts of positive / negative torque heads
+tauByState[4]         axial torque summed by nucleotide state
+nByState[4]           bound-head counts by nucleotide state
+tauPull, tauDrag      axial torque summed over heads with F_ax*v_fil > 0 and < 0
+nPull, nDrag          counts of axial pullers / draggers
+fAxPull, fAxDrag      summed axial force in each class
+residPull, residDrag  residence accumulated in each class
+```
+
+Per-head axial torque is already computed at `ChiralSiteHarness` ~line 1930 (`ChiralSiteSystem.axialTorque`)
+and per-head axial force just below it (the `bondData` projection); only the signed reductions and these
+record fields are missing.
+
+### 5A.8 STEP 7 — artifact checks
+
+| check | result |
+|---|---|
+| rev/s from direct roll slopes, not via turns-per-distance | **confirmed** — `omegaFit` is the LS slope of transported body-fixed roll; rev/s = Ω/2π |
+| 2π conversion correct | **confirmed** — max \|roll_span/2π − stored turns\| = 0.0351 rev across all arms |
+| roll-unwrapping / branch cuts | **structurally impossible** — largest observed mean per-step roll increment 2.22×10⁻³ rad vs a π branch cut |
+| a few abrupt jumps dominating the slope | **no** — max single-interval \|ΔRoll\| is near-constant at 0.33–0.44 rad on *every* arm (the uniform Brownian roll background). The one case where it exceeds the net excursion (10 µM −ε seed 101, frac 2.98) is an arm whose **net** roll is only 0.13 rad, i.e. a near-null arm, not an anomalous jump |
+| lab-frame tumble contaminating body-fixed roll | **excluded by construction** — the estimator transports the material yVec onto the plane ⊥ the current û (rotation-minimizing frame); the legacy lab-referenced readout is computed separately and is never used for a claim |
+| startup transient | equilibration 25 % (50 ms ≈ 2.4 bound lifetimes at 5 µM); roll R² rises from ~0.45 to 0.83–0.97 between 50 and 100 ms and is stable after |
+| one seed dominating the mean | **yes, for the impulse route** (5 µM +ε seed 102, §5A.5). Not for Ω_odd or τ_odd, where both seeds are same-signed at every ATP |
+| ε-even rotational background | **large** — \|even\|/\|odd\| = 1.08 at the reference, 0.72 at 20 µM |
+| cancellation from subtracting two noisy large rotations | **a real risk**, quantified by the ratio above; this is the main reason n = 2 cannot settle the plateau |
+| full- vs late-window disagreement | **9 of 16 arms** fail (>25 % or R² < 0.5) |
+| identical analysis window at every ATP | **confirmed** — duration 0.2 s, equil 0.25, measSteps 600 000 identical on all 16 arms |
+| ε sign / seed pairing | **confirmed** — every pair is (p, n) at the same seed and same ATP; unmatched signs are never combined |
+| reduced displacement at low ATP compromising the roll fit | **no** — the roll fit does not depend on displacement; R² is reported per arm |
+| torque and roll time-aligned | **by construction** — both accumulated in the same per-step loop over the same window |
+| reference uses identical estimator definitions | **confirmed** — same code path, only `nucParams[1]` differs |
+
+Plots: `RUN_LOGS/lowatp/torque_mechanism/` — cumulative body-fixed roll for every arm (1), τ_odd vs ATP (2),
+Ω_odd vs ATP (3), measured vs predicted Ω_odd (4), flux vs impulse per event (5), bound population and torque
+per bound head (6, 6b). Plots 7 and 8 (positive/negative torque components; puller/dragger) are **not
+producible** — see `PLOTS_7_8_UNAVAILABLE.txt`.
+
+### 5A.9 STEP 8 — decision
+
+**Primary: E — the apparent plateau is NOT ESTABLISHED (statistically), together with A as the
+best-supported physical reading, and explicitly NOT F for the rotation observable.**
+
+- **Not F for rotation.** Torque–rotation closure is 1.033 ± 0.031 with 8/8 sign agreement. Rotation
+  faithfully reflects torque; there is no observable defect. *(One genuine bookkeeping defect was found —
+  `qOmega`/`omegaPred` divide whole-filament torque by one-segment drag — but it is a diagnostic field that no
+  claim uses. A second, real analysis artifact **was** found, in the impulse route only: ATP-dependent
+  censoring, §5A.5.)*
+- **A is the physical reading the data support.** Because closure holds, the flat Ω_odd *is* a flat τ_odd:
+  −2.18, −1.69, −1.33, −1.91 ×10⁻²² N·m across a 400× ATP range, all same-signed on both seeds.
+- **E is the honest statistical verdict.** The across-ATP spread is **smaller than the within-condition seed
+  scatter** (ratio 1.12 for Ω_odd, 0.92 for τ_odd); 9/16 arms fail window stability; the ε-even background
+  reaches 1.08× the odd signal; and every n = 2 CI includes zero. "Flat" and "varying by up to 2×" are not
+  distinguishable here.
+- **B is coherent but unproven.** Flux falls 2.46×, residence rises 3.5× entirely in the post-stroke limb,
+  and ≈99 % of the odd impulse sits in that limb — at 20 → 10 µM the product is flat to ~2 %. But the
+  per-episode impulse estimator is ATP-dependently censored (0.28 % → 16.6 %) in exactly the direction that
+  removes the dominant term, so this cannot be promoted.
+- **C and D are not diagnosable** — net-only torque, no per-head force. Schema additions given in §5A.7.
+
+### 5A.10 Limitations from n = 2
+
+Two seeds give 1 degree of freedom: the 95 % *t*-multiplier is 12.706, so CIs are ~±250–320 rad/s on an
+Ω_odd of ~55 rad/s. Seed-to-seed magnitude spread within one concentration is 1.47–3.76×, larger than the
+entire across-ATP variation. Nothing in this section is a significance claim; the sign consistency (8/8) and
+the closure (8/8) are the only results that survive at this sample size, and both are qualitative-plus-ratio
+statements rather than powered tests.
+
+### 5A.11 Recommendation — targeted extension to n = 4, then stop
+
+Power computed from the observed pooled within-condition SD (Ω_odd 27.78 rad/s; τ_odd 9.26×10⁻²³ N·m):
+
+| goal | requirement | n = 2 | n = 4 | n = 8 | n = 16 |
+|---|---|---|---|---|---|
+| Ω_odd itself resolved ≠ 0 (95 %, *t*) | half-width < ~55 rad/s | 249.6 ✗ | **44.2 ✓** | 23.2 ✓ | — |
+| resolve the across-ATP τ_odd spread at 3 SEM | spread/SEM ≥ 3 | 1.30 ✗ | 1.85 ✗ | 2.61 ✗ | **3.69 ✓** |
+
+**Recommendation: option 2 — a targeted extension to n = 4, and no further work now.**
+
+- n = 4 is the point at which **the twirl itself becomes resolved at every ATP** (95 % half-width 44 rad/s
+  against |Ω_odd| ≈ 55). That converts the pilot's strongest qualitative result — same sign on every
+  seed-pair at every concentration — into a statement with an interval attached. Cost: 2 additional seeds ×
+  4 ATP × 2 ε = **16 arms ≈ 10.8 h** on the measured 40.6 min/arm.
+- **Do not go to n = 8 for the plateau question** — it still falls short (2.61 < 3). The plateau claim needs
+  **n ≈ 16**, i.e. ~112 further arms ≈ 76 h. Reserve that for publication work, and only if the ATP-
+  independence of chiral torque is a claim the paper actually intends to make.
+- **Before any extension, make three cheap fixes** (all analysis/instrumentation, no physics):
+  1. correct `gammaRollOf` to the whole-filament roll drag (or divide `tau` by segment count) so `qOmega` is
+     a usable closure diagnostic;
+  2. implement the preregistered "unless the CI includes zero" clause in the G4 gate evaluator;
+  3. add the eight per-head reduction fields of §5A.7 — they are the difference between "C and D not
+     diagnosable" and a decisive mechanism test, and they cost one per-step reduction each.
+  With (3) in place, an n = 4 extension would answer the cancellation and puller/dragger questions **that this
+  pilot could not touch**, which is worth more than the extra seeds alone.
+- Also record for any future campaign: stamp **build identity** (source hash / class mtime) into the
+  provenance line, not just `git HEAD` — commits made while runs are in flight left three different `rev=`
+  stamps on arms produced by one identical binary (§5A.12).
+
+### 5A.12 Reusability of the 16 pilot arms
+
+All 16 arms share identical [ATP]-independent configuration, duration, equilibration, record schema and seed
+definition, and were produced by **one compiled binary** (source mtime 2026-07-27T23:19:02, classes 23:19:49,
+first record 2026-07-28T00:00:35, last 08:09, no rebuild in between). The five differing `rev=` stamps
+(`f5af18cc` ×7, `f19749a7` ×4, `40843aa2` ×2, `38d1f91b` ×2, `9683598a` ×1) record **HEAD at record-write
+time**, not build time, and `git diff` confirms **no `softbox/*.java` changed** across those commits — they
+were shell-script, analysis-script and Markdown commits made while runs were in flight.
+
+⇒ **All 16 arms are reusable as-is** at this duration; an n = 4 or n = 8 extension needs only the additional
+seeds, provided no Java source changes in the meantime. If the §5A.11 fixes (1) and (3) are applied first,
+the existing 16 arms remain valid for Ω/τ/flux analysis (the fixes are additive and do not alter any stored
+quantity), but the new per-head fields would exist only in the new arms.
+
+---
+
+## 6. Stage 3 onward — NOT RUN (study stopped at the pilot checkpoint)
+
+The n = 8 production ladder, the ε = 0 null, the low-ATP mirror control and the adaptive seed extension were
+**not launched**, by direction: the study was stopped at the pilot checkpoint and converted to an
+analysis-only investigation of the 16 completed arms (§5A). No GPU run was started after that point.
+
+The configuration those stages *would* have used is the one the 16 pilot arms already carry, and is recorded
+here because it is what any future extension must match exactly:
 
 | item | value | source |
 |---|---|---|
@@ -424,45 +793,68 @@ Everything below is the controlling starting point, unchanged. **The only variab
 | filament | 12 segments, Brownian **ON** (all four channels) | `TwoBodyConverterMotor.G4_NSEG` |
 | free S2 | homogeneous 40 nm | canonical L40 geometry |
 | motor density | 400 heads/µm² | canonical |
-| motors | N = 1200 | as built by `buildS2Mat` at this density |
 | actin sites | discrete, surface bond ON, native lattice | canonical |
 | converter skew | **linear ramp**, ε = +15° and −15° | the confirmed mechanism |
-| target-zone | OFF | task requirement |
-| old binding/interface skew | OFF | task requirement |
-| roll spring | OFF | not referenced by this lineage |
+| target-zone / old interface skew / roll spring | OFF | task requirement |
 | rigor mechanical rupture | **OFF** (`RUPTURE_MODE = 0`) | §2.7 — as the viscosity campaign had it |
-| equilibration | 25 % of the run | unless the pilot demanded otherwise (§5) |
-| runner | GPU device-resident, monitored, **no fallback** | `run_gpu_monitored.sh`; a lowering failure throws |
+| duration / equilibration | 200 ms / 25 % | Stage 2 decision (§5) |
+| runner | GPU device-resident, monitored, **no fallback** | `run_gpu_monitored.sh` |
 
-Per-record provenance retained: [ATP] and effective `atpOn`, η, dt, physical duration, equilibration
-fraction, seed, ε sign, mirror flag, git revision, boot id, rupture mode, runner, and the full observable set
-(gliding slope, body-fixed roll slope, torque, all four phase-resolved angular impulses, bound population,
-state occupancy, attachment/stroke/detachment counts, ATP-triggered vs rigor-rupture detachments, physical
-pre- and post-stroke lifetimes, numerical-health counters).
+Controls not run, and what that costs: without the **ε = 0 null** the estimator's own noise floor is not
+measured directly (the ε-even background in §5A.3 is the available proxy, and it is large); without the
+**low-ATP mirror** the chirality of the low-ATP twirl is inherited from the viscosity campaign's mirror
+control at the reference condition rather than demonstrated at low ATP. Neither gap affects any statement
+made in §5A, because §5A makes no chirality claim.
 
-### 6.2 Results
+## 7. Results — what the pilot establishes
 
-*(filled in from `RUN_LOGS/lowatp/stage3_*.txt`)*
+**Gliding transfers cleanly and is the solid result.** Across a 400× ATP range, seed-paired v_even:
 
----
+| [ATP] µM | atpOn /s | v_even µm/s (n = 2) | seed spread | vs reference |
+|---|---|---|---|---|
+| 2000 (reference) | 2.0×10⁴ | −4.19 | 1.15× | 1.00 |
+| 20 | 200 | −0.650 | 1.23× | 0.155 |
+| 10 | 100 | −0.271 | 1.32× | 0.065 |
+| 5 | 50 | −0.163 | 1.32× | 0.039 |
 
-## 7. Stage 4 — primary analysis and interpretation
+Gliding falls **25.7×** from reference to 5 µM, monotonically, with tight seed agreement (1.15–1.32×) — and
+5, 10 µM land inside the experimentally reported 0.1–0.5 µm/s band with **nothing tuned**. The engagement
+account is equally clean and monotone (§5A.5): bound population 4.5 → 34.7, rigor occupancy 0.08 → 0.94,
+residence 1.1 → 21.1 ms, detachment 100 % ATP-triggered at every condition, pre-stroke lifetime invariant at
+~100 µs.
 
-*(filled in)*
+**Rotation does not follow.** Ω_odd stays between −40 and −71 rad/s across the same 400× range (§5A.3), and
+because torque–rotation closure holds at 1.033 ± 0.031 (§5A.4), that is a flat **torque**, not an observable
+artifact. Turns-per-µm therefore rises from −2.53 ± 0.28 at the reference to −58.8 ± 18.9 at 5 µM **entirely
+because v_even falls**, not because rotation speeds up.
 
----
+**Interpretation class: B (gliding transfers but pitch shifts)** is what the point estimates describe — ATP
+slows translation appropriately while rotation and translation stop scaling together. But at n = 2 the
+across-ATP variation in Ω_odd and τ_odd is smaller than the within-condition seed scatter (§5A.3), so the
+*magnitude* of the pitch shift is not established, only its direction and order.
 
-## 8. Stage 5 — controls
+## 8. Controls — not run
 
-*(filled in)*
+See §6. The ε = 0 null and the low-ATP mirror were not launched.
 
----
+## 9. Numerical and scientific health
 
-## 9. Stage 6 — numerical and scientific health
+Across all 16 arms: **zero invalid states, zero solver failures, zero rate-cap warnings, zero
+rigor-rupture events** (the channel is off), 100 % ATP-triggered detachment, no silent CPU fallback (every
+arm device-resident, and a lowering failure throws by construction), no record collisions (ids carry ATP,
+duration, ε sign, seed and mirror flag; atomic temp-file + rename), exact seed accounting (16 of 16 expected
+records, 1 reused + 15 newly run), and identical intrinsic parameters at every ATP — only `nucParams[1]`
+differs, verified by the Stage 1 identity gates.
 
-*(filled in)*
+Confirmed **not** altered by lowering ATP (Stage 1 gates C5–C7, and the invariance check in §5A.2): viscosity,
+timestep, Brownian amplitudes, motor density, S2 mechanics, stroke angle, binding geometry.
 
----
+**One machine-level event:** the first 200 ms pilot attempt died at CUDA error 719 cascading into a SIGSEGV in
+`libcuda.so`, followed by a host crash and reboot. Evidence archived per CLAUDE.md
+(`gpu-crash-case-20260728-001308.tar.gz`; no Xid in the previous-boot kernel log). The atomic-record design
+lost nothing — the completed arm survived intact, no partial record was written, and the campaign resumed
+from it under `scripts/run_lowatp_campaign.sh`, completing the remaining 15 arms in one attempt with no
+retries. A slower run is not a failed run, and this was not a failed run.
 
 ## 10. Experimental comparison, limits, work not done, next recommendation
 
@@ -471,9 +863,16 @@ pre- and post-stroke lifetimes, numerical-health counters).
 | quantity | experiment | this study |
 |---|---|---|
 | [ATP] | ≈5–20 µM | 5, 10, 20 µM (+ the frozen reference) |
-| gliding speed | ≈0.1–0.5 µm/s | *(§7)* |
-| mean myosin-II twirling pitch | ≈0.47 ± 0.20 µm | *(§7)* |
-| pitch vs filament velocity | comparatively insensitive | *(§7)* |
+| gliding speed | ≈0.1–0.5 µm/s | **−0.163 µm/s (5 µM), −0.271 (10 µM)** — inside the band, untuned |
+| mean myosin-II twirling pitch | ≈0.47 ± 0.20 µm | **−0.396 µm at the reference** (per-seed −0.444, −0.357) — *inside the experimental band*; but **−0.017 µm at 5 µM** (per-seed −0.025, −0.013) |
+| pitch vs filament velocity | comparatively insensitive | **not reproduced** — pitch tracks 1/v_even because Ω_odd is flat |
+
+**The sharpest comparison in the study, and it is a negative one.** The model reproduces the experimental
+pitch *at saturating ATP* (−0.396 µm against 0.47 ± 0.20 µm) — but the experiment was performed at
+**5–20 µM**, and at those concentrations the model's pitch collapses to ≈0.017–0.11 µm, a factor of 4–30
+below the measurement. So the model matches the reported pitch **at the wrong ATP condition**, and the
+condition transfer that would have been the strongest possible outcome does not hold for rotation. It does
+hold for gliding. This is reported as found; nothing was adjusted in response to it.
 
 Nothing was changed after seeing output. No ATP, viscosity, skew, density or detachment parameter was
 adjusted to improve agreement, and no ATP response curve was fitted back into the motor.
@@ -512,4 +911,8 @@ adjusted to improve agreement, and no ATP response curve was fitted back into th
 
 ### 10.4 Next recommendation
 
-*(filled in with the result)*
+**Extend selected conditions to n = 4, then stop** — see §5A.11 for the power calculation this rests on, and
+§5A.7 for the instrumentation that would make the extension answer the questions this pilot could not.
+
+Do **not** launch the n = 8 ladder for the plateau question: it still falls short (spread/SEM 2.61 < 3). Either
+stay at n = 4 for a resolved-existence statement, or go to n ≈ 16 deliberately for a resolved-plateau statement.
