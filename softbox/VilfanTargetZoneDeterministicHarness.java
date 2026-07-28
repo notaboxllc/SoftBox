@@ -91,6 +91,13 @@ public final class VilfanTargetZoneDeterministicHarness {
     static boolean CLAMP_TILT = true;   // -no-clamp-tilt
     static boolean RIGID_FIL = true;    // -no-rigid : flexible chain filament
     static double  CONV_SKEW_DEG = 0.0; // -conv-skew-deg : MUST stay 0 for the zero-stroke-skew test
+    /** Vilfan graded competing-site attachment mode (0 = off ⇒ the hard-zone/canonical path is unchanged). */
+    static int     GRADED_MODE = VilfanGradedBindingSystem.MODE_OFF;
+    static int     GRAD_WINDOW = 6;
+    static double  GRAD_ALPHA  = VilfanGradedBindingSystem.VILFAN_ALPHA;
+    static boolean GRAD_SHADOW = false;
+    /** Binding-only fixture: clamp the roll as well, so bond mechanics cannot feed back on the landscape. */
+    static boolean CLAMP_ROLL = false;
 
     static final double TWOPI = 2.0 * Math.PI;
 
@@ -102,6 +109,7 @@ public final class VilfanTargetZoneDeterministicHarness {
         double mirror, vdir; int before;          // +1 before, -1 after, 0 at centre
         double tau0;                              // instantaneous axial torque at the attachment step (N·m)
         double cDotDown;                          // cHat·(−eup): does the zone centre face the substrate?
+        double xiNm, thetaRad, kTot, ringFrac, arcUm;   // Vilfan graded-mode attachment record
         double impulse; int lifeSteps; int detachNuc = -1; boolean open = true;
     }
 
@@ -111,6 +119,7 @@ public final class VilfanTargetZoneDeterministicHarness {
         FloatArray coord0, fixP;
         double[] axis = new double[3], prevY = new double[3];
         double roll, tSim;
+        FloatArray yRef;                  // reference material yVec for the optional roll clamp
         double dphidarc, drift;
         double sumTau, sumAbsTau, sumBound; long nStat;
         double maxPosErr;
@@ -150,6 +159,10 @@ public final class VilfanTargetZoneDeterministicHarness {
         ExplicitCompleteMatHarness.BR_MOT_S2NODE = BR_S2NODE;
         ExplicitCompleteMatHarness.BR_MOT_CONV   = BR_CONV;
         ExplicitCompleteMatHarness.BR_MOT_HEAD   = BR_HEAD;
+        ExplicitCompleteMatHarness.ATTACH_MODE   = GRADED_MODE;
+        ExplicitCompleteMatHarness.GRAD_WINDOW   = GRAD_WINDOW;
+        ExplicitCompleteMatHarness.GRAD_ALPHA    = GRAD_ALPHA;
+        ExplicitCompleteMatHarness.GRAD_SHADOW   = GRAD_SHADOW;
     }
 
     static Rig buildRig(int seed) {
@@ -168,6 +181,9 @@ public final class VilfanTargetZoneDeterministicHarness {
                 (float) VCMD, 0f, CLAMP_TILT ? 1f : 0f, PRESCRIBE ? 1f : 0f);
         ChiralSiteHarness.seedPrevY(r.f, 0, r.prevY);
         fillZoneCentres(r);
+        fillMotorAnchors(r);
+        r.yRef = new FloatArray(3 * n);
+        for (int i = 0; i < 3 * n; i++) r.yRef.set(i, r.f.yVec.get(i));
         double rise = ExplicitCompleteMatHarness.siteRise(LATTICE);
         double stair = ExplicitCompleteMatHarness.siteStairPhase(LATTICE);
         double twist = r.e.chiP.get(2);                       // already carries the mirror sign
@@ -204,6 +220,11 @@ public final class VilfanTargetZoneDeterministicHarness {
             DerivedGeometrySystem.derive(r.f.coord, r.f.uVec, r.f.yVec, r.f.zVec, r.f.end1, r.f.end2,
                     r.f.segLength, r.f.counts);
         }
+        if (CLAMP_ROLL) {   // binding-only fixture: restore the material frame so mechanics cannot feed back
+            for (int i = 0; i < 3 * r.nSeg; i++) r.f.yVec.set(i, r.yRef.get(i));
+            DerivedGeometrySystem.derive(r.f.coord, r.f.uVec, r.f.yVec, r.f.zVec, r.f.end1, r.f.end2,
+                    r.f.segLength, r.f.counts);
+        }
         r.roll += ChiralSiteHarness.rollIncrementTransported(r.f, 0, r.prevY);
         // commanded vs actual translation (a fixture-integrity readout, not a physics quantity)
         if (PRESCRIBE) {
@@ -233,7 +254,7 @@ public final class VilfanTargetZoneDeterministicHarness {
             boolean fresh = r.e.justBound.get(m) == 1 && bs >= 0 && wasBound[m] < 0;
             if (fresh) {
                 float d = r.e.tzOff.get(m);
-                if (!Float.isNaN(d)) {
+                if (ExplicitCompleteMatHarness.gradedOn() || !Float.isNaN(d)) {
                     Attach a = new Attach();
                     a.motor = m; a.step = t; a.seg = bs; a.site = r.e.bindSite.get(m);
                     a.delta = d; a.azimBody = r.mot.bindAzim.get(m);
@@ -246,6 +267,14 @@ public final class VilfanTargetZoneDeterministicHarness {
                     a.tau0 = ChiralSiteSystem.axialTorque(r.G.bondData, r.f.uVec, r.mot.boundSeg, m, n);
                     double[] ch = zoneCentreDirection(r, m);
                     a.cDotDown = -(ch[0]*r.G.eup[0] + ch[1]*r.G.eup[1] + ch[2]*r.G.eup[2]);
+                    if (ExplicitCompleteMatHarness.gradedOn()) {
+                        a.kTot     = r.e.gradData.get(3 * r.N + m);
+                        a.xiNm     = r.e.gradData.get(4 * r.N + m);
+                        a.thetaRad = r.e.gradData.get(5 * r.N + m);
+                        a.ringFrac = r.e.gradData.get(6 * r.N + m);
+                        a.arcUm    = motorArc(r, m);
+                        a.delta    = a.thetaRad;      // the angular mismatch is the secondary diagnostic
+                    }
                     r.open[m] = a; r.events.add(a); r.attachments++;
                 }
             } else if (r.e.justBound.get(m) == 1 && bs < 0) r.releasedNoSite++;
@@ -321,12 +350,13 @@ public final class VilfanTargetZoneDeterministicHarness {
                 LATTICE, ZONE_ON ? "on" : "off", ZONE_DEG, VCMD, MIRROR, AZ0_DEG, seed);
         try (PrintWriter w = new PrintWriter(new File(d, nm))) {
             w.println("motor,step,seg,site,delta_rad,azim_body_rad,azim_lab_rad,roll_rad,phase_rad,"
-                    + "zone_centre_phase_rad,before(1)/after(-1),mirror,v_dir,tau0_Nm,impulse_Nms,life_steps,detach_nuc,cHat_dot_down");
+                    + "zone_centre_phase_rad,before(1)/after(-1),mirror,v_dir,tau0_Nm,impulse_Nms,life_steps,detach_nuc,cHat_dot_down,xi_nm,theta_rad,k_total_per_s,ring_frac,motor_arc_um");
             for (Attach a : r.events)
-                w.printf(Locale.US, "%d,%d,%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%+.0f,%+.0f,%.9g,%.9g,%d,%d,%.6f%n",
+                w.printf(Locale.US, "%d,%d,%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%+.0f,%+.0f,%.9g,%.9g,%d,%d,"
+                                + "%.6f,%.9g,%.9g,%.9g,%.6g,%.9g%n",
                         a.motor, a.step, a.seg, a.site, a.delta, a.azimBody, a.azimLab, a.roll, a.phase,
                         a.zoneCenterPhase, a.before, a.mirror, a.vdir, a.tau0, a.impulse, a.lifeSteps, a.detachNuc,
-                        a.cDotDown);
+                        a.cDotDown, a.xiNm, a.thetaRad, a.kTot, a.ringFrac, a.arcUm);
         } catch (Exception ex) { System.out.println("  ! event write failed: " + ex); }
     }
 
@@ -660,6 +690,30 @@ public final class VilfanTargetZoneDeterministicHarness {
             if (l > 1e-12) { rx /= l; ry /= l; rz /= l; } else { rx = ry = rz = 0; }
             r.e.tzOff.set(N + m, (float) rx); r.e.tzOff.set(2*N + m, (float) ry); r.e.tzOff.set(3*N + m, (float) rz);
         }
+    }
+
+    /**
+     * Publish each motor's SUBSTRATE ANCHOR into the graded buffer. Vilfan's {@code x_M} is the motor's
+     * anchoring point on the coverslip, so this is {@code g4E[m]}, the S2 emergence point — the same point
+     * the hard-zone study used for its zone-centre direction.
+     */
+    static void fillMotorAnchors(Rig r) {
+        int N = r.N;
+        for (int m = 0; m < N; m++) {
+            double[] E = r.G.g4E[m];
+            r.e.gradData.set(m, E[0]); r.e.gradData.set(N + m, E[1]); r.e.gradData.set(2 * N + m, E[2]);
+            r.e.gradData.set(7 * N + m, r.G.noBind[m] ? 1.0 : 0.0);
+        }
+    }
+
+    /** The arc coordinate (µm, from the filament's end1) of motor m's axial foot — the landscape phase. */
+    static double motorArc(Rig r, int m) {
+        int n = r.nSeg;
+        double[] E = r.G.g4E[m];
+        double cx = r.f.coord.get(0), cy = r.f.coord.get(n), cz = r.f.coord.get(2 * n);
+        double ux = r.f.uVec.get(0), uy = r.f.uVec.get(n), uz = r.f.uVec.get(2 * n);
+        double half = 0.5 * r.f.segLength.get(0);
+        return r.e.segCumArc.get(0) + ((E[0] - cx) * ux + (E[1] - cy) * uy + (E[2] - cz) * uz) + half;
     }
 
     /** The zone-centre direction actually in force for motor m (read back from the buffer the kernel reads). */

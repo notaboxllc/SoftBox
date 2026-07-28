@@ -137,6 +137,19 @@ public final class ExplicitCompleteMatHarness {
     // radial direction in a surface assay). This is an ACCESSIBILITY constraint on the assay geometry — it
     // adds NO force, NO torque, NO rate and NO chemistry; it only removes inaccessible sites from the
     // candidate set that siteSnap already scans. TZ_ZONE_HALF <= 0 ⇒ every azimuth accessible (exact no-op).
+    // ---- VILFAN GRADED COMPETING-SITE ATTACHMENT (noncanonical, default-off) --------------------------
+    // ATTACH_MODE 0 ⇒ the canonical bind + (optional hard-zone) siteSnap path runs UNCHANGED and this
+    // feature costs nothing. > 0 ⇒ VilfanGradedBindingSystem.gradedAttach REPLACES the fresh-attachment
+    // site-selection stage (and only that stage): chemistry, detachment, stroke, bond forces and every
+    // geometric parameter are untouched. See docs/twirling/vilfan_target_zone/VILFAN_GRADED_BINDING_VALIDATION.md
+    static int     ATTACH_MODE = VilfanGradedBindingSystem.MODE_OFF;
+    static int     GRAD_WINDOW = 6;          // candidate half-window in sites (SELECTED by the Stage-2 convergence)
+    static double  GRAD_ALPHA  = VilfanGradedBindingSystem.VILFAN_ALPHA;
+    static double  GRAD_K_PN   = VilfanGradedBindingSystem.VILFAN_K_PN_PER_NM;
+    static double  GRAD_KA     = VilfanGradedBindingSystem.VILFAN_KA_PER_S;
+    static boolean GRAD_SHADOW = false;      // the no-depletion diagnostic sampler
+    static boolean gradedOn() { return ATTACH_MODE != VilfanGradedBindingSystem.MODE_OFF; }
+
     static double  TZ_ZONE_HALF_DEG = 0.0;   // -tz-zone-half-deg  (accessibility half-width, degrees)
     static boolean TZ_ZONE_RECORD   = false; // -tz-record : record the signed zone offset even with the gate off
     static boolean tzZoneOn()     { return TZ_ZONE_HALF_DEG > 0.0; }
@@ -445,6 +458,8 @@ public final class ExplicitCompleteMatHarness {
         FloatArray headRef, headOmega, headTau, headMis;
         // Vilfan target-zone accessibility on the discrete lattice: signed zone offset at attachment (NaN = none)
         FloatArray tzOff;
+        // Vilfan GRADED competing-site attachment (noncanonical, default-off)
+        DoubleArray gradData, gradP, shadow;
         // per-motor converter frame (true converter-stroke-plane rotation; identity/zero when the feature is off)
         DoubleArray convF;
     }
@@ -536,6 +551,17 @@ public final class ExplicitCompleteMatHarness {
         // direction (filled by the fixture harness from each motor's substrate tether point; 0 = gate off)
         e.tzOff = new FloatArray(4 * N); e.tzOff.init(0f);
         for (int m = 0; m < N; m++) e.tzOff.set(m, Float.NaN);
+        // ---- Vilfan graded competing-site attachment (allocated always; wired only when ATTACH_MODE>0) ----
+        // gradData: 8 planar per-motor slots + a dense per-site occupancy flag tail (see the system javadoc).
+        int nSiteFlags = 4096;
+        e.gradData = new DoubleArray(8 * N + nSiteFlags); e.gradData.init(0.0);
+        e.shadow = new DoubleArray(4 * N); e.shadow.init(0.0);
+        e.gradP = DoubleArray.fromElements(
+                siteRise(SITE_MODE), chiTwist, chiStair, Ract,
+                GRAD_K_PN, GRAD_ALPHA, GRAD_KA, G.dt, VilfanGradedBindingSystem.KT_PN_NM,
+                GRAD_WINDOW, -G.eup[0], -G.eup[1], -G.eup[2],
+                ATTACH_MODE, MIRROR_SIGN, GRAD_SHADOW ? 1.0 : 0.0, nSiteFlags);
+        for (int m = 0; m < N; m++) e.gradData.set(7 * N + m, G.noBind[m] ? 1.0 : 0.0);
         // Per-motor CONVERTER FRAME (stride 13, planar): [0..2] b*, [3..5] econv*, [6..8] eup*, [9..11] gauge
         // offset (µm), [12] flag. ALL ZERO ⇒ flag 0 ⇒ matBeamGeom / matS2SolveStep take the VERBATIM canonical
         // branch reading the base frame ⇒ byte-identical when the feature is off (it is never even wired).
@@ -761,14 +787,30 @@ public final class ExplicitCompleteMatHarness {
             ChiralSiteSystem.convFrameStep(mot.boundSeg, f.uVec, f.yVec, mot.bindAzim, e.frame, e.params, e.q,
                     e.convF, e.chiP, e.exCounts);   // geometry, gates, bond and solve all see ONE frame this step
         TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
-        if (occOn()) {   // continuous local actin co-occupancy exclusion (gate-only → serial resolve); OFF path below is byte-identical
+        if (gradedOn() && ATTACH_MODE == VilfanGradedBindingSystem.MODE_HYBRID)
+            // HYBRID: SoftBox's own binding clock decides WHETHER a head attaches this step; the graded
+            // stage below then decides only WHICH site it takes.
+            TwoBodyBeamAnalyticGpu.matBindExplicit(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
+        if (gradedOn()) {
+            // VILFAN GRADED COMPETING-SITE ATTACHMENT — replaces the fresh-attachment SITE-SELECTION stage
+            // only. Chemical eligibility (nucleotideState == 2) is SoftBox's own and is read, not changed;
+            // detachment, stroke, bond forces and all geometry are untouched.
+            VilfanGradedBindingSystem.refreshOccupancy(mot.boundSeg, e.bindSite, e.gradData, e.gradP, e.exCounts);
+            VilfanGradedBindingSystem.gradedAttach(mot.boundSeg, e.justBound, mot.nucleotideState,
+                    f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, mot.bindArc, mot.bindAzim,
+                    e.bindSite, e.gradData, e.gradP, e.matc, e.exCounts);
+            ChiralSiteSystem.siteOccupancyResolve(mot.boundSeg, e.justBound, e.prevBound, e.bindSite,
+                    e.segFilId, e.siteStats, e.chiP, e.exCounts);
+            VilfanGradedBindingSystem.shadowSample(mot.nucleotideState, f.coord, f.uVec, f.yVec,
+                    f.segLength, e.segCumArc, e.gradData, e.gradP, e.shadow, e.matc, e.exCounts);
+        } else if (occOn()) {   // continuous local actin co-occupancy exclusion (gate-only → serial resolve); OFF path below is byte-identical
             TwoBodyBeamAnalyticGpu.matBindGateOnly(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, e.candInt, e.candArc, e.exCounts);
             TwoBodyBeamAnalyticGpu.matOccupancyResolve(e.candInt, e.candArc, mot.boundSeg, mot.bindArc, e.segCumArc, e.segFilId, e.occP, e.occStats, e.exCounts);
         } else
             TwoBodyBeamAnalyticGpu.matBindExplicit(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
-        if (tzOn())   // Vilfan target-zone angular hazard — applied to the geometric candidate BEFORE it persists
+        if (tzOn() && !gradedOn())   // Vilfan target-zone angular hazard — applied to the geometric candidate BEFORE it persists
             TwoBodyBeamAnalyticGpu.matTargetZone(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, mot.bindPsi0, e.tzP, e.tzDiag, e.matc, e.exCounts);
-        if (siteOn()) {   // DISCRETE ACTIN SITES: snap the fresh bind onto the nearest lattice site + latch its id
+        if (siteOn() && !gradedOn()) {   // DISCRETE ACTIN SITES: snap the fresh bind onto the nearest lattice site + latch its id
             ChiralSiteSystem.siteSnap(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, mot.bindArc, mot.bindAzim, e.bindSite, e.tzOff, e.chiP, e.exCounts);
             ChiralSiteSystem.siteOccupancyResolve(mot.boundSeg, e.justBound, e.prevBound, e.bindSite, e.segFilId, e.siteStats, e.chiP, e.exCounts);
         }
@@ -777,7 +819,7 @@ public final class ExplicitCompleteMatHarness {
         else          NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
         if (strokeSkewOn())   // askew EFFECTIVE STROKE: local-frame rest-coordinate change at the ADP·Pi→ADP switch
             ChiralSiteSystem.strokeSkew(mot.boundSeg, mot.nucleotideState, e.prevNuc, mot.bindAzim, e.chiP, e.exCounts);
-        if (surfOn()) {   // select+retain the material azimuth at the bind transition (canonical bindArc kept), then 3D steric
+        if (surfOn() && !gradedOn()) {   // select+retain the material azimuth at the bind transition (canonical bindArc kept), then 3D steric
             if (!tzOn() && !siteOn())  // target-zone / discrete-site modes select + retain the azimuth themselves
                 TwoBodyBeamAnalyticGpu.matSurfaceAzim(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, e.surfP, e.exCounts);
             TwoBodyBeamAnalyticGpu.matSurfaceStericPrune(mot.boundSeg, e.justBound, e.prevBound, mot.bindArc, mot.bindAzim, f.coord, f.uVec, f.yVec, f.segLength, e.segFilId, e.stericP, e.occStats, e.exCounts);
