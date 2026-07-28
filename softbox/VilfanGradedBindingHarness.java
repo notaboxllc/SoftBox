@@ -30,6 +30,10 @@ public final class VilfanGradedBindingHarness {
     static double TRAVEL_UM = 3.0;
     static int    TRACE_STRIDE = 500;
     static String ARM_SEEDS = "101,102", ARM_MIRRORS = "1,-1";
+    /** Periodic motor-lawn re-entry (authorised fixture relaxation; see LawnRecycleSystem). */
+    static boolean RECYCLE = false;
+    static double  RECYCLE_MARGIN_UM = 0.05;
+    static DoubleArray recP;
     static final double TWOPI = 2.0 * Math.PI;
 
     // ===================================================================================================
@@ -70,6 +74,7 @@ public final class VilfanGradedBindingHarness {
                 case "-trace-stride" -> TRACE_STRIDE = Integer.parseInt(args[++i]);
                 case "-arm-seed" -> ARM_SEEDS = args[++i];
                 case "-arm-mirror" -> ARM_MIRRORS = args[++i];
+                case "-recycle" -> RECYCLE = true;
                 default -> { if (a.startsWith("-")) throw new IllegalArgumentException("unknown flag " + a); }
             }
         }
@@ -529,13 +534,15 @@ public final class VilfanGradedBindingHarness {
                 TRAVEL_UM, steps);
         List<String> summary = new ArrayList<>();
         summary.add("arm,mirror,seed,az0_deg,travel_um,steps,gamma_roll_Nms,contour_um,nSeg,"
-                + "attach_total,avg_bound,roll_total_rad,turns_total,mean_tau_Nm,wall_s");
+                + "attach_total,avg_bound,roll_total_rad,turns_total,mean_tau_Nm,wall_s,recycled");
         for (String ms : ARM_MIRRORS.split(",")) {
             for (String ss : ARM_SEEDS.split(",")) {
                 double mir = Double.parseDouble(ms.trim());
                 int seed = Integer.parseInt(ss.trim());
                 double az = VilfanTargetZoneDeterministicHarness.AZ0_DEG;
-                String nm = String.format(Locale.US, "trace_az%03.0f_mir%+.0f_seed%d_%.2fum.csv", az, mir, seed, TRAVEL_UM);
+                String nm = String.format(Locale.US, "trace_az%03.0f_mir%+.0f_seed%d_%.2fum%s.csv",
+                        az, mir, seed, TRAVEL_UM,
+                        RECYCLE ? String.format(Locale.US, "_recP%.2f", VilfanTargetZoneDeterministicHarness.MATX) : "");
                 File fin = new File(dir, nm);
                 if (fin.exists()) { System.out.println("  [skip, already complete] " + nm); continue; }
                 VilfanTargetZoneDeterministicHarness.MIRROR = mir;
@@ -546,27 +553,32 @@ public final class VilfanGradedBindingHarness {
                 double contour = 0; for (int k = 0; k < r.nSeg; k++) contour += r.f.segLength.get(k);
                 if (mir == Double.parseDouble(ARM_MIRRORS.split(",")[0].trim()) && seed == Integer.parseInt(ARM_SEEDS.split(",")[0].trim()))
                     printArtifactBlock(r, gammaRoll, contour, steps);
+                recP = DoubleArray.fromElements(VilfanTargetZoneDeterministicHarness.MATX, 1.0,
+                        RECYCLE_MARGIN_UM, RECYCLE ? 1.0 : 0.0, 0.0);
                 long t0 = System.currentTimeMillis();
                 File tmp = new File(dir, nm + ".tmp");
                 double sumTau = 0, sumBound = 0; long nAcc = 0;
                 try (PrintWriter w = new PrintWriter(tmp)) {
-                    w.println("step,time_s,travel_um,roll_rad,tau_Nm,bound,attach_cum");
+                    w.println("step,time_s,travel_um,roll_rad,tau_Nm,bound,attach_cum,recycled");
                     for (int t = 0; t < steps; t++) {
                         VilfanTargetZoneDeterministicHarness.step(r, t, seed);
+                        if (RECYCLE) LawnRecycleSystem.recycle(r.mot.boundSeg, r.e.nodes, r.e.frame,
+                                r.e.gradData, r.f.coord, r.f.uVec, r.f.segLength, recP, r.e.exCounts);
                         double tau = r.axialTorqueTotal();
                         int nb = 0; for (int m = 0; m < r.N; m++) if (r.mot.boundSeg.get(m) >= 0) nb++;
                         sumTau += tau; sumBound += nb; nAcc++;
                         if (t % TRACE_STRIDE == 0 || t == steps - 1)
-                            w.printf(Locale.US, "%d,%.9g,%.9g,%.10g,%.6e,%d,%d%n", t, r.tSim,
+                            w.printf(Locale.US, "%d,%.9g,%.9g,%.10g,%.6e,%d,%d,%.0f%n", t, r.tSim,
                                     Math.abs(VilfanTargetZoneDeterministicHarness.VCMD) * r.tSim,
-                                    r.roll, tau, nb, r.attachments);
+                                    r.roll, tau, nb, r.attachments, recP.get(4));
                     }
                 } catch (Exception ex) { System.out.println("  ! trace write failed: " + ex); continue; }
                 if (!tmp.renameTo(fin)) System.out.println("  ! atomic rename failed for " + nm);
                 double wall = (System.currentTimeMillis() - t0) / 1000.0;
                 summary.add(String.format(Locale.US, "%s,%+.0f,%d,%.1f,%.2f,%d,%.6e,%.4f,%d,%d,%.4f,%.6f,%.6f,%.6e,%.1f",
                         (mir > 0 ? "native" : "mirror"), mir, seed, az, TRAVEL_UM, steps, gammaRoll, contour,
-                        r.nSeg, r.attachments, sumBound / nAcc, r.roll, r.roll / TWOPI, sumTau / nAcc, wall));
+                        r.nSeg, r.attachments, sumBound / nAcc, r.roll, r.roll / TWOPI, sumTau / nAcc, wall)
+                        + String.format(Locale.US, ",%.0f", recP.get(4)));
                 System.out.printf(Locale.US, "  %-7s seed %d : roll=%+.5f rad (%+.5f turns)  <tau>=%+.4e N·m  "
                         + "attach=%d  avgBound=%.3f  [%.0f s]%n", (mir > 0 ? "native" : "mirror"), seed,
                         r.roll, r.roll / TWOPI, sumTau / nAcc, r.attachments, sumBound / nAcc, wall);
@@ -602,6 +614,13 @@ public final class VilfanGradedBindingHarness {
         System.out.printf(Locale.US, "   prescribed v     : %+.4f µm/s, dt=%.3g s, steps=%d%n",
                 VilfanTargetZoneDeterministicHarness.VCMD, VilfanTargetZoneDeterministicHarness.DT, steps);
         System.out.printf(Locale.US, "   2pi conversion   : turns = roll_rad / %.10f%n", TWOPI);
+        double P = VilfanTargetZoneDeterministicHarness.MATX;
+        boolean cover = LawnRecycleSystem.tileCoversFilament(P, contour, RECYCLE_MARGIN_UM);
+        System.out.printf(Locale.US, "   lawn recycle     : %s  period=%.3f µm, jump=1 period, margin=%.3f µm%n",
+                RECYCLE ? "ON (periodic re-entry)" : "OFF", P, RECYCLE_MARGIN_UM);
+        System.out.printf(Locale.US, "                      tile must cover contour+margin = %.3f µm  => %s%n",
+                contour + RECYCLE_MARGIN_UM, cover ? "OK, engagement is translation-invariant"
+                        : "FAIL — tile too short, engagement will oscillate/dip");
         System.out.println("  -------------------------");
     }
 

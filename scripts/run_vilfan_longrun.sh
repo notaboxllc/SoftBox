@@ -8,11 +8,11 @@ AZ=${2:-0}
 D=RUN_LOGS/vilfan_graded_binding/longrun
 mkdir -p $D
 echo "=== Stage A: travel=${TRAVEL} um, az0=${AZ} deg, 4 arms (2 lattices x 2 seeds) ==="
-VG_PROCS=1 ./scripts/run_vilfan_graded.sh -longrun -travel $TRAVEL -az0 $AZ \
+VG_PROCS=1 ./scripts/run_vilfan_graded.sh -longrun -recycle -matx 2.2 -travel $TRAVEL -az0 $AZ \
     -arm-mirror 1 -arm-seed 101,102 -out RUN_LOGS/vilfan_graded_binding \
     > $D/log_native_az${AZ}_${TRAVEL}um.txt 2>&1 &
 P1=$!
-VG_PROCS=1 ./scripts/run_vilfan_graded.sh -longrun -travel $TRAVEL -az0 $AZ \
+VG_PROCS=1 ./scripts/run_vilfan_graded.sh -longrun -recycle -matx 2.2 -travel $TRAVEL -az0 $AZ \
     -arm-mirror -1 -arm-seed 101,102 -out RUN_LOGS/vilfan_graded_binding \
     > $D/log_mirror_az${AZ}_${TRAVEL}um.txt 2>&1 &
 P2=$!

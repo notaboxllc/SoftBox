@@ -33,7 +33,7 @@ plt.rcParams.update({"figure.dpi": 130, "font.size": 9, "axes.grid": True, "grid
 TWOPI = 2.0 * math.pi
 WINDOWS = [(0.0, 0.5), (0.5, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 4.0), (4.0, 5.0)]
 NESTED = [0.25, 0.50, 1.00, 2.00, 3.00, 5.00]
-FNAME = re.compile(r"trace_az(\d+)_mir([+-]\d)_seed(\d+)_([\d.]+)um\.csv")
+FNAME = re.compile(r"trace_az(\d+)_mir([+-]\d)_seed(\d+)_([\d.]+)um(_recP[\d.]+)?\.csv")
 
 
 def load_traces():
@@ -43,11 +43,12 @@ def load_traces():
         if not m:
             continue
         az, mir, seed, travel = int(m.group(1)), int(m.group(2)), int(m.group(3)), float(m.group(4))
+        rec = m.group(5) is not None
         with open(p) as f:
             rows = list(csv.DictReader(f))
         if len(rows) < 10:
             continue
-        d = dict(az=az, mir=mir, seed=seed, travel=travel,
+        d = dict(az=az, mir=mir, seed=seed, travel=travel, rec=rec,
                  t=np.array([float(r["time_s"]) for r in rows]),
                  x=np.array([float(r["travel_um"]) for r in rows]),
                  roll=np.array([float(r["roll_rad"]) for r in rows]),
