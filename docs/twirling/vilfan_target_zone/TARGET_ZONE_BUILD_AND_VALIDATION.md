@@ -586,9 +586,68 @@ hidden — within a single arm every seed shares the same mean, so the seed-to-s
 chemical noise on both quantities rather than by a causal link between them. The causal claim rests on the
 between-condition covariation and on the mirror reversal, not on the within-arm correlation.
 
-## 9. Native versus idealized lattice
+## 9. Native actin 13/6 versus the idealized lattice — the decisive scope limit
 
-[RESULTS PENDING]
+The same 2×2 design, the same zone width, the same speeds, the same seeds, the same everything — run on the
+**faithful native actin 13/6 lattice** (`-lattice 1`, analytic helix, −166.5° per monomer). Log:
+`RUN_LOGS/vilfan_target_zone_native/`.
+
+| arm (native 13/6) | attach | `A_TZ` | `⟨δ⟩` (rad) | `⟨τ⟩` (N·m) | `Ω` (rad/s) | turns/µm |
+|---|---|---|---|---|---|---|
+| zone ON, native | 1380 | **−0.037 ± 0.024** (1.5σ) | +0.0319 ± 0.0100 | −6.188e-21 (6.2σ) | −218.8 ± 27 | −17.41 |
+| zone ON, MIRRORED | 1355 | **−0.085 ± 0.028** (3.0σ) | −0.0433 ± 0.0114 | +3.787e-21 (2.7σ) | +87.6 ± 46 | +6.97 |
+| zone OFF, native | 1365 | **−0.095 ± 0.032** (3.0σ) | +0.1127 ± 0.0640 | +1.094e-21 (4.8σ) | +27.4 ± 8.0 | +2.18 |
+| zone OFF, MIRRORED | 1373 | **+0.065 ± 0.033** (2.0σ) | +0.1002 ± 0.0791 | +4.484e-22 (1.9σ) | +9.6 ± 8.9 | +0.76 |
+
+### 9.1 The attachment asymmetry does NOT survive on actin's real lattice
+
+Compare directly with §8.3:
+
+| | idealized monotone lattice | native actin 13/6 |
+|---|---|---|
+| `A_TZ`, zone ON, native | **+0.171 ± 0.025 (6.8σ)** | **−0.037 ± 0.024 (1.5σ)** |
+| `A_TZ`, zone ON, mirrored | **+0.176 ± 0.018 (9.8σ)** | **−0.085 ± 0.028 (3.0σ)** |
+| `A_TZ`, zone OFF, native | −0.040 ± 0.030 (1.3σ) | −0.095 ± 0.032 (3.0σ) |
+| `A_TZ`, zone OFF, mirrored | −0.025 ± 0.033 (0.8σ) | +0.065 ± 0.033 (2.0σ) |
+
+On the native lattice the four `A_TZ` values are small, of **inconsistent sign**, and — decisively — they do
+**not separate zone-ON from zone-OFF**. There is no before/after attachment bias to speak of, and what
+little there is does not track the presence of the gate. On the idealized lattice the same four numbers
+separate cleanly and unambiguously (+0.17/+0.18 with the gate, ~0 without).
+
+**This is the predicted consequence of §5.2, and it is the most important scope limit in this report.**
+Actin's real lattice advances −166.5° per monomer, so consecutive sites are near-antipodal and the 13
+azimuths of one repeat are visited in scrambled order. A site's zone offset `δ` is *constant* under pure
+axial translation, and the accessible sites a motor meets arrive in azimuthally scrambled order. There is
+therefore **no coherent passage through the zone** for a first-passage bias to act on: a motor that becomes
+chemically ready binds at the next accessible encounter, and averaged over the lawn's lattice phases that
+encounter is equally likely to be on either side of the zone centre. `A_TZ → 0` is what that predicts.
+
+### 9.2 The filament still twirls — by the other channel
+
+The native lattice nevertheless produces the *largest* rotations in the whole study
+(`Ω = −218.8 rad/s`, 8.1σ; turns/µm = −17.41), and those rotations **reverse under mirroring**
+(`⟨τ⟩` −6.188e-21 → +3.787e-21; `Ω` −218.8 → +87.6). So the twirl is real and genuinely chiral — it is
+simply **not** the target-zone attachment-asymmetry mechanism. It is the lattice/registry channel already
+isolated by gates F1–F4: a helical lattice plus off-axis attachment, with the head binding the
+best-registered reachable site, twists the filament without any before/after flux bias.
+
+Note also that on the native lattice the simple restoring relation `τ ∝ −⟨δ⟩` (which holds in all four
+idealized-lattice control arms, §8.8) **fails**: zone-OFF and zone-ON native both have `⟨δ⟩ > 0` yet
+`⟨τ⟩` flips sign between them (+1.094e-21 → −6.188e-21). The mean offset is not a sufficient description of
+the mechanics on the scrambled lattice, which is consistent with there being no coherent zone passage there.
+
+### 9.3 What this means for the scientific question
+
+> **The Vilfan target-zone mechanism — helical site passage through a surface-facing zone producing a
+> before/after attachment bias — is reproduced inside SoftBox on an idealized monotone helix, and is NOT
+> reproduced on actin's true 13/6 lattice, because the real lattice's azimuthal ordering destroys the
+> coherent zone passage the mechanism requires.**
+
+That is a statement about the *mechanism's requirements*, established under favourable, deterministic,
+Brownian-free assumptions — the most permissive conditions the mechanism will ever see in this model. It is
+therefore a strong constraint, not a provisional one: if the asymmetry does not appear here on the real
+lattice, restoring thermal noise will not create it.
 
 ## 10. Controls: mirror and target-zone-off
 
