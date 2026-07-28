@@ -6,8 +6,6 @@ device context, at any point. Noncanonical, flag-gated, default-off; no canonica
 chemistry, force law, stiffness, stroke, rate, catch/slip law, rupture rule, motor density or viscosity was
 changed.
 
-> Status placeholders marked **[RESULTS PENDING]** are filled by the campaign sections below.
-
 ---
 
 ## 1. Executive conclusion
@@ -904,6 +902,57 @@ Combined with gates E1–E3 of this task's own suite (offset recording alters no
 trajectory bit; the per-channel bits at 0 are bit-identical to the canonical mask; all three channels off is
 bit-identical to the global switch), **the default-off claim is verified rather than asserted.**
 
+## 12.3 Success-criteria assessment (the task's nine criteria, verdict by verdict)
+
+| # | Criterion | Verdict | Evidence |
+|---|---|---|---|
+| 1 | Zone ON with zero stroke skew produces a **resolved** before/after asymmetry | **MET** (idealized lattice) | `A_TZ` = +0.171 ± 0.025 (6.8σ), +0.176 ± 0.018 (9.8σ); §8.3 |
+| 2 | The asymmetry has the sign predicted by the direction of site passage | **MET** | positive `A_TZ` = capture on the entering edge, the first-passage/depletion prediction; §8.3 |
+| 3 | Signed axial torque has the corresponding sign | **MET at the primary point, NOT ISOLATED** | consistent and mirror-reversing in all four control arms (§8.8), but the width sweep gives the largest torque at zero `A_TZ` (§11) |
+| 4 | Axial rotation has the corresponding sign | **MET at the primary point, NOT ISOLATED** | `Ω` = +134.5 (4.6σ), unanimous 8/8 seeds; same qualification as #3 |
+| 5 | Mirroring reverses `A_TZ`, torque, angular velocity, turns/distance | **MET, with a stated convention** | `⟨δ⟩`, `⟨τ⟩`, `Ω`, turns/µm all reverse at 4.6–17σ; `A_TZ` is drift-referenced and therefore invariant **by construction** (§8.2) |
+| 6 | Turning the zone OFF removes or strongly suppresses the effect | **MET for the asymmetry; PARTIAL for the rotation** | `A_TZ` +0.171 → −0.040 (removed); \|τ\| falls 2.8× and flips sign, residue is the separate lattice channel (§10.2) |
+| 7 | The imposed-translation fixture itself produces no torque | **MET outright** | exactly 0.000e+00 N·m, kinematic by construction; gate D |
+| 8 | Attachment asymmetry and twirling strength covary across the ladder or phases | **PARTIAL** | they covary strongly *between conditions* (zone ON/OFF, native/mirror); they do **not** covary within an arm across seeds, nor monotonically across zone width (§8.6, §11) |
+| 9 | The result does not depend on one accidental starting azimuth | **MET outright** | six azimuths over a full repeat, `A_TZ` +0.156…+0.212, all resolved, none excluded (§8.4) |
+
+**Overall.** Criteria 1, 2, 7 and 9 are met outright. Criterion 5 is met under the convention stated in
+advance. Criteria 3, 4, 6 and 8 are met at the primary operating point but are **not cleanly isolated** from
+the second, azimuthal-restriction channel that the same rule also switches on. Per the task's own standard —
+"the attachment asymmetry, torque, and rotation must agree causally and reverse under mirroring" — they do
+agree and do reverse; what the study additionally shows is that agreement alone does not establish
+exclusivity, and §11 is the evidence that forced that distinction into the open.
+
+## 12.4 Files produced
+
+**Report:** `docs/twirling/vilfan_target_zone/TARGET_ZONE_BUILD_AND_VALIDATION.md` (this file, the sole
+controlling document).
+
+**Raw run data + manifests** (`RUN_LOGS/vilfan_target_zone/`, and `…_native/` for the faithful lattice):
+
+| file | contents |
+|---|---|
+| `gates.txt` | the full validation-gate log |
+| `campaign.txt` / `campaign.csv` / `campaign_seeds.csv` | the 2×2 + azimuth campaign, arm-level and per-seed |
+| `ladder.txt` / `ladder.csv` / `ladder_seeds.csv` | the prescribed-speed ladder |
+| `sensitivity.txt` / `sensitivity.csv` / `sensitivity_seeds.csv` | the bounded width × speed grid |
+| `events/*.csv` | **72 per-attachment event files** — site id, axial coordinate, body-fixed and laboratory azimuth, filament roll, helical phase, zone-centre phase, signed offset, before/after label, mirror state, translation direction, instantaneous axial torque, angular impulse, lifetime, detach nucleotide state, and the measured `cHat·(−eup)` |
+| `manifest_*.json` | git revision, branch, JVM, processor count, backend declaration, and the full switch state |
+| `regression/regression.txt` | the existing-suite regression output |
+
+**Analysis** (`ANALYSIS/vilfan_target_zone/`, plus `native/` for the faithful lattice):
+`analyze_target_zone.py`; `tidy_campaign.csv`, `tidy_ladder.csv`, `tidy_sensitivity.csv`;
+`consistency_campaign.csv` (the `Ω = τ/γ_roll` check); and eleven figures —
+`fig01` target-zone coordinate per attachment, `fig02` offset histograms zone ON vs OFF, `fig03` native vs
+mirrored offset distributions, `fig04` control summary (`A_TZ`, τ, Ω, turns/µm), `fig05` speed ladder,
+`fig06` torque and Ω versus `A_TZ` per seed, `fig07` starting-azimuth robustness, `fig08` offset→torque at
+the binding step, `fig09` zone-centre versus substrate normal, `fig10` offset→angular-impulse (native and
+mirrored).
+
+**Backend, for every run:** CPU sequential Java runner — no TaskGraph, no device context, no GPU call. The
+manifest records this explicitly, along with `availableProcessors`; the launcher pins
+`-XX:ActiveProcessorCount=4` and `nice -n 15`.
+
 ## 13. Limitations
 
 **Design / physics**
@@ -933,6 +982,13 @@ bit-identical to the global switch), **the default-off claim is verified rather 
    off-axis F8 bond at `Ractin`. A registry spring would add a second, independent channel.
 
 **Scope / validation**
+
+7b. **The axial torque is not isolated to the flux asymmetry.** The width sweep (§11) produces the study's
+   largest torque at a zone width where `A_TZ` is exactly zero. The accessibility rule drives rotation
+   mainly through *which azimuthal band it admits* (a static restriction), not through the before/after
+   capture bias. Any claim that "the target zone twirls the filament" must carry this qualification.
+7c. **The primary lattice's zone-OFF arm is not a null**, so "zone ON minus zone OFF" is a difference of two
+   non-null configurations rather than a signal-over-background. The achiral control is the only true null.
 
 8. **CPU only; no device equivalence for the new gate.** The modified kernels compile for both runners and
    both `siteSnap` call sites were updated together, but no GPU execution was performed, so CPU/GPU
