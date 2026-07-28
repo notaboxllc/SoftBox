@@ -427,7 +427,53 @@ definition given in §5.1 that is not the correct expectation, so this report te
 meaningful pair explicitly: **`A_TZ` invariant, `⟨δ⟩` reversed** — and reports both, so either reading can
 be checked against the data.
 
-### 8.3 Results
+### 8.3 Results — the 2×2 control design
+
+8 matched chemical seeds per arm, 20 000 steps (50 ms), first 2 000 discarded. ~1300 attachments per arm.
+Uncertainties are SEM over seeds; σ is |mean|/SEM.
+
+| arm | attach | `A_TZ` | `⟨δ⟩` (rad) | `⟨τ⟩` (N·m) | `Ω` (rad/s) | turns/µm |
+|---|---|---|---|---|---|---|
+| **zone ON, native** | 1321 | **+0.171 ± 0.025** (6.8σ) | −0.0925 ± 0.0132 (7.0σ) | +4.702e-21 ± 8.0e-22 (5.9σ) | +134.5 ± 29 (4.6σ) | +10.70 ± 2.28 |
+| **zone ON, MIRRORED** | 1300 | **+0.176 ± 0.018** (9.8σ) | +0.0983 ± 0.0070 (14.0σ) | −6.403e-21 ± 4.8e-22 (13.3σ) | −222.8 ± 13 (17.1σ) | −17.73 ± 1.05 |
+| zone OFF, native | 1330 | **−0.040 ± 0.030** (1.3σ) | +0.0632 ± 0.0551 (1.1σ) | −1.681e-21 ± 5.1e-22 (3.3σ) | −53.6 ± 15 (3.6σ) | −4.27 ± 1.22 |
+| zone OFF, MIRRORED | 1312 | **−0.025 ± 0.033** (0.8σ) | −0.0771 ± 0.0659 (1.2σ) | +2.357e-21 ± 4.2e-22 (5.6σ) | +67.3 ± 12 (5.6σ) | +5.36 ± 0.96 |
+
+Attachment counts are matched across all four arms (1300–1330), so nothing below is an engagement artefact.
+
+**Reading the table.**
+
+1. **The target zone creates the attachment asymmetry, and nothing else does.** `A_TZ` is +0.171 and +0.176
+   (6.8σ, 9.8σ) with the zone on, and −0.040 and −0.025 (1.3σ, 0.8σ — both consistent with zero) with it
+   off. The before/after split is not something the lattice produces on its own; it appears if and only if
+   the accessibility gate is present.
+2. **The sign is the one the mechanism predicts.** `A_TZ > 0` means attachments are caught preferentially
+   *before* the zone centre — on the entering edge. That is exactly what finite attachment kinetics plus
+   free-head-pool depletion must do to a site sweeping into an accessibility window, and it is the same
+   sign the prior increment's dynamics-free kinematic rig produced.
+3. **The torque and the rotation follow.** With the zone on, `⟨δ⟩` is displaced to the entering side and the
+   bond's restoring moment about the axis is correspondingly signed: `τ` and `Ω` are resolved at 4.6–17σ and
+   carry the sign opposite to `⟨δ⟩`, i.e. the bond turns the filament in the direction that brings the
+   captured site *toward* the zone centre.
+4. **Everything signed reverses under mirroring; `A_TZ` does not.** Exactly as committed to in §8.2, and in
+   **both** zone states — the zone-OFF pair reverses too (−1.681e-21 → +2.357e-21; −53.6 → +67.3).
+5. **There are TWO chirality channels, and they are separable.** The zone-OFF arms are not null in torque:
+   they carry −1.681e-21 N·m (3.3σ). That is the *lattice* channel identified in §7.1 — a helical lattice
+   plus off-axis attachment is chiral on its own. Critically it is **smaller and of the OPPOSITE sign** to
+   the zone-on result, so the target zone does not merely amplify a pre-existing bias: it **overwhelms and
+   reverses** it.
+
+**The zone's own contribution** (ON − OFF, same lattice, same seeds, matched attachments):
+
+| lattice | Δ`⟨τ⟩` (N·m) | Δ`Ω` (rad/s) | Δ turns/µm |
+|---|---|---|---|
+| native | **+6.383e-21** | **+188.1** | **+14.97** |
+| MIRRORED | **−8.760e-21** | **−290.1** | **−23.09** |
+
+The contribution attributable to the target zone is large, resolved, and **itself reverses under
+mirroring** — which is the strongest single statement in this report.
+
+### 8.4 Starting-azimuth robustness
 
 [RESULTS PENDING]
 
@@ -464,7 +510,25 @@ sign reversal of all four signed observables together, at 4.6–17σ.
 
 ### 10.2 Target-zone OFF — is the zone necessary?
 
-[RESULTS PENDING]
+Success criterion 6 asks whether turning the gate off "removes or strongly suppresses the effect". The
+answer is different for the two halves of the chain, and both halves are reported.
+
+- **The attachment asymmetry is REMOVED.** `A_TZ` falls from +0.171 (6.8σ) to −0.040 (1.3σ) on the native
+  lattice, and from +0.176 (9.8σ) to −0.025 (0.8σ) on the mirrored one. With the gate off the before/after
+  split is statistically indistinguishable from zero. The zone is *necessary* for the asymmetry.
+- **The rotation is strongly suppressed AND sign-reversed, but not abolished.** |τ| falls 2.8× (4.70e-21 →
+  1.68e-21) and |Ω| falls 2.5× (134.5 → 53.6), with the sign flipping. The residue is a genuinely different
+  mechanism — the helical-lattice channel of §7.1 — not a leak of the target-zone mechanism.
+
+The achiral control (gates F3/F4) is what makes this decomposition safe: with a mirror-invariant lattice
+(180°/site) both torque and rotation collapse to noise (0.14σ, 0.79σ), so neither channel is a fixture
+artefact. The three-way comparison is therefore:
+
+| configuration | `A_TZ` | `⟨τ⟩` (N·m) | interpretation |
+|---|---|---|---|
+| achiral lattice, zone OFF | — | −1.219e-22 (0.14σ) | no chirality anywhere ⇒ the fixture is unbiased |
+| helical lattice, zone OFF | −0.040 (1.3σ) | −1.681e-21 (3.3σ) | the lattice channel alone |
+| helical lattice, zone ON | +0.171 (6.8σ) | +4.702e-21 (5.9σ) | the lattice channel + the target-zone channel |
 
 ## 11. Bounded sensitivity check — run, but NOT as a rescue
 
