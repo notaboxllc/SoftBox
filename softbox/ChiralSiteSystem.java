@@ -185,12 +185,18 @@ public final class ChiralSiteSystem {
     public static void siteSnap(IntArray boundSeg, IntArray prevBound, IntArray justBound,
             DoubleArray outGeom, FloatArray filCoord, FloatArray filUVec, FloatArray filYVec,
             FloatArray filSegLength, FloatArray segCumArc, FloatArray bindArc, FloatArray bindAzim,
-            IntArray bindSite, DoubleArray chiP, IntArray counts) {
+            IntArray bindSite, FloatArray tzOff, DoubleArray chiP, IntArray counts) {
         int N = counts.get(0), nSeg = counts.get(3);
         int mode = (int) chiP.get(0);
         double rise = chiP.get(1), twistRate = chiP.get(2), stairPhase = chiP.get(3), Ract = chiP.get(4);
         double epsBind = chiP.get(5), mirror = chiP.get(13), capture = chiP.get(14);
         int halfSearch = (int) chiP.get(15);
+        // ---- VILFAN TARGET-ZONE ACCESSIBILITY (noncanonical, default-off; chiP[25]/[26]) -------------------
+        // tzHalf <= 0 AND tzRec == 0 ⇒ not one extra arithmetic operation is executed and tzOff is never
+        // written ⇒ this kernel is byte-identical to its pre-target-zone form (validated by gate E).
+        double tzHalf = chiP.get(25);    // accessibility half-width (rad); <= 0 ⇒ every azimuth is accessible
+        double tzRec  = chiP.get(26);    // != 0 ⇒ record the signed zone offset of the CHOSEN site into tzOff
+        boolean tzAct = (tzHalf > 0.0) || (tzRec != 0.0);
         for (@Parallel int m = 0; m < N; m++) {
             int bs = boundSeg.get(m), pb = prevBound.get(m);
             int jb = 0;
@@ -208,7 +214,22 @@ public final class ChiralSiteSystem {
                 double fx = outGeom.get(6 * N + m), fy = outGeom.get(7 * N + m), fz = outGeom.get(8 * N + m);   // xF8
                 int k0 = (int) ((cum + footArc) / rise + 0.5);
                 int bestK = -1; double bestD2 = capture * capture;
-                double bestArc = footArc, bestPhi = 0.0;
+                double bestArc = footArc, bestPhi = 0.0, bestDel = 0.0;
+                // TARGET-ZONE CENTRE DIRECTION cHat: the radial direction from the filament AXIS toward this
+                // head's own F8 anchor, taken at the head's axial station (its perpendicular foot). It is built
+                // ONLY from simulated material vectors (u, the segment pose, the beam-solved xF8), so it is
+                // covariant under any rigid rotation of the scene and carries no laboratory axis. In a surface
+                // assay every motor is tethered below the filament, so cHat is the substrate-facing radial
+                // direction — the equivalence is MEASURED, not assumed (gate C4).
+                double chx = 0.0, chy = 0.0, chz = 0.0; boolean tzOk = false;
+                if (tzAct) {
+                    double fo = footArc - halfLen;
+                    double rx = fx - (cx + fo * ux), ry = fy - (cy + fo * uy), rz = fz - (cz + fo * uz);
+                    double rd = rx * ux + ry * uy + rz * uz;
+                    rx -= rd * ux; ry -= rd * uy; rz -= rd * uz;
+                    double rl = rx * rx + ry * ry + rz * rz;
+                    if (rl > 1e-24) { double ir = 1.0 / Math.sqrt(rl); chx = rx * ir; chy = ry * ir; chz = rz * ir; tzOk = true; }
+                }
                 for (int j = -halfSearch; j <= halfSearch; j++) {
                     int k = k0 + j;
                     if (k < 0) continue;
@@ -217,11 +238,24 @@ public final class ChiralSiteSystem {
                     double ph = (stairPhase != 0.0) ? (k * stairPhase) : (twistRate * (la - halfLen));
                     double cph = Math.cos(ph), sph = Math.sin(ph);
                     double nx = cph * yx + sph * zx, ny = cph * yy + sph * zy, nz = cph * yz + sph * zz;
+                    // SIGNED TARGET-ZONE OFFSET delta = angle(cHat -> nSite) about u, in (-pi, pi].
+                    // delta = 0 ⇔ the site's outward normal points exactly at the motor (the zone centre).
+                    double del = 0.0;
+                    if (tzOk) {
+                        double dt2 = chx * nx + chy * ny + chz * nz;
+                        double qx = chy * nz - chz * ny, qy = chz * nx - chx * nz, qz = chx * ny - chy * nx;
+                        double sin2 = qx * qx + qy * qy + qz * qz;
+                        double mag = TwoBodyBeamAnalyticGpu.tzAngle(sin2, dt2);
+                        del = (qx * ux + qy * uy + qz * uz) < 0.0 ? -mag : mag;
+                        // ACCESSIBILITY: a site whose normal lies outside the zone is not a binding target at all.
+                        // No renormalisation — a head with no accessible site in reach simply does not attach.
+                        if (tzHalf > 0.0 && (del > tzHalf || del < -tzHalf)) continue;
+                    }
                     double aOff = la - halfLen;
                     double px = cx + aOff * ux + Ract * nx, py = cy + aOff * uy + Ract * ny, pz = cz + aOff * uz + Ract * nz;
                     double dx = px - fx, dy = py - fy, dz = pz - fz;
                     double d2 = dx * dx + dy * dy + dz * dz;
-                    if (d2 < bestD2) { bestD2 = d2; bestK = k; bestArc = la; bestPhi = ph; }
+                    if (d2 < bestD2) { bestD2 = d2; bestK = k; bestArc = la; bestPhi = ph; bestDel = del; }
                 }
                 if (bestK < 0) { boundSeg.set(m, -1); bs = -1; bindSite.set(m, -1); }   // no site in reach ⇒ release
                 else {
@@ -231,9 +265,10 @@ public final class ChiralSiteSystem {
                     // askew BOUND-interface offset: a rotation in the LOCAL site tangent plane. mirror flips the
                     // site's tangential sense (the chirality control) so a mirrored lattice reverses the offset.
                     bindAzim.set(m, (float) (bestPhi + mirror * epsBind));
+                    if (tzAct) tzOff.set(m, (float) bestDel);   // the signed zone offset AT ATTACHMENT
                 }
             }
-            if (bs < 0) bindSite.set(m, -1);
+            if (bs < 0) { bindSite.set(m, -1); if (tzAct) tzOff.set(m, Float.NaN); }
             justBound.set(m, jb);
             prevBound.set(m, bs);
         }

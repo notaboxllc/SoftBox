@@ -725,7 +725,7 @@ public final class ChiralSiteHarness {
             mot.bindArc.set(m, (float) arc);
             e.prevBound.set(m, -1);
             ChiralSiteSystem.siteSnap(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec,
-                    f.segLength, e.segCumArc, mot.bindArc, mot.bindAzim, e.bindSite, e.chiP, e.exCounts);
+                    f.segLength, e.segCumArc, mot.bindArc, mot.bindAzim, e.bindSite, e.tzOff, e.chiP, e.exCounts);
             return mot.boundSeg.get(m);
         }
         /** the local site frame (u, n, t) of motor m's bound site. */

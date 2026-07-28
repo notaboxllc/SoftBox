@@ -131,6 +131,16 @@ public final class ExplicitCompleteMatHarness {
     static int     SITE_SEARCH_HALF = 3;     // bounded neighbour search half-width (never an all-pairs scan)
     static boolean RAND_BASE_AZ = false;     // -randomize-motor-base-azimuth (SCENE control, not physics)
     static int     RAND_BASE_SEED = 20260724;
+    // ---- VILFAN TARGET-ZONE ACCESSIBILITY on the DISCRETE-SITE lattice (noncanonical, default-off) ----------
+    // A site is a binding target for a surface-tethered motor only while its outward material normal lies
+    // within TZ_ZONE_HALF of the direction from the filament axis toward that motor (the substrate-facing
+    // radial direction in a surface assay). This is an ACCESSIBILITY constraint on the assay geometry — it
+    // adds NO force, NO torque, NO rate and NO chemistry; it only removes inaccessible sites from the
+    // candidate set that siteSnap already scans. TZ_ZONE_HALF <= 0 ⇒ every azimuth accessible (exact no-op).
+    static double  TZ_ZONE_HALF_DEG = 0.0;   // -tz-zone-half-deg  (accessibility half-width, degrees)
+    static boolean TZ_ZONE_RECORD   = false; // -tz-record : record the signed zone offset even with the gate off
+    static boolean tzZoneOn()     { return TZ_ZONE_HALF_DEG > 0.0; }
+    static boolean tzZoneActive() { return tzZoneOn() || TZ_ZONE_RECORD; }
     // ---- TRUE LOCAL-FRAME ROTATION OF THE CONVERTER POWER STROKE (noncanonical, default-off) ----------------
     // A DIFFERENT mechanism from EPS_BIND_DEG / EPS_STROKE_DEG, which are actin-SIDE attachment-position offsets.
     // This one rotates the MOTOR-SIDE converter stroke plane itself, in the local actin-site frame, so the whole
@@ -345,16 +355,31 @@ public final class ExplicitCompleteMatHarness {
         EPS_STROKE_DEG = 0; SITE_EXCLUSIVE = true; MIRROR_SIGN = 1.0; SITE_CAPTURE_NM = 12.0; RAND_BASE_AZ = false;
         CONV_SKEW_DEG = 0; CONV_SKEW_GAUGE = true; CONV_SKEW_STATE_GATED = false;
         CONV_SKEW_RAMP = ChiralSiteSystem.RAMP_OFF; CONV_SKEW_RAMP_ONSET = 0.25; }
+    // ---- MODE 6: the PARAMETRIC MONOTONE STAIRCASE — a declared ASSAY FIXTURE, not actin's real lattice -----
+    // Actin 13/6 advances -166.5 deg per monomer, so the 13 azimuths of one repeat are visited in a SCRAMBLED
+    // order: consecutive monomers are near-antipodal and a site's azimuth does not sweep monotonically past a
+    // surface-facing zone. "Passage through a target zone", and therefore "before versus after the zone centre",
+    // is only well posed on a lattice whose azimuth advances monotonically. Mode 6 keeps actin's real azimuthal
+    // QUANTIZATION (360/13 = 27.6923 deg) and its real axial rise (one monomer, 2.7 nm) but visits the same 13
+    // azimuths in MONOTONE order — i.e. the single genuine long-pitch helix of 13 subunits per turn over a
+    // 35.1 nm repeat. It is an idealization of the ORDERING only; the site set, spacing and repeat are actin's.
+    static double SITE_FIX_RISE_NM  = Constants.actinMonoRadius * 1e3;   // -site-rise-nm    (default one monomer)
+    static double SITE_FIX_STAIR_DEG = -360.0 / 13.0;                    // -site-stair-deg  (default 13 per turn)
     static String siteModeName(int m) {
         return switch (m) { case 1 -> "native"; case 2 -> "every3"; case 3 -> "every4";
-                            case 4 -> "stair9-45"; case 5 -> "stair9-90"; default -> "off"; }; }
+                            case 4 -> "stair9-45"; case 5 -> "stair9-90";
+                            case 6 -> String.format(Locale.US, "stair-fixture(%.4f nm, %+.4f deg)",
+                                                    SITE_FIX_RISE_NM, SITE_FIX_STAIR_DEG);
+                            default -> "off"; }; }
     /** axial site rise (µm) for a lattice mode. */
     static double siteRise(int m) {
         return switch (m) { case 1 -> Constants.actinMonoRadius; case 2 -> 3 * Constants.actinMonoRadius;
-                            case 3 -> 4 * Constants.actinMonoRadius; case 4, 5 -> 9.0e-3; default -> Constants.actinMonoRadius; }; }
+                            case 3 -> 4 * Constants.actinMonoRadius; case 4, 5 -> 9.0e-3;
+                            case 6 -> SITE_FIX_RISE_NM * 1e-3; default -> Constants.actinMonoRadius; }; }
     /** azimuthal advance per site (rad); 0 ⇒ the analytic native helix phi(s) is used instead. */
     static double siteStairPhase(int m) {
-        return switch (m) { case 4 -> Math.PI / 4.0; case 5 -> Math.PI / 2.0; default -> 0.0; }; }
+        return switch (m) { case 4 -> Math.PI / 4.0; case 5 -> Math.PI / 2.0;
+                            case 6 -> SITE_FIX_STAIR_DEG * Math.PI / 180.0; default -> 0.0; }; }
     static String chiralConfigString() {
         return String.format(Locale.US,
             "sites=%s(rise=%.3f nm, stair=%.1f deg) headRollDof=%s headRollBrownian=%s registryK=%.3e N·m/rad "
@@ -377,20 +402,29 @@ public final class ExplicitCompleteMatHarness {
     static boolean BR_FIL_OTHROT = true;     // -filament-brownian-other-rotation on|off
     static boolean BR_MOT_UNBOUND = true;    // -motor-brownian-unbound on|off
     static boolean BR_MOT_BOUND   = true;    // -motor-brownian-bound on|off
+    // PER-BODY motor Brownian channels (orthogonal to the binding-state pair above; all true ⇒ policy bits 2/3/4
+    // clear ⇒ matS2SolveStep is arithmetically bit-identical to the canonical path).
+    static boolean BR_MOT_S2NODE  = true;    // -s2-node-brownian on|off      (the explicit-S2 beam nodes)
+    static boolean BR_MOT_CONV    = true;    // -converter-brownian on|off    (the phi generalized torque)
+    static boolean BR_MOT_HEAD    = true;    // -motor-head-brownian on|off   (the psi generalized torque)
     /** true iff any filament Brownian channel is masked ⇒ the (additive) mask task is wired. */
     static boolean brownChanOn() { return !(BR_FIL_AXIAL && BR_FIL_TRANS && BR_FIL_ROLL && BR_FIL_OTHROT); }
     /** matc[3]: bit0 ⇒ bound-motor Brownian OFF, bit1 ⇒ unbound-motor Brownian OFF. 0 = canonical. */
-    static int motorBrownPolicy() { return (BR_MOT_BOUND ? 0 : 1) | (BR_MOT_UNBOUND ? 0 : 2); }
+    static int motorBrownPolicy() { return (BR_MOT_BOUND ? 0 : 1) | (BR_MOT_UNBOUND ? 0 : 2)
+            | (BR_MOT_S2NODE ? 0 : 4) | (BR_MOT_CONV ? 0 : 8) | (BR_MOT_HEAD ? 0 : 16); }
     static void setBrownianPolicy(boolean filAx, boolean filTr, boolean filRoll, boolean filOth,
                                   boolean motUnbound, boolean motBound) {
         BR_FIL_AXIAL = filAx; BR_FIL_TRANS = filTr; BR_FIL_ROLL = filRoll; BR_FIL_OTHROT = filOth;
         BR_MOT_UNBOUND = motUnbound; BR_MOT_BOUND = motBound;
     }
-    static void resetBrownianPolicy() { setBrownianPolicy(true, true, true, true, true, true); }
+    static void resetBrownianPolicy() { setBrownianPolicy(true, true, true, true, true, true);
+        BR_MOT_S2NODE = true; BR_MOT_CONV = true; BR_MOT_HEAD = true; }
     static String brownianPolicyString() {
-        return String.format("filament[axial=%s transverse=%s roll=%s otherRot=%s] motor[unbound=%s bound=%s] (matc[3]=%d)",
+        return String.format("filament[axial=%s transverse=%s roll=%s otherRot=%s] motor[unbound=%s bound=%s "
+                + "s2node=%s converter=%s head=%s] (matc[3]=%d)",
                 BR_FIL_AXIAL ? "ON" : "OFF", BR_FIL_TRANS ? "ON" : "OFF", BR_FIL_ROLL ? "ON" : "OFF",
                 BR_FIL_OTHROT ? "ON" : "OFF", BR_MOT_UNBOUND ? "ON" : "OFF", BR_MOT_BOUND ? "ON" : "OFF",
+                BR_MOT_S2NODE ? "ON" : "OFF", BR_MOT_CONV ? "ON" : "OFF", BR_MOT_HEAD ? "ON" : "OFF",
                 motorBrownPolicy());
     }
     /** The explicit complete-mat state: the beam SoA + CSR/reduce scratch, over the shared G (fil/mot/body/bondData). */
@@ -409,6 +443,8 @@ public final class ExplicitCompleteMatHarness {
         // discrete actin sites + head rotational DOF + registry (noncanonical, default-off)
         DoubleArray chiP; IntArray bindSite, prevNuc, siteStats;
         FloatArray headRef, headOmega, headTau, headMis;
+        // Vilfan target-zone accessibility on the discrete lattice: signed zone offset at attachment (NaN = none)
+        FloatArray tzOff;
         // per-motor converter frame (true converter-stroke-plane rotation; identity/zero when the feature is off)
         DoubleArray convF;
     }
@@ -493,7 +529,10 @@ public final class ExplicitCompleteMatHarness {
                 // [21..22] the §25.1 CALIBRATED theta endpoints (one source of truth: ChiralSiteSystem);
                 // [23] ramp shape, [24] delayed-ramp onset.
                 ChiralSiteSystem.THETA_PRE, ChiralSiteSystem.THETA_POST,
-                CONV_SKEW_RAMP, CONV_SKEW_RAMP_ONSET);
+                CONV_SKEW_RAMP, CONV_SKEW_RAMP_ONSET,
+                // [25] Vilfan target-zone accessibility half-width (rad; <=0 ⇒ OFF), [26] record-offset flag.
+                TZ_ZONE_HALF_DEG * Math.PI / 180.0, TZ_ZONE_RECORD || tzZoneOn() ? 1.0 : 0.0);
+        e.tzOff = new FloatArray(N); e.tzOff.init(Float.NaN);   // signed zone offset at attachment (NaN = none)
         // Per-motor CONVERTER FRAME (stride 13, planar): [0..2] b*, [3..5] econv*, [6..8] eup*, [9..11] gauge
         // offset (µm), [12] flag. ALL ZERO ⇒ flag 0 ⇒ matBeamGeom / matS2SolveStep take the VERBATIM canonical
         // branch reading the base frame ⇒ byte-identical when the feature is off (it is never even wired).
@@ -727,7 +766,7 @@ public final class ExplicitCompleteMatHarness {
         if (tzOn())   // Vilfan target-zone angular hazard — applied to the geometric candidate BEFORE it persists
             TwoBodyBeamAnalyticGpu.matTargetZone(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, mot.bindPsi0, e.tzP, e.tzDiag, e.matc, e.exCounts);
         if (siteOn()) {   // DISCRETE ACTIN SITES: snap the fresh bind onto the nearest lattice site + latch its id
-            ChiralSiteSystem.siteSnap(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, mot.bindArc, mot.bindAzim, e.bindSite, e.chiP, e.exCounts);
+            ChiralSiteSystem.siteSnap(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, mot.bindArc, mot.bindAzim, e.bindSite, e.tzOff, e.chiP, e.exCounts);
             ChiralSiteSystem.siteOccupancyResolve(mot.boundSeg, e.justBound, e.prevBound, e.bindSite, e.segFilId, e.siteStats, e.chiP, e.exCounts);
         }
         if (ADP_RUP_ON) NucleotideCycleSystem.cycleLymnTaylorRuptureAll(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats, mot.adpRuptureParams, mot.adpRuptureStats);
@@ -790,7 +829,7 @@ public final class ExplicitCompleteMatHarness {
         if (tzOn())   tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.prevBound, e.justBound, e.tzP, e.tzDiag, mot.bindAzim, mot.bindPsi0);
         if (chiralOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.prevBound, e.justBound, e.chiP,
                 e.bindSite, e.prevNuc, e.siteStats, e.headRef, e.headOmega, e.headTau, e.headMis,
-                e.segCumArc, e.segFilId, mot.bindAzim);
+                e.segCumArc, e.segFilId, mot.bindAzim, e.tzOff);
         if (brownChanOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.brChan);
         if (RIGOR_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.rigorParams, mot.ruptureStats);
         if (ADP_RUP_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.adpRuptureParams, mot.adpRuptureStats);
@@ -808,7 +847,7 @@ public final class ExplicitCompleteMatHarness {
         if (tzOn())   // Vilfan target-zone angular hazard — immediately after the canonical bind, before it persists
             tg.task("tzone", TwoBodyBeamAnalyticGpu::matTargetZone, mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, mot.bindPsi0, e.tzP, e.tzDiag, e.matc, e.exCounts);
         if (siteOn())   // DISCRETE ACTIN SITES: snap fresh binds onto the lattice (parallel) → exclusive occupancy (serial)
-            tg.task("siteSnap", ChiralSiteSystem::siteSnap, mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, mot.bindArc, mot.bindAzim, e.bindSite, e.chiP, e.exCounts)
+            tg.task("siteSnap", ChiralSiteSystem::siteSnap, mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, mot.bindArc, mot.bindAzim, e.bindSite, e.tzOff, e.chiP, e.exCounts)
               .task("siteOcc", ChiralSiteSystem::siteOccupancyResolve, mot.boundSeg, e.justBound, e.prevBound, e.bindSite, e.segFilId, e.siteStats, e.chiP, e.exCounts);
         if (surfOn()) {   // helical surface binding: azimuth-select at bind (parallel) → 3D steric prune (single-thread serial)
             if (!tzOn() && !siteOn())

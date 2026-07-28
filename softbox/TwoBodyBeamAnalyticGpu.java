@@ -955,6 +955,13 @@ public final class TwoBodyBeamAnalyticGpu {
             int brownM = brownOn;
             if (bnd) { if ((mPolicy & 1) != 0) brownM = 0; }
             else     { if ((mPolicy & 2) != 0) brownM = 0; }
+            // PER-CHANNEL motor Brownian mask (noncanonical, default 0 ⇒ every channel equals brownM ⇒ arithmetic
+            // bit-identical). bit2 ⇒ the S2 BEAM-NODE stochastic force off; bit3 ⇒ the CONVERTER (phi) generalized
+            // stochastic torque off; bit4 ⇒ the HEAD (psi) generalized stochastic torque off. Physical bodies, not
+            // binding states — the three channels the deterministic target-zone fixture must silence independently.
+            int brownNode = ((mPolicy & 4) != 0) ? 0 : brownM;
+            int brownPhi  = ((mPolicy & 8) != 0) ? 0 : brownM;
+            int brownPsi  = ((mPolicy & 16) != 0) ? 0 : brownM;
             double f8x = bnd ? bondData.get(dB) : 0.0, f8y = bnd ? bondData.get(dB + 1) : 0.0, f8z = bnd ? bondData.get(dB + 2) : 0.0;
             double phi = q.get(m), psi = q.get(nM + m), thetaS = q.get(2 * nM + m), psiActin = q.get(3 * nM + m);
             // TRUE CONVERTER-STROKE-PLANE ROTATION (noncanonical, default-off). skewF == 0 ⇒ every branch below
@@ -1096,7 +1103,7 @@ public final class TwoBodyBeamAnalyticGpu {
                 }
                 // node drag diagonal + node Brownian RHS
                 for (int r=0;r<nF;r++) addK(sys,base,W, r, r, aN);
-                if (brownM != 0) for (int j=1;j<=M;j++){ int fb=(j-1)*3;
+                if (brownNode != 0) for (int j=1;j<=M;j++){ int fb=(j-1)*3;
                     for (int k=0;k<3;k++){ long salt = 0x4811L + ((long)m*1009 + (long)j*131 + k)*7919L;
                         addF(sys,base,W,n, fb+k, brownTorqueD(gNode, dt, seed, tt, salt)); } }
                 // F8 / converter / bind block  (axis = gu*, the generalized-force axis of the branch above)
@@ -1126,8 +1133,8 @@ public final class TwoBodyBeamAnalyticGpu {
                 addF(sys,base,W,n, pB+0, f8x); addF(sys,base,W,n, pB+1, f8y); addF(sys,base,W,n, pB+2, f8z);
                 addF(sys,base,W,n, iPhi, QphiF8 + kc*(th2-thetaS));
                 addF(sys,base,W,n, iPsi, QpsiF8 - kc*(th2-thetaS) - kbnd*(psi-psiActin));
-                if (brownM != 0) { addF(sys,base,W,n, iPhi, brownTorqueD(gPhi, dt, seed, tt, 0x4841L + (long)m*7919L));
-                                    addF(sys,base,W,n, iPsi, brownTorqueD(gPsi, dt, seed, tt, 0x4842L + (long)m*7919L)); }
+                if (brownPhi != 0) addF(sys,base,W,n, iPhi, brownTorqueD(gPhi, dt, seed, tt, 0x4841L + (long)m*7919L));
+                if (brownPsi != 0) addF(sys,base,W,n, iPsi, brownTorqueD(gPsi, dt, seed, tt, 0x4842L + (long)m*7919L));
                 // solve (Gauss–Jordan)
                 for (int c=0;c<n;c++){
                     int p=c; double bestv=sys.get(base+c*W+c); if(bestv<0)bestv=-bestv;
