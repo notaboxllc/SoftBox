@@ -26,6 +26,10 @@ public final class VilfanGradedBindingHarness {
     private VilfanGradedBindingHarness() {}
 
     static String OUT = "RUN_LOGS/vilfan_graded_binding";
+    /** Long-run discovery screen: prescribed travel per arm (µm) and trace sampling stride (steps). */
+    static double TRAVEL_UM = 3.0;
+    static int    TRACE_STRIDE = 500;
+    static String ARM_SEEDS = "101,102", ARM_MIRRORS = "1,-1";
     static final double TWOPI = 2.0 * Math.PI;
 
     // ===================================================================================================
@@ -44,7 +48,8 @@ public final class VilfanGradedBindingHarness {
         for (int i = 0; i < args.length; i++) {
             String a = args[i];
             switch (a) {
-                case "-gates", "-landscape", "-window", "-binding", "-dynamic", "-ladder", "-all", "-time" -> mode = a;
+                case "-gates", "-landscape", "-window", "-binding", "-dynamic", "-ladder", "-all", "-time",
+                     "-longrun" -> mode = a;
                 case "-out" -> OUT = args[++i];
                 case "-steps" -> VilfanTargetZoneDeterministicHarness.STEPS = Integer.parseInt(args[++i]);
                 case "-warmup" -> VilfanTargetZoneDeterministicHarness.WARMUP = Integer.parseInt(args[++i]);
@@ -61,6 +66,10 @@ public final class VilfanGradedBindingHarness {
                 case "-win" -> VilfanTargetZoneDeterministicHarness.GRAD_WINDOW = Integer.parseInt(args[++i]);
                 case "-attach-mode" -> VilfanTargetZoneDeterministicHarness.GRADED_MODE = modeOf(args[++i]);
                 case "-shadow" -> VilfanTargetZoneDeterministicHarness.GRAD_SHADOW = true;
+                case "-travel" -> TRAVEL_UM = Double.parseDouble(args[++i]);
+                case "-trace-stride" -> TRACE_STRIDE = Integer.parseInt(args[++i]);
+                case "-arm-seed" -> ARM_SEEDS = args[++i];
+                case "-arm-mirror" -> ARM_MIRRORS = args[++i];
                 default -> { if (a.startsWith("-")) throw new IllegalArgumentException("unknown flag " + a); }
             }
         }
@@ -90,6 +99,7 @@ public final class VilfanGradedBindingHarness {
                         msPerStep, rt.N, nb, rt.attachments,
                         modeName(VilfanTargetZoneDeterministicHarness.GRADED_MODE));
             }
+            case "-longrun" -> runLongRun();
             case "-gates" -> ok = runGates();
             case "-landscape" -> runLandscape();
             case "-window" -> runWindowConvergence();
@@ -493,6 +503,114 @@ public final class VilfanGradedBindingHarness {
         }
         VilfanTargetZoneDeterministicHarness.VCMD = sv;
         write("ladder.csv", rows);
+    }
+
+    // ===================================================================================================
+    // LONG-RUN STEADY-TWIRL DISCOVERY SCREEN
+    // ===================================================================================================
+    /**
+     * One arm = one (lattice handedness, chemical seed) trajectory carried for {@link #TRAVEL_UM} of
+     * PRESCRIBED filament travel, with a periodic trace of everything needed to reconstruct cumulative
+     * body-fixed roll, axial torque, attachment flux and bound population against both time and distance.
+     *
+     * <p>Records are ATOMIC (written to {@code .tmp} then renamed) and the screen is RESUMABLE: an arm whose
+     * final trace already exists is skipped. Because the fixture is fully deterministic for a given seed,
+     * re-running an arm to a longer travel reproduces the shorter trajectory exactly, so the bounded 5 µm
+     * extension continues the SAME trajectories rather than creating new ones.
+     *
+     * <p>This is a DURATION EXTENSION ONLY. Every motor and attachment parameter is exactly as frozen by the
+     * task; the artifact block printed at the start of each run records them so the log itself is the audit.
+     */
+    static void runLongRun() {
+        int steps = (int) Math.round(TRAVEL_UM / (Math.abs(VilfanTargetZoneDeterministicHarness.VCMD)
+                * VilfanTargetZoneDeterministicHarness.DT));
+        File dir = new File(OUT, "longrun"); dir.mkdirs();
+        System.out.printf(Locale.US, "%n--- LONG-RUN DISCOVERY SCREEN: %.2f µm travel = %d steps/arm ---%n",
+                TRAVEL_UM, steps);
+        List<String> summary = new ArrayList<>();
+        summary.add("arm,mirror,seed,az0_deg,travel_um,steps,gamma_roll_Nms,contour_um,nSeg,"
+                + "attach_total,avg_bound,roll_total_rad,turns_total,mean_tau_Nm,wall_s");
+        for (String ms : ARM_MIRRORS.split(",")) {
+            for (String ss : ARM_SEEDS.split(",")) {
+                double mir = Double.parseDouble(ms.trim());
+                int seed = Integer.parseInt(ss.trim());
+                double az = VilfanTargetZoneDeterministicHarness.AZ0_DEG;
+                String nm = String.format(Locale.US, "trace_az%03.0f_mir%+.0f_seed%d_%.2fum.csv", az, mir, seed, TRAVEL_UM);
+                File fin = new File(dir, nm);
+                if (fin.exists()) { System.out.println("  [skip, already complete] " + nm); continue; }
+                VilfanTargetZoneDeterministicHarness.MIRROR = mir;
+                VilfanTargetZoneDeterministicHarness.CLAMP_ROLL = false;   // roll MUST be free here
+                VilfanTargetZoneDeterministicHarness.configure();
+                Rig r = VilfanTargetZoneDeterministicHarness.buildRig(seed);
+                double gammaRoll = r.f.bRotGam.get(0);
+                double contour = 0; for (int k = 0; k < r.nSeg; k++) contour += r.f.segLength.get(k);
+                if (mir == Double.parseDouble(ARM_MIRRORS.split(",")[0].trim()) && seed == Integer.parseInt(ARM_SEEDS.split(",")[0].trim()))
+                    printArtifactBlock(r, gammaRoll, contour, steps);
+                long t0 = System.currentTimeMillis();
+                File tmp = new File(dir, nm + ".tmp");
+                double sumTau = 0, sumBound = 0; long nAcc = 0;
+                try (PrintWriter w = new PrintWriter(tmp)) {
+                    w.println("step,time_s,travel_um,roll_rad,tau_Nm,bound,attach_cum");
+                    for (int t = 0; t < steps; t++) {
+                        VilfanTargetZoneDeterministicHarness.step(r, t, seed);
+                        double tau = r.axialTorqueTotal();
+                        int nb = 0; for (int m = 0; m < r.N; m++) if (r.mot.boundSeg.get(m) >= 0) nb++;
+                        sumTau += tau; sumBound += nb; nAcc++;
+                        if (t % TRACE_STRIDE == 0 || t == steps - 1)
+                            w.printf(Locale.US, "%d,%.9g,%.9g,%.10g,%.6e,%d,%d%n", t, r.tSim,
+                                    Math.abs(VilfanTargetZoneDeterministicHarness.VCMD) * r.tSim,
+                                    r.roll, tau, nb, r.attachments);
+                    }
+                } catch (Exception ex) { System.out.println("  ! trace write failed: " + ex); continue; }
+                if (!tmp.renameTo(fin)) System.out.println("  ! atomic rename failed for " + nm);
+                double wall = (System.currentTimeMillis() - t0) / 1000.0;
+                summary.add(String.format(Locale.US, "%s,%+.0f,%d,%.1f,%.2f,%d,%.6e,%.4f,%d,%d,%.4f,%.6f,%.6f,%.6e,%.1f",
+                        (mir > 0 ? "native" : "mirror"), mir, seed, az, TRAVEL_UM, steps, gammaRoll, contour,
+                        r.nSeg, r.attachments, sumBound / nAcc, r.roll, r.roll / TWOPI, sumTau / nAcc, wall));
+                System.out.printf(Locale.US, "  %-7s seed %d : roll=%+.5f rad (%+.5f turns)  <tau>=%+.4e N·m  "
+                        + "attach=%d  avgBound=%.3f  [%.0f s]%n", (mir > 0 ? "native" : "mirror"), seed,
+                        r.roll, r.roll / TWOPI, sumTau / nAcc, r.attachments, sumBound / nAcc, wall);
+                VilfanTargetZoneDeterministicHarness.writeEvents(r, seed);
+            }
+        }
+        appendCsv(new File(dir, String.format(Locale.US, "arm_summary_mir%s_seed%s.csv",
+                ARM_MIRRORS.replace(",", "_").replace("-", "m"), ARM_SEEDS.replace(",", "_"))), summary);
+    }
+
+    /** The artifact audit the task requires, printed into the run log so the log itself is the evidence. */
+    static void printArtifactBlock(Rig r, double gammaRoll, double contour, int steps) {
+        double single = DragTensorSystem.rodDragSI(contour, Constants.radius)[3];
+        System.out.println("  ---- ARTIFACT CHECKS ----");
+        System.out.printf(Locale.US, "   roll drag        : gammaRoll = %.6e N·m·s over nSeg=%d, contour=%.4f µm%n",
+                gammaRoll, r.nSeg, contour);
+        System.out.printf(Locale.US, "                      one rod of the same contour = %.6e  (ratio %.6f)"
+                + "  => WHOLE-FILAMENT drag%n", single, gammaRoll / single);
+        System.out.printf(Locale.US, "   roll observable  : transported body-fixed (rollIncrementTransported), NOT lab spin%n");
+        System.out.printf(Locale.US, "   roll clamp       : CLAMP_ROLL=%s (must be false)%n",
+                VilfanTargetZoneDeterministicHarness.CLAMP_ROLL);
+        System.out.printf(Locale.US, "   height/tilt      : prescribe=%s clampTilt=%s (both must be true)%n",
+                VilfanTargetZoneDeterministicHarness.PRESCRIBE, VilfanTargetZoneDeterministicHarness.CLAMP_TILT);
+        System.out.printf(Locale.US, "   brownian         : %s%n", ExplicitCompleteMatHarness.brownianPolicyString());
+        System.out.printf(Locale.US, "   attachment       : mode=%s window=+-%d alpha=%.2f K=%.3f pN/nm kA=%.1f /s%n",
+                modeName(VilfanTargetZoneDeterministicHarness.GRADED_MODE),
+                VilfanTargetZoneDeterministicHarness.GRAD_WINDOW,
+                VilfanTargetZoneDeterministicHarness.GRAD_ALPHA,
+                VilfanGradedBindingSystem.VILFAN_K_PN_PER_NM, VilfanGradedBindingSystem.VILFAN_KA_PER_S);
+        System.out.printf(Locale.US, "   lattice          : %s   converter skew = %.2f deg%n",
+                ExplicitCompleteMatHarness.siteModeName(VilfanTargetZoneDeterministicHarness.LATTICE),
+                VilfanTargetZoneDeterministicHarness.CONV_SKEW_DEG);
+        System.out.printf(Locale.US, "   prescribed v     : %+.4f µm/s, dt=%.3g s, steps=%d%n",
+                VilfanTargetZoneDeterministicHarness.VCMD, VilfanTargetZoneDeterministicHarness.DT, steps);
+        System.out.printf(Locale.US, "   2pi conversion   : turns = roll_rad / %.10f%n", TWOPI);
+        System.out.println("  -------------------------");
+    }
+
+    static void appendCsv(File f, List<String> rows) {
+        boolean exists = f.exists();
+        try (PrintWriter w = new PrintWriter(new java.io.FileWriter(f, true))) {
+            for (int i = 0; i < rows.size(); i++) { if (i == 0 && exists) continue; w.println(rows.get(i)); }
+        } catch (Exception e) { System.out.println("  ! summary append failed: " + e); }
+        System.out.println("  wrote " + f.getPath());
     }
 
     // ===================================================================================================

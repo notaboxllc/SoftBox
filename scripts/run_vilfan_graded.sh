@@ -4,7 +4,7 @@
 # ======================= CPU ONLY — NO GPU, NO DEVICE EXECUTION =======================
 # Plain sequential JVM runner: no TaskGraph, no device context, no TornadoVM device call.
 # @tornado-argfile is present only for classpath / --enable-preview parity.
-#   -XX:ActiveProcessorCount=3   caps JVM-internal parallelism (2-4 logical processors)
+#   -XX:ActiveProcessorCount=$VG_PROCS (default 3)  caps JVM-internal parallelism
 #   nice -n 17                   yields CPU to the active low-ATP GPU study
 # =====================================================================================
 #
@@ -22,6 +22,6 @@
 TORNADOVM_HOME="$HOME/Code/TornadoVM/dist/tornadovm-4.0.1-dev-ptx-linux-amd64/tornadovm-4.0.1-dev-ptx"
 TDIR="$TORNADOVM_HOME/share/java/tornado"
 exec nice -n 17 java @$TORNADOVM_HOME/tornado-argfile --enable-preview -Xmx4G \
-     -XX:ActiveProcessorCount=3 \
+     -XX:ActiveProcessorCount=${VG_PROCS:-3} \
      -cp "$TDIR/tornado-api-4.0.1-dev.jar:." \
      softbox.VilfanGradedBindingHarness "$@"
