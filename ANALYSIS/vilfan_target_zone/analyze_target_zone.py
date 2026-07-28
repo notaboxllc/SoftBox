@@ -319,6 +319,35 @@ def tidy(seeds, name):
     print("  wrote", p)
 
 
+# analytic axial (roll) drag of the fixture filament: gamma = 4*pi*eta*R^2*L
+ETA_PA_S, R_ACTIN_M, L_FIL_M = 0.1, 3.5e-9, 1.76e-6
+GAMMA_ROLL_ANALYTIC = 4 * math.pi * ETA_PA_S * R_ACTIN_M ** 2 * L_FIL_M
+
+
+def consistency(seeds, name):
+    """Is the rotation actually the gathered torque divided by the roll drag?
+
+    Omega = tau / gamma_roll is the overdamped statement. Recovering gamma_roll from the measured
+    (tau, Omega) pair and comparing it to the analytic 4*pi*eta*R^2*L is a strong internal check that the
+    rotation is torque-driven and that the fixture leaves the roll coordinate genuinely free.
+    """
+    if not seeds:
+        return
+    p = os.path.join(OUT, name)
+    with open(p, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["arm", "tau_Nm", "omega_rad_s", "gamma_from_ratio_Nms",
+                    "gamma_analytic_Nms", "ratio_measured_over_analytic"])
+        for a in arms(seeds):
+            g = [r for r in seeds if r["arm"] == a]
+            t, _, _ = msem([r["tau_Nm"] for r in g])
+            o, _, _ = msem([r["omega_rad_s"] for r in g])
+            gam = t / o if o and abs(o) > 1e-12 else float("nan")
+            w.writerow([a, f"{t:.6e}", f"{o:.6e}", f"{gam:.6e}",
+                        f"{GAMMA_ROLL_ANALYTIC:.6e}", f"{gam / GAMMA_ROLL_ANALYTIC:.4f}"])
+    print("  wrote", p)
+
+
 def main():
     print("reading", RUN)
     camp = load("campaign_seeds.csv")
@@ -328,6 +357,7 @@ def main():
     print(f"  campaign rows={len(camp)}  ladder rows={len(lad)}  sensitivity rows={len(sens)}  "
           f"event files={len(ev)}")
     tidy(camp, "tidy_campaign.csv")
+    consistency(camp, "consistency_campaign.csv")
     tidy(lad, "tidy_ladder.csv")
     tidy(sens, "tidy_sensitivity.csv")
     if ev:

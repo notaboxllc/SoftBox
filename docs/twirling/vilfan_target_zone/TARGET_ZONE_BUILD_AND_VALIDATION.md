@@ -282,7 +282,118 @@ translation are recorded every step; the maximum discrepancy over a run is repor
 
 ## 7. Stage 4 — validation gates
 
-[RESULTS PENDING]
+`./scripts/run_vilfan_tz_deterministic.sh -gates -maty 0.01 -density 6000 -steps 12000 -seeds 4`
+Log: `RUN_LOGS/vilfan_target_zone/gates.txt`. **36 PASS / 2 FAIL.** The two failures are F1/F2, and they
+fail for a *physical* reason that the F3/F4 control isolates — see §7.1.
+
+### A. Helical geometry — 5/5 PASS
+
+| Gate | Result |
+|---|---|
+| A1 site rise matches the declared lattice | 2.700000 nm |
+| A2 azimuthal advance matches the declared value | −27.692308° per site |
+| A3 wrapping continuous through ±π | 2.000e-03 (expected 2.000e-03) |
+| A4 stored starting filament azimuth applied exactly | 37.000003° for a commanded 37° |
+| A5 body-fixed → laboratory: roll δ shifts lab azimuth by δ | Δ = 0.400000 rad for a commanded 0.400000 |
+
+### B. Mirror transformation — 7/7 PASS
+
+| Gate | Result |
+|---|---|
+| B1 handedness reverses | dφ/darc −179.0081 → +179.0081 rad/µm |
+| B2 zone-phase drift reverses | D +358.0163 → −358.0163 rad/s |
+| B3 filament pose and segment geometry unchanged | max\|Δcoord\| = 0.000e+00 µm |
+| B4 motor anchor positions unchanged | max\|Δanchor\| = 0.000e+00 µm |
+| B5 axial site spacing unchanged | 2.700000 / 2.700000 nm |
+| B6 imposed velocity and laboratory axis unchanged | v = 2.000, axis = (1,0,0) |
+| B7 mirror sign is the only chiral input | chiP[13] +1 / −1 |
+
+RNG assignment is untouched by mirroring by construction: the mirror flips only `chiP[2]/[3]/[13]`, and no
+RNG stream is keyed on them.
+
+### C. Target-zone gate — 7/7 PASS
+
+| Gate | Result |
+|---|---|
+| C1 site normal facing the motor ⇒ δ = 0 | max\|δ\| = 0.000e+00 rad over 17 azimuths |
+| C2 site normal facing away ⇒ \|δ\| = π (occluded) | verified over 17 azimuths |
+| C3 δ changes sign through the centre; before/after exchange | δ(−0.30) = −0.3000 BEFORE, δ(+0.30) = +0.3000 AFTER, sign(D) = +1 |
+| C4 gate periodic and continuous across ±π | δ(π−) = +3.141493, δ(−π+) = −3.141493, wrapped Δ = 2.0e-04 |
+| C5 zone centre **is** the substrate-facing direction (measured) | mean cHat·(−eup) = **0.9856** over 41 attachments, min 0.9088 |
+| C6 accessible azimuthal fraction = zone/180° | measured 0.2244, expected 0.2222 |
+| C7 **the causal link δ → torque, measured** | **dτ/dδ = +9.4390e-21 N·m/rad, r = +0.6403** over 41 attachments |
+
+**C7 is the gate that makes the campaign interpretable.** It establishes empirically — not by assertion —
+that a signed attachment offset produces an axial torque of a definite sign, with `δ > 0 ⇒ τ > 0`. Every
+sign prediction in §8 follows from this measured mapping rather than from a geometric argument.
+
+### D. Imposed translation, motors disabled — 6/6 PASS
+
+| Gate | Result |
+|---|---|
+| D1 translation follows the prescribed velocity | actual 0.020000000 vs commanded 0.020000000 µm (max error 9.31e-10 µm) |
+| D2 no lateral drift | 0.000e+00 µm |
+| D3 no tilt develops | 0.000e+00 rad |
+| D4 axial roll remains zero | 0.000e+00 rad over 4000 steps |
+| D5 axial torque remains zero | 0.000e+00 N·m |
+| D6 the control is genuinely motor-free | 0 attachments |
+
+**The prescribed-translation fixture exerts exactly zero axial torque** — not "small", zero, because it is
+kinematic. Success criterion 7 is satisfied outright.
+
+### E. Default identity — 3/3 PASS
+
+| Gate | Result |
+|---|---|
+| E1 recording the offset alters no binding decision and no trajectory bit | max\|Δcoord\| = 0, bound mismatches = 0, Δroll = 0 |
+| E2 per-channel motor Brownian bits = 0 ⇒ bit-identical to the canonical mask | max\|Δcoord\| = 0 over 1500 steps |
+| E3 all three motor channels off ≡ the global motor-Brownian switch off | max\|Δcoord\| = 0, Δroll = 0 over 1500 steps |
+
+### F. Zero-chirality nulls — 2 FAIL (literal) / 2 PASS (achiral control)
+
+| Gate | Result | Verdict |
+|---|---|---|
+| F1 zone OFF, skew 0 ⇒ no axial torque | τ = **−1.9224e-21 ± 5.4514e-22 N·m (3.53σ)** | **FAIL** |
+| F2 zone OFF, skew 0 ⇒ no axial rotation | Ω = **−7.7466e+01 ± 1.6990e+01 rad/s (4.56σ)** | **FAIL** |
+| F3 **achiral** lattice (180°/site) ⇒ no axial torque | τ = −1.2186e-22 ± 8.5769e-22 N·m (**0.14σ**) | PASS |
+| F4 **achiral** lattice (180°/site) ⇒ no axial rotation | Ω = +1.6239e+01 ± 2.0644e+01 rad/s (**0.79σ**) | PASS |
+
+### 7.1 Why F1/F2 fail, and why that is a result rather than a defect
+
+The task's zero-chirality null switches off the *target zone* and the *stroke skew*, but it leaves the
+**helical lattice** and **off-axis attachment** in place — and those two together are already a chirality
+source. On a monotone helical lattice the azimuth of the nearest accessible site advances systematically as
+the filament slides, so nearest-site binding at radius `Ractin` produces a systematically signed moment
+about the axis with no target zone involved. F1/F2 are therefore measuring real physics, not a fixture bias.
+
+F3/F4 supply the null the task actually needs. Setting the azimuthal advance to 180° per site makes the site
+set `{0°, 180°, 0°, …}` **mirror-invariant** (mirroring negates the advance and −180° ≡ +180°), so the
+lattice carries no handedness whatever, while every other element of the fixture — prescribed translation,
+constraints, off-axis attachment at the same `Ractin`, the same chemistry, the same seeds — is unchanged.
+The torque and the rotation both collapse to noise (0.14σ, 0.79σ).
+
+> **Conclusion from the F block: the fixture itself injects no chirality. Any signed torque observed with a
+> helical lattice is genuine lattice chirality — but it is NOT, by itself, evidence for the target-zone
+> mechanism, because it survives with the target zone switched off.** Separating those two is exactly what
+> the §8 campaign is for.
+
+### G. CPU health — 6/6 PASS
+
+All states finite; no forbidden nucleotide state (all in [0,3]); roll and torque finite; the prescribed
+translation held to 9.31e-10 µm; **exact repeat** (same seed ⇒ bit-identical trajectory, max\|Δcoord\| = 0
+and Δroll = 0); no attachment-record collisions. Zero solver failures and zero invalid states throughout.
+The gate run also reports the engagement cost of the accessibility rule directly: 64 attachments accepted
+against **791 fresh binds released for having no accessible site** — the zone rejects ~92 % of geometric
+candidates, and that loss is reported, never renormalised.
+
+### 7.2 Internal consistency: is the rotation actually torque-driven?
+
+The overdamped statement is `Ω = τ / γ_roll`. Taking the F1/F2 pair, `γ_roll = τ/Ω = (−1.92e-21)/(−77.5) =
+2.48e-23 N·m·s`, against the analytic axial drag of the fixture rod
+`4πηR²L = 4π(0.1)(3.5e-9)²(1.76e-6) = 2.71e-23 N·m·s` — agreement to ~9 %. The measured rotation is the
+gathered axial torque divided by the roll drag, which confirms both that the roll coordinate is genuinely
+free under the constraint and that the rotation observable is not picking up tumble. This check is emitted
+per arm as `ANALYSIS/vilfan_target_zone/consistency_campaign.csv`.
 
 ## 8. Stage 5 — deterministic proof of mechanism
 
