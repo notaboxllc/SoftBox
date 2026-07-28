@@ -1666,7 +1666,10 @@ public final class ChiralSiteHarness {
         double[] occBound = new double[4];     // BOUND-head occupancy fractions, indexed by MotorStore.NUC_*
         double[] occAll   = new double[4];     // whole-population occupancy fractions
         // Nested-window prefix readout (populated only when NESTED_ON): one entry per NESTED_MS window that fits.
-        double[] nesV, nesOmega, nesBound, nesEpRate, nesDurS;
+        // nesVhalf/nesOmHalf are the SAME window's FINAL HALF [W/2, W] — the preregistered "final half vs full
+        // post-equilibration window" stability check. nesRaw is the retained dense prefix trace.
+        double[] nesV, nesOmega, nesBound, nesEpRate, nesDurS, nesVhalf, nesOmHalf, nesRollR2;
+        java.util.List<double[]> nesRaw;
 
         /**
          * Reduce the dense prefix trace to one (v, Omega, avgBound, stroke rate) estimate per NESTED_MS window
@@ -1683,20 +1686,27 @@ public final class ChiralSiteHarness {
             int n = ws.size();
             nesV = new double[n]; nesOmega = new double[n]; nesBound = new double[n];
             nesEpRate = new double[n]; nesDurS = new double[n];
+            nesVhalf = new double[n]; nesOmHalf = new double[n]; nesRollR2 = new double[n];
+            nesRaw = tr;
             for (int k = 0; k < n; k++) {
-                double W = ws.get(k), t0 = EQUIL_FRAC * W;
-                java.util.List<double[]> sub = new java.util.ArrayList<>();
+                double W = ws.get(k), t0 = EQUIL_FRAC * W, tHalf = 0.5 * W;
+                java.util.List<double[]> sub = new java.util.ArrayList<>(), half = new java.util.ArrayList<>();
                 double[] first = null, last = null;
                 for (double[] s : tr) {
                     if (s[0] < t0 || s[0] > W) continue;
                     if (first == null) first = s;
                     last = s; sub.add(s);
+                    if (s[0] >= tHalf) half.add(s);
                 }
                 nesDurS[k] = W;
                 if (sub.size() < 3 || first == null || last == first) {
-                    nesV[k] = nesOmega[k] = nesBound[k] = nesEpRate[k] = Double.NaN; continue; }
+                    nesV[k] = nesOmega[k] = nesBound[k] = nesEpRate[k] = Double.NaN;
+                    nesVhalf[k] = nesOmHalf[k] = nesRollR2[k] = Double.NaN; continue; }
                 nesOmega[k] = slope(sub, 1);
                 nesV[k]     = slope(sub, 2);
+                nesRollR2[k] = r2(sub, 1);
+                nesVhalf[k]  = half.size() >= 3 ? slope(half, 2) : Double.NaN;
+                nesOmHalf[k] = half.size() >= 3 ? slope(half, 1) : Double.NaN;
                 double dT = last[0] - first[0];
                 double dSteps = dT / Math.max(DTR, 1e-30);
                 nesBound[k]  = dSteps > 0 ? (last[6] - first[6]) / dSteps : Double.NaN;
@@ -4224,11 +4234,20 @@ public final class ChiralSiteHarness {
         try {
             java.io.File dir = new java.io.File(ATP_DIR); dir.mkdirs();
             try (java.io.PrintWriter w = new java.io.PrintWriter(new java.io.File(dir, id + ".nested.tsv"))) {
-                w.println("windowS\tv\tomega\tavgBound\tstrokeRate");
+                w.println("windowS\tv\tomega\tavgBound\tstrokeRate\tvHalf\tomegaHalf\trollR2");
                 for (int k = 0; k < r.nesV.length; k++)
-                    w.printf(Locale.US, "%.9g\t%.9g\t%.9g\t%.9g\t%.9g%n",
-                            r.nesDurS[k], r.nesV[k], r.nesOmega[k], r.nesBound[k], r.nesEpRate[k]);
+                    w.printf(Locale.US, "%.9g\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g%n",
+                            r.nesDurS[k], r.nesV[k], r.nesOmega[k], r.nesBound[k], r.nesEpRate[k],
+                            r.nesVhalf[k], r.nesOmHalf[k], r.nesRollR2[k]);
             }
+            // the dense prefix trace itself, so ANY sub-window can be re-derived offline without a rerun
+            if (r.nesRaw != null)
+                try (java.io.PrintWriter w = new java.io.PrintWriter(new java.io.File(dir, id + ".trace.tsv"))) {
+                    w.println("tS\tmeanRoll\tglideProj\tcumBinds\tcumStrokes\tcumDetach\tcumBoundSteps");
+                    for (double[] s : r.nesRaw)
+                        w.printf(Locale.US, "%.9g\t%.9g\t%.9g\t%.0f\t%.0f\t%.0f\t%.0f%n",
+                                s[0], s[1], s[2], s[3], s[4], s[5], s[6]);
+                }
         } catch (Exception ignored) { }
     }
 
@@ -4293,20 +4312,67 @@ public final class ChiralSiteHarness {
         System.out.println("  within 20%; (4) Omega_odd and turns-per-µm within 25% between the last two nested windows");
         System.out.println("  (unless their CIs include zero); (5) no startup transient dominating the slope; (6) stationary");
         System.out.println("  cause fractions and bound population.");
+        java.util.Map<Double, double[][]> tables = new java.util.LinkedHashMap<>();
         for (double uM : ATP_MAP) {
             System.out.printf(Locale.US, "%n  ---- [ATP] = %.4g µM   (atpOn = %.4g /s) ----%n", uM, atpOnFor(uM));
-            System.out.printf("    %8s %12s %12s %14s %12s %12s %12s%n",
-                    "win ms", "v_even", "Omega_odd", "turns/µm", "|disp| µm", "strokes/pair", "avgBound");
+            System.out.printf("    %8s %12s %12s %14s %12s %12s %10s %12s %10s%n",
+                    "win ms", "v_even", "Omega_odd", "turns/µm", "|disp| µm", "strokes/pair",
+                    "avgBound", "v_finalHalf", "rollR2");
             double[][] byWin = atpNestedRead(uM, durS);
             if (byWin == null) { System.out.println("    (no nested records)"); continue; }
+            tables.put(uM, byWin);
             for (double[] row : byWin)
-                System.out.printf(Locale.US, "    %8.0f %+12.4f %+12.2f %+14.4f %12.4f %12.0f %12.2f%n",
-                        row[0]*1e3, row[1], row[2], row[3], row[4], row[5], row[6]);
+                System.out.printf(Locale.US, "    %8.0f %+12.4f %+12.2f %+14.4f %12.4f %12.0f %10.2f %+12.4f %10.4f%n",
+                        row[0]*1e3, row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8]);
         }
-        System.out.println("\n    Read the shortest window at which (a) strokes/pair >= 100, (b) |disp| >= 0.02 µm,");
-        System.out.println("    (c) v_even and turns/µm are within 20 %/25 % of the next longer window.");
+        // ---- the preregistered gates, evaluated -----------------------------------------------------------
+        System.out.println("\n  ---- PREREGISTERED GATE EVALUATION (per window, per [ATP]) ----");
+        System.out.printf("    %10s %8s %8s %8s %10s %10s %10s %8s%n",
+                "[ATP] µM", "win ms", "G1 ep", "G2 disp", "G3 half", "G4 om", "G4 turns", "ALL");
+        java.util.Map<Double, Double> firstOk = new java.util.LinkedHashMap<>();
+        for (var en : tables.entrySet()) {
+            double[][] t = en.getValue();
+            for (int k = 0; k < t.length; k++) {
+                boolean g1 = t[k][5] >= 100;
+                boolean g2 = t[k][4] >= 0.02;
+                boolean g3 = rel(t[k][7], t[k][1]) <= 0.20;
+                // G4: vs the NEXT LONGER window (the last window compares against the previous one)
+                int j = k + 1 < t.length ? k + 1 : k - 1;
+                boolean g4o = j < 0 || rel(t[k][2], t[j][2]) <= 0.25;
+                boolean g4t = j < 0 || rel(t[k][3], t[j][3]) <= 0.25;
+                boolean all = g1 && g2 && g3 && g4o && g4t;
+                System.out.printf(Locale.US, "    %10.4g %8.0f %8s %8s %10s %10s %10s %8s%n",
+                        en.getKey(), t[k][0]*1e3, yn(g1), yn(g2), yn(g3), yn(g4o), yn(g4t), all ? "PASS" : "-");
+                if (all && !firstOk.containsKey(en.getKey())) firstOk.put(en.getKey(), t[k][0]);
+            }
+        }
+        System.out.println("\n  ---- DURATION DECISION ----");
+        double common = 0; boolean allHave = true;
+        for (double uM : ATP_MAP) {
+            Double f = firstOk.get(uM);
+            System.out.printf(Locale.US, "    [ATP] = %8.4g µM : shortest window passing all gates = %s%n",
+                    uM, f == null ? "NONE at the durations run" : String.format(Locale.US, "%.0f ms", f*1e3));
+            if (f == null) allHave = false; else common = Math.max(common, f);
+        }
+        if (allHave)
+            System.out.printf(Locale.US, "%n    ⇒ SHORTEST COMMON PRODUCTION DURATION = %.0f ms%n", common*1e3);
+        else
+            System.out.println("\n    ⇒ at least one [ATP] fails at every window run — EXTEND the pilot"
+                    + " (500 ms, then 1.0 s for the slowest condition) before production.");
+        System.out.println("\n    G1 = >=100 completed stroke episodes per matched ±eps seed pair");
+        System.out.println("    G2 = >=0.02 µm directed displacement per arm");
+        System.out.println("    G3 = v_even final-half vs full post-equilibration window within 20 %");
+        System.out.println("    G4 = Omega_odd and turns-per-µm within 25 % of the adjacent nested window");
+        System.out.println("    G5 (startup transient) and G6 (stationary cause fractions / bound population) are read");
+        System.out.println("    from the window-to-window trend of v_finalHalf/rollR2 and avgBound above.");
     }
-    /** Per-ATP nested table: {windowS, v_even, Omega_odd, turns/µm, |disp|, strokes per ± pair, avgBound}. */
+    static String yn(boolean b) { return b ? "ok" : "NO"; }
+    static double rel(double a, double b) {
+        double d = Math.max(Math.abs(a), Math.abs(b));
+        return d > 0 ? Math.abs(a - b) / d : 0.0;
+    }
+    /** Per-ATP nested table:
+     *  {windowS, v_even, Omega_odd, turns/µm, |disp|, strokes per ± pair, avgBound, v_even final-half, rollR2}. */
     static double[][] atpNestedRead(double uM, double durS) {
         java.util.List<double[]> out = new java.util.ArrayList<>();
         java.util.List<double[]>[] plus = readNested(uM, +1, durS), minus = readNested(uM, -1, durS);
@@ -4316,7 +4382,7 @@ public final class ChiralSiteHarness {
         for (var l : minus) if (l != null) nw = Math.min(nw, l.size());
         if (nw == Integer.MAX_VALUE || nw == 0) return null;
         for (int k = 0; k < nw; k++) {
-            double w = 0, ve = 0, oo = 0, tp = 0, dis = 0, st = 0, ab = 0; int n = 0;
+            double w = 0, ve = 0, oo = 0, tp = 0, dis = 0, st = 0, ab = 0, vh = 0, r2v = 0; int n = 0;
             for (int i = 0; i < SEEDS; i++) {
                 if (plus[i] == null || minus[i] == null || plus[i].size() <= k || minus[i].size() <= k) continue;
                 double[] p = plus[i].get(k), m = minus[i].get(k);
@@ -4326,10 +4392,12 @@ public final class ChiralSiteHarness {
                 dis += 0.5*(Math.abs(p[1]) + Math.abs(m[1])) * p[0] * (1 - EQUIL_FRAC);
                 st  += (p[4] + m[4]) * p[0] * (1 - EQUIL_FRAC);
                 ab  += 0.5*(p[3] + m[3]);
+                vh  += p.length > 5 ? 0.5*(p[5] + m[5]) : Double.NaN;
+                r2v += p.length > 7 ? 0.5*(p[7] + m[7]) : Double.NaN;
                 n++;
             }
             if (n == 0) continue;
-            out.add(new double[]{ w, ve/n, oo/n, tp/n, dis/n, st/n, ab/n });
+            out.add(new double[]{ w, ve/n, oo/n, tp/n, dis/n, st/n, ab/n, vh/n, r2v/n });
         }
         return out.toArray(new double[0][]);
     }
@@ -4346,8 +4414,9 @@ public final class ChiralSiteHarness {
                 while (sc.hasNextLine()) {
                     String[] p = sc.nextLine().split("\t");
                     if (p.length < 5) continue;
-                    rows.add(new double[]{ Double.parseDouble(p[0]), Double.parseDouble(p[1]),
-                            Double.parseDouble(p[2]), Double.parseDouble(p[3]), Double.parseDouble(p[4]) });
+                    double[] row = new double[8];
+                    for (int c = 0; c < 8; c++) row[c] = c < p.length ? Double.parseDouble(p[c]) : Double.NaN;
+                    rows.add(row);
                 }
             } catch (Exception ignored) { continue; }
             out[i] = rows; any = true;
