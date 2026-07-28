@@ -12,56 +12,67 @@ changed.
 
 ## 1. Executive conclusion
 
-**The Vilfan target-zone mechanism IS reproduced inside SoftBox under favourable deterministic assumptions
-— on an idealized monotone helix. It is NOT reproduced on actin's true 13/6 lattice.** Both halves are
-established under the *most permissive* conditions the mechanism will ever see in this model: zero handed
-component in the working stroke, all mechanical Brownian motion off, prescribed translation, constrained
-geometry, free axial roll.
+**Verdict: the target-zone attachment asymmetry is reproduced inside SoftBox under favourable deterministic
+assumptions, on an idealized monotone helix; it is NOT reproduced on actin's true 13/6 lattice; and the
+axial rotation it accompanies is NOT solely attributable to it.** All three parts are established with
+converter skew pinned at exactly 0°, all mechanical Brownian motion off, prescribed translation, constrained
+geometry and free axial roll — the most permissive conditions the mechanism will ever see in this model.
 
-**On the idealized monotone lattice** (actin's real azimuthal quantization, rise and repeat, visited in
-monotone order — a declared idealization of the *ordering* only), with converter skew pinned at 0°, the full
-causal chain closes and every element reverses correctly:
+### What was reproduced
+
+On the idealized monotone lattice (actin's real azimuthal quantization 360/13, real rise 2.7 nm, real
+35.1 nm repeat — but visited in monotone order; a declared idealization of the *ordering* only):
 
 | link in the chain | result |
 |---|---|
-| biased attachment before vs after the zone centre | `A_TZ = +0.171 ± 0.025` (**6.8σ**), and `+0.176 ± 0.018` (9.8σ) mirrored |
-| the bias is *caused by the gate* | `A_TZ` falls to `−0.040 ± 0.030` (1.3σ) and `−0.025 ± 0.033` (0.8σ) with the zone OFF |
+| biased attachment before vs after the zone centre | `A_TZ = +0.171 ± 0.025` (**6.8σ**); mirrored `+0.176 ± 0.018` (9.8σ) |
+| the bias is **caused by the gate** | zone OFF: `−0.040 ± 0.030` (1.3σ) and `−0.025 ± 0.033` (0.8σ) |
+| the sign is the predicted one | positive `A_TZ` = capture on the **entering** edge = first-passage + pool depletion |
 | signed axial torque | `⟨τ⟩ = +4.702e-21 ± 8.0e-22 N·m` (5.9σ) |
 | signed filament rotation | `Ω = +134.5 ± 29 rad/s` (4.6σ); turns/µm `+10.70 ± 2.28` |
 | **mirror reversal** | `⟨δ⟩`, `⟨τ⟩`, `Ω`, turns/µm **all reverse** (4.6–17σ); `A_TZ` invariant by construction (§8.2) |
+| per-seed reproducibility | torque and rotation signs unanimous **8/8 seeds** in every control arm |
+| starting-azimuth robustness | six azimuths across a full repeat: `A_TZ` +0.156…+0.212, all resolved |
 | the fixture itself | exerts **exactly zero** axial torque (kinematic; gate D) |
-| an achiral lattice | gives a clean null: `τ` 0.14σ, `Ω` 0.79σ (gates F3/F4) |
-| per-seed reproducibility | torque and rotation signs unanimous, **8/8 seeds**, in every control arm |
-| starting-azimuth robustness | six azimuths over a full repeat: `A_TZ` +0.156…+0.212, all resolved |
+| achiral-lattice null | `τ` 0.14σ, `Ω` 0.79σ (gates F3/F4) — no fixture bias anywhere |
 
-**On the faithful native actin 13/6 lattice the attachment asymmetry disappears**: `A_TZ` = −0.037 (1.5σ),
-−0.085 (3.0σ), −0.095 (3.0σ), +0.065 (2.0σ) across the same four arms — small, inconsistent in sign, and
-**not separating zone-ON from zone-OFF**. The filament still twirls, strongly and chirally (`Ω` = −218.8
-rad/s, reversing under mirroring), but by a *different* channel — a helical lattice with off-axis
-attachment is chiral on its own, as gates F1–F4 establish independently.
+### The two limits that qualify it
 
-**The reason is structural and was predicted in advance (§5.2), not discovered post hoc.** Actin advances
-−166.5° per monomer, so consecutive sites are near-antipodal; a site's zone offset is *constant* under pure
-axial translation and accessible sites arrive in scrambled azimuthal order. There is no coherent passage
-through the zone for a first-passage bias to act on. The mechanism needs monotone azimuthal passage, and
-actin's real lattice does not provide it.
+1. **Actin's real lattice destroys the mechanism.** On the native 13/6 helix `A_TZ` is −0.037, −0.085,
+   −0.095, +0.065 across the same four arms — small, inconsistent in sign, and **not separating zone-ON from
+   zone-OFF**; across six starting azimuths it is never positive. The filament still twirls, strongly and
+   chirally (`Ω` = −219 rad/s, mirror-reversing), but by a different channel. The cause is structural and
+   was **predicted in advance** (§5.2): actin advances −166.5° per monomer, so consecutive sites are
+   near-antipodal, a site's zone offset is constant under axial translation, and accessible sites arrive in
+   scrambled azimuthal order — there is no coherent passage for a first-passage bias to act on.
+2. **The rotation is dominated by azimuthal restriction, not by the flux asymmetry.** The bounded width
+   sweep (§11) shows the largest torque of the whole study at a 70° zone, where `A_TZ` is exactly zero.
+   The accessibility rule has two separable consequences: **(a)** restricting which azimuthal band may bind
+   at all — which needs no coherent passage and drives most of the torque — and **(b)** the Vilfan
+   first-passage before/after bias, which needs monotone passage and a narrow enough zone. The causal chain
+   is internally consistent and fully mirror-reversing at the primary operating point, but it is **not
+   isolated**.
 
-**Two further findings the design forced into the open:**
+### Two methodological findings worth carrying forward
 
-1. **The task's literal zero-chirality null (gates F1/F2) fails, and correctly so.** Switching the target
-   zone off leaves a helical lattice and off-axis attachment in place, which are already chiral (3.5σ). The
-   added achiral control — 180° per site, a mirror-invariant site set — is what actually isolates fixture
-   bias, and it passes at 0.14σ/0.79σ. Any future study of this kind should use the achiral control, not
-   the zone-off arm, as its null.
-2. **Rotation here is chemistry-limited, not transit-limited.** Attachment counts are flat across a 16×
-   speed range, so `Ω` is speed-insensitive and turns/µm falls as 1/v — a qualitative difference from the
-   published picture, reported rather than tuned away. No biological pitch is claimed.
+- **The task's literal zero-chirality null (F1/F2) fails, and correctly so.** Turning the zone off leaves a
+  helical lattice and off-axis attachment in place, which are already chiral (3.5σ). The **achiral control**
+  added here — 180° per site, a mirror-invariant site set — is what actually isolates fixture bias, and it
+  passes at 0.14σ/0.79σ. Future studies should use that as their null, not the zone-off arm.
+- **Rotation here is chemistry-limited, not transit-limited.** Attachment counts are flat across a 16× speed
+  range, so `Ω` is speed-insensitive and turns/µm falls as 1/v — a qualitative difference from the published
+  picture, reported rather than tuned away. **No biological pitch is claimed** and no parameter was tuned
+  toward one.
 
-**Bottom line for the next step:** the mechanism is real and implementable, but its *requirement* is
-monotone helical passage. Before investing in the Brownian restoration ladder, the open question is not
-"does thermal noise destroy it" (it will only make things harder) but "does anything in the real actin
-geometry — axial compliance, a wider zone, multi-site reach — restore coherent passage on a 13/6 lattice".
-The §14 ladder is built and smoke-tested and is ready either way.
+### Bottom line for the next step
+
+The mechanism is real and implementable, and its **requirement** is now identified precisely: *monotone
+helical passage through a zone narrow enough to force first-passage capture.* Actin's real lattice supplies
+neither on its own. The open question is therefore not "will thermal noise destroy it" — noise can only make
+coherence harder, and the prior increment already measured the thermal phase decorrelation that does exactly
+that — but **"does anything physical (axial compliance, multi-site reach, a wider effective footprint)
+restore coherent passage on a 13/6 lattice?"** The §14 restoration ladder is built and smoke-tested (11/11)
+and is ready either way; §14.1 gives the exact recommended first rung.
 
 ## 2. The exact scientific question
 
@@ -686,6 +697,26 @@ idealized-lattice control arms, §8.8) **fails**: zone-OFF and zone-ON native bo
 `⟨τ⟩` flips sign between them (+1.094e-21 → −6.188e-21). The mean offset is not a sufficient description of
 the mechanics on the scrambled lattice, which is consistent with there being no coherent zone passage there.
 
+### 9.2b Six starting azimuths on the native lattice — the decoupling is systematic
+
+The same six-azimuth robustness sweep, run on the native lattice (zone ON, 8 seeds each):
+
+| `az0` | attach | `A_TZ` | `⟨τ⟩` (N·m) | `Ω` (rad/s) | turns/µm |
+|---|---|---|---|---|---|
+| 0° | 1380 | −0.037 ± 0.024 | −6.188e-21 | −218.8 ± 27 | −17.41 |
+| 60° | 1369 | −0.048 ± 0.021 | −6.167e-21 | −222.2 ± 22 | −17.69 |
+| 120° | 1361 | −0.096 ± 0.042 | −5.341e-21 | −200.9 ± 30 | −15.99 |
+| 180° | 1379 | −0.074 ± 0.032 | −7.919e-21 | −269.1 ± 17 | −21.41 |
+| 240° | 1372 | −0.016 ± 0.020 | −6.784e-21 | −241.0 ± 27 | −19.18 |
+| 300° | 1364 | −0.016 ± 0.019 | −7.479e-21 | −260.1 ± 13 | −20.69 |
+
+This is the cleanest possible statement of the decoupling. Across a full actin repeat the **rotation is
+large, one-signed and highly reproducible** (`Ω` between −201 and −269 rad/s, every arm resolved) while the
+**attachment asymmetry is uniformly small and never positive** (`A_TZ` −0.016 to −0.096, i.e. 0.8σ–2.3σ,
+and of the *wrong* sign for the mechanism). A strong, reproducible twirl coexists with no target-zone
+asymmetry at all: on actin's real lattice the rotation simply is not being produced by the target-zone
+route.
+
 ### 9.3 What this means for the scientific question
 
 > **The Vilfan target-zone mechanism — helical site passage through a surface-facing zone producing a
@@ -756,10 +787,75 @@ attachment asymmetry should depend on the zone width and on the sweep rate, and 
 the same asymmetry at every width would be suspicious.
 
 Grid: zone half-width ∈ {20°, 40°, 70°} × prescribed speed ∈ {1, 2, 4} µm/s — three values per parameter,
-one compact two-dimensional grid, exactly the bound the task sets. Converter skew, nucleotide rates, S2
-stiffness, catch/slip parameters, motor density and viscosity were **not** varied.
+one compact two-dimensional grid, exactly the bound the task sets. 4 seeds per cell. Converter skew,
+nucleotide rates, S2 stiffness, catch/slip parameters, motor density and viscosity were **not** varied.
 
-[RESULTS PENDING]
+| zone half-width | `v` (µm/s) | attach | `A_TZ` | `⟨δ⟩` (rad) | `⟨τ⟩` (N·m) | `Ω` (rad/s) |
+|---|---|---|---|---|---|---|
+| 20° | 1.0 | 574 | +0.139 ± 0.040 | −0.0368 | +1.365e-21 (0.8σ) | +24.8 (0.5σ) |
+| 20° | 2.0 | 610 | +0.197 ± 0.054 | −0.0430 | −3.603e-22 (0.3σ) | −30.4 (0.7σ) |
+| 20° | 4.0 | 683 | +0.130 ± 0.052 | −0.0325 | −3.833e-22 (0.2σ) | −36.1 (0.5σ) |
+| **40°** | 1.0 | 675 | **+0.251 ± 0.030** | −0.1469 | +3.747e-21 (2.3σ) | +104.4 (1.9σ) |
+| **40°** | 2.0 | 676 | **+0.200 ± 0.045** | −0.0980 | +4.586e-21 (4.2σ) | +127.0 (3.2σ) |
+| **40°** | 4.0 | 701 | **+0.214 ± 0.020** | −0.1128 | +4.169e-21 (4.3σ) | +109.8 (2.5σ) |
+| 70° | 1.0 | 693 | +0.018 ± 0.041 | −0.0335 | +6.771e-21 (10.9σ) | +207.9 (8.7σ) |
+| 70° | 2.0 | 693 | −0.013 ± 0.058 | −0.0052 | +7.284e-21 (5.6σ) | +225.5 (5.2σ) |
+| 70° | 4.0 | 684 | +0.009 ± 0.015 | −0.0243 | +6.532e-21 (4.7σ) | +213.8 (3.7σ) |
+
+### 11.1 What the grid shows — and the qualification it forces
+
+**The attachment asymmetry behaves exactly as the mechanism requires.** `A_TZ` is resolved and positive at
+20° and 40° at every speed, and **collapses to zero at 70°** (+0.018, −0.013, +0.009). That is the correct
+signature: a zone must be narrow enough to force first-passage capture. If it admits a wide azimuthal band,
+the head can simply take the best-registered site available and no entering-edge bias survives. The primary
+40° value (chosen from literature geometry, §3.3) sits in the middle of the working range, not at an edge.
+
+**But the torque does not track `A_TZ` across widths, and that is a real qualification.** Laying the width
+sweep against the zone-OFF arm at the same speed (`v = 2`, idealized lattice):
+
+| zone half-width | `A_TZ` | `⟨τ⟩` (N·m) |
+|---|---|---|
+| 20° | +0.197 | −3.603e-22 |
+| 40° | +0.200 | +4.586e-21 |
+| 70° | −0.013 | **+7.284e-21** |
+| OFF (=180°) | −0.040 | −1.681e-21 |
+
+The **largest** torque in the sweep occurs at 70°, where the attachment asymmetry is **zero**. The torque is
+therefore not a simple readout of `A_TZ`.
+
+### 11.2 The resulting mechanistic account — two separable consequences of one rule
+
+The accessibility rule has **two distinct consequences**, and only one of them is the Vilfan mechanism:
+
+- **(a) Azimuthal restriction.** Excluding sites outside the zone changes *which* azimuthal band can be
+  attached at all, hence the shape of the `δ` distribution and hence the net moment. **This requires no
+  coherent passage**: it operates on any lattice, at any speed. It is what makes the 70° arm the strongest
+  rotator (removing only the two most-misaligned candidates, at |δ| ≈ 83°, removes a large opposite-signed
+  contribution and flips the net), and it is why the zone-OFF arm — which admits everything — has the
+  opposite torque sign.
+- **(b) First-passage before/after bias.** This is the Vilfan mechanism proper. It **requires** monotone
+  azimuthal passage *and* a zone narrow enough to force capture on the entering edge. It is present on the
+  idealized lattice at 20–40°, and absent at 70° and on the native lattice.
+
+Every result in this report is consistent with that decomposition:
+
+| configuration | (a) restriction | (b) first-passage bias | `A_TZ` | `⟨τ⟩` |
+|---|---|---|---|---|
+| achiral lattice | — (no handedness) | — | — | null (0.14σ) |
+| native 13/6, zone ON | active | **absent** (scrambled order) | ~0 | large |
+| idealized, zone OFF | absent | absent | ~0 | moderate, opposite sign |
+| idealized, zone 70° | active | **absent** (too wide) | ~0 | largest |
+| **idealized, zone 20–40°** | active | **active** | **+0.14…+0.25** | large, mirror-reversing |
+
+**Consequence for the causal claim.** The chain *asymmetry → torque → rotation* is **internally consistent
+and fully mirror-reversing at the primary operating point** (§8.3, §10.1), but it is **not isolated**: the
+grid proves that a large signed torque can be produced by the same rule with no attachment asymmetry at
+all. The honest statement is therefore that **the target zone demonstrably creates the before/after
+attachment asymmetry, and demonstrably drives a mirror-reversing axial rotation, but the rotation is
+dominated by the azimuthal-restriction consequence rather than by the flux asymmetry itself.**
+
+This grid was not used to select any reported value, and the primary 40° width was fixed from geometry
+before it was run.
 
 ## 12. Numerical health and regression
 
