@@ -158,6 +158,62 @@ def paired(per, ref_uM, field):
     return out
 
 
+# two-sided 95 % t quantiles for n-1 degrees of freedom (n = 2..25), then the normal limit
+_T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262,
+        10: 2.228, 11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131, 16: 2.120, 17: 2.110,
+        18: 2.101, 19: 2.093, 20: 2.086, 21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064}
+
+
+def ci95(mean, sem, n):
+    """Two-sided 95 % confidence interval on the seed mean (t, n-1 df)."""
+    if n < 2 or not math.isfinite(sem):
+        return float("nan"), float("nan")
+    t = _T95.get(n - 1, 1.960)
+    return mean - t * sem, mean + t * sem
+
+
+def load_nested(duration_ms, mirror):
+    """(uM, seed, sign) -> list of nested-window rows, for the nested-window stability report."""
+    dur_us = int(round(duration_ms * 1000))
+    out = defaultdict(dict)
+    for path in sorted(glob.glob(os.path.join(REC_DIR, "*.nested.tsv"))):
+        m = ID_RE.search(os.path.basename(path).replace(".nested", ""))
+        if not m or int(m.group("dur")) != dur_us or bool(m.group("mir")) != mirror:
+            continue
+        rows = []
+        with open(path) as fh:
+            fh.readline()
+            for line in fh:
+                p = line.rstrip("\n").split("\t")
+                if len(p) >= 5:
+                    rows.append([float(v) for v in p])
+        out[(float(m.group("uM")), int(m.group("seed")))][m.group("sgn")] = rows
+    return out
+
+
+def nested_stability(nested):
+    """Per-[ATP] nested-window table combined ACROSS SEEDS as eps-EVEN / eps-ODD, seed-paired."""
+    per = defaultdict(lambda: defaultdict(list))     # uM -> windowS -> [(v_even, om_odd, turns)]
+    for (uM, seed), d in nested.items():
+        if "p" not in d or "n" not in d:
+            continue
+        for rp, rn in zip(d["p"], d["n"]):
+            if abs(rp[0] - rn[0]) > 1e-12:
+                continue
+            v_even = 0.5 * (rp[1] + rn[1])
+            om_odd = 0.5 * (rp[2] - rn[2])
+            turns = om_odd / (2 * math.pi * abs(v_even)) if v_even else float("nan")
+            per[uM][rp[0]].append((v_even, om_odd, turns))
+    out = {}
+    for uM in per:
+        rows = []
+        for w in sorted(per[uM]):
+            vs = per[uM][w]
+            rows.append((w,) + tuple(msn([t[i] for t in vs])[:2] for i in range(3)))
+        out[uM] = rows
+    return out
+
+
 def write_csv(path, rows, cols):
     with open(path, "w") as fh:
         fh.write(",".join(cols) + "\n")
@@ -202,8 +258,21 @@ def plots(rows, per, outdir, tag):
         "eps-ODD angular velocity vs [ATP]", hline=0.0)
     fig("3_turns_vs_atp", [("turns", "turns per µm", {})], "turns per µm",
         "Rotation per unit distance vs [ATP]", hline=0.0)
-    fig("5_engagement_vs_atp", [("avgBound", "avgBound", {}), ("occNone", "rigor occupancy x10", {})],
-        "bound heads / occupancy", "Bound population vs [ATP]")
+    # 5: bound population (left axis) with rigor occupancy on its own right axis
+    f, ax = plt.subplots(figsize=(5.2, 3.6))
+    ax.errorbar(x, [r["avgBound"] for r in rows], yerr=[r["avgBound_sem"] for r in rows],
+                marker="o", capsize=3, color="C0", label="bound heads")
+    ax.set_xscale("log"); ax.set_xlabel("[ATP]  (µM)")
+    ax.set_ylabel("mean bound heads", color="C0"); ax.tick_params(axis="y", labelcolor="C0")
+    ax2 = ax.twinx()
+    ax2.errorbar(x, [r["occNone"] for r in rows], yerr=[r["occNone_sem"] for r in rows],
+                 marker="s", capsize=3, color="C3", label="rigor occupancy")
+    ax2.set_ylabel("rigor (NUC_NONE) occupancy of bound heads", color="C3")
+    ax2.tick_params(axis="y", labelcolor="C3"); ax2.set_ylim(0, 1.05)
+    ax.set_title("Bound population and rigor loading vs [ATP]", fontsize=9)
+    ax.grid(alpha=0.25, lw=0.5); f.tight_layout()
+    p = os.path.join(outdir, "%s_5_engagement_vs_atp.png" % tag)
+    f.savefig(p, dpi=180); plt.close(f); made.append(p)
     fig("5b_flux_vs_atp", [("attachRate", "attachments/s", {}), ("strokeRate", "strokes/s", {}),
                            ("detachRate", "detachments/s", {})], "events per second",
         "Event flux vs [ATP]")
@@ -247,6 +316,7 @@ def main():
     os.makedirs(a.outdir, exist_ok=True)
     tag = "lowatp_d%dms%s" % (round(a.duration_ms), "_mirror" if a.mirror else "")
 
+    a_duration, a_mirror = a.duration_ms, a.mirror
     recs, prov = load(a.duration_ms, a.mirror)
     if not recs:
         print("no complete records for duration %g ms (mirror=%s)" % (a.duration_ms, a.mirror))
@@ -294,6 +364,24 @@ def main():
         m1, s1, _ = dv[uM]; m2, s2, _ = dt[uM]
         print("%10.4g %13.4f±%8.4f %8.2f | %13.4f±%8.4f %8.2f" %
               (uM, m1, s1, sigma(m1, s1), m2, s2, sigma(m2, s2)))
+    print("\n---- 95% confidence intervals (t, n-1 df) on the seed mean ----")
+    print("%10s %28s %28s %28s" % ("[ATP] µM", "v_even", "Omega_odd", "turns/µm"))
+    for r in rows:
+        civ = ci95(r["v_even"], r["v_even_sem"], r["n"])
+        cio = ci95(r["om_odd"], r["om_odd_sem"], r["n"])
+        cit = ci95(r["turns"], r["turns_sem"], r["n"])
+        print("%10.4g  [%+11.4f, %+11.4f]  [%+11.2f, %+11.2f]  [%+11.4f, %+11.4f]"
+              % (r["atpUM"], civ[0], civ[1], cio[0], cio[1], cit[0], cit[1]))
+
+    nest = nested_stability(load_nested(a_duration, a_mirror))
+    if nest:
+        print("\n---- nested-window stability (prefixes of the SAME trajectories, seed-paired) ----")
+        print("%10s %9s %22s %22s %22s" % ("[ATP] µM", "win ms", "v_even ± SEM", "Omega_odd ± SEM", "turns/µm ± SEM"))
+        for uM in sorted(nest, reverse=True):
+            for w, v, o, t in nest[uM]:
+                print("%10.4g %9.0f %13.4f±%8.4f %13.2f±%8.2f %13.4f±%8.4f"
+                      % (uM, w * 1e3, v[0], v[1], o[0], o[1], t[0], t[1]))
+
     print("\n---- numerical health ----")
     for r in rows:
         print("  [ATP]=%8.4g µM : invalid=%d  solverFail=%d  rateCapWarn=%d  episodes=%d"
