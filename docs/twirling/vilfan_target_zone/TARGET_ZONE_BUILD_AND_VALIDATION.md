@@ -437,9 +437,46 @@ be checked against the data.
 
 ## 10. Controls: mirror and target-zone-off
 
+### 10.1 Mirror reversal — the primary symmetry control
+
+Idealized lattice, zone ON, 8 matched chemical seeds per arm, 20 000 steps, identical scene, identical
+motor positions, identical seeds, identical prescribed velocity. **The only difference is the sign of the
+lattice's azimuthal advance.**
+
+| observable | native lattice | MIRRORED lattice | expectation (§8.2) | verdict |
+|---|---|---|---|---|
+| attachments | 1321 | 1300 | comparable | ✓ |
+| `A_TZ` | **+0.171 ± 0.025** (6.8σ) | **+0.176 ± 0.018** (9.8σ) | **invariant** | ✓ |
+| `⟨δ⟩` (rad) | **−0.0925 ± 0.0132** (7.0σ) | **+0.0983 ± 0.0070** (14.0σ) | **reverses** | ✓ |
+| `⟨τ⟩` (N·m) | **+4.702e-21 ± 8.0e-22** (5.9σ) | **−6.403e-21 ± 4.8e-22** (13.3σ) | **reverses** | ✓ |
+| `Ω` (rad/s) | **+134.5 ± 29** (4.6σ) | **−222.8 ± 13** (17.1σ) | **reverses** | ✓ |
+| turns/µm | **+10.70 ± 2.28** (4.7σ) | **−17.73 ± 1.05** (16.9σ) | **reverses** | ✓ |
+
+Every signed quantity reverses, each at high significance, while the drift-referenced asymmetry `A_TZ`
+stays put at ~+0.17 on both lattices — precisely the pattern §8.2 committed to in advance. The invariance
+of `A_TZ` is not a weakness of the control: it is the statement that *the same first-passage mechanism runs
+on both lattices*, and that the handedness enters only through which side of the zone centre that mechanism
+happens to catch.
+
+Magnitudes are not symmetric (10.70 vs 17.73 turns/µm). Magnitude antisymmetry is therefore **not**
+established, exactly as in the project's earlier chirality mirror control; the discriminating fact is the
+sign reversal of all four signed observables together, at 4.6–17σ.
+
+### 10.2 Target-zone OFF — is the zone necessary?
+
 [RESULTS PENDING]
 
-## 11. Bounded sensitivity check
+## 11. Bounded sensitivity check — run, but NOT as a rescue
+
+Stage 6 of the task authorises a bounded sensitivity grid **only if the primary setup is null**. The primary
+setup is **not** null (§8.3), so this grid is not a rescue and nothing in it was used to establish the
+result. It was run anyway, at reduced cost (4 seeds), for one reason: the mechanism predicts that the
+attachment asymmetry should depend on the zone width and on the sweep rate, and a mechanism that produced
+the same asymmetry at every width would be suspicious.
+
+Grid: zone half-width ∈ {20°, 40°, 70°} × prescribed speed ∈ {1, 2, 4} µm/s — three values per parameter,
+one compact two-dimensional grid, exactly the bound the task sets. Converter skew, nucleotide rates, S2
+stiffness, catch/slip parameters, motor density and viscosity were **not** varied.
 
 [RESULTS PENDING]
 
