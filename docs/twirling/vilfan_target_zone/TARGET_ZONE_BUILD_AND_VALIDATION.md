@@ -473,9 +473,52 @@ Attachment counts are matched across all four arms (1300–1330), so nothing bel
 The contribution attributable to the target zone is large, resolved, and **itself reverses under
 mirroring** — which is the strongest single statement in this report.
 
-### 8.4 Starting-azimuth robustness
+### 8.4 Starting-azimuth robustness — the result is not one lucky phase
 
-[RESULTS PENDING]
+Six stored starting filament azimuths spanning one full actin repeat, zone ON, native lattice, 8 seeds each
+(48 independent runs). Every arm is re-built from scratch with the material `yVec` pre-rotated by `az0`.
+
+| `az0` | attach | `A_TZ` | `⟨δ⟩` (rad) | `⟨τ⟩` (N·m) | `Ω` (rad/s) | turns/µm |
+|---|---|---|---|---|---|---|
+| 0° | 1321 | +0.171 ± 0.025 (6.8σ) | −0.0925 ± 0.0132 | +4.702e-21 (5.9σ) | +134.5 ± 29 | +10.70 ± 2.28 |
+| 60° | 1314 | +0.199 ± 0.034 (5.8σ) | −0.1171 ± 0.0121 | +4.901e-21 (5.8σ) | +139.1 ± 29 | +11.07 ± 2.33 |
+| 120° | 1339 | +0.166 ± 0.022 (7.7σ) | −0.0966 ± 0.0071 | +4.322e-21 (3.7σ) | +123.1 ± 45 | +9.79 ± 3.61 |
+| 180° | 1336 | +0.212 ± 0.028 (7.4σ) | −0.1103 ± 0.0130 | +4.054e-21 (3.5σ) | +109.4 ± 42 | +8.70 ± 3.37 |
+| 240° | 1344 | +0.201 ± 0.029 (7.0σ) | −0.1185 ± 0.0138 | +5.168e-21 (4.6σ) | +155.0 ± 38 | +12.33 ± 3.04 |
+| 300° | 1296 | +0.156 ± 0.044 (3.6σ) | −0.0926 ± 0.0228 | +4.337e-21 (5.6σ) | +133.7 ± 30 | +10.64 ± 2.36 |
+
+**Every one of the six azimuths gives the same answer**: `A_TZ` between +0.156 and +0.212 (all resolved,
+3.6–7.7σ), `⟨δ⟩` between −0.093 and −0.119, `⟨τ⟩` between +4.05e-21 and +5.17e-21, `Ω` between +109 and
++155 rad/s. The spread across a whole actin repeat is smaller than the seed SEM within an arm. **Success
+criterion 9 is satisfied outright — the result does not depend on one accidental starting azimuth**, and no
+starting phase was excluded (all six are reported).
+
+### 8.5 Per-seed sign consistency
+
+`sign_agree` counts (+1 per seed with a positive value, −1 per negative; ±8 means unanimous over 8 seeds):
+
+| arm | `⟨τ⟩` | `Ω` |
+|---|---|---|
+| zone ON, native | **+8/8** | **+8/8** |
+| zone ON, MIRRORED | **−8/8** | **−8/8** |
+| zone OFF, native | −8/8 | −8/8 |
+| zone OFF, MIRRORED | +8/8 | +8/8 |
+
+**The torque and rotation signs are unanimous across all eight chemical seeds in every control arm**, and
+they flip as a block under mirroring. This is a stronger statement than the SEM-based σ values: the effect
+is not a mean pulled by outliers, it is present in every single run.
+
+### 8.6 Where the covariation is, and where it is not
+
+Success criterion 8 asks that the attachment asymmetry and the twirling strength covary. They do so
+**across conditions** — zone ON versus OFF (§10.2), native versus mirrored (§10.1), and across the speed
+ladder (§8.7) — with large, resolved changes moving together.
+
+They do **not** covary cleanly *within* an arm across seeds: the per-arm Pearson `r(A_TZ, τ)` over the eight
+seeds ranges from −0.71 to +0.82 with no consistent sign. That is expected and is reported rather than
+hidden — within a single arm every seed shares the same mean, so the seed-to-seed scatter is dominated by
+chemical noise on both quantities rather than by a causal link between them. The causal claim rests on the
+between-condition covariation and on the mirror reversal, not on the within-arm correlation.
 
 ## 9. Native versus idealized lattice
 
