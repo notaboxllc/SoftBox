@@ -182,6 +182,41 @@ def fig_delta_torque(events):
     save(fig, "fig08_delta_to_torque.png")
 
 
+def fig_delta_impulse(events):
+    """The DRIVING relation: angular impulse accumulated over the whole attachment vs the offset at capture.
+
+    The instantaneous torque at the binding step (fig08) is measured before the bond has developed its
+    restoring strain, so its sign is not the sign that drives rotation. The angular impulse integrated over
+    the attachment IS the quantity that turns the filament, so this is the regression the causal claim rests
+    on. A restoring bond gives impulse ~ -delta.
+    """
+    for tag, sub in (("native", "mir+1"), ("mirror", "mir-1")):
+        keys = [k for k in events if "zoneon" in k and sub in k]
+        if not keys:
+            continue
+        d = np.degrees([float(r["delta_rad"]) for k in keys for r in events[k]])
+        j = np.array([float(r["impulse_Nms"]) for k in keys for r in events[k]])
+        ok = np.isfinite(d) & np.isfinite(j)
+        if ok.sum() < 10:
+            continue
+        d, j = d[ok], j[ok]
+        fig, ax = plt.subplots(figsize=(5.2, 3.4))
+        ax.scatter(d, j, s=8, color=C_ON if tag == "native" else C_MIR, alpha=0.5)
+        k = np.polyfit(d, j, 1)
+        xs = np.linspace(d.min(), d.max(), 30)
+        r = np.corrcoef(d, j)[0, 1]
+        ax.plot(xs, np.polyval(k, xs), color=C_NEU, lw=1.5,
+                label=f"slope {k[0]:+.3e} N·m·s/deg\nr = {r:+.3f},  n = {d.size}")
+        ax.axhline(0, color=C_NEU, lw=0.8); ax.axvline(0, color=C_NEU, lw=0.8)
+        ax.set_xlabel("signed zone offset δ at capture (deg)")
+        ax.set_ylabel("angular impulse over the attachment (N·m·s)")
+        ax.set_title(f"the driving relation: offset → angular impulse ({tag} lattice)", loc="left")
+        ax.legend(frameon=False, fontsize=8)
+        save(fig, f"fig10_delta_to_impulse_{tag}.png")
+        print(f"    [{tag}] impulse-vs-delta slope {k[0]:+.4e} N·m·s/deg, r = {r:+.4f}, "
+              f"mean delta {d.mean():+.4f} deg, mean impulse {j.mean():+.4e} N·m·s")
+
+
 def fig_zone_centre(events):
     """diagnostic: is the zone centre the substrate-facing direction, over real attachments?"""
     keys = [k for k in events if "zoneon" in k]
@@ -362,7 +397,7 @@ def main():
     tidy(sens, "tidy_sensitivity.csv")
     if ev:
         fig_zone_coordinate(ev); fig_offset_hist(ev); fig_native_mirror_hist(ev)
-        fig_delta_torque(ev); fig_zone_centre(ev)
+        fig_delta_torque(ev); fig_delta_impulse(ev); fig_zone_centre(ev)
     if camp:
         fig_summary_bars(camp); fig_covariation(camp); fig_azimuth(camp)
     if lad:

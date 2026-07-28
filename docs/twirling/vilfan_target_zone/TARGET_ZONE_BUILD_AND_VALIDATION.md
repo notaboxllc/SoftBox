@@ -492,7 +492,47 @@ bit-identical to the global switch), **the default-off claim is verified rather 
 
 ## 13. Limitations
 
-[RESULTS PENDING]
+**Design / physics**
+
+1. **The primary lattice is an idealization of the site ORDERING.** Actin 13/6 advances −166.5° per monomer,
+   so consecutive monomers are near-antipodal and the azimuths of one repeat are visited in scrambled order.
+   The mode-6 fixture keeps actin's real quantization (360/13), rise (2.7 nm) and repeat (35.1 nm) but visits
+   those azimuths monotonically. This is what makes "passage through a target zone" well posed; it is
+   **not** actin's true lattice. The faithful native 13/6 lattice is run alongside it in §9.
+2. **The target zone is a hard admissibility rule, not a graded hazard.** This was the conservative choice
+   (it adds no rate and no tunable parameter that could manufacture a bias), but it means the smooth
+   attachment-rate profile of the published mechanism is not represented; the prior increment's
+   `exp(−½αΔψ²)` hazard is the graded alternative and is held OFF here.
+3. **No axial site search beyond the existing ±3-site window**, and site selection among accessible sites is
+   still nearest-in-3D. Axial-compliance-assisted selection of a better-registered site is not represented.
+4. **The lawn is a narrow strip** (2.00 × 0.010 µm). With mechanical Brownian motion off there is no thermal
+   search, so only motors whose relaxed deterministic pose already reaches the filament can ever engage; a
+   full-width lawn spends ~95 % of the CPU on motors that can never bind. The strip changes no physics, no
+   density and no rate, but it does mean the *transverse* disorder of a real coverslip is not sampled.
+5. **One filament, one length, one motor model, one viscosity, one dt.** No dt-convergence study was run for
+   the new gate. The prior increment's dt study (its §15) showed the *thermalized* phase-coherence ratio
+   worsens at finer dt; that finding is about the Brownian assay and does not transfer to this deterministic
+   fixture, which has no thermal phase noise at all.
+6. **The rigid single-rod filament** removes bending and tumbling entirely. That is deliberate (it is one of
+   the task's favourable assumptions) but it also removes any coupling between roll and bending modes.
+7. **Head rotational DOF and the bound orientational registry are OFF.** The only torque channel is the
+   off-axis F8 bond at `Ractin`. A registry spring would add a second, independent channel.
+
+**Scope / validation**
+
+8. **CPU only; no device equivalence for the new gate.** The modified kernels compile for both runners and
+   both `siteSnap` call sites were updated together, but no GPU execution was performed, so CPU/GPU
+   equivalence of the accessibility gate is **untested**. It must be established before any device-resident
+   production use — the project's policy triggers a CPU/GPU check for exactly this case (a changed hot
+   kernel).
+9. **The literal zero-chirality null (F1/F2) fails**, because switching the target zone off leaves a helical
+   lattice and off-axis attachment in place. The achiral control (F3/F4) is what isolates fixture bias, and
+   it passes. Readers should take F3/F4, not F1/F2, as the statement that the fixture is unbiased.
+10. **`A_TZ` is drift-referenced and therefore mirror-invariant by construction** (§8.2). The handedness is
+    carried by `⟨δ⟩`, `⟨τ⟩` and `Ω`. This differs from a naive reading of the success criteria and is
+    reported explicitly rather than silently.
+11. **No claim is made about the biological twirling pitch.** The zone width came from the literature target
+    zone geometry, not from pitch agreement, and was never tuned toward an experimental value.
 
 ## 14. Stage 7 — behaviour-restoration infrastructure (prepared, NOT executed as a study)
 
