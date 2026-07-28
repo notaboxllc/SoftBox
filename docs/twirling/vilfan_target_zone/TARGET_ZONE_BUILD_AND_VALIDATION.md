@@ -508,6 +508,72 @@ starting phase was excluded (all six are reported).
 they flip as a block under mirroring. This is a stronger statement than the SEM-based σ values: the effect
 is not a mean pulled by outliers, it is present in every single run.
 
+### 8.7 The prescribed-speed ladder
+
+Five speeds spanning 16× (0.5 → 8 µm/s), zone ON, native lattice, 8 seeds each, plus one reversed-direction
+control. Speeds were chosen to span the stable range of the fixture, not fitted.
+
+| `v` (µm/s) | attach | `A_TZ` | `Ω` (rad/s) | turns/µm | equivalent pitch (µm) |
+|---|---|---|---|---|---|
+| +0.5 | 1243 | +0.169 (3.9σ) | +115.5 (3.5σ) | +36.77 | 0.027 |
+| +1.0 | 1316 | +0.256 (8.6σ) | +120.6 (4.0σ) | +19.19 | 0.052 |
+| +2.0 | 1321 | +0.171 (6.8σ) | +134.5 (4.7σ) | +10.70 | 0.093 |
+| +4.0 | 1372 | +0.209 (12.1σ) | +109.0 (3.6σ) | +4.34 | 0.231 |
+| +8.0 | 1297 | +0.145 (5.7σ) | +61.3 (2.7σ) | +1.22 | 0.820 |
+| **−2.0 (reversed)** | 1336 | +0.153 (5.0σ) | +111.7 (9.4σ) | +8.89 | 0.113 |
+
+**`A_TZ` is resolved and positive at every speed** (3.9–12.1σ) and roughly flat at ~+0.15…+0.26 over a 16×
+range. `Ω` is also roughly flat (~110–135 rad/s) up to 4 µm/s, falling to +61 at 8 µm/s. Consequently
+**turns/µm falls essentially as 1/v** and the equivalent pitch grows roughly linearly with speed.
+
+**Why, and what it means.** The attachment counts are flat across the whole ladder (1243–1372). The
+attachment *rate* is therefore set by the chemistry, **not** by how fast sites sweep through the zone. Each
+attachment delivers a roughly fixed angular impulse, so `Ω ≈ (attachment rate) × (impulse per attachment)`
+is speed-insensitive and the rotation *per unit distance* must fall as 1/v.
+
+This is a **qualitative difference from the published target-zone picture**, where the zone-transit rate
+scales with sliding speed and the pitch is correspondingly closer to speed-independent. In this fixture the
+mechanism is **chemistry-limited rather than transit-limited**, and that is a property of the SoftBox motor's
+own kinetics, not of the accessibility rule. It is reported as a difference, not smoothed over; no attempt
+was made to tune toward a Vilfan-like pitch-versus-speed curve, and **no biological pitch is claimed** — the
+equivalent pitches here (0.03–0.82 µm) are fixture numbers.
+
+### 8.8 The reversed-direction control — a partial reversal, and what it teaches
+
+Reversing the prescribed translation (`v = +2 → −2 µm/s`, native lattice, zone ON) gives:
+
+| observable | `v = +2` | `v = −2` | reversed? |
+|---|---|---|---|
+| `A_TZ` | +0.171 | +0.153 | invariant (expected — drift-referenced) |
+| `⟨δ⟩` (rad) | −0.0925 | **+0.0762** | **YES** |
+| `⟨τ⟩` (N·m) | +4.702e-21 | +3.602e-21 | **NO** |
+| `Ω` (rad/s) | +134.5 | +111.7 | **NO** |
+
+**The kinetic half of the chain reverses; the mechanical half does not.** This is not a contradiction, and
+it is worth stating plainly because a careless reading would treat it as one.
+
+Reversing the imposed translation is **not a parity operation**. It flips the direction in which sites sweep
+through the zone — so the entering edge swaps and `⟨δ⟩` duly flips, exactly as the gate was designed to do —
+but it *also* reverses the mechanical loading of every bound head, because the motor stroke polarity is
+fixed by the actin polarity and does not flip with the imposed velocity. The bond force direction, and hence
+the moment it exerts about the axis, is therefore governed by a different variable than `⟨δ⟩` alone in this
+comparison.
+
+**Mirroring the lattice is the clean parity operation**, and under it the entire chain reverses together
+(§10.1). The relation `τ ∝ −⟨δ⟩` holds in all four mirror/zone control arms at fixed loading:
+
+| arm (v = +2) | `⟨δ⟩` | `⟨τ⟩` | `τ ∝ −⟨δ⟩`? |
+|---|---|---|---|
+| native, zone OFF | +0.0632 | −1.681e-21 | ✓ |
+| native, zone ON | −0.0925 | +4.702e-21 | ✓ |
+| mirrored, zone OFF | −0.0771 | +2.357e-21 | ✓ |
+| mirrored, zone ON | +0.0983 | −6.403e-21 | ✓ |
+
+The restoring relation therefore holds whenever the loading regime is held fixed, and the reversed-velocity
+arm is the case where it is not. **The useful positive statement from that arm is that the mechanism
+operates in both translation directions**: `A_TZ` is +0.153 (5.0σ) and `Ω` is +111.7 (9.4σ) with the
+translation reversed, so nothing about the effect depends on the sign of the imposed motion.
+
 ### 8.6 Where the covariation is, and where it is not
 
 Success criterion 8 asks that the attachment asymmetry and the twirling strength covary. They do so
