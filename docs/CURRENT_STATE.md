@@ -585,6 +585,43 @@ prototype toward a stiffer, mechanically recognizable motor.
 
 ---
 
+## 9c. Low-[ATP] condition transfer (exploratory pilot, 2026-07-28)
+
+**Working interpretation, not a settled result** — 16 arms at n = 2 seeds; the powered campaign was
+deliberately not run. Report: `docs/twirling/LOW_ATP_GLIDING_TWIRLING_FINDINGS.md`.
+
+The experimental myosin-II twirling assay uses ~5-20 uM ATP to slow translation. Changing ONLY the assay ATP
+concentration, through the model's own nucleotide law and with no motor parameter retuned:
+
+- **Gliding transfers.** v_even falls 25.7x monotonically from 2 mM to 5 uM (-4.19 -> -0.163 um/s), seed
+  spread 1.15-1.32x, placing 5 and 10 uM inside the reported 0.1-0.5 um/s band untuned. Bound population
+  4.5 -> 34.7, rigor occupancy 0.08 -> 0.94, residence 1.1 -> 21.1 ms, detachment 100% ATP-triggered,
+  pre-stroke lifetime invariant at ~100 us.
+- **Rotation does not.** Omega_odd stays between -40 and -71 rad/s over a 400x ATP range, and measured rotation
+  closes against independently accumulated torque at **1.033 +/- 0.031 (8/8 sign agreement)** -- so this is a
+  flat TORQUE, not an observable defect. Turns-per-um rises from -2.53 to -58.8 purely because v_even collapses.
+- **The pitch match sits at the wrong ATP.** The model reproduces the experimental pitch (0.47 +/- 0.20 um) at
+  SATURATING ATP (-0.396 um), but gives -0.017 um at 5 uM, the condition the experiment actually used.
+- **Not established at n = 2.** Across-ATP variation in Omega_odd and tau_odd is smaller than the
+  within-condition seed scatter; 9/16 arms fail window stability; the eps-even rotational background reaches
+  1.08x the odd signal; every CI includes zero.
+
+**ATP interface (reusable).** `nucParams[1]` (`atpOn`, NONE->ATP) is the sole [ATP]-dependent transition, a
+pseudo-first-order hazard frozen at 2.0e4/s for saturating ATP. `-atp-uM` scales it linearly, anchored on the
+project's own declared saturating condition (2 mM). Data-only, default-absent, exact no-op when absent, and
+CPU/GPU decision-identical (Stage 1: 19/19 gates). Note this lineage runs with **rigor rupture OFF**, so ATP
+binding is the sole detachment pathway.
+
+**Caveat for anyone reading older records:** `qOmega`/`omegaPred` divided whole-filament torque by ONE
+segment's roll drag until 2026-07-28; records written before the fix carry `qOmega` low by nSeg = 12. No claim
+ever used the field.
+
+**Next:** extend selected low-ATP conditions to n = 4 (~11 h) to resolve Omega_odd itself; n ~ 16 (~76 h) is
+required for the plateau question and is publication-only. Add per-head signed-torque and axial puller/dragger
+reduction fields first -- torque cancellation and axial-rotational decoupling were not diagnosable without them.
+
+---
+
 ## 10. Load-bearing reports
 
 Read these before revisiting the associated topic:
@@ -598,6 +635,8 @@ Read these before revisiting the associated topic:
 - `docs/VMAX_SENSITIVITY_25C.md`
 - `docs/MOTOR_PARAMETER_PROVENANCE_25C.md`
 - `docs/GLIDING_TARGET_25C.md`
+- `docs/twirling/LOW_ATP_GLIDING_TWIRLING_FINDINGS.md` (low-[ATP] condition transfer; §9c)
+- `docs/VISCOSITY_SENSITIVITY_FINDINGS.md` (viscosity campaign + mirror control)
 - `J2_CONFORMATION_ARCHITECTURE.md`
 - `J2_NATIVE_ANGLE_AUDIT.md`
 - `J2_SINGLE_MOTOR_TRANSMISSION.md`

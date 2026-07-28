@@ -409,6 +409,37 @@ Panels:
 
 ---
 
+## 13b. Low-ATP condition transfer (exploratory pilot, 2026-07-28)
+
+The experimental twirling assay ran at approximately 5-20 uM ATP to slow translation for tracking. A bounded
+pilot asked whether the frozen motor reproduces that assay manipulation when only ATP concentration is changed.
+Full report: `docs/twirling/LOW_ATP_GLIDING_TWIRLING_FINDINGS.md`.
+
+ATP enters through the model's own nucleotide law: `nucParams[1]` (`atpOn`, NONE->ATP) is the sole
+concentration-dependent transition, a pseudo-first-order hazard frozen at 2.0e4/s for saturating ATP, scaled
+linearly and anchored on the project's own declared saturating condition (2 mM). No rate constant was invented
+or fitted, and no motor parameter was retuned. 16 arms, 4 ATP x 2 eps x 2 seeds, 200 ms, eta = 0.01 Pa.s.
+
+What the section may use:
+
+- **Gliding transfers cleanly.** v_even falls 25.7x monotonically from 2 mM to 5 uM (-4.19 -> -0.163 um/s) with
+  tight seed agreement, placing 5 and 10 uM inside the reported 0.1-0.5 um/s band with nothing tuned. Bound
+  population rises 4.5 -> 34.7 and rigor occupancy 0.08 -> 0.94; detachment stays 100% ATP-triggered; the
+  pre-stroke lifetime is invariant at ~100 us.
+- **Rotation does not follow.** Omega_odd stays between -40 and -71 rad/s across a 400x ATP range, and measured
+  rotation closes against independently accumulated torque at 1.033 +/- 0.031 (8/8 sign agreement) -- so the flat
+  rotation is a flat TORQUE, not an observable artifact. Turns-per-um therefore rises from -2.53 to -58.8 purely
+  because v_even collapses.
+- **The pitch comparison is negative, and should be stated as such.** The model reproduces the experimental
+  pitch (0.47 +/- 0.20 um) at SATURATING ATP (-0.396 um) but not at the concentration the experiment used: at
+  5 uM the model gives -0.017 um. The reported insensitivity of pitch to filament velocity is not reproduced.
+- **Powering caveat that must travel with any of the above rotation numbers.** At n=2 the across-ATP variation
+  in Omega_odd and tau_odd is SMALLER than the seed-to-seed scatter within one concentration, 9 of 16 arms fail
+  window stability, the eps-even rotational background reaches 1.08x the odd signal, and every confidence
+  interval includes zero. The direction and order of the pitch shift are supported; the magnitude is not.
+
+Not run and therefore not claimable: eps = 0 null at low ATP, low-ATP mirror control, any n >= 4 statistics.
+
 ## 14. Open computational work
 
 1. Reconstruct the original Vilfan assumptions and target-zone parameters from the paper and supplements.
@@ -417,10 +448,17 @@ Panels:
 4. Implement and validate target-zone phase telemetry.
 5. Quantify drift, diffusion, and \(\mathrm{Pe}_{\mathrm{TZ}}\).
 6. Complete the channel-by-channel Brownian ladder.
-7. Extend low-viscosity twirling statistics and required mirror control.
+7. ~~Extend low-viscosity twirling statistics and required mirror control.~~ **DONE** - the viscosity campaign
+   and its mirror control are complete (`docs/VISCOSITY_SENSITIVITY_FINDINGS.md`).
 8. Run the 0°, 5°, 10°, 15° angle map at selected viscosity.
 9. Develop a preregistered experimental-style twirling classifier.
 10. Validate the axial step for the final illustrative skew using the blinded tweezers assay.
+11. **Low-ATP follow-up (new, from §13b).** Extend selected low-ATP conditions to n = 4 (~11 h) so Omega_odd
+    itself is resolved at every ATP; do NOT use n = 8 for the plateau question (it still falls short at
+    spread/SEM 2.61), and reserve n ~ 16 (~76 h) for publication work only if ATP-independence of chiral torque
+    becomes a claim. Before extending, add the eight per-head reduction fields (signed torque split by sign and
+    by nucleotide state; axial puller/dragger classification) -- the pilot could not diagnose torque cancellation
+    or axial-rotational decoupling at all without them.
 
 ---
 

@@ -1,5 +1,77 @@
 # Soft Box Project Journal
 
+### 2026-07-28 — LOW-[ATP] CONDITION TRANSFER: gliding transfers, rotation does not; the pitch match sits at the WRONG ATP
+
+**What was done.** Bounded condition-transfer study asking whether the frozen motor reproduces the experimental
+twirling assay's 5-20 µM ATP manipulation when ONLY [ATP] changes. Stage 0 audit + Stage 1 validation (19/19
+gates) + Stage 2 duration pilot (16 arms). **Stopped at the pilot checkpoint by direction — the n=8 production
+ladder and the controls were NOT launched**, and the pilot was converted into an analysis-only mechanism study.
+Report `docs/twirling/LOW_ATP_GLIDING_TWIRLING_FINDINGS.md`; records `RUN_LOGS/chiral_sites/lowatp/`; analyses
+`RUN_LOGS/lowatp/`.
+
+**The interface.** `nucParams[1]` (`atpOn`, NONE→ATP) is the SOLE [ATP]-dependent transition — traced through
+the state/probability flow, not inferred from names (`nucParams[2]/[3]` are named "ATP" but are hydrolysis of
+already-bound ATP and are intrinsic). It is a pseudo-first-order hazard frozen at 2.0e4/s for saturating ATP,
+and a linear scaling interface was already declared in-repo (Sm4 `-atpscale`, class D). The absolute axis is
+anchored on the repository's OWN declared saturating condition (2 mM, Rossi et al. 2012, `GLIDING_TARGET_25C.md`),
+so **no biochemical rate constant was invented or fitted**; every record carries the effective hazard in 1/s so
+the study can be relabelled under a different anchor by a pure rescale. `applyAtp` is data-only in the
+`applyEta` precedent: no kernel edit, no buffer resize, no TaskGraph change, no change to RNG draw count or
+event ordering. Absent ⇒ exact no-op; explicit reference ⇒ identity; [ATP]=0 ⇒ the established ATP-free path.
+
+**Also established in the audit:** this lineage never sets `RUPTURE_MODE`, so rigor mechanical rupture is OFF
+here (the canonical default-ON is applied only in `ExplicitCompleteMatHarness.main`). ATP binding is therefore
+the sole detachment pathway, exactly as the completed viscosity campaign had it. A fixture-only diagnostic
+quantified what the competing channel WOULD do: at 5 µM a rupture-ON motor would detach mechanically 73 % of
+the time — the crossover sits inside the experimental window.
+
+**What was learned.**
+- **Gliding transfers cleanly, and it is the solid result.** v_even falls **25.7×** monotonically from 2 mM to
+  5 µM (−4.19 → −0.163 µm/s), seed spread only 1.15–1.32×, placing 5 and 10 µM **inside the reported
+  0.1–0.5 µm/s band with nothing tuned**. Engagement is equally clean: bound population 4.5 → 34.7, rigor
+  occupancy 0.08 → 0.94, residence 1.1 → 21.1 ms, 100 % ATP-triggered detachment, pre-stroke lifetime invariant
+  at ~100 µs (reproducing the viscosity campaign's chemistry-limited pre-stroke dwell).
+- **Rotation does NOT follow — and that is a torque statement, not an artifact.** Ω_odd stays between −40 and
+  −71 rad/s across a 400× ATP range, and **measured rotation closes against independently accumulated torque at
+  1.033 ± 0.031 with 8/8 sign agreement**. So the flat rotation IS a flat τ_odd. Turns-per-µm rises from −2.53
+  to −58.8 purely because v_even collapses.
+- **The pitch comparison is NEGATIVE and must be quoted that way.** The model reproduces the experimental pitch
+  (0.47 ± 0.20 µm) at **saturating** ATP (−0.396 µm) but **not at the concentration the experiment used**: at
+  5 µM it gives −0.017 µm. The reported insensitivity of pitch to filament velocity is not reproduced.
+  ⇒ interpretation class **B** (gliding transfers, pitch shifts), with the magnitude unresolved.
+- **The plateau is NOT established at n=2.** Across-ATP variation in Ω_odd and τ_odd is SMALLER than the
+  within-condition seed scatter (ratio 1.12 and 0.92); 9/16 arms fail window stability; the ε-EVEN rotational
+  background reaches 1.08× the odd signal at the reference; every n=2 CI includes zero.
+- **Three defects found by the analysis, all diagnostic/reporting, all fixed.** (1) `omegaPred` divided the
+  WHOLE-filament torque by ONE segment's roll drag ⇒ `qOmega` low by nSeg=12; closure reads 0.086 before the fix
+  and **1.033** after. No claim ever used it (rotation results use `omegaFit`). (2) The Stage-2 G4 gate omitted
+  the preregistered "unless the CI includes zero" clause and so reported failure at the HIGH-ATP end purely
+  because Ω_odd is unresolved there; with the clause implemented, re-running over the same 16 records (0 newly
+  run) independently returns **200 ms** as the shortest common duration. (3) `reportAtpMirror` printed a false
+  "does NOT reverse" verdict when native partners were missing.
+- **A real analysis artifact, not fixable by code:** episode right-censoring rises **0.28 % → 16.6 %** as ATP
+  falls and removes precisely the longest, highest-impulse episodes. The per-episode impulse route therefore
+  closes to 2 % at the reference and **inverts sign** at 5 µM. The flux/impulse compensation picture (flux ÷2.46,
+  residence ×3.5 entirely in the post-stroke limb, ≈99 % of odd impulse in that limb, product flat to ~2 % at
+  20→10 µM) is coherent but **cannot be promoted to proven**. τ and Ω are per-step accumulations over all bound
+  heads and are never censored — which is why they close while the impulse route does not.
+- **Torque cancellation and axial puller/dragger decoupling are NOT diagnosable from this pilot** — only NET
+  torque is stored and per-head axial force is absent. The eight per-head reduction fields needed are recorded
+  in the report; the loop already computes their inputs.
+
+**Machine event.** The first 200 ms pilot attempt died at CUDA 719 → SIGSEGV in `libcuda.so`, then a host crash
+and reboot. Evidence archived per CLAUDE.md (`gpu-crash-case-20260728-001308.tar.gz`; **no Xid** in the
+previous-boot log). The atomic-record design lost nothing; a new crash-resilient driver
+(`scripts/run_lowatp_campaign.sh`) resumed and completed the remaining 15 arms in one attempt.
+
+**Recommendation (recorded, not executed).** Extend selected low-ATP conditions to **n = 4** (~11 h) — the point
+where Ω_odd itself becomes resolved at every ATP. Do NOT use n = 8 for the plateau question (spread/SEM 2.61 < 3);
+n ≈ 16 (~76 h) is required and should be reserved for publication work. Add the per-head reduction fields first.
+All 16 pilot arms are reusable as-is (one binary; the five differing `rev=` stamps are HEAD-at-write-time from
+doc/script commits made while runs were in flight, with no `softbox/*.java` change).
+
+**Open / not run.** ε=0 null at low ATP; low-ATP mirror control; n≥4 statistics; a rupture-ON low-ATP ladder.
+
 ### 2026-07-27 — MIRROR CONTROL: the ε-ODD twirl REVERSES on a mirrored lattice ⇒ CHIRAL IN ORIGIN; the last open gate on the viscosity study is closed
 
 **What was done.** The single gating experiment left open by the n=24 twirling confirmation. New
