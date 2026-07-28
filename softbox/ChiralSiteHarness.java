@@ -74,6 +74,45 @@ public final class ChiralSiteHarness {
     // would not. Recorded under a distinct id ("m_") so native and mirror can never collide.
     static double  ETA_MIRROR = 1.0;
     static boolean ETA_FIXED_DT = false;      // -eta-fixed-dt: keep dt at DT (the Stage-5 fixed-dt diagnostic arm)
+
+    // ---------------------------------------------------------------------------------------------------------
+    // LOW-[ATP] ASSAY CONDITION (noncanonical, DEFAULT-ABSENT; docs/twirling/LOW_ATP_GLIDING_TWIRLING_FINDINGS.md).
+    //
+    // `-atp-uM <c>` reproduces the EXPERIMENTAL assay manipulation (5-20 µM ATP, used to slow filament translation
+    // for optical tracking) through the model's OWN nucleotide-cycle law. It is DATA-ONLY, in the applyEta /
+    // applyS2Lawn precedent: no kernel edit, no buffer resize, no TaskGraph change, no new RNG draw.
+    //
+    // WHAT IS SCALED — EXACTLY ONE NUMBER: nucParams[1] = atpOn, the NONE→ATP hazard. Stage-0 audit result:
+    //   * atpOn is the ONLY [ATP]-dependent transition in cycleLymnTaylor. Every other slot is a first-order
+    //     intrinsic rate (ATP→ADP·Pi hydrolysis 100/s, ADP·Pi→ADP powerstroke 1e4/s, ADP→NONE release 1e3/s·g(F)).
+    //   * It is a PSEUDO-FIRST-ORDER rate: atpOn = k_ATP·[ATP], frozen at 2.0e4/s for SATURATING ATP
+    //     (v1 Env.java:836 atpOnMyo; Lymn & Taylor 1971 / Howard 2001 T14-2; canonical inventory class B).
+    //     `docs/MOTOR_PARAM_PROVENANCE.md:208` states the mechanism verbatim: "saturating [ATP]; reduce for low-[ATP]".
+    //   * The declared scaling interface already exists (Sm4ForceLifetimeHarness `-atpscale`, canonical inventory
+    //     class D, CONDITIONALLY FROZEN): nucParams[1] ← 2e4·([ATP]/[ATP]_ref). This flag REUSES that mapping and
+    //     only supplies the absolute concentration axis.
+    //
+    // THE REFERENCE CONCENTRATION (the one interpretive choice; recorded, not fitted). ATP_REF_UM = 2000 µM is the
+    // repository's OWN declared saturating-ATP assay condition — the 2 mM of Rossi et al. 2012, the measurement
+    // `docs/GLIDING_TARGET_25C.md` adopts as the canonical gliding comparison. No new biochemical rate constant is
+    // introduced: the frozen atpOn and the frozen linear mechanism are used unchanged, and the anchor only labels
+    // the axis. Implied k_ATP = 2e4/2 mM = 1.0e7 M⁻¹s⁻¹ (≈5-10× the classic actomyosin K₁k₊₂ ≈ 1-2e6 M⁻¹s⁻¹ —
+    // a stated limitation of the frozen rate, NOT something tuned here; the effective hazard atpOn is reported
+    // alongside every µM label so the result can be re-read under any other anchor by a linear rescale).
+    //
+    // ATP_UM < 0 ⇒ the feature is ABSENT ⇒ exact early return ⇒ byte-identical to every existing path.
+    // ATP_UM == ATP_REF_UM ⇒ scale exactly 1.0 ⇒ identity. ATP_UM == 0 ⇒ atpOn = 0 ⇒ the established ATP-free path.
+    // ---------------------------------------------------------------------------------------------------------
+    static final double ATP_REF_UM = 2000.0;  // the declared saturating-ATP reference the frozen atpOn represents
+    static double  ATP_UM = -1.0;             // -atp-uM <c>;  < 0 ⇒ feature absent (exact no-op)
+    static double  ATP_ON_EFF = Double.NaN;   // the realized nucParams[1] of the last build (for records/logging)
+    static double[] ATP_MAP = { 2000.0, 20.0, 10.0, 5.0 };   // -atp-map ladder (reference FIRST)
+    static double  ATP_MIRROR = 1.0;          // -atp-mirror ⇒ −1: the same arms on a MIRRORED actin lattice
+    static double  ATP_EPS_DEG = 15.0;        // the frozen ±ε converter skew of this study
+    static boolean NESTED_ON = false;         // retain the dense prefix trace ⇒ nested-window readout (pilot)
+    /** Nested PHYSICAL windows (s) the pilot reads out of ONE trajectory prefix. */
+    static double[] NESTED_MS = { 20, 50, 100, 200, 500 };
+    static double  ATP_DUR_MS = -1.0;         // -atp-duration-ms <ms> (production/pilot physical duration)
     static double  EQUIL_FRAC = 0.25;                           // -equil-frac: startup transient discarded
     static int     NBLK      = 5;                               // measurement blocks for the block-SEM
     static int     NTRACE    = 60;                              // stationarity trace samples in the measure window
@@ -102,6 +141,8 @@ public final class ChiralSiteHarness {
         boolean fixtures = false, equiv = false, campaign = false, lattice = false, mechanism = false, all = false; String jsDir = null;
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean etaAudit = false, etaControls = false, etaMap = false, etaReport = false, etaMirrorRep = false;
+        boolean atpFix = false, atpPilot = false, atpMap = false, atpReport = false, atpMirrorRep = false, atpNull = false;
+        boolean atpEquiv = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
                 convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false, s2DtCmp = false, studyB = false, studyBRep = false;
@@ -198,6 +239,24 @@ public final class ChiralSiteHarness {
                 case "-eta-mirror-report" -> etaMirrorRep = true;
                 case "-eta-points" -> { String[] p = args[++i].split(","); ETA_MAP = new double[p.length];
                                         for (int k = 0; k < p.length; k++) ETA_MAP[k] = Double.parseDouble(p[k]); }
+                // ---- LOW-[ATP] STUDY ----
+                case "-atp-uM", "-atp-um" -> ATP_UM = Double.parseDouble(args[++i]);
+                case "-atp-fixtures" -> atpFix = true;
+                case "-atp-equiv" -> atpEquiv = true;
+                case "-atp-equiv-steps" -> ATP_EQUIV_STEPS = Integer.parseInt(args[++i]);
+                case "-atp-chem-steps" -> ATP_CHEM_STEPS = Integer.parseInt(args[++i]);
+                case "-atp-pilot" -> atpPilot = true;
+                case "-atp-map" -> atpMap = true;
+                case "-atp-report" -> atpReport = true;
+                case "-atp-mirror" -> { ATP_MIRROR = -1.0; atpMap = true; }
+                case "-atp-mirror-report" -> { ATP_MIRROR = -1.0; atpMirrorRep = true; }
+                case "-atp-null" -> atpNull = true;
+                case "-atp-duration-ms" -> ATP_DUR_MS = Double.parseDouble(args[++i]);
+                case "-atp-points" -> { String[] p = args[++i].split(","); ATP_MAP = new double[p.length];
+                                        for (int k = 0; k < p.length; k++) ATP_MAP[k] = Double.parseDouble(p[k].trim()); }
+                case "-atp-nested-ms" -> { String[] p = args[++i].split(","); NESTED_MS = new double[p.length];
+                                        for (int k = 0; k < p.length; k++) NESTED_MS[k] = Double.parseDouble(p[k].trim()); }
+                case "-atp-eps-deg" -> ATP_EPS_DEG = Double.parseDouble(args[++i]);
                 default -> { }
             }
         }
@@ -220,7 +279,14 @@ public final class ChiralSiteHarness {
         if (jsDir != null) {
             if (twirlMode) makeTwirlMovies(jsDir); else makeMovies(jsDir);
             TornadoCrashDiagnostic.normalMainReturn("mode=3js"); return; }
-        if (etaAudit)        ok = runEtaAudit();
+        if (atpFix)          ok = runAtpFixtures();
+        else if (atpEquiv)   ok = runAtpEquiv();
+        else if (atpPilot)   runAtpPilot(ATP_DUR_MS > 0 ? ATP_DUR_MS : 200.0);
+        else if (atpMap)     runAtpMap(ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0);
+        else if (atpReport)  { atpSetDuration((ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0)*1e-3); reportAtpMap((ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0)*1e-3); }
+        else if (atpMirrorRep) { double d = (ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0)*1e-3; atpSetDuration(d); reportAtpMirror(d); }
+        else if (atpNull)    runAtpNull(ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0, ATP_UM >= 0 ? ATP_UM : 10.0);
+        else if (etaAudit)   ok = runEtaAudit();
         else if (etaControls) ok = runEtaControls();
         else if (etaMap)     runEtaMap();
         else if (etaReport)  reportEtaMap();
@@ -333,6 +399,7 @@ public final class ChiralSiteHarness {
             ExplicitCompleteMatHarness.applyGeomScales(G);
             ExplicitCompleteMatHarness.applyS2Lawn(G);   // §S2-FIXTURE quenched per-motor free S2 length (default-off)
             applyEta(G);                                 // §VISCOSITY coherent whole-system solvent viscosity (default-off)
+            applyAtp(G);                                 // §LOW-ATP assay concentration (default-ABSENT ⇒ exact no-op)
             return G;
         } finally { TwoBodyConverterMotor.G4_NSEG_RUN = saved; }
     }
@@ -350,6 +417,26 @@ public final class ChiralSiteHarness {
     static void etaScale(FloatArray a, double r) {
         for (int i = 0; i < a.getSize(); i++) a.set(i, (float) (a.get(i) * r));
     }
+
+    /**
+     * LOW-[ATP] ASSAY CONDITION — see the ATP field block. Scales the ONE pseudo-first-order ATP-dependent
+     * hazard (nucParams[1] = atpOn, NONE→ATP) by [ATP]/[ATP]_ref, reading the just-built value as the reference
+     * so no base rate is duplicated in code (the Sm4 `2.0e4·atpScale` hardcode is deliberately NOT copied).
+     * Every other kinetic slot, every stiffness, every drag and every Brownian amplitude is untouched.
+     * ATP_UM &lt; 0 ⇒ exact early return (feature absent). scale == 1 ⇒ identity.
+     */
+    static void applyAtp(Glide2D G) {
+        ATP_ON_EFF = G.mot.nucParams.get(1);                   // as built = the frozen saturating-ATP rate
+        if (ATP_UM < 0) return;                                // feature ABSENT ⇒ byte-identical to every existing path
+        double s = ATP_UM / ATP_REF_UM;
+        if (s == 1.0) return;                                  // explicit reference condition ⇒ exact identity
+        float eff = (float) (G.mot.nucParams.get(1) * s);
+        G.mot.nucParams.set(1, eff);
+        ATP_ON_EFF = eff;
+    }
+    /** The effective NONE→ATP hazard (1/s) a given [ATP] produces, without building a scene. */
+    static double atpOnFor(double uM) { return uM < 0 ? 2.0e4 : 2.0e4 * (uM / ATP_REF_UM); }
+    static String atpLabel() { return ATP_UM < 0 ? "absent (frozen saturating)" : String.format(Locale.US, "%.4g µM", ATP_UM); }
 
     // ============================================================ STAGE 0/1 — viscosity + FDT + timestep audit
     /**
@@ -1570,6 +1657,52 @@ public final class ChiralSiteHarness {
         // §Study-B class-stratified totals, [0]=short [1]=long
         double[] clsDep, clsBound, clsFprop, clsFabs, clsTau, clsBinds, clsStrokes;
         double strokeRatePerS;                 // strokes per SECOND over the whole population
+        // ---- §LOW-ATP telemetry (analysis-only; counted from values the loop already reads) -------------------
+        // Detachment CAUSE is read off the nucleotide state on the step the head leaves: the Lymn-Taylor terminus
+        // is NUC_ATP (ATP binding released it); a rigor mechanical rupture would leave it in NUC_NONE. Any other
+        // terminal state is counted as "other" and must be zero on this path.
+        long detachAtp, detachRigor, detachOther;
+        long ruptureEvents, rateCapWarns;      // pulled from mot.ruptureStats when rigor rupture is compiled in
+        double[] occBound = new double[4];     // BOUND-head occupancy fractions, indexed by MotorStore.NUC_*
+        double[] occAll   = new double[4];     // whole-population occupancy fractions
+        // Nested-window prefix readout (populated only when NESTED_ON): one entry per NESTED_MS window that fits.
+        double[] nesV, nesOmega, nesBound, nesEpRate, nesDurS;
+
+        /**
+         * Reduce the dense prefix trace to one (v, Omega, avgBound, stroke rate) estimate per NESTED_MS window
+         * that FITS inside this trajectory. Each window is a genuine PREFIX [0, W] of the SAME trajectory, read
+         * with the SAME 25 % equilibration convention the production estimator uses, so the nested-window
+         * comparison isolates duration and nothing else. Sample columns:
+         * {t, meanRoll, glide, cumBinds, cumStrokes, cumDetach, cumBoundSteps}.
+         */
+        void nested(java.util.List<double[]> tr, double totalS) {
+            java.util.List<Double> ws = new java.util.ArrayList<>();
+            for (double ms : NESTED_MS) if (ms * 1e-3 <= totalS * 1.0000001) ws.add(ms * 1e-3);
+            if (ws.isEmpty()) ws.add(totalS);
+            else if (ws.get(ws.size()-1) < totalS * 0.999) ws.add(totalS);
+            int n = ws.size();
+            nesV = new double[n]; nesOmega = new double[n]; nesBound = new double[n];
+            nesEpRate = new double[n]; nesDurS = new double[n];
+            for (int k = 0; k < n; k++) {
+                double W = ws.get(k), t0 = EQUIL_FRAC * W;
+                java.util.List<double[]> sub = new java.util.ArrayList<>();
+                double[] first = null, last = null;
+                for (double[] s : tr) {
+                    if (s[0] < t0 || s[0] > W) continue;
+                    if (first == null) first = s;
+                    last = s; sub.add(s);
+                }
+                nesDurS[k] = W;
+                if (sub.size() < 3 || first == null || last == first) {
+                    nesV[k] = nesOmega[k] = nesBound[k] = nesEpRate[k] = Double.NaN; continue; }
+                nesOmega[k] = slope(sub, 1);
+                nesV[k]     = slope(sub, 2);
+                double dT = last[0] - first[0];
+                double dSteps = dT / Math.max(DTR, 1e-30);
+                nesBound[k]  = dSteps > 0 ? (last[6] - first[6]) / dSteps : Double.NaN;
+                nesEpRate[k] = dT > 0 ? (last[4] - first[4]) / dT : Double.NaN;
+            }
+        }
     }
     static final int EV_BINS = 7;
     static final String[] EV_LABEL = { "0", "1", "2", "3", "4-7", "8-15", "16+" };
@@ -1706,6 +1839,14 @@ public final class ChiralSiteHarness {
             double blkTauAcc = 0, blkRoll0 = 0, blkGlide0 = 0, blkBoundAcc = 0; long blkSteps = 0;
             java.util.List<double[]> blocks = new java.util.ArrayList<>();
             java.util.List<double[]> trace = new java.util.ArrayList<>();
+            // §LOW-ATP: occupancy + detachment-cause counters (analysis-only, measurement window)
+            long[] occB = new long[4], occA = new long[4];
+            // §LOW-ATP nested-window prefix trace: sampled from step 0 so any leading sub-window is a genuine
+            // trajectory PREFIX of the full run (never a restart). {t_phys, meanRoll, glide, cumBinds, cumStrokes,
+            // cumDetach, cumBoundSteps}. Off by default ⇒ nothing is allocated and no sample is taken.
+            java.util.List<double[]> nested = NESTED_ON ? new java.util.ArrayList<>() : null;
+            int nestEvery = Math.max(1, steps / 4000);
+            long cumBinds = 0, cumStrokes = 0, cumDetach = 0, cumBoundSteps = 0;
             for (int t = 0; t < steps; t++) {
                 if (GPU) {
                     e.matc.set(0, t); e.matc.set(1, seed); G.mot.setCounts(t, seed, nSeg); f.counts.set(1, t); f.counts.set(2, seed);
@@ -1725,18 +1866,41 @@ public final class ChiralSiteHarness {
                     legacyAtEquil = 0; for (double v : cumLegacy) legacyAtEquil += v; legacyAtEquil /= nSeg;
                 }
                 if (t < equil) {   // startup transient: advance the trajectory, measure nothing
-                    for (int m = 0; m < N; m++) { int bs = G.mot.boundSeg.get(m);
+                    for (int m = 0; m < N; m++) { int bs = G.mot.boundSeg.get(m), nu = G.mot.nucleotideState.get(m);
+                        if (nested != null) {                       // prefix bookkeeping only (no measurement)
+                            if (bs >= 0 && prevBs[m] < 0) cumBinds++;
+                            if (bs < 0 && prevBs[m] >= 0) cumDetach++;
+                            if (bs >= 0 && prevBs[m] == bs && prevNu[m] == MotorStore.NUC_ADPPI && nu == MotorStore.NUC_ADP) cumStrokes++;
+                            if (bs >= 0) cumBoundSteps++;
+                        }
                         age[m] = bs < 0 ? -1 : (prevBs[m] == bs ? age[m] + 1 : 0);
-                        prevBs[m] = bs; prevNu[m] = G.mot.nucleotideState.get(m); }
+                        prevBs[m] = bs; prevNu[m] = nu; }
+                    if (nested != null && t % nestEvery == 0)
+                        nested.add(new double[]{ (t+1)*DTR, meanRoll, gl, cumBinds, cumStrokes, cumDetach, cumBoundSteps });
                     continue;
                 }
                 double sn = 0, sa = 0; int nb = 0;
                 for (int m = 0; m < N; m++) {
                     int bs = G.mot.boundSeg.get(m), nu = G.mot.nucleotideState.get(m);
                     if (bs >= 0 && prevBs[m] < 0) { binds++; if (lawn != null) clsBinds[lawn[m] <= clsSplit ? 0 : 1]++; }
-                    if (bs < 0 && prevBs[m] >= 0) detach++;
+                    if (bs < 0 && prevBs[m] >= 0) {
+                        detach++;
+                        // §LOW-ATP detachment CAUSE, read off the terminal nucleotide state (see TRes):
+                        //   NUC_ATP  = ATP binding released the head (the sole Lymn-Taylor pathway)
+                        //   NUC_NONE = a rigor MECHANICAL rupture detached it (only reachable when rupture is on)
+                        if (nu == MotorStore.NUC_ATP) r.detachAtp++;
+                        else if (nu == MotorStore.NUC_NONE) r.detachRigor++;
+                        else r.detachOther++;
+                    }
+                    if (nu >= 0 && nu < 4) { occA[nu]++; if (bs >= 0) occB[nu]++; }
+                    if (nested != null) {
+                        if (bs >= 0 && prevBs[m] < 0) cumBinds++;
+                        if (bs < 0 && prevBs[m] >= 0) cumDetach++;
+                        if (bs >= 0) cumBoundSteps++;
+                    }
                     boolean stroked = bs >= 0 && prevBs[m] == bs && prevNu[m] == MotorStore.NUC_ADPPI && nu == MotorStore.NUC_ADP;
-                    if (stroked) { strokes++; if (lawn != null) clsStrokes[lawn[m] <= clsSplit ? 0 : 1]++; }
+                    if (stroked) { strokes++; if (nested != null) cumStrokes++;
+                                   if (lawn != null) clsStrokes[lawn[m] <= clsSplit ? 0 : 1]++; }
                     // ---- PHASE A episode boundaries: close a finished episode, open a fresh one ----------------
                     if (L != null) {
                         if (L.open(m) && (bs < 0 || bs != prevBs[m])) L.close(m, t, false);
@@ -1781,6 +1945,8 @@ public final class ChiralSiteHarness {
                     blocks.add(new double[]{ blkTauAcc/blkSteps, (meanRoll-blkRoll0)/dtSpan, (gl-blkGlide0)/dtSpan, blkBoundAcc/blkSteps });
                     blkTauAcc = 0; blkBoundAcc = 0; blkSteps = 0; blkRoll0 = meanRoll; blkGlide0 = gl;
                 }
+                if (nested != null && t % nestEvery == 0)
+                    nested.add(new double[]{ (t+1)*DTR, meanRoll, gl, cumBinds, cumStrokes, cumDetach, cumBoundSteps });
                 if ((t - equil) % traceEvery == 0) {
                     boolean fin = true;
                     for (int i = 0; i < 3*nSeg; i++) if (!Float.isFinite(f.coord.get(i))) fin = false;
@@ -1835,6 +2001,16 @@ public final class ChiralSiteHarness {
             r.tauBlkSem = ms(r.blkTau)[1]; r.omegaBlkSem = ms(r.blkOmega)[1];
             r.rollR2 = r2(trace, 1);
             r.omegaFit = slope(trace, 1);   // LS slope of transported roll vs time — the DIRECT twirl endpoint
+            // §LOW-ATP: occupancy fractions + the rigor-rupture cause channel + the nested-window prefix readout.
+            long tb = 0, ta = 0; for (int k = 0; k < 4; k++) { tb += occB[k]; ta += occA[k]; }
+            for (int k = 0; k < 4; k++) { r.occBound[k] = tb > 0 ? (double) occB[k]/tb : 0;
+                                          r.occAll[k]   = ta > 0 ? (double) occA[k]/ta : 0; }
+            if (ExplicitCompleteMatHarness.RIGOR_ON) {          // structurally OFF in this lineage; recorded either way
+                long ev = 0, wr = 0;
+                for (int m = 0; m < N; m++) { ev += G.mot.ruptureStats.get(2*m); wr += G.mot.ruptureStats.get(2*m + 1); }
+                r.ruptureEvents = ev; r.rateCapWarns = wr;
+            }
+            if (nested != null) r.nested(nested, steps * DTR);
             for (int i = 0; i < 3*nSeg; i++) if (!Float.isFinite(f.coord.get(i))) r.invalid++;
             if (GPU) {
                 TornadoCrashDiagnostic.executeLoopEnd("twirlArm=" + a.tag + " seed=" + seed);
@@ -3920,6 +4096,931 @@ public final class ChiralSiteHarness {
                     : reversed ? "REVERSES but the sum is NOT null — partially chiral / magnitude differs"
                     : "NOT CHIRAL — does not reverse under mirroring"));
         }
+    }
+
+    // =========================================================================================================
+    // ==============================  LOW-[ATP] GLIDING AND TWIRLING STUDY  ====================================
+    // =========================================================================================================
+    // ONE gliding assay run across [ATP], from which BOTH phenotypes are read (gliding = ε-EVEN, twirling =
+    // ε-ODD) — the viscosity-campaign pattern, reused verbatim. Everything about the motor is FROZEN; the only
+    // thing that changes across arms is the assay-level ATP concentration, exactly as in the experiment.
+    // Records live in their OWN directory with their OWN schema, so no completed viscosity record is touched.
+    static final String ATP_DIR = "RUN_LOGS/chiral_sites/lowatp";
+    /** The low-ATP record schema: the viscosity schema VERBATIM (so every existing reduction works unchanged)
+     *  plus the condition provenance, the detachment-cause accounting and the physical-time lifetimes. */
+    // Built LAZILY: POW_KEYS is declared further down the file, so a static initializer here would read null.
+    private static String[] ATP_KEYS_CACHE;
+    static String[] atpKeys() {
+        if (ATP_KEYS_CACHE != null) return ATP_KEYS_CACHE;
+        String[] extra = {
+            "atpUM", "atpOnEff", "eta", "dt", "durationS", "equilFrac", "seedNo", "epsSign", "mirror",
+            "detachAtp", "detachRigor", "detachOther", "ruptureEvents", "rateCapWarns",
+            "occNoneB", "occAtpB", "occAdpPiB", "occAdpB",
+            "occNoneA", "occAtpA", "occAdpPiA", "occAdpB2",
+            "bindsPerS", "detachPerS", "preLifeS", "postLifeS", "residenceS", "avgBoundFrac",
+        };
+        String[] base = ChiralSiteHarness.POW_KEYS;
+        String[] all = new String[base.length + extra.length];
+        System.arraycopy(base, 0, all, 0, base.length);
+        System.arraycopy(extra, 0, all, base.length, extra.length);
+        ATP_KEYS_CACHE = all;
+        return all;
+    }
+    static int ATPK(String k) { String[] a = atpKeys();
+        for (int i = 0; i < a.length; i++) if (a[i].equals(k)) return i; return -1; }
+
+    static double[] atpValues(TRes r, double uM, int sgn, int seed, double durS) {
+        double[] base = powValues(r);
+        double[] v = new double[atpKeys().length];
+        System.arraycopy(base, 0, v, 0, base.length);
+        int i = base.length;
+        double meas = Math.max(1, Math.round((1 - EQUIL_FRAC) * STEPS)) * DTR;
+        v[i++] = uM; v[i++] = ATP_ON_EFF; v[i++] = ETA; v[i++] = DTR; v[i++] = durS; v[i++] = EQUIL_FRAC;
+        v[i++] = seed; v[i++] = sgn; v[i++] = ATP_MIRROR;
+        v[i++] = r.detachAtp; v[i++] = r.detachRigor; v[i++] = r.detachOther;
+        v[i++] = r.ruptureEvents; v[i++] = r.rateCapWarns;
+        for (int k = 0; k < 4; k++) v[i++] = r.occBound[k];
+        for (int k = 0; k < 4; k++) v[i++] = r.occAll[k];
+        v[i++] = r.bindsPerStep / DTR;
+        v[i++] = r.detachPerStep / DTR;
+        v[i++] = base[POWK("preLife")]  * DTR;      // episode lifetimes are STEP counts ⇒ convert to seconds
+        v[i++] = base[POWK("postLife")] * DTR;
+        v[i++] = r.meanResidenceSteps * DTR;
+        v[i++] = r.avgBound;
+        return v;
+    }
+    static void atpWrite(String id, double[] v, String provenance) throws java.io.IOException {
+        java.io.File dir = new java.io.File(ATP_DIR); dir.mkdirs();
+        java.io.File tmp = new java.io.File(dir, id + ".tmp"), fin = new java.io.File(dir, id + ".tsv");
+        try (java.io.PrintWriter w = new java.io.PrintWriter(tmp)) {
+            w.println("# " + provenance);
+            String[] keys = atpKeys();
+            for (int i = 0; i < keys.length; i++) w.printf(Locale.US, "%s\t%.10e%n", keys[i], v[i]);
+            w.println("COMPLETE\t1"); w.flush();
+        }
+        if (!tmp.renameTo(fin)) throw new java.io.IOException("could not finalise " + fin);
+    }
+    static double[] atpRead(String id) {
+        java.io.File f = new java.io.File(ATP_DIR, id + ".tsv");
+        if (!f.exists()) return null;
+        String[] keys = atpKeys();
+        double[] v = new double[keys.length]; java.util.Arrays.fill(v, Double.NaN); boolean complete = false;
+        try (java.util.Scanner sc = new java.util.Scanner(f)) {
+            while (sc.hasNextLine()) {
+                String[] p = sc.nextLine().split("\t");
+                if (p.length != 2) continue;
+                if (p[0].equals("COMPLETE")) { complete = true; continue; }
+                for (int i = 0; i < keys.length; i++) if (keys[i].equals(p[0])) v[i] = Double.parseDouble(p[1]);
+            }
+        } catch (Exception e) { return null; }
+        return complete ? v : null;
+    }
+    /** Record id. The PHYSICAL duration (µs) and the ε magnitude are tagged in, so runs of different duration or
+     *  skew can never silently reuse one another's records (the eta-map "s%d" precedent). */
+    static String atpId(double uM, int sgn, int seed, double durS, double mirror) {
+        return String.format(Locale.US, "atp_u%07.2f_d%08d_%s%s%d", uM, Math.round(durS * 1e6),
+                mirror < 0 ? "m_" : "", sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed);
+    }
+    static String atpProvenance(double uM, double durS) {
+        return powProvenance() + String.format(Locale.US,
+                " eta=%.4g dt=%.4e atpUM=%.4g atpOn=%.6g durationS=%.6g eps=%.1f mirror=%.0f rupture_mode=%d gpu=%s",
+                ETA, DTR, uM, atpOnFor(uM), durS, ATP_EPS_DEG, ATP_MIRROR,
+                ExplicitCompleteMatHarness.RIGOR_ON ? 1 : 0, GPU);
+    }
+
+    /** Run (or reuse) ONE low-ATP arm. STEPS/DTR must already be set for the requested physical duration. */
+    static boolean atpArm(double uM, int sgn, int seed, double durS, int[] tally) {
+        String id = atpId(uM, sgn, seed, durS, ATP_MIRROR);
+        if (atpRead(id) != null) { tally[0]++; return false; }
+        double savedAtp = ATP_UM; ATP_UM = uM;
+        try {
+            TArm T = new TArm(id, 0.0, false, ATP_MIRROR, true, TwoBodyConverterMotor.G4_NSEG)
+                    .conv(sgn * ATP_EPS_DEG);
+            long t0 = System.currentTimeMillis();
+            TRes r = runTwirlArm(T, seed, STEPS);
+            try { atpWrite(id, atpValues(r, uM, sgn, seed, durS), atpProvenance(uM, durS)); }
+            catch (java.io.IOException ex) { throw new RuntimeException("record write failed: " + id, ex); }
+            tally[1]++;
+            long dAll = r.detachAtp + r.detachRigor + r.detachOther;
+            System.out.printf(Locale.US,
+                    "    [%3d] %-34s glide=%+7.3f µm/s  Omega=%+9.2f rad/s  avgB=%6.2f  rigorOcc=%.3f  "
+                    + "detATP=%.3f  inv=%d (%.1f s)%n",
+                    tally[0] + tally[1], id, r.glide, r.omegaFit, r.avgBound, r.occBound[MotorStore.NUC_NONE],
+                    dAll > 0 ? (double) r.detachAtp/dAll : Double.NaN, r.invalid,
+                    (System.currentTimeMillis()-t0)/1000.0);
+            if (r.nesV != null) {
+                StringBuilder sb = new StringBuilder("          nested:");
+                for (int k = 0; k < r.nesV.length; k++)
+                    sb.append(String.format(Locale.US, "  %.0fms v=%+.3f Om=%+.1f",
+                            r.nesDurS[k]*1e3, r.nesV[k], r.nesOmega[k]));
+                System.out.println(sb);
+                atpNestedDump(id, r);
+            }
+            return true;
+        } finally { ATP_UM = savedAtp; }
+    }
+    /** Persist the nested-window prefix readout beside the record (pilot analysis input). */
+    static void atpNestedDump(String id, TRes r) {
+        try {
+            java.io.File dir = new java.io.File(ATP_DIR); dir.mkdirs();
+            try (java.io.PrintWriter w = new java.io.PrintWriter(new java.io.File(dir, id + ".nested.tsv"))) {
+                w.println("windowS\tv\tomega\tavgBound\tstrokeRate");
+                for (int k = 0; k < r.nesV.length; k++)
+                    w.printf(Locale.US, "%.9g\t%.9g\t%.9g\t%.9g\t%.9g%n",
+                            r.nesDurS[k], r.nesV[k], r.nesOmega[k], r.nesBound[k], r.nesEpRate[k]);
+            }
+        } catch (Exception ignored) { }
+    }
+
+    /** Set STEPS/DTR for a requested PHYSICAL duration at the frozen viscosity-scaled timestep. */
+    static void atpSetDuration(double durS) {
+        DTR = DT * ETA / Constants.aeta;                 // the mechanically scaled dt of the viscosity campaign
+        STEPS = (int) Math.round(durS / DTR);
+    }
+
+    static void atpBanner(String what, double durS, int nSeeds) {
+        System.out.printf(Locale.US, "%n--- LOW-[ATP] %s: ONE GLIDING ASSAY ACROSS [ATP] (canonical scene:%n"
+                + "    %d-segment filament, filament Brownian ON, homogeneous S2 = 40 nm, density %.0f heads/µm²,%n"
+                + "    eta = %.4g Pa·s, dt = %.4e s, %.1f ms physical duration, %d matched seeds, eps = ±%.0f°,%n"
+                + "    lattice = %s; runner: %s) ---%n",
+                what, TwoBodyConverterMotor.G4_NSEG, DENSITY, ETA, DTR, durS*1e3, nSeeds, ATP_EPS_DEG,
+                ATP_MIRROR < 0 ? "MIRRORED" : "native", GPU ? "GPU device-resident" : "CPU sequential");
+        System.out.printf(Locale.US, "  ATP ladder (µM): %s   ⇒ effective atpOn (NONE→ATP, 1/s): ",
+                java.util.Arrays.toString(ATP_MAP));
+        for (double u : ATP_MAP) System.out.printf(Locale.US, "%.4g ", atpOnFor(u));
+        System.out.printf(Locale.US, "%n  mapping: atpOn = %.4g/s × ([ATP]/%.0f µM)  (pseudo-first-order; "
+                + "reference = the frozen saturating-ATP rate)%n", 2.0e4, ATP_REF_UM);
+        System.out.println("  rigor mechanical rupture: " + (ExplicitCompleteMatHarness.RIGOR_ON ? "ON" : "OFF")
+                + "  ⇒ detachment pathway(s): " + (ExplicitCompleteMatHarness.RIGOR_ON
+                    ? "ATP binding + mechanical rigor rupture (competing hazards)" : "ATP binding ONLY"));
+        System.out.println("  BOTH phenotypes come from these same runs: gliding = eps-EVEN, twirling = eps-ODD.");
+        System.out.println("  provenance: " + atpProvenance(ATP_MAP[0], durS));
+    }
+
+    // ------------------------------------------------------------------ STAGE 2: automatic duration pilot
+    /**
+     * Nested-window duration pilot. ONE trajectory per (ATP, ε sign, seed) at the LONGEST pilot duration, with
+     * every shorter window read out of that SAME trajectory as a genuine PREFIX — so the nested comparison costs
+     * nothing beyond the longest run and can never be confounded by a different realization. The preregistered
+     * gates then choose the shortest common production duration.
+     */
+    static void runAtpPilot(double maxMs) {
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; BUDGET = true; NESTED_ON = true;
+        boolean savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        double durS = maxMs * 1e-3;
+        atpSetDuration(durS);
+        atpBanner("DURATION PILOT", durS, SEEDS);
+        System.out.printf("  nested windows (ms): %s   (each is a PREFIX of the same trajectory)%n",
+                java.util.Arrays.toString(NESTED_MS));
+        int[] tally = new int[2];
+        for (double uM : ATP_MAP)
+            for (int sgn = +1; sgn >= -1; sgn -= 2)
+                for (int i = 0; i < SEEDS; i++) atpArm(uM, sgn, SEED + i, durS, tally);
+        System.out.printf("%n  records: %d reused, %d newly run, %d expected%n",
+                tally[0], tally[1], 2*ATP_MAP.length*SEEDS);
+        NESTED_ON = false; CONV_RAMP_ARM = null; BUDGET = false;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem; cfgOff(); EPS_CONV_ARM = 0;
+        reportAtpPilot(durS);
+    }
+
+    /** The preregistered duration gates, evaluated on the nested prefixes. */
+    static void reportAtpPilot(double durS) {
+        System.out.println("\n  ================= STAGE 2 — DURATION PILOT (nested prefixes of ONE trajectory) =================");
+        System.out.println("  Gates: (1) >=100 completed stroke episodes per matched ±eps seed pair; (2) >=0.02 µm directed");
+        System.out.println("  displacement per arm OR a demonstrably stable estimator; (3) v_even final-half vs full window");
+        System.out.println("  within 20%; (4) Omega_odd and turns-per-µm within 25% between the last two nested windows");
+        System.out.println("  (unless their CIs include zero); (5) no startup transient dominating the slope; (6) stationary");
+        System.out.println("  cause fractions and bound population.");
+        for (double uM : ATP_MAP) {
+            System.out.printf(Locale.US, "%n  ---- [ATP] = %.4g µM   (atpOn = %.4g /s) ----%n", uM, atpOnFor(uM));
+            System.out.printf("    %8s %12s %12s %14s %12s %12s %12s%n",
+                    "win ms", "v_even", "Omega_odd", "turns/µm", "|disp| µm", "strokes/pair", "avgBound");
+            double[][] byWin = atpNestedRead(uM, durS);
+            if (byWin == null) { System.out.println("    (no nested records)"); continue; }
+            for (double[] row : byWin)
+                System.out.printf(Locale.US, "    %8.0f %+12.4f %+12.2f %+14.4f %12.4f %12.0f %12.2f%n",
+                        row[0]*1e3, row[1], row[2], row[3], row[4], row[5], row[6]);
+        }
+        System.out.println("\n    Read the shortest window at which (a) strokes/pair >= 100, (b) |disp| >= 0.02 µm,");
+        System.out.println("    (c) v_even and turns/µm are within 20 %/25 % of the next longer window.");
+    }
+    /** Per-ATP nested table: {windowS, v_even, Omega_odd, turns/µm, |disp|, strokes per ± pair, avgBound}. */
+    static double[][] atpNestedRead(double uM, double durS) {
+        java.util.List<double[]> out = new java.util.ArrayList<>();
+        java.util.List<double[]>[] plus = readNested(uM, +1, durS), minus = readNested(uM, -1, durS);
+        if (plus == null || minus == null) return null;
+        int nw = Integer.MAX_VALUE;
+        for (var l : plus)  if (l != null) nw = Math.min(nw, l.size());
+        for (var l : minus) if (l != null) nw = Math.min(nw, l.size());
+        if (nw == Integer.MAX_VALUE || nw == 0) return null;
+        for (int k = 0; k < nw; k++) {
+            double w = 0, ve = 0, oo = 0, tp = 0, dis = 0, st = 0, ab = 0; int n = 0;
+            for (int i = 0; i < SEEDS; i++) {
+                if (plus[i] == null || minus[i] == null || plus[i].size() <= k || minus[i].size() <= k) continue;
+                double[] p = plus[i].get(k), m = minus[i].get(k);
+                double vEven = 0.5*(p[1] + m[1]), oOdd = 0.5*(p[2] - m[2]);
+                w = p[0]; ve += vEven; oo += oOdd;
+                tp += vEven != 0 ? oOdd/(2*Math.PI*Math.abs(vEven)) : Double.NaN;
+                dis += 0.5*(Math.abs(p[1]) + Math.abs(m[1])) * p[0] * (1 - EQUIL_FRAC);
+                st  += (p[4] + m[4]) * p[0] * (1 - EQUIL_FRAC);
+                ab  += 0.5*(p[3] + m[3]);
+                n++;
+            }
+            if (n == 0) continue;
+            out.add(new double[]{ w, ve/n, oo/n, tp/n, dis/n, st/n, ab/n });
+        }
+        return out.toArray(new double[0][]);
+    }
+    @SuppressWarnings("unchecked")
+    static java.util.List<double[]>[] readNested(double uM, int sgn, double durS) {
+        java.util.List<double[]>[] out = new java.util.List[SEEDS];
+        boolean any = false;
+        for (int i = 0; i < SEEDS; i++) {
+            java.io.File f = new java.io.File(ATP_DIR, atpId(uM, sgn, SEED+i, durS, ATP_MIRROR) + ".nested.tsv");
+            if (!f.exists()) continue;
+            java.util.List<double[]> rows = new java.util.ArrayList<>();
+            try (java.util.Scanner sc = new java.util.Scanner(f)) {
+                if (sc.hasNextLine()) sc.nextLine();
+                while (sc.hasNextLine()) {
+                    String[] p = sc.nextLine().split("\t");
+                    if (p.length < 5) continue;
+                    rows.add(new double[]{ Double.parseDouble(p[0]), Double.parseDouble(p[1]),
+                            Double.parseDouble(p[2]), Double.parseDouble(p[3]), Double.parseDouble(p[4]) });
+                }
+            } catch (Exception ignored) { continue; }
+            out[i] = rows; any = true;
+        }
+        return any ? out : null;
+    }
+
+    // ------------------------------------------------------------------ STAGE 3: the production ATP ladder
+    static void runAtpMap(double durMs) {
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; BUDGET = true;
+        boolean savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;      // the confirmed mechanism, unmodified
+        double durS = durMs * 1e-3;
+        atpSetDuration(durS);
+        atpBanner(ATP_MIRROR < 0 ? "MIRROR CONTROL" : "PRODUCTION LADDER", durS, SEEDS);
+        int[] tally = new int[2];
+        for (double uM : ATP_MAP)
+            for (int sgn = +1; sgn >= -1; sgn -= 2)
+                for (int i = 0; i < SEEDS; i++) atpArm(uM, sgn, SEED + i, durS, tally);
+        System.out.printf("%n  records: %d reused, %d newly run, %d expected%n",
+                tally[0], tally[1], 2*ATP_MAP.length*SEEDS);
+        CONV_RAMP_ARM = null; BUDGET = false;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem; cfgOff(); EPS_CONV_ARM = 0;
+        reportAtpMap(durS);
+        if (ATP_MIRROR < 0) reportAtpMirror(durS);
+    }
+
+    // ------------------------------------------------------------------ STAGE 5A: the eps = 0 achiral null
+    static void runAtpNull(double durMs, double uM) {
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; BUDGET = true;
+        boolean savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        double durS = durMs * 1e-3; atpSetDuration(durS);
+        System.out.printf(Locale.US, "%n--- STAGE 5A: eps = 0 ACHIRAL NULL at [ATP] = %.4g µM, %d seeds, %.1f ms ---%n",
+                uM, SEEDS, durS*1e3);
+        System.out.println("  A zero-skew converter must produce NO resolved signed chiral rotation. The ±eps");
+        System.out.println("  half-split of these same eps = 0 runs is the estimator's own noise floor.");
+        int[] tally = new int[2];
+        double savedEps = ATP_EPS_DEG; ATP_EPS_DEG = 0.0;
+        for (int i = 0; i < SEEDS; i++) atpArm(uM, 0, SEED + i, durS, tally);
+        ATP_EPS_DEG = savedEps;
+        CONV_RAMP_ARM = null; BUDGET = false;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem; cfgOff(); EPS_CONV_ARM = 0;
+        reportAtpNull(uM, durS);
+    }
+    static void reportAtpNull(double uM, double durS) {
+        int n = 0; double[] om = new double[SEEDS], gl = new double[SEEDS], tq = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            double[] v = atpRead(atpId(uM, 0, SEED+i, durS, ATP_MIRROR));
+            if (v == null) continue;
+            om[n] = v[ATPK("omegaFit")]; gl[n] = v[ATPK("glide")]; tq[n] = v[ATPK("tau")]; n++;
+        }
+        if (n == 0) { System.out.println("  (no eps=0 records)"); return; }
+        double[] mo = ConvBudget.msn(java.util.Arrays.copyOf(om, n));
+        double[] mg = ConvBudget.msn(java.util.Arrays.copyOf(gl, n));
+        double[] mt = ConvBudget.msn(java.util.Arrays.copyOf(tq, n));
+        System.out.printf(Locale.US, "%n  eps = 0 NULL (n = %d):  Omega = %+.2f ± %.2f rad/s (%.2f sigma)   "
+                + "tau = %+.3e ± %.1e N·m   glide = %+.3f ± %.3f µm/s%n",
+                n, mo[0], mo[1], ConvBudget.sigma(mo), mt[0], mt[1], mg[0], mg[1]);
+        System.out.printf("  VERDICT: %s%n", Math.abs(ConvBudget.sigma(mo)) < 2.0
+                ? "PASS — no resolved signed rotation without skew"
+                : "*** FAIL *** — a signed rotation survives at eps = 0");
+    }
+
+    // ------------------------------------------------------------------ STAGE 4: the primary analysis
+    /** Per-seed ε-ODD response of key k (NaN where either sign's record is missing — never pair unmatched). */
+    static double[] atpOdd(double uM, String key, double durS, double mirror) {
+        int ki = ATPK(key); double[] o = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            double[] p = atpRead(atpId(uM, +1, SEED+i, durS, mirror)), m = atpRead(atpId(uM, -1, SEED+i, durS, mirror));
+            o[i] = (p != null && m != null) ? 0.5*(p[ki] - m[ki]) : Double.NaN;
+        }
+        return o;
+    }
+    static double[] atpEven(double uM, String key, double durS, double mirror) {
+        int ki = ATPK(key); double[] o = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            double[] p = atpRead(atpId(uM, +1, SEED+i, durS, mirror)), m = atpRead(atpId(uM, -1, SEED+i, durS, mirror));
+            o[i] = (p != null && m != null) ? 0.5*(p[ki] + m[ki]) : Double.NaN;
+        }
+        return o;
+    }
+    /** Per-seed turns-per-µm — computed PER SEED before averaging (never a ratio of ensemble means). */
+    static double[] atpTurns(double uM, double durS, double mirror) {
+        double[] ve = atpEven(uM, "glide", durS, mirror), oo = atpOdd(uM, "omegaFit", durS, mirror);
+        double[] t = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++)
+            t[i] = (Double.isFinite(ve[i]) && ve[i] != 0) ? oo[i]/(2*Math.PI*Math.abs(ve[i])) : Double.NaN;
+        return t;
+    }
+    static void reportAtpMap(double durS) { reportAtpMap(durS, ATP_MIRROR); }
+    static void reportAtpMap(double durS, double mirror) {
+        System.out.println("\n  ================= LOW-[ATP] LADDER — ONE GLIDING ASSAY =================");
+        System.out.printf("  duration = %.1f ms   eta = %.4g Pa·s   dt = %.4e s   lattice = %s   n = %d seeds%n",
+                durS*1e3, ETA, DT * ETA / Constants.aeta, mirror < 0 ? "MIRRORED" : "native", SEEDS);
+        System.out.println("\n  #### CORE GLIDING (eps-EVEN) ####");
+        System.out.printf("    %10s %10s %18s %8s %10s %12s%n",
+                "[ATP] µM", "atpOn /s", "v_even ± SEM µm/s", "sigma", "v/v(ref)", "sgn%");
+        double uTop = ATP_MAP[0]; for (double u : ATP_MAP) uTop = Math.max(uTop, u);
+        double vRef = ConvBudget.msn(atpEven(uTop, "glide", durS, mirror))[0];
+        for (double uM : ATP_MAP) {
+            double[] v = ConvBudget.msn(atpEven(uM, "glide", durS, mirror));
+            System.out.printf(Locale.US, "    %10.4g %10.4g %+11.4f±%6.4f %8.2f %10.3f %12.0f%n",
+                    uM, atpOnFor(uM), v[0], v[1], ConvBudget.sigma(v), vRef != 0 ? v[0]/vRef : Double.NaN,
+                    100*ConvBudget.signFrac(atpEven(uM, "glide", durS, mirror)));
+        }
+        System.out.println("\n  #### ENGAGEMENT, EVENT FLUX AND DETACHMENT CAUSE (physical time) ####");
+        System.out.printf("    %10s %9s %9s %11s %11s %10s %10s %10s %9s%n",
+                "[ATP] µM", "avgBound", "rigorOcc", "attach /s", "strokes /s", "detach /s", "resid ms", "fATP", "fRupt");
+        for (double uM : ATP_MAP) {
+            double ab = ConvBudget.msn(atpEven(uM,"avgBound",durS,mirror))[0];
+            double ro = ConvBudget.msn(atpEven(uM,"occNoneB",durS,mirror))[0];
+            double at = ConvBudget.msn(atpEven(uM,"bindsPerS",durS,mirror))[0];
+            double st = ConvBudget.msn(atpEven(uM,"strokeRatePerS",durS,mirror))[0];
+            double de = ConvBudget.msn(atpEven(uM,"detachPerS",durS,mirror))[0];
+            double rs = ConvBudget.msn(atpEven(uM,"residenceS",durS,mirror))[0];
+            double da = ConvBudget.msn(atpEven(uM,"detachAtp",durS,mirror))[0];
+            double dr = ConvBudget.msn(atpEven(uM,"detachRigor",durS,mirror))[0];
+            double dv = ConvBudget.msn(atpEven(uM,"detachOther",durS,mirror))[0];
+            double tot = da + dr + dv;
+            System.out.printf(Locale.US, "    %10.4g %9.3f %9.4f %11.0f %11.0f %10.0f %10.4f %10.4f %9.4f%n",
+                    uM, ab, ro, at, st, de, rs*1e3, tot > 0 ? da/tot : Double.NaN, tot > 0 ? dr/tot : Double.NaN);
+        }
+        System.out.println("\n  #### STATE OCCUPANCY (bound heads) and PHYSICAL LIFETIMES ####");
+        System.out.printf("    %10s %9s %9s %9s %9s %13s %13s%n",
+                "[ATP] µM", "NONE", "ATP", "ADP·Pi", "ADP", "preLife µs", "postLife µs");
+        for (double uM : ATP_MAP)
+            System.out.printf(Locale.US, "    %10.4g %9.4f %9.4f %9.4f %9.4f %13.2f %13.2f%n", uM,
+                    ConvBudget.msn(atpEven(uM,"occNoneB",durS,mirror))[0],
+                    ConvBudget.msn(atpEven(uM,"occAtpB",durS,mirror))[0],
+                    ConvBudget.msn(atpEven(uM,"occAdpPiB",durS,mirror))[0],
+                    ConvBudget.msn(atpEven(uM,"occAdpB",durS,mirror))[0],
+                    ConvBudget.msn(atpEven(uM,"preLifeS",durS,mirror))[0]*1e6,
+                    ConvBudget.msn(atpEven(uM,"postLifeS",durS,mirror))[0]*1e6);
+        System.out.println("\n  #### SECONDARY TWIRLING (eps-ODD, SAME RUNS) ####");
+        System.out.printf("    %10s %18s %18s %8s %7s %16s%n",
+                "[ATP] µM", "tau_odd ± SEM", "Omega_odd ± SEM", "sigma", "sgn%", "J_total_odd");
+        for (double uM : ATP_MAP) {
+            double[] to = atpOdd(uM,"tau",durS,mirror), om = atpOdd(uM,"omegaFit",durS,mirror);
+            double[] jp = atpOdd(uM,"jPre",durS,mirror), js = atpOdd(uM,"jStroke",durS,mirror);
+            double[] je = atpOdd(uM,"jEarly",durS,mirror), jl = atpOdd(uM,"jLate",durS,mirror);
+            double[] tot = new double[SEEDS];
+            for (int i = 0; i < SEEDS; i++) tot[i] = jp[i]+js[i]+je[i]+jl[i];
+            double[] mt = ConvBudget.msn(to), mo = ConvBudget.msn(om);
+            System.out.printf(Locale.US, "    %10.4g %+.4e±%.1e %+9.2f±%7.2f %8.2f %7.0f %+16.5e%n",
+                    uM, mt[0], mt[1], mo[0], mo[1], ConvBudget.sigma(mo), 100*ConvBudget.signFrac(om),
+                    ConvBudget.msn(tot)[0]);
+        }
+        System.out.println("\n  #### THE PITCH ENDPOINT (per-seed turns per µm, then pitch) ####");
+        System.out.printf("    %10s %20s %8s %7s %20s%n",
+                "[ATP] µM", "turns/µm ± SEM", "sigma", "sgn%", "signed pitch µm");
+        for (double uM : ATP_MAP) {
+            double[] tp = atpTurns(uM, durS, mirror);
+            double[] m = ConvBudget.msn(tp);
+            double pitch = m[0] != 0 ? 1.0/m[0] : Double.NaN;
+            boolean meaningful = Math.abs(ConvBudget.sigma(m)) >= 2.0;
+            System.out.printf(Locale.US, "    %10.4g %+13.4f±%6.4f %8.2f %7.0f %20s%n",
+                    uM, m[0], m[1], ConvBudget.sigma(m), 100*ConvBudget.signFrac(tp),
+                    meaningful ? String.format(Locale.US, "%+.4f", pitch) : "(not resolved)");
+        }
+        // paired per-seed differences against the reference ATP condition (the HIGHEST [ATP] on the ladder —
+        // independent of the order the arms were run in, so the ladder can be reordered for scheduling)
+        double u0 = ATP_MAP[0];
+        for (double u : ATP_MAP) u0 = Math.max(u0, u);
+        System.out.printf("%n  ---- paired per-seed differences vs the reference [ATP] = %.4g µM ----%n", u0);
+        System.out.printf("    %10s %22s %8s | %22s %8s%n", "[ATP] µM", "d(v_even)", "sigma", "d(turns per µm)", "sigma");
+        for (double uM : ATP_MAP) {
+            if (uM == u0) continue;
+            double[] a = atpEven(uM,"glide",durS,mirror), b = atpEven(u0,"glide",durS,mirror);
+            double[] ta = atpTurns(uM,durS,mirror), tb = atpTurns(u0,durS,mirror);
+            double[] dv = new double[SEEDS], dt2 = new double[SEEDS];
+            for (int i = 0; i < SEEDS; i++) { dv[i] = a[i]-b[i]; dt2[i] = ta[i]-tb[i]; }
+            double[] m1 = ConvBudget.msn(dv), m2 = ConvBudget.msn(dt2);
+            System.out.printf(Locale.US, "    %10.4g %+15.4f±%6.4f %8.2f | %+15.4f±%6.4f %8.2f%n",
+                    uM, m1[0], m1[1], ConvBudget.sigma(m1), m2[0], m2[1], ConvBudget.sigma(m2));
+        }
+        System.out.println("\n  #### NUMERICAL HEALTH ####");
+        System.out.printf("    %10s %10s %12s %14s %14s%n", "[ATP] µM", "invalid", "solverFail", "rateCapWarn", "detachOther");
+        for (double uM : ATP_MAP)
+            System.out.printf(Locale.US, "    %10.4g %10.1f %12.1f %14.1f %14.1f%n", uM,
+                    ConvBudget.msn(atpEven(uM,"invalid",durS,mirror))[0],
+                    ConvBudget.msn(atpEven(uM,"solverFail",durS,mirror))[0],
+                    ConvBudget.msn(atpEven(uM,"rateCapWarns",durS,mirror))[0],
+                    ConvBudget.msn(atpEven(uM,"detachOther",durS,mirror))[0]);
+        System.out.println("\n  Experimental comparators (POST-HOC, not targets): [ATP] ~5-20 µM, gliding ~0.1-0.5 µm/s,");
+        System.out.println("  myosin-II twirling pitch ~0.47 ± 0.20 µm, pitch comparatively insensitive to velocity.");
+        atpCsv(durS, mirror);
+    }
+
+    /** STAGE 5B: the low-ATP mirror control — the chiral quantities must REVERSE on a mirrored lattice. */
+    static void reportAtpMirror(double durS) {
+        System.out.println("\n  ================= LOW-[ATP] MIRROR CONTROL — is the eps-ODD twirl CHIRAL? =================");
+        System.out.println("  A chiral response REVERSES on a mirrored lattice. The discriminating fact is the SIGN FLIP");
+        System.out.println("  on matched seeds; magnitude equality is NOT required by this test.");
+        for (double uM : ATP_MAP) {
+            int n = 0;
+            for (int i = 0; i < SEEDS; i++)
+                if (atpRead(atpId(uM,+1,SEED+i,durS,-1)) != null && atpRead(atpId(uM,-1,SEED+i,durS,-1)) != null) n++;
+            if (n == 0) { System.out.printf(Locale.US, "%n    [ATP] = %.4g µM : no mirror records — not run.%n", uM); continue; }
+            int ko = ATPK("omegaFit"), kt = ATPK("tau"), kg = ATPK("glide");
+            double[] natO = new double[n], mirO = new double[n], sum = new double[n];
+            double[] natT = new double[n], mirT = new double[n], natP = new double[n], mirP = new double[n];
+            int m = 0;
+            for (int i = 0; i < SEEDS && m < n; i++) {
+                double[] np = atpRead(atpId(uM,+1,SEED+i,durS,+1)), nm = atpRead(atpId(uM,-1,SEED+i,durS,+1));
+                double[] mp = atpRead(atpId(uM,+1,SEED+i,durS,-1)), mm = atpRead(atpId(uM,-1,SEED+i,durS,-1));
+                if (np == null || nm == null || mp == null || mm == null) continue;
+                natO[m] = 0.5*(np[ko]-nm[ko]); mirO[m] = 0.5*(mp[ko]-mm[ko]); sum[m] = natO[m]+mirO[m];
+                natT[m] = 0.5*(np[kt]-nm[kt]); mirT[m] = 0.5*(mp[kt]-mm[kt]);
+                double nv = 0.5*(np[kg]+nm[kg]), mv = 0.5*(mp[kg]+mm[kg]);
+                natP[m] = nv != 0 ? natO[m]/(2*Math.PI*Math.abs(nv)) : Double.NaN;
+                mirP[m] = mv != 0 ? mirO[m]/(2*Math.PI*Math.abs(mv)) : Double.NaN;
+                m++;
+            }
+            double[] mo = ConvBudget.msn(natO), mm2 = ConvBudget.msn(mirO), ms = ConvBudget.msn(sum);
+            double[] mt = ConvBudget.msn(natT), mt2 = ConvBudget.msn(mirT);
+            double[] mp1 = ConvBudget.msn(natP), mp2 = ConvBudget.msn(mirP);
+            System.out.printf(Locale.US, "%n    [ATP] = %.4g µM   (%d matched seed pairs)%n", uM, m);
+            System.out.printf(Locale.US, "      Omega_odd   native %+9.2f ± %6.2f (%.2fσ, %3.0f%% sgn)   "
+                    + "mirror %+9.2f ± %6.2f (%.2fσ, %3.0f%% sgn)%n",
+                    mo[0], mo[1], ConvBudget.sigma(mo), 100*ConvBudget.signFrac(natO),
+                    mm2[0], mm2[1], ConvBudget.sigma(mm2), 100*ConvBudget.signFrac(mirO));
+            System.out.printf(Locale.US, "      tau_odd     native %+.4e            mirror %+.4e%n", mt[0], mt2[0]);
+            System.out.printf(Locale.US, "      turns/µm    native %+9.4f            mirror %+9.4f%n", mp1[0], mp2[0]);
+            System.out.printf(Locale.US, "      antisymmetry sum   %+9.2f ± %6.2f (%.2fσ)%n", ms[0], ms[1], ConvBudget.sigma(ms));
+            boolean rev = mo[0]*mm2[0] < 0;
+            System.out.printf("      VERDICT: %s%n", rev
+                    ? "REVERSES — the eps-ODD twirl is CHIRAL in origin at this [ATP]"
+                    : "does NOT reverse — not established as chiral at this [ATP]");
+        }
+    }
+
+    /** Tidy per-record CSV for the analysis/plot layer. */
+    static void atpCsv(double durS, double mirror) {
+        try {
+            java.io.File dir = new java.io.File(ATP_DIR); dir.mkdirs();
+            java.io.File out = new java.io.File(dir, String.format(Locale.US, "records_d%08d_%s.csv",
+                    Math.round(durS*1e6), mirror < 0 ? "mirror" : "native"));
+            try (java.io.PrintWriter w = new java.io.PrintWriter(out)) {
+                w.print("atpUM,epsSign,seed,mirror");
+                for (String k : atpKeys()) w.print("," + k);
+                w.println();
+                for (double uM : ATP_MAP)
+                    for (int sgn = +1; sgn >= -1; sgn -= 2)
+                        for (int i = 0; i < SEEDS; i++) {
+                            double[] v = atpRead(atpId(uM, sgn, SEED+i, durS, mirror));
+                            if (v == null) continue;
+                            w.printf(Locale.US, "%.6g,%d,%d,%.0f", uM, sgn, SEED+i, mirror);
+                            for (double x : v) w.printf(Locale.US, ",%.10g", x);
+                            w.println();
+                        }
+            }
+            System.out.println("\n  tidy CSV written: " + out.getPath());
+        } catch (Exception e) { System.out.println("  (CSV write failed: " + e + ")"); }
+    }
+
+    // ------------------------------------------------------------------ STAGE 1: ATP interface validation
+    /** A/B/C fixtures for the low-ATP interface. CPU, deterministic, seconds. Gate D is the existing
+     *  {@code -equiv} full-graph CPU/GPU check run with {@code -atp-uM} set (see the report). */
+    static boolean runAtpFixtures() {
+        passN = failN = 0;
+        double dt = DT * ETA / Constants.aeta;
+        System.out.printf(Locale.US, "%n=== STAGE 1 — LOW-[ATP] INTERFACE VALIDATION (CPU; dt = %.4e s, eta = %.4g) ===%n", dt, ETA);
+        System.out.printf(Locale.US, "  mapping: atpOn = 2.0e4 /s × ([ATP] / %.0f µM)  (pseudo-first-order; the ONE"
+                + " [ATP]-dependent hazard)%n", ATP_REF_UM);
+        double[] ladder = { 0.0, 5.0, 10.0, 20.0, ATP_REF_UM };
+
+        // ---- A. BOUND RIGOR ATP-DETACHMENT LATENCY -----------------------------------------------------------
+        // A population of bound heads held in NUC_NONE (rigor) at zero load. The ONLY exit on the production
+        // lineage is ATP binding, so the first-passage time must be the geometric law with p = atpOn·dt.
+        System.out.println("\n  ---- A. bound-rigor ATP-detachment latency (production lineage: rigor rupture OFF) ----");
+        System.out.printf("    %10s %10s %14s %14s %10s %10s %10s%n",
+                "[ATP] µM", "atpOn /s", "mean lat ms", "1/atpOn ms", "rel err", "fATP", "fCens");
+        boolean aOk = true;
+        for (double uM : ladder) {
+            double[] res = atpLatency(uM, dt, false);
+            double theory = uM > 0 ? 1.0/atpOnFor(uM) : Double.POSITIVE_INFINITY;
+            double rel = (uM > 0 && Double.isFinite(res[0])) ? Math.abs(res[0]-theory)/theory : Double.NaN;
+            System.out.printf(Locale.US, "    %10.4g %10.4g %14.4f %14.4f %10s %10.4f %10.4f%n",
+                    uM, atpOnFor(uM), res[0]*1e3, theory*1e3,
+                    Double.isNaN(rel) ? "  n/a" : String.format(Locale.US, "%.4f", rel), res[1], res[3]);
+            if (uM == 0.0) aOk &= res[3] == 1.0;                       // ATP-free ⇒ 100 % censored
+            else if (Double.isFinite(rel)) aOk &= rel < 0.05;          // sampling-limited tolerance
+        }
+        ck(1, "A: ATP-detachment latency follows 1/atpOn; [ATP]=0 is 100% censored (ATP-free)", aOk);
+        // The competing-hazard diagnostic: the SAME ladder with canonical rigor mechanical rupture available.
+        // This is a FIXTURE-ONLY diagnostic — the production lineage leaves rupture OFF (see the report).
+        System.out.println("\n  ---- A'. the same ladder with canonical rigor rupture AVAILABLE (diagnostic only) ----");
+        System.out.printf("    %10s %14s %10s %10s %10s%n", "[ATP] µM", "mean lat ms", "fATP", "fRupture", "fCens");
+        for (double uM : ladder) {
+            double[] res = atpLatency(uM, dt, true);
+            System.out.printf(Locale.US, "    %10.4g %14.4f %10.4f %10.4f %10.4f%n", uM, res[0]*1e3, res[1], res[2], res[3]);
+        }
+
+        // ---- B. OFF-ACTIN CYCLE COMPLETION -------------------------------------------------------------------
+        // Reducing [ATP] must NOT touch the detached recovery limb (ATP→ADP·Pi at offATP = 100/s) and must not
+        // create a forbidden transition or a stall other than the expected rigor ATP wait.
+        System.out.println("\n  ---- B. off-actin cycle completion (recovery limb must be [ATP]-INDEPENDENT) ----");
+        // The primed fraction at the horizon is ANALYTIC, not a magic threshold: a first-order limb with
+        // offATP = 100/s run for T seconds leaves exp(-T·offATP) un-hydrolysed, so primed = 1 - exp(-T·offATP).
+        double offAtpT = 200000 * dt;                                    // atpOffActin's horizon
+        double primedTheory = 1.0 - Math.exp(-offAtpT * 100.0);
+        System.out.printf("    %10s %18s %16s %14s %16s %14s%n",
+                "[ATP] µM", "ATP→ADP·Pi ms", "1/offATP ms", "forbidden", "end in ADP·Pi", "theory");
+        boolean bOk = true;
+        for (double uM : ladder) {
+            double[] res = atpOffActin(uM, dt);
+            System.out.printf(Locale.US, "    %10.4g %18.4f %16.4f %14.0f %16.4f %14.4f%n",
+                    uM, res[0]*1e3, 1.0/100.0*1e3, res[1], res[2], primedTheory);
+            bOk &= res[1] == 0 && Math.abs(res[0] - 0.01)/0.01 < 0.05
+                   && Math.abs(res[2] - primedTheory) < 0.01;
+        }
+        ck(2, "B: recovery limb is [ATP]-independent; zero forbidden transitions; heads end primed in ADP·Pi", bOk);
+
+        // ---- C. IDENTITY GATES -------------------------------------------------------------------------------
+        System.out.println("\n  ---- C. identity gates ----");
+        double savedAtp = ATP_UM;
+        ATP_UM = -1.0;              Glide2D gAbsent = build(SEED);
+        ATP_UM = ATP_REF_UM;        Glide2D gRef    = build(SEED);
+        ATP_UM = 0.0;               Glide2D gZero   = build(SEED);
+        ATP_UM = 5.0;               Glide2D gLow    = build(SEED);
+        ATP_UM = savedAtp;
+        boolean cRef = gAbsent.mot.nucParams.get(1) == gRef.mot.nucParams.get(1);
+        ck(3, "C1: explicit reference [ATP] == feature ABSENT (atpOn identical)", cRef);
+        ck(4, "C2: [ATP] = 0 reproduces the established ATP-free path (atpOn == 0)", gZero.mot.nucParams.get(1) == 0f);
+        boolean cScale = Math.abs(gLow.mot.nucParams.get(1) - 50.0f) < 1e-3;
+        ck(5, "C3: 5 µM ⇒ atpOn = 50 /s exactly (2e4 × 5/2000)", cScale);
+        // every OTHER kinetic slot must be untouched
+        boolean cOther = true;
+        for (int k = 0; k < gAbsent.mot.nucParams.getSize(); k++)
+            if (k != 1) cOther &= gAbsent.mot.nucParams.get(k) == gLow.mot.nucParams.get(k);
+        ck(6, "C4: every OTHER nucleotide rate (and dt) is bit-identical at 5 µM", cOther);
+        boolean cKin = arraysEqual(gAbsent.mot.kinParams, gLow.mot.kinParams);
+        boolean cDrag = arraysEqual(gAbsent.fil.bTransGam, gLow.fil.bTransGam)
+                     && arraysEqual(gAbsent.fil.bRotGam,   gLow.fil.bRotGam)
+                     && arraysEqual(gAbsent.mot.body.bTransGam, gLow.mot.body.bTransGam)
+                     && arraysEqual(gAbsent.mot.body.bRotGam,   gLow.mot.body.bRotGam);
+        boolean cGeom = arraysEqual(gAbsent.fil.coord, gLow.fil.coord)
+                     && arraysEqual(gAbsent.fil.uVec,  gLow.fil.uVec)
+                     && arraysEqual(gAbsent.mot.body.coord, gLow.mot.body.coord);
+        ck(7, "C5: catch-slip/binding kinParams bit-identical at 5 µM", cKin);
+        ck(8, "C6: every drag (=viscosity) and Brownian-amplitude source buffer bit-identical at 5 µM", cDrag);
+        ck(9, "C7: filament + motor geometry bit-identical at 5 µM", cGeom);
+        // dynamic identity: a short CPU trajectory at the explicit reference must be BIT-IDENTICAL to absent
+        boolean cDyn = atpTrajectoryIdentical(-1.0, ATP_REF_UM, 300);
+        ck(10, "C8: 300-step CPU trajectory at explicit reference [ATP] == feature ABSENT, bit-identical", cDyn);
+        // C9. THE FLAG DEMONSTRABLY ACTS — checked where it can act. The rigor state NUC_NONE is the ONLY state
+        // that reads atpOn, so the divergence gate is applied to a bound-rigor population under the production
+        // chemistry kernel: the detachment sequences must differ between the reference and 5 µM.
+        boolean cDiff = atpChemDiverges(ATP_REF_UM, 5.0, dt, 400);
+        ck(11, "C9: the production chemistry kernel DIVERGES between reference and 5 µM on bound rigor heads", cDiff);
+        // C10. …and the reason the 300-step FULL-SCENE trajectory above cannot diverge is positive, not a bug:
+        // in 300 steps (= 75 µs) no head has yet traversed bind → stroke → ADP release, so NUC_NONE is never
+        // occupied and atpOn is never read. Asserting that makes C8's bit-identity a MEANINGFUL statement.
+        int rigorSeen = atpMaxRigorOccupancy(5.0, 300);
+        ck(12, "C10: no head reaches NUC_NONE within 300 steps (75 µs) ⇒ C8's bit-identity is expected, "
+                + "not a masked no-op", rigorSeen == 0);
+        note(String.format(Locale.US, "max bound-rigor heads seen in the 300-step scene: %d "
+                + "(bind → stroke → ADP release needs ~1 ms; atpOn is read only in NUC_NONE)", rigorSeen));
+
+        System.out.println("\n  ---- D. CPU/GPU equivalence ----");
+        System.out.println("    Gate D reuses the VALIDATED full-graph device/CPU check unchanged:");
+        System.out.println("      ./scripts/run_gpu_monitored.sh ./scripts/run_chiral_sites.sh -equiv -eta 0.01");
+        System.out.println("      ./scripts/run_gpu_monitored.sh ./scripts/run_chiral_sites.sh -equiv -eta 0.01 -atp-uM 5");
+        System.out.printf("%n=== STAGE 1: %d PASS, %d FAIL ===%n", passN, failN);
+        return failN == 0;
+    }
+    static boolean arraysEqual(FloatArray a, FloatArray b) {
+        if (a.getSize() != b.getSize()) return false;
+        for (int i = 0; i < a.getSize(); i++) if (a.get(i) != b.get(i)) return false;
+        return true;
+    }
+    /** Bound-rigor first-passage: {mean latency s, fATP, fRupture, fCensored}. */
+    static double[] atpLatency(double uM, double dt, boolean rigor) {
+        int N = 4096;
+        // horizon = 8 mean lifetimes of the FASTEST available exit (ATP binding, or the rigor rupture floor),
+        // capped so the ATP-free arm still demonstrates full censoring in bounded time.
+        double kFast = Math.max(atpOnFor(uM), rigor ? ExplicitCompleteMatHarness.RIGOR_K0 * 0.09 : 0.0);
+        int steps = kFast > 0 ? (int) Math.min(400000, Math.max(20000, 8.0/(kFast*dt))) : 40000;
+        MotorStore mot = new MotorStore(N);
+        mot.setKinParams(0.006, -0.4, dt); mot.setNucParams(dt);
+        mot.nucParams.set(1, (float) atpOnFor(uM));
+        if (rigor) mot.setRigorRupture(true, ExplicitCompleteMatHarness.RIGOR_MODEL, ExplicitCompleteMatHarness.RIGOR_K0,
+                ExplicitCompleteMatHarness.RIGOR_AC, ExplicitCompleteMatHarness.RIGOR_XC,
+                ExplicitCompleteMatHarness.RIGOR_AS, ExplicitCompleteMatHarness.RIGOR_XS);
+        else mot.disableRigorRupture();
+        for (int m = 0; m < N; m++) { mot.boundSeg.set(m, 0); mot.nucleotideState.set(m, MotorStore.NUC_NONE);
+                                      mot.forceDotFil.set(m, 0f); }
+        int[] active = new int[N]; for (int m = 0; m < N; m++) active[m] = m;
+        int nAct = N;
+        long sum = 0; int nAtp = 0, nRup = 0, nDone = 0;
+        for (int t = 0; t < steps && nAct > 0; t++) {
+            mot.setCounts(t, 4242, 1);
+            if (rigor) NucleotideCycleSystem.cycleLymnTaylorRigor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil,
+                    mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts,
+                    mot.rigorParams, mot.ruptureStats);
+            else NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil,
+                    mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+            int w = 0;
+            for (int k = 0; k < nAct; k++) {
+                int m = active[k];
+                if (mot.boundSeg.get(m) < 0) {
+                    nDone++; sum += t;
+                    if (mot.nucleotideState.get(m) == MotorStore.NUC_ATP) nAtp++; else nRup++;
+                    mot.boundSeg.set(m, -100);           // park: never re-enter the population
+                } else active[w++] = m;
+            }
+            nAct = w;
+        }
+        double mean = nDone > 0 ? (sum / (double) nDone) * dt : Double.NaN;
+        return new double[]{ mean, nDone > 0 ? nAtp/(double) nDone : Double.NaN,
+                             nDone > 0 ? nRup/(double) nDone : Double.NaN, 1.0 - nDone/(double) N };
+    }
+    /** Detached recovery limb: {mean ATP→ADP·Pi latency s, forbidden transitions, fraction primed in ADP·Pi}. */
+    static double[] atpOffActin(double uM, double dt) {
+        int N = 8192, steps = 200000;
+        MotorStore mot = new MotorStore(N);
+        mot.setKinParams(0.006, -0.4, dt); mot.setNucParams(dt);
+        mot.nucParams.set(1, (float) atpOnFor(uM));
+        mot.disableRigorRupture();
+        for (int m = 0; m < N; m++) { mot.boundSeg.set(m, MotorStore.FREE_BINDABLE);
+                                      mot.nucleotideState.set(m, MotorStore.NUC_ATP); mot.forceDotFil.set(m, 0f); }
+        int[] prev = new int[N], lat = new int[N];
+        for (int m = 0; m < N; m++) { prev[m] = MotorStore.NUC_ATP; lat[m] = -1; }
+        long sum = 0, forbidden = 0; int nDone = 0;
+        for (int t = 0; t < steps; t++) {
+            mot.setCounts(t, 7331, 1);
+            NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil,
+                    mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+            for (int m = 0; m < N; m++) {
+                int nu = mot.nucleotideState.get(m);
+                if (nu != prev[m]) {
+                    // legal OFF-FILAMENT transitions: ATP→ADP·Pi (offATP) and NONE→ATP (offPi = 0 makes
+                    // ADP·Pi absorbing; ADP→NONE is legal but unreachable from an ATP start).
+                    boolean legal = (prev[m] == MotorStore.NUC_ATP && nu == MotorStore.NUC_ADPPI)
+                                 || (prev[m] == MotorStore.NUC_NONE && nu == MotorStore.NUC_ATP)
+                                 || (prev[m] == MotorStore.NUC_ADP  && nu == MotorStore.NUC_NONE);
+                    if (!legal) forbidden++;
+                    if (prev[m] == MotorStore.NUC_ATP && nu == MotorStore.NUC_ADPPI && lat[m] < 0) {
+                        lat[m] = t; sum += t; nDone++; }
+                    prev[m] = nu;
+                }
+            }
+        }
+        int primed = 0;
+        for (int m = 0; m < N; m++) if (mot.nucleotideState.get(m) == MotorStore.NUC_ADPPI) primed++;
+        return new double[]{ nDone > 0 ? (sum/(double) nDone)*dt : Double.NaN, forbidden, primed/(double) N };
+    }
+    // ------------------------------------------------------------------ STAGE 1D: CPU/GPU equivalence
+    /**
+     * Gate D for the low-[ATP] interface, in TWO parts, because the two things that must be shown live on
+     * different horizons:
+     *
+     * <p><b>D1 — the FULL production graph still lowers and still decides identically</b> at this study's exact
+     * configuration (12-segment filament, filament Brownian ON, linear converter ramp, ε = ±15°, η = 0.01,
+     * dt = 2.5e-7), run at the reference [ATP] and at 5 µM. Compared per step inside the bit-close window:
+     * bound set, site selection, nucleotide state, azimuth. This is the short horizon on which exactness is
+     * attainable — beyond it float32 op-ordering decorrelates a chaotic many-body trajectory, which is the
+     * project's documented standard, not a defect.
+     *
+     * <p><b>D2 — the ATP DECISION ITSELF, device vs host, over a long horizon.</b> [ATP] enters at exactly one
+     * place: the threshold {@code u < atpOn·dt} inside the {@code chem} kernel, which is a per-motor PURE
+     * function of (state, boundSeg, load, params, counters) with a counter-based RNG. Running that kernel alone
+     * — the same task the production graph carries — on a bound-rigor population lets the ATP transition and
+     * its detachment terminus be compared EXACTLY, step by step, for hundreds of thousands of steps, with no
+     * chaotic-mechanics confound. Requirement: zero mismatches in discrete state, boundSeg and cause counts.
+     */
+    static boolean runAtpEquiv() {
+        passN = failN = 0;
+        double dt = DT * ETA / Constants.aeta;
+        System.out.printf(Locale.US, "%n=== STAGE 1D — LOW-[ATP] CPU/GPU EQUIVALENCE (eta = %.4g, dt = %.4e s) ===%n", ETA, dt);
+        int k1 = ATP_EQUIV_STEPS > 0 ? ATP_EQUIV_STEPS : 4000;
+        for (double uM : new double[]{ ATP_REF_UM, 5.0 })
+            ck(uM == ATP_REF_UM ? 1 : 2,
+               String.format(Locale.US, "D1: full production graph, device-resident, decisions exact @ [ATP]=%.4g µM", uM),
+               atpFullGraphEquiv(uM, k1));
+        int k2 = ATP_CHEM_STEPS > 0 ? ATP_CHEM_STEPS : 200000;
+        for (double uM : new double[]{ ATP_REF_UM, 20.0, 10.0, 5.0, 0.0 })
+            ck(uM == ATP_REF_UM ? 3 : 4,
+               String.format(Locale.US, "D2: isolated ATP decision kernel, device == host, exact @ [ATP]=%.4g µM", uM),
+               atpChemDeviceEquiv(uM, dt, k2));
+        System.out.printf("%n=== STAGE 1D: %d PASS, %d FAIL ===%n", passN, failN);
+        return failN == 0;
+    }
+    static int ATP_EQUIV_STEPS = -1, ATP_CHEM_STEPS = -1;
+
+    /** D1: the study's production scene, CPU vs device, decision channels compared inside the bit-close window. */
+    static boolean atpFullGraphEquiv(double uM, int K) {
+        double savedAtp = ATP_UM, savedDt = DTR; int savedSegs = FIL_SEGS; boolean savedBrown = FIL_BROWN;
+        Integer savedRamp = CONV_RAMP_ARM; double savedConv = EPS_CONV_ARM;
+        ATP_UM = uM; DTR = DT * ETA / Constants.aeta;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR; EPS_CONV_ARM = ATP_EPS_DEG;
+        boolean savedSci = ExplicitCompleteMatHarness.PROD_SCI; ExplicitCompleteMatHarness.PROD_SCI = true;
+        try {
+            cfg(2, true, 0.0, 0.0, 0.0, true, 1.0, true);
+            Glide2D Gc = build(SEED), Gd = build(SEED);
+            var ec = ExplicitCompleteMatHarness.packExMat(Gc, 1);
+            var ed = ExplicitCompleteMatHarness.packExMat(Gd, 1);
+            TornadoExecutionPlan plan;
+            TornadoCrashDiagnostic.planConstructionBegin("graph=buildGlidingGraph(prod) arm=atpequiv uM=" + uM);
+            try { plan = ExplicitCompleteMatHarness.buildGlidingGraph(ed, false); }
+            catch (Throwable ex) { TornadoCrashDiagnostic.planConstructionThrew(ex);
+                System.out.println("    device graph did NOT lower: " + oneLine(root(ex).getMessage())); return false; }
+            TornadoCrashDiagnostic.planConstructionEnd(plan, "arm=atpequiv");
+            int firstDiv = -1, siteMism = 0, bindMism = 0, nucMism = 0;
+            double maxFil = 0, maxAz = 0;
+            boolean lowered = true;
+            TornadoCrashDiagnostic.executeLoopBegin("glide", 0, K-1, "arm=atpequiv executeCallsPlanned=" + K);
+            for (int t = 0; t < K; t++) {
+                ed.matc.set(0, t); ed.matc.set(1, SEED); Gd.mot.setCounts(t, SEED, Gd.nSeg);
+                Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, SEED);
+                try { TornadoCrashDiagnostic.beforeExecute(t); plan.execute(); TornadoCrashDiagnostic.afterExecute(t); }
+                catch (Throwable ex) { TornadoCrashDiagnostic.executeThrew(ex); lowered = false;
+                    System.out.println("    device execute FAILED @t=" + t + ": " + oneLine(root(ex).getMessage())); break; }
+                ExplicitCompleteMatHarness.stepGlidingCPU(ec, t, SEED);
+                double dFil = 0;
+                for (int i = 0; i < 3*Gc.nSeg; i++) dFil = Math.max(dFil, Math.abs(Gc.fil.coord.get(i) - Gd.fil.coord.get(i)));
+                maxFil = Math.max(maxFil, dFil);
+                if (firstDiv < 0 && dFil > 1e-6) firstDiv = t;
+                if (firstDiv < 0) {                       // decisions compared inside the bit-close window
+                    for (int m = 0; m < Gc.N; m++) {
+                        if (Gc.mot.boundSeg.get(m) != Gd.mot.boundSeg.get(m)) bindMism++;
+                        if (ec.bindSite.get(m) != ed.bindSite.get(m)) siteMism++;
+                        if (Gc.mot.nucleotideState.get(m) != Gd.mot.nucleotideState.get(m)) nucMism++;
+                        maxAz = Math.max(maxAz, Math.abs(Gc.mot.bindAzim.get(m) - Gd.mot.bindAzim.get(m)));
+                    }
+                }
+            }
+            TornadoCrashDiagnostic.executeLoopEnd("arm=atpequiv lowered=" + lowered);
+            int nbC = 0, nbD = 0, rigC = 0, rigD = 0; boolean fin = true;
+            for (int m = 0; m < Gc.N; m++) {
+                if (Gc.mot.boundSeg.get(m) >= 0) { nbC++; if (Gc.mot.nucleotideState.get(m) == MotorStore.NUC_NONE) rigC++; }
+                if (Gd.mot.boundSeg.get(m) >= 0) { nbD++; if (Gd.mot.nucleotideState.get(m) == MotorStore.NUC_NONE) rigD++; }
+            }
+            for (int i = 0; i < 3*Gc.nSeg; i++) if (!Float.isFinite(Gd.fil.coord.get(i))) fin = false;
+            boolean ok = lowered && fin && siteMism == 0 && bindMism == 0 && nucMism == 0 && maxAz < 1e-5;
+            System.out.printf(Locale.US,
+                    "    [ATP]=%8.4g µM  %6d device steps: bindMism=%d siteMism=%d nucStateMism=%d max|dAzim|=%.2e "
+                    + "max|dFilCoord|=%.2e µm bitCloseUntil=%s bound C/G=%d/%d rigor C/G=%d/%d finite=%b%n",
+                    uM, K, bindMism, siteMism, nucMism, maxAz, maxFil,
+                    firstDiv < 0 ? "end of run" : ("t=" + firstDiv), nbC, nbD, rigC, rigD, fin);
+            TornadoCrashDiagnostic.gpuWorkDeclaredFinished("arm=atpequiv");
+            TornadoCrashDiagnostic.closePlan(plan, "graph=glide arm=atpequiv");
+            return ok;
+        } finally {
+            ATP_UM = savedAtp; DTR = savedDt; FIL_SEGS = savedSegs; FIL_BROWN = savedBrown;
+            CONV_RAMP_ARM = savedRamp; EPS_CONV_ARM = savedConv;
+            ExplicitCompleteMatHarness.PROD_SCI = savedSci; cfgOff();
+        }
+    }
+
+    /** D2: the isolated ATP decision — the SAME chem task, device vs host, exact per-step over a long horizon. */
+    static boolean atpChemDeviceEquiv(double uM, double dt, int steps) {
+        int N = 4096;
+        MotorStore h = new MotorStore(N), d = new MotorStore(N);
+        for (MotorStore mot : new MotorStore[]{ h, d }) {
+            mot.setKinParams(0.006, -0.4, dt); mot.setNucParams(dt);
+            mot.nucParams.set(1, (float) atpOnFor(uM)); mot.disableRigorRupture();
+            for (int m = 0; m < N; m++) { mot.boundSeg.set(m, 0); mot.nucleotideState.set(m, MotorStore.NUC_NONE);
+                                          mot.forceDotFil.set(m, 0f); }
+        }
+        TornadoExecutionPlan plan;
+        try {
+            var tg = new uk.ac.manchester.tornado.api.TaskGraph("atpchem")
+                .transferToDevice(uk.ac.manchester.tornado.api.enums.DataTransferMode.FIRST_EXECUTION,
+                        d.forceDotFil, d.forceDotAvg, d.avgInit, d.cooldown, d.stats, d.nucParams, d.kinParams,
+                        d.nucleotideState, d.boundSeg)
+                .transferToDevice(uk.ac.manchester.tornado.api.enums.DataTransferMode.EVERY_EXECUTION, d.counts)
+                .task("chem", NucleotideCycleSystem::cycleLymnTaylor, d.nucleotideState, d.boundSeg, d.forceDotFil,
+                        d.forceDotAvg, d.avgInit, d.cooldown, d.stats, d.nucParams, d.kinParams, d.counts)
+                .transferToHost(uk.ac.manchester.tornado.api.enums.DataTransferMode.EVERY_EXECUTION,
+                        d.nucleotideState, d.boundSeg);
+            var sched = new uk.ac.manchester.tornado.api.GridScheduler();
+            ExplicitCompleteMatHarness.addW(sched, "atpchem.chem", ((N + 63) / 64) * 64);
+            plan = new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(sched);
+        } catch (Throwable ex) {
+            System.out.println("    chem device graph did NOT lower: " + oneLine(root(ex).getMessage())); return false; }
+        long mism = 0; int firstMism = -1, atpH = 0, atpD = 0;
+        try {
+            for (int t = 0; t < steps; t++) {
+                h.setCounts(t, 4242, 1); d.setCounts(t, 4242, 1);
+                NucleotideCycleSystem.cycleLymnTaylor(h.nucleotideState, h.boundSeg, h.forceDotFil,
+                        h.forceDotAvg, h.avgInit, h.cooldown, h.stats, h.nucParams, h.kinParams, h.counts);
+                plan.execute();
+                for (int m = 0; m < N; m++)
+                    if (h.nucleotideState.get(m) != d.nucleotideState.get(m) || h.boundSeg.get(m) != d.boundSeg.get(m)) {
+                        mism++; if (firstMism < 0) firstMism = t; }
+                if (firstMism >= 0) break;
+            }
+            for (int m = 0; m < N; m++) {
+                if (h.boundSeg.get(m) < 0 && h.nucleotideState.get(m) == MotorStore.NUC_ATP) atpH++;
+                if (d.boundSeg.get(m) < 0 && d.nucleotideState.get(m) == MotorStore.NUC_ATP) atpD++;
+            }
+        } finally { try { plan.close(); } catch (Exception ignored) { } }
+        System.out.printf(Locale.US,
+                "    [ATP]=%8.4g µM  atpOn=%9.4g/s  %7d steps: state+boundSeg mismatches=%d (first=%s)  "
+                + "ATP-detached host/device = %d/%d%n",
+                uM, atpOnFor(uM), steps, mism, firstMism < 0 ? "none" : ("t=" + firstMism), atpH, atpD);
+        return mism == 0 && atpH == atpD;
+    }
+
+    /** Do the production chemistry kernel's outcomes differ between two [ATP] values on bound rigor heads? */
+    static boolean atpChemDiverges(double uA, double uB, double dt, int steps) {
+        int[] a = atpChemStates(uA, dt, steps), b = atpChemStates(uB, dt, steps);
+        for (int i = 0; i < a.length; i++) if (a[i] != b[i]) return true;
+        return false;
+    }
+    static int[] atpChemStates(double uM, double dt, int steps) {
+        int N = 512;
+        MotorStore mot = new MotorStore(N);
+        mot.setKinParams(0.006, -0.4, dt); mot.setNucParams(dt);
+        mot.nucParams.set(1, (float) atpOnFor(uM)); mot.disableRigorRupture();
+        for (int m = 0; m < N; m++) { mot.boundSeg.set(m, 0); mot.nucleotideState.set(m, MotorStore.NUC_NONE);
+                                      mot.forceDotFil.set(m, 0f); }
+        for (int t = 0; t < steps; t++) {
+            mot.setCounts(t, 4242, 1);
+            NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil,
+                    mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+        }
+        int[] out = new int[2*N];
+        for (int m = 0; m < N; m++) { out[m] = mot.nucleotideState.get(m); out[N+m] = mot.boundSeg.get(m); }
+        return out;
+    }
+    /** Peak number of BOUND heads in NUC_NONE over a short full-scene CPU run (the state that reads atpOn). */
+    static int atpMaxRigorOccupancy(double uM, int steps) {
+        double savedAtp = ATP_UM, savedDt = DTR;
+        boolean savedGpu = GPU; GPU = false;
+        DTR = DT * ETA / Constants.aeta; ATP_UM = uM;
+        try {
+            cfg(2, true, 0.0, 0.0, 0.0, true, 1.0, true);
+            EPS_CONV_ARM = ATP_EPS_DEG;
+            Glide2D G = build(SEED);
+            var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+            int peak = 0;
+            for (int t = 0; t < steps; t++) {
+                ExplicitCompleteMatHarness.stepGlidingCPU(e, t, SEED);
+                int c = 0;
+                for (int m = 0; m < G.N; m++)
+                    if (G.mot.boundSeg.get(m) >= 0 && G.mot.nucleotideState.get(m) == MotorStore.NUC_NONE) c++;
+                peak = Math.max(peak, c);
+            }
+            return peak;
+        } finally { GPU = savedGpu; ATP_UM = savedAtp; DTR = savedDt; EPS_CONV_ARM = 0; cfgOff(); }
+    }
+    /** Bit-identity of a short CPU trajectory between two [ATP] settings. */
+    static boolean atpTrajectoryIdentical(double uA, double uB, int steps) {
+        double savedAtp = ATP_UM, savedDt = DTR; int savedSteps = STEPS;
+        DTR = DT * ETA / Constants.aeta;
+        try {
+            float[] a = atpShortTrajectory(uA, steps), b = atpShortTrajectory(uB, steps);
+            if (a.length != b.length) return false;
+            for (int i = 0; i < a.length; i++) if (a[i] != b[i]) return false;
+            return true;
+        } finally { ATP_UM = savedAtp; DTR = savedDt; STEPS = savedSteps; }
+    }
+    static float[] atpShortTrajectory(double uM, int steps) {
+        ATP_UM = uM;
+        boolean savedGpu = GPU; GPU = false;
+        try {
+            cfg(2, true, 0.0, 0.0, 0.0, true, 1.0, true);
+            EPS_CONV_ARM = ATP_EPS_DEG;
+            Glide2D G = build(SEED);
+            var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+            for (int t = 0; t < steps; t++) ExplicitCompleteMatHarness.stepGlidingCPU(e, t, SEED);
+            float[] out = new float[G.fil.coord.getSize() + G.fil.uVec.getSize()];
+            int i = 0;
+            for (int k = 0; k < G.fil.coord.getSize(); k++) out[i++] = G.fil.coord.get(k);
+            for (int k = 0; k < G.fil.uVec.getSize(); k++)  out[i++] = G.fil.uVec.get(k);
+            return out;
+        } finally { GPU = savedGpu; EPS_CONV_ARM = 0; cfgOff(); }
     }
 
     static String etaId(double eta, int sgn, int seed) { return etaId(eta, sgn, seed, ETA_MIRROR); }
