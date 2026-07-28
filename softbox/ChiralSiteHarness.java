@@ -68,6 +68,11 @@ public final class ChiralSiteHarness {
     // ---------------------------------------------------------------------------------------------------------
     static double  ETA = Constants.aeta;      // -eta <Pa·s>  (0.1 ⇒ no-op)
     static double[] ETA_MAP = { 0.10, 0.05, 0.02, 0.01 };   // -eta-map: the premise-test ladder (eta0 FIRST)
+    // -eta-mirror ⇒ −1: run the SAME arms on a MIRRORED actin lattice. The chirality control the brief
+    // requires before a twirling result may be credited: a genuinely CHIRAL eps-ODD response must REVERSE
+    // sign under mirroring, whereas an achiral artifact (or a pure mobility effect on a non-chiral torque)
+    // would not. Recorded under a distinct id ("m_") so native and mirror can never collide.
+    static double  ETA_MIRROR = 1.0;
     static boolean ETA_FIXED_DT = false;      // -eta-fixed-dt: keep dt at DT (the Stage-5 fixed-dt diagnostic arm)
     static double  EQUIL_FRAC = 0.25;                           // -equil-frac: startup transient discarded
     static int     NBLK      = 5;                               // measurement blocks for the block-SEM
@@ -96,7 +101,7 @@ public final class ChiralSiteHarness {
         TornadoCrashDiagnostic.init("chiral-actin-sites", args);
         boolean fixtures = false, equiv = false, campaign = false, lattice = false, mechanism = false, all = false; String jsDir = null;
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
-        boolean etaAudit = false, etaControls = false, etaMap = false, etaReport = false;
+        boolean etaAudit = false, etaControls = false, etaMap = false, etaReport = false, etaMirrorRep = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
                 convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false, s2DtCmp = false, studyB = false, studyBRep = false;
@@ -189,6 +194,8 @@ public final class ChiralSiteHarness {
                 case "-eta-controls" -> etaControls = true;
                 case "-eta-map" -> etaMap = true;
                 case "-eta-report" -> etaReport = true;
+                case "-eta-mirror" -> { ETA_MIRROR = -1.0; etaMap = true; }
+                case "-eta-mirror-report" -> etaMirrorRep = true;
                 case "-eta-points" -> { String[] p = args[++i].split(","); ETA_MAP = new double[p.length];
                                         for (int k = 0; k < p.length; k++) ETA_MAP[k] = Double.parseDouble(p[k]); }
                 default -> { }
@@ -217,6 +224,7 @@ public final class ChiralSiteHarness {
         else if (etaControls) ok = runEtaControls();
         else if (etaMap)     runEtaMap();
         else if (etaReport)  reportEtaMap();
+        else if (etaMirrorRep) reportEtaMirror();
         else if (convStage1) { EPS_CONV_DEG = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 5.0; runConvStage1(); }
         else if (convFix)    ok = runConvFixtures();
         else if (convEquiv)  ok = runConvEquiv();
@@ -3769,7 +3777,7 @@ public final class ChiralSiteHarness {
                 int seed = SEED + i;
                 String id = etaId(eta, sgn, seed);
                 if (powRead(id) != null) { done++; continue; }
-                TArm T = new TArm(id, 0.0, false, +1, true, TwoBodyConverterMotor.G4_NSEG).conv(sgn * epsMax);
+                TArm T = new TArm(id, 0.0, false, ETA_MIRROR, true, TwoBodyConverterMotor.G4_NSEG).conv(sgn * epsMax);
                 long t0 = System.currentTimeMillis();
                 TRes r = runTwirlArm(T, seed, STEPS);
                 try { powWrite(id, powValues(r), prov + " eta=" + eta + " dt=" + DTR + " steps=" + STEPS); }
@@ -3785,6 +3793,7 @@ public final class ChiralSiteHarness {
         CONV_RAMP_ARM = null; BUDGET = false; ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem;
         FIL_BROWN = true; cfgOff(); EPS_CONV_ARM = 0;
         reportEtaMap();
+        if (ETA_MIRROR < 0) reportEtaMirror();   // the chirality control's own native-vs-mirror comparison
     }
 
     /** The premise verdict: raw response, then the NORMALIZED quantities that actually decide it. */
@@ -3856,9 +3865,68 @@ public final class ChiralSiteHarness {
     /** Base (eta0-equivalent) step count, tagged into the id so runs of DIFFERENT physical duration can never
      *  collide — a smoke run must not be silently reused as a campaign record (the s2Id "h" precedent). */
     static int ETA_BASE_STEPS = -1;
-    static String etaId(double eta, int sgn, int seed) {
+    /**
+     * THE CHIRALITY CONTROL. A genuinely chiral ε-ODD response must REVERSE sign on a mirrored actin
+     * lattice; an achiral artifact must not. Compares native vs mirror at each η over the seeds both
+     * arms share, and reports the ANTISYMMETRY SUM (native + mirror), which must be consistent with ZERO
+     * if the response is cleanly chiral.
+     */
+    static void reportEtaMirror() {
+        System.out.println("\n  ================= MIRROR CONTROL — is the eps-ODD twirl CHIRAL? =================");
+        System.out.println("  A chiral response REVERSES on a mirrored lattice: Omega_odd(mirror) = -Omega_odd(native),");
+        System.out.println("  so the SUM must be consistent with ZERO. A non-reversing response is NOT chiral in origin.");
+        for (double eta : ETA_MAP) {
+            int n = 0;
+            for (int i = 0; i < SEEDS; i++)
+                if (powRead(etaId(eta, +1, SEED+i, -1)) != null && powRead(etaId(eta, -1, SEED+i, -1)) != null) n++;
+            if (n == 0) { System.out.printf(Locale.US, "%n    eta = %.3g : no mirror records — not run.%n", eta); continue; }
+            int ko = POWK("omegaFit"), kt = POWK("tau"), kg = POWK("glide");
+            double[] natO = new double[n], mirO = new double[n], sum = new double[n];
+            double[] natT = new double[n], mirT = new double[n];
+            double[] natP = new double[n], mirP = new double[n];
+            int m = 0;
+            for (int i = 0; i < SEEDS && m < n; i++) {
+                double[] np = powRead(etaId(eta,+1,SEED+i,+1)), nm = powRead(etaId(eta,-1,SEED+i,+1));
+                double[] mp = powRead(etaId(eta,+1,SEED+i,-1)), mm = powRead(etaId(eta,-1,SEED+i,-1));
+                if (np == null || nm == null || mp == null || mm == null) continue;
+                natO[m] = 0.5*(np[ko]-nm[ko]);  mirO[m] = 0.5*(mp[ko]-mm[ko]);  sum[m] = natO[m]+mirO[m];
+                natT[m] = 0.5*(np[kt]-nm[kt]);  mirT[m] = 0.5*(mp[kt]-mm[kt]);
+                double nv = 0.5*(np[kg]+nm[kg]), mv = 0.5*(mp[kg]+mm[kg]);
+                natP[m] = nv != 0 ? natO[m]/(2*Math.PI*Math.abs(nv)) : Double.NaN;
+                mirP[m] = mv != 0 ? mirO[m]/(2*Math.PI*Math.abs(mv)) : Double.NaN;
+                m++;
+            }
+            double[] mo = ConvBudget.msn(natO), mm2 = ConvBudget.msn(mirO), ms = ConvBudget.msn(sum);
+            double[] tn = ConvBudget.msn(natT), tm = ConvBudget.msn(mirT);
+            double[] pn = ConvBudget.msn(natP), pm = ConvBudget.msn(mirP);
+            System.out.printf(Locale.US, "%n    ---- eta = %.3g   (n = %d matched seeds) ----%n", eta, n);
+            System.out.printf(Locale.US, "      %-16s %14s %8s %8s%n", "quantity", "mean ± SEM", "sigma", "sgn%");
+            System.out.printf(Locale.US, "      %-16s %+8.2f±%5.2f %8.2f %8.0f%n", "Omega_odd NATIVE",
+                    mo[0], mo[1], ConvBudget.sigma(mo), 100*ConvBudget.signFrac(natO));
+            System.out.printf(Locale.US, "      %-16s %+8.2f±%5.2f %8.2f %8.0f%n", "Omega_odd MIRROR",
+                    mm2[0], mm2[1], ConvBudget.sigma(mm2), 100*ConvBudget.signFrac(mirO));
+            System.out.printf(Locale.US, "      %-16s %+8.2f±%5.2f %8.2f   <-- must be ~0 if chiral%n", "SUM (nat+mir)",
+                    ms[0], ms[1], ConvBudget.sigma(ms));
+            System.out.printf(Locale.US, "      %-16s %+8.4f / %+8.4f  (turns per µm)%n", "P_turn nat/mir", pn[0], pm[0]);
+            System.out.printf(Locale.US, "      %-16s %+.3e / %+.3e  N·m%n", "tau_odd nat/mir", tn[0], tm[0]);
+            boolean reversed = mo[0]*mm2[0] < 0;
+            boolean sumNull  = ConvBudget.sigma(ms) < 2.0;
+            boolean natReal  = ConvBudget.sigma(mo) >= 2.0;
+            System.out.printf(Locale.US, "      >> sign REVERSES: %-5s | SUM consistent with zero: %-5s | native resolved: %-5s%n",
+                    reversed, sumNull, natReal);
+            System.out.printf(Locale.US, "      >> VERDICT: %s%n", !natReal
+                    ? "INCONCLUSIVE — native twirl not resolved at this eta, nothing to mirror-test"
+                    : (reversed && sumNull ? "CHIRAL — reverses and the sum is null"
+                    : reversed ? "REVERSES but the sum is NOT null — partially chiral / magnitude differs"
+                    : "NOT CHIRAL — does not reverse under mirroring"));
+        }
+    }
+
+    static String etaId(double eta, int sgn, int seed) { return etaId(eta, sgn, seed, ETA_MIRROR); }
+    static String etaId(double eta, int sgn, int seed, double mirror) {
         int base = ETA_BASE_STEPS > 0 ? ETA_BASE_STEPS : STEPS;
-        return String.format(Locale.US, "etamap_s%d_e%04.0f_%s%d", base, eta*10000, sgn > 0 ? "" : "n_", seed);
+        return String.format(Locale.US, "etamap_s%d_e%04.0f_%s%s%d", base, eta*10000,
+                mirror < 0 ? "m_" : "", sgn > 0 ? "" : "n_", seed);
     }
     static double[] etaOdd(double eta, String key) {
         int ki = POWK(key); double[] o = new double[SEEDS];
