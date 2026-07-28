@@ -522,13 +522,28 @@ flip). **DECISIVE MECHANISM — the phenotypes are in DIFFERENT classes: ROTATIO
 turns-per-distance is the **RATIO** ⇒ η^−0.97, fully explained **with NO viscosity-dependent chirality**.
 **⇒ V3 NOT SUPPORTED** (τ_odd/J_total_odd show no monotone increase). Pre-stroke lifetime viscosity-invariant
 in PHYSICAL time **to 0.2 %** (99.25 vs 99.45 µs); carrier is attachment **FLUX** (+149 %), not residence (−20 %).
-**OPEN — ONE gating experiment: the MIRROR CONTROL at η=0.01.** The per-distance twirl is confirmed as a
-**measurement**; its **chiral ORIGIN is unestablished** until the signed quantities reverse on a mirrored lattice
-(`TArm` already carries `mirror`; the eta-map arms pass +1). **n=8 suffices for a sign test (~1 h).** Until then
-report it as *"a confirmed viscosity dependence of rotation per unit distance, of MOBILITY origin"* — **NOT** as
-evidence about motor chirality. Gliding needs no extension (17.07σ). Not run: force decomposition (propulsive vs opposing — the tug-of-war reading is consistent with but
-NOT demonstrated by these data), η > 0.1 (Part I's knee is untested on the current motor), η < 0.01.
-**Canonical viscosity UNCHANGED; nothing tuned; frozen model untouched.**
+**MIRROR CONTROL DONE (2026-07-27, 16/16 records, 0 invalid, 0.6 h) — the twirl is CHIRAL IN ORIGIN; NO GATES
+REMAIN.** `-eta-mirror` reruns the SAME eta-map arms with `TArm.mirror=−1` at η=0.01, n=8 matched seeds (mirror
+ids carry an `m_` prefix). **All three signed quantities REVERSE:** Ω_odd **−91.34 ± 39.84 (2.29σ, 75 % seed
+sign) → +67.93 ± 35.29 (1.92σ, 75 % seed sign)**; turns/µm −3.508 → **+2.178**; τ_odd −2.727e−22 →
+**+2.000e−22** N·m; antisymmetry sum −23.41 ± 62.58 (0.37σ). **Quote the SIGN FLIP, not the null sum** — the
+`σ(sum)<2` criterion is weak-power and passes trivially on a noisy measurement; the discriminating fact is
+mirror-positive/native-negative at 75 % seed sign on matched seeds, **4.5σ** from the no-reversal expectation.
+**Magnitude antisymmetry is NOT established** (|mirror|/|native|=0.74, unresolvable at n=8 — optional n=24
+refinement ≈2 h, NOT a gate). **V3 UNCHANGED (still NOT SUPPORTED): τ_odd stays FLAT in η** — the mirror control
+is ORTHOGONAL, establishing that the flat τ_odd is a *genuine chiral torque* rather than an achiral artifact.
+**⇒ Complete account: the motor generates a chiral torque of viscosity-INDEPENDENT magnitude; rotation rises as
+η falls purely because rotational drag falls. Chirality supplies the SIGN, mobility supplies the SCALING.**
+**STANDING PHRASING (both halves must travel together):** *"a confirmed viscosity dependence of rotation per unit
+distance, of MOBILITY origin, acting on a torque that is CHIRAL in origin."* Gliding needs no extension (17.07σ).
+Not run: mirror at the canonical η=0.10 (**deliberately** — native is 1.06σ / 58 % seed sign at n=24, nothing
+resolved to reverse), mirror at n=24, force decomposition (propulsive vs opposing — the tug-of-war reading is
+consistent with but NOT demonstrated by these data), η > 0.1 (Part I's knee is untested on the current motor),
+η < 0.01. **Canonical viscosity UNCHANGED; nothing tuned; frozen model untouched.**
+```
+./scripts/run_gpu_monitored.sh ./scripts/run_chiral_sites.sh -eta-mirror -eta-points 0.01 -gpu -seeds 8 -steps 8000
+./scripts/run_chiral_sites.sh -eta-mirror-report -eta-points 0.01 -seeds 8 -steps 8000   # re-report from records
+```
 
 **S2 FIXTURE HETEROGENEITY (new study, 2026-07-26) — AUDIT ONLY.** Separately bounded investigation of the
 assay fixture *mechanically free S2 length*: does a heterogeneous lawn change the core GLIDING predictions,

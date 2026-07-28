@@ -67,9 +67,10 @@ steepening toward η⁻¹ and to locate the knee; more seeds on the 0.05 point t
 
 **Date:** 2026-07-27 · **Status:** Stages 0–2 COMPLETE and PASSING; the **viscosity premise test
 COMPLETE** (one gliding assay: 4 η × 8 seeds, then the η = 0.10/0.01 endpoints extended to **24 seeds**;
-both ε signs throughout; **128 production runs, 0 invalid, 0 solver failures**, 4.1 h).
+both ε signs throughout; **128 production runs, 0 invalid, 0 solver failures**, 4.1 h); the **mirror
+control COMPLETE** (§12c — 16 further runs at η = 0.01, 0 invalid, 0.6 h).
 · **Runner:** GPU device-resident, monitored, no fallback (verified).
-· **Remaining gate:** the **mirror control at η = 0.01** (§18).
+· **No gates outstanding.** The study is closed on its own terms.
 
 > **HEADLINE — the premise is CONFIRMED, but the class assignment is PHENOTYPE-SPECIFIC.**
 > *(endpoint numbers n = 24)*
@@ -88,6 +89,13 @@ both ε signs throughout; **128 production runs, 0 invalid, 0 solver failures**,
 >
 > **The mechanism, in one line: rotation is drag-limited (`Ω ∝ η^−1.2`, τ_odd flat) while translation is
 > not (`v ∝ η^−0.232`), so turns-per-distance rises as the RATIO of the two — MOBILITY, not chirality.**
+>
+> **Mirror control (§12c): the twirl IS chiral in origin.** On a mirrored actin lattice Ω_odd, τ_odd and
+> turns-per-µm all **reverse sign** (Ω_odd −91.34 → **+67.93**, both at 75 % seed sign, n = 8). The
+> viscosity-flat τ_odd is therefore a **genuine chiral torque**, not an achiral artifact — which
+> *completes* the mobility account rather than competing with it: a chiral torque of
+> viscosity-independent magnitude, mobilized ever more freely as η falls. **Sign reversal is
+> established; magnitude antisymmetry is NOT** (|mirror|/|native| = 0.74, unresolvable at n = 8).
 >
 > **⇒ V1 refuted for gliding but HOLDS for rotation · V2 confirmed · V3 not supported · V4 not the
 > explanation · V5 excluded to η = 0.01 · V6 refuted.**
@@ -424,9 +432,54 @@ on the same scene reaches 4.74σ.
 viscosity therefore buys far more rotation (`η^−1.2`) than translation (`η^−0.23`), and turns-per-distance
 rises as the **ratio** of those two exponents (`η^−0.97`). The twirl gain is **mobility**, not chirality.
 
-**Still required before this twirling result is credited:** the **mirror control** at η = 0.01 (§18) —
-the signed twirling quantities must reverse on a mirrored actin lattice. Until that is run, the
-per-distance twirling result is **confirmed as a measurement but not yet established as chiral in origin.**
+**The chiral-origin gate that this section left open is now CLOSED — see §12c.**
+
+## 12c. MIRROR CONTROL at η = 0.01 — the twirl is CHIRAL in origin
+
+**What was required.** §12b confirmed the per-distance twirl as a *measurement* but could not establish
+that it was chiral rather than an achiral artifact of the scene. The discriminating test: a genuinely
+chiral ε-ODD response must **reverse sign** on a mirrored actin lattice; an achiral one must not.
+
+**What was run.** The *same* eta-map arms with `TArm.mirror = −1` (`-eta-mirror`), η = 0.01, both ε
+signs, **n = 8 matched seeds** — a subset of the §12b native seeds, so native and mirror are seed-paired.
+**16/16 records, 0 invalid, 0 solver failures**, GPU device-resident with no fallback, 0.6 h. Mirror
+records carry a distinct `m_` id prefix so they cannot collide with native ones. Raw
+`RUN_LOGS/2026-07-27_eta_mirror_n8.txt`.
+
+| quantity | native | mirror | sum (nat + mir) |
+|---|---:|---:|---:|
+| **Ω_odd** (rad/s) | −91.34 ± 39.84 (2.29σ, **75 %** seed sign) | **+67.93 ± 35.29** (1.92σ, **75 %** seed sign) | −23.41 ± 62.58 (**0.37σ**) |
+| **P_turn** (turns/µm) | −3.508 | **+2.178** | — |
+| **τ_odd** (N·m) | −2.727e−22 | **+2.000e−22** | — |
+
+**Verdict: all three signed quantities REVERSE. The ε-ODD twirl is chiral in origin.**
+
+**How much this shows, stated precisely.** The load-bearing evidence is *not* that the antisymmetry sum
+is 0.37σ — that criterion (`σ(sum) < 2`) is weak-power and a sufficiently noisy measurement passes it
+trivially. The load-bearing evidence is that the mirror arm came out **positive at 75 % seed-sign
+consistency** while the native arm came out **negative at 75 %**, on matched seeds. Against the
+no-reversal expectation (mirror ≈ native ≈ −91) the observed +67.93 ± 35.29 sits **4.5σ** away.
+
+**What is NOT established: magnitude antisymmetry.** |mirror| / |native| = **0.74**, and the sum's SEM
+(62.58) cannot resolve a ~26 % asymmetry. n = 8 was sized for a *sign* test and delivers exactly that.
+Whether the mirrored magnitude truly equals the native one is **open** and would cost ≈ 2 h at n = 24.
+
+**Consistency checks.**
+- The §18 pre-registration predicted a mirror arm near **+77 ± 28 (≈2.7σ)**; observed **+67.93 ± 35.29
+  (1.92σ)**. Within 0.3σ of prediction.
+- The native n = 8 subset reads 2.29σ; the n = 24 campaign reads 4.74σ, and 4.74·√(8/24) = 2.74σ. No
+  tension — the subset behaves as a subset should.
+
+**What it does and does not change.** It does **not** change **V3**, which remains **NOT SUPPORTED**:
+τ_odd is still flat in η, so the *mechanochemistry* of twirling is still not viscosity-sensitive. What
+the control adds is orthogonal — it establishes that the flat τ_odd is a **real chiral torque** rather
+than an achiral artifact. The two facts compose into a complete account: **the motor generates a chiral
+torque whose magnitude does not depend on viscosity, and rotation rises as η falls purely because
+rotational drag falls.** Chirality supplies the *sign*; mobility supplies the *scaling*.
+
+**Scope limit.** This is η = 0.01 only. A mirror control at the canonical η = 0.10 would be
+uninformative: the native twirl there is 1.06σ with 58 % seed sign even at n = 24, so there is nothing
+resolved to reverse.
 
 ## 13. Brownian/coherence control
 
@@ -496,7 +549,7 @@ full 4-point ladder carry n = 8 at the η = 0.05 and 0.02 points.**
 |---|---|---|
 | **V1** mobility/time-rescaling | **REFUTED for GLIDING · HOLDS for ROTATION** | gliding: η·v collapses 5.9× at **17.07σ** ⇒ refuted. Rotation: `Ω ∝ η^−1.2` with **τ_odd flat** ⇒ twirling *is* mobility scaling |
 | **V2** gliding mechanochemistry viscosity-sensitive | **CONFIRMED** | avgBound **+92 %**, strokes/s **+144 %**, episode rate **+149 %**, η·v at **17.07σ** |
-| **V3** twirling mechanochemistry viscosity-sensitive | **NOT SUPPORTED** | turns-per-µm confirmed at **3.55σ**, but τ_odd (−1.6e-22 → −2.3e-22, overlapping) and J_total_odd show **no monotone trend** ⇒ the gain is **rotational mobility**, not generated chiral impulse |
+| **V3** twirling mechanochemistry viscosity-sensitive | **NOT SUPPORTED** | turns-per-µm confirmed at **3.55σ**, but τ_odd (−1.6e-22 → −2.3e-22, overlapping) and J_total_odd show **no monotone trend** ⇒ the gain is **rotational mobility**, not generated chiral impulse. *(The mirror control, §12c, does not revive V3: it shows τ_odd is **chiral in origin**, which is orthogonal to whether it varies with η — it does not.)* |
 | **V4** coherence/noise only | **NOT the explanation** | mean normalized quantities moved far beyond noise |
 | **V5** low-viscosity numerical confound | **EXCLUDED to η = 0.01** | **0 invalid, 0 solver failures across all 128 production runs**; Stage-1 factors exactly invariant; Stage-2 controls exact; CPU/GPU clean. *Caveat: the fixed-dt arm was not run — §14 gives why it is not required.* |
 | **V6** weak sensitivity below 0.1 | **REFUTED** | sensitivity is strong and resolved throughout 0.10 → 0.01 |
@@ -509,6 +562,9 @@ full 4-point ladder carry n = 8 at the η = 0.05 and 0.02 points.**
 - **Turns-per-distance is the RATIO**, so it rises `η^−0.97` at **3.55σ** — a real, confirmed change in
   rotation per unit distance that is nonetheless **entirely accounted for by the two limiting regimes**,
   with no appeal to viscosity-dependent chirality.
+- **And the torque being mobilized IS chiral** (§12c: Ω_odd, τ_odd and turns-per-µm all reverse on a
+  mirrored lattice). Chirality sets the **sign** of the response; mobility sets its **scaling with η**.
+  These are separate claims and the study now supports both, without either implying the other.
 
 **The subtlety worth stating explicitly.** Two true things that sound contradictory: gliding **SPEED** is
 nearly viscosity-insensitive (`η^−0.232` — 10× less drag buys only **1.71×** speed), yet the gliding
@@ -536,27 +592,35 @@ rather than converted into transport.
    more often. Consistent with the standing **"recruitment is REACH-limited"** finding.
 5. **And it acts on twirling through rotational drag ALONE.** `Ω ∝ η^−1.2` with τ_odd flat: the motor does
    not generate more chiral torque at low viscosity, the filament merely rotates more freely under the
-   torque it already generates. **Do not read the 9× rise in turns-per-µm as a chirality result.**
+   torque it already generates. **Do not read the 9× rise in turns-per-µm as a chirality result** — the
+   *rise* is mobility. (The torque itself **is** chiral — §12c — but that is a statement about its sign
+   under mirroring, not about its viscosity dependence, which is flat.)
 6. **Biological framing.** Water is ~1e-3 Pa·s; this study reaches 0.01, still 10× above water and 10×
    below the fixture value. Trends are monotone with no saturation at 0.01, so the **fixture viscosity —
    not any intrinsic motor property — sets twirling observability.**
 
 **No canonical value is changed by this study, and none is recommended on this evidence** (§18).
-**The twirling conclusions of §§11–12b remain provisional pending the mirror control** (§18).
+**The twirling conclusions of §§11–12b are no longer provisional** — the mirror control has run (§12c).
 
 ## 18. Exact next recommendation
 
 **Gliding: SETTLED.** 17.07σ at n = 24. No further work.
 
-**Twirling: the per-distance effect is CONFIRMED (3.55σ) but its CHIRAL ORIGIN is not yet established.**
-The one remaining gating experiment is the **mirror control at η = 0.01**: run the same scene on a
-**mirrored actin lattice** (`TArm` already carries a `mirror` field; the eta-map arms currently pass +1)
-and require the signed twirling quantities to **reverse**. Ω_odd = −76.99 ± 16.25 at n = 24 implies a
-mirror arm at **n = 8** would land near **+77 ± 28 (≈2.7σ)** — adequate for a *sign* test, at
-**≈1 h** GPU. n = 24 would cost ≈3.1 h and is not needed for a sign test.
+**Twirling: SETTLED for sign and origin.** The per-distance effect is confirmed at 3.55σ (§12b) and its
+**chiral origin is established** by the mirror control at η = 0.01 (§12c): Ω_odd, τ_odd and turns-per-µm
+all reverse, native −91.34 → mirror +67.93, both at 75 % seed sign. **The study's gating question is
+answered and nothing further is required to defend the results as stated.**
 
-Until that runs, report the twirling result as **"a confirmed viscosity dependence of rotation per unit
-distance, of mobility origin"** — and NOT as evidence about the motor's chirality.
+The correct standing phrasing is now: **"a confirmed viscosity dependence of rotation per unit distance,
+of MOBILITY origin, acting on a torque that is CHIRAL in origin."** The two halves must travel together
+— dropping the first invites reading the 9× rise as a chirality result; dropping the second understates
+what §12c showed.
+
+**The one open sub-question, and it is optional:** **magnitude antisymmetry**. |mirror|/|native| = 0.74
+and n = 8 cannot resolve a ~26 % gap. Extending the mirror arm to **n = 24** (≈32 further records,
+≈2 h) would test whether the mirrored magnitude genuinely equals the native one. This is a refinement,
+not a gate — no conclusion in this report depends on it, and a 26 % asymmetry at 0.37σ is at least as
+likely to be noise as signal.
 
 **Lower priority:** add propulsive/opposing force columns to test the §9 tug-of-war reading directly;
 probe η > 0.1 to check Part I's claimed knee on the current motor.
@@ -571,9 +635,13 @@ probe η > 0.1 to check Part I's claimed knee on the current motor.
   that arm measures a *different* system. Not required to defend these results.
 - **Brownian-ON/OFF coherence control (§13)** — unnecessary; the mean effects far exceed noise.
 - **Extension to 24 seeds — RUN** for twirling (η = 0.10 and η = 0.01); see §12b. Gliding needed none.
-- **The twirling mirror control — NOT YET RUN.** It is now the single gating experiment (§18): the
-  per-distance twirling effect is confirmed as a *measurement*, but its **chiral origin is unestablished**
-  until the signed quantities are shown to reverse on a mirrored lattice.
+- **The twirling mirror control — RUN** (§12c). All signed quantities reverse; chiral origin established
+  at n = 8, which was sized for a sign test.
+- **The mirror control at n = 24 — NOT RUN.** Would test *magnitude* antisymmetry (|mirror|/|native| =
+  0.74 at n = 8, unresolvable). Optional refinement, not a gate — §18.
+- **The mirror control at the canonical η = 0.10 — NOT RUN, and deliberately so.** The native twirl there
+  is 1.06σ with 58 % seed sign at n = 24; there is nothing resolved to reverse, so a mirror arm would be
+  uninformative regardless of outcome.
 - **η > 0.1** — Part I's claimed knee above the canonical value is **untested on the current motor**.
 - **η = 0.003 / 0.001 Pa·s** — excluded by the brief for this task; not recommended on this evidence.
 - **Force decomposition (propulsive vs opposing)** — not in the record; the §9 tug-of-war reading is

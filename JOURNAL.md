@@ -1,5 +1,49 @@
 # Soft Box Project Journal
 
+### 2026-07-27 — MIRROR CONTROL: the ε-ODD twirl REVERSES on a mirrored lattice ⇒ CHIRAL IN ORIGIN; the last open gate on the viscosity study is closed
+
+**What was done.** The single gating experiment left open by the n=24 twirling confirmation. New
+`-eta-mirror` / `-eta-mirror-report` on `ChiralSiteHarness`: the SAME eta-map arms with `TArm.mirror=−1`
+(the field already existed; the eta-map arms passed +1), η=0.01, both ε signs, **n=8 matched seeds** (a
+subset of the §12b native seeds, so native/mirror are seed-paired). **16/16 records, 0 invalid, 0 solver**,
+GPU device-resident no fallback, 0.6 h. Mirror ids carry an `m_` prefix so they cannot collide with native.
+Raw `RUN_LOGS/2026-07-27_eta_mirror_n8.txt`; report `docs/VISCOSITY_SENSITIVITY_FINDINGS.md` §12c.
+
+**What was learned.**
+- **ALL THREE signed quantities REVERSE.** Ω_odd native **−91.34 ± 39.84** (2.29σ, 75 % seed sign) →
+  mirror **+67.93 ± 35.29** (1.92σ, 75 % seed sign); P_turn −3.508 → **+2.178** turns/µm; τ_odd
+  −2.727e−22 → **+2.000e−22** N·m. Antisymmetry sum −23.41 ± 62.58 (**0.37σ**).
+- **⇒ The twirl is CHIRAL IN ORIGIN.** The chiral-origin caveat that has ridden on every twirling claim
+  since the premise test is **discharged**.
+- **The load-bearing evidence is the SIGN FLIP, not the null sum.** The harness's `σ(sum) < 2` criterion is
+  weak-power — a noisy enough measurement passes it trivially. What discriminates is that mirror came out
+  **positive at 75 % seed sign** while native came out **negative at 75 %**, on matched seeds; against the
+  no-reversal expectation the mirror arm sits **4.5σ** away. Quote it that way, not as "sum ≈ 0".
+- **Magnitude antisymmetry is NOT established.** |mirror|/|native| = **0.74**; the sum's SEM (62.58) cannot
+  resolve a ~26 % gap. n=8 was sized for a *sign* test and delivered one — nothing more.
+- **The §18 pre-registration held.** Predicted +77 ± 28 (≈2.7σ); observed +67.93 ± 35.29 (1.92σ) — within
+  0.3σ. Native n=8 subset 2.29σ vs n=24's 4.74σ; 4.74·√(8/24)=2.74σ ⇒ no tension.
+- **V3 is UNCHANGED — still NOT SUPPORTED.** τ_odd remains FLAT in η. The mirror control is **orthogonal**:
+  it establishes that the flat τ_odd is a *genuine chiral torque* rather than an achiral artifact. The two
+  compose into the complete account — **the motor generates a chiral torque whose magnitude does not depend
+  on viscosity; rotation rises as η falls purely because rotational drag falls.** Chirality supplies the
+  **sign**, mobility supplies the **scaling**. Neither claim implies the other.
+- **Standing phrasing is now:** *"a confirmed viscosity dependence of rotation per unit distance, of
+  MOBILITY origin, acting on a torque that is CHIRAL in origin."* Both halves must travel together.
+
+**Process note — a GPU hard freeze interrupted the first attempt.** The run died at seed 107 (Xid 79 +
+154, `state=EXECUTING`, step 41737/80000) leaving 6 of 16 records, all at ε=+1, hence **zero matched pairs
+and no partial result**. Crash case collected (`gpu-crash-case-20260727-172447.tar.gz`) before resuming, per
+the standing rule. The resume-safe record design did its job — the relaunch reused the 6 and ran only the
+missing 10. One more instance of the standing unresolved TornadoVM/NVIDIA freeze; nothing implicates the
+mirror arms.
+
+**What's open.** Nothing gating. **Optional refinement:** mirror at **n=24** (≈32 records, ≈2 h) to test
+*magnitude* antisymmetry — a refinement, not a gate; no conclusion depends on it, and a 26 % gap at 0.37σ is
+at least as likely noise as signal. **Deliberately NOT run:** mirror at the canonical η=0.10 — the native
+twirl there is 1.06σ / 58 % seed sign at n=24, so there is nothing resolved to reverse.
+**Canonical viscosity UNCHANGED; nothing tuned; frozen model untouched; default-off.**
+
 ### 2026-07-27 — TWIRLING CONFIRMED at n=24 (3.55σ) — and it is MOBILITY, not chirality; the canonical 0.1 Pa·s is BLIND to twirling even with 24 seeds
 
 **What was done.** The brief's adaptive-powering extension (twirling only — gliding was already 4.8–7.8σ):
@@ -27,7 +71,9 @@
   near-exact confirmation of the n=8 reading, and exactly what a chemistry-limited phase must do.
   Post-stroke −23 %, total residence −20 %, while avgBound **+92 %** ⇒ the carrier is attachment **FLUX**.
 
-**What's open — ONE gating experiment.** The **mirror control at η = 0.01**: the per-distance twirling
+**What's open — ONE gating experiment.** *(RESOLVED 2026-07-27 by the mirror control — see the entry above;
+the quantities DO reverse. The paragraph below is preserved as the state of knowledge at the time.)* The
+**mirror control at η = 0.01**: the per-distance twirling
 effect is confirmed as a **measurement**, but its **chiral ORIGIN is unestablished** until the signed
 quantities reverse on a mirrored actin lattice. `TArm` already carries the `mirror` field (the eta-map
 arms pass +1); **n=8 suffices for a sign test** (Ω_odd would land ≈ +77 ± 28, ≈2.7σ) at **≈1 h**. Until
