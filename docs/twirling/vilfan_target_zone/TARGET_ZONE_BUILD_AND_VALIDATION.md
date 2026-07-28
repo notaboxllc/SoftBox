@@ -178,7 +178,7 @@ manifest records every underlying switch explicitly.
 | 11 | rigid-filament fixture | `-no-rigid` | rigid single rod in the fixture | `buildS2Mat(..., rigid)` |
 | 12 | converter skew amplitude | `-conv-skew-deg <v>` | **0.0** | existing `convFrameStep` |
 | 13 | actin-lattice mirror state | `-mirror ±1` | +1 | existing `MIRROR_SIGN` |
-| 14 | lattice選択 | `-lattice 1\|4\|5\|6`, `-site-rise-nm`, `-site-stair-deg` | 6 (fixture) | `siteRise`/`siteStairPhase` |
+| 14 | lattice selection | `-lattice 1\|4\|5\|6`, `-site-rise-nm`, `-site-stair-deg` | 6 (fixture) | `siteRise`/`siteStairPhase` |
 
 **Not altered** (verified by inspection and by gate E): nucleotide kinetics, load-dependent kinetic laws,
 working-stroke magnitude, S2 stiffness/geometry, binding stiffness, catch/slip, rigor rupture, motor density
@@ -397,6 +397,38 @@ per arm as `ANALYSIS/vilfan_target_zone/consistency_campaign.csv`.
 
 ## 8. Stage 5 — deterministic proof of mechanism
 
+### 8.1 Configuration
+
+`./scripts/run_vilfan_tz_deterministic.sh -campaign -maty 0.01 -density 6000 -steps 20000 -warmup 2000
+-seeds 8 -lattice 6`. Idealized monotone-staircase lattice (2.7 nm rise, −27.6923°/site); zone half-width
+40°; converter skew **0°**; old binding/interface skew **off**; every mechanical Brownian channel **off**;
+rigid single-rod filament; fixed height; fixed tilt; **free axial roll**; prescribed axial translation
++2 µm/s; ordinary stochastic attachment/detachment chemistry **retained**. 120 motors on a 2.00 × 0.010 µm
+lawn strip; 8 matched chemical seeds; 20 000 steps (50 ms) with the first 2 000 discarded. Arms: zone ON/OFF
+× native/mirrored lattice, plus six starting azimuths spanning one full actin repeat.
+
+### 8.2 What "reverses under mirroring" means for each observable — stated before the numbers
+
+This needs care, because two of the reported quantities transform differently and conflating them would
+manufacture or destroy an apparent reversal.
+
+- **`⟨δ⟩`, the mean signed zone offset, REVERSES.** `δ` is measured from a zone centre fixed in the
+  laboratory to a site normal carried by the lattice. Mirroring negates the lattice's phase gradient, so
+  the offsets at which attachment happens flip sign. Likewise `⟨τ⟩`, `Ω` and turns/µm reverse, because
+  gate C7 established `τ` tracks `δ` with a positive, measured slope.
+- **`A_TZ` is mirror-INVARIANT by construction, and that is the point.** `A_TZ` is referenced to the drift
+  direction (`BEFORE ⇔ sign(D)·δ < 0`), and mirroring negates `D` as well as `δ`. A mechanism that catches
+  sites on the *entering* edge of the zone does so on either lattice, so `A_TZ` should keep the *same*
+  sign while everything it drives flips. **Its invariance is a check that the same mechanism is running on
+  both lattices**, and it is the raw `⟨δ⟩` that carries the handedness.
+
+The task's success criterion lists `A_TZ` among the quantities that reverse. Under the drift-referenced
+definition given in §5.1 that is not the correct expectation, so this report tests the physically
+meaningful pair explicitly: **`A_TZ` invariant, `⟨δ⟩` reversed** — and reports both, so either reading can
+be checked against the data.
+
+### 8.3 Results
+
 [RESULTS PENDING]
 
 ## 9. Native versus idealized lattice
@@ -411,9 +443,52 @@ per arm as `ANALYSIS/vilfan_target_zone/consistency_campaign.csv`.
 
 [RESULTS PENDING]
 
-## 12. Numerical health
+## 12. Numerical health and regression
 
-[RESULTS PENDING]
+### 12.1 Numerical health of the fixture
+
+Across every gate and every campaign arm: **all states finite**, **no forbidden nucleotide state** (all in
+[0,3]), **zero solver failures**, **zero invalid states**, no NaN/Inf in `coord` or `bondData`, and no
+attachment-record collisions. The prescribed translation is held to `9.31e-10 µm` maximum deviation from
+the command over a full run. The configuration is reported deterministically (every switch in the manifest)
+and the fixture is **exactly reproducible**: the same seed gives a bit-identical trajectory
+(`max|Δcoord| = 0`, `Δroll = 0`, gate G5).
+
+### 12.2 Regression of the EXISTING code paths (CPU)
+
+The two shared kernels this task touched — `ChiralSiteSystem.siteSnap` (one new argument, one gated filter)
+and `TwoBodyBeamAnalyticGpu.matS2SolveStep` (three new default-0 policy bits) — are exercised by existing
+suites, which were re-run on this branch. Log: `RUN_LOGS/vilfan_target_zone/regression/regression.txt`.
+
+**`./scripts/run_chiral_sites.sh -fixtures` — 24 PASS / 0 FAIL, `ALL GATED CHECKS PASS`.** The two decisive
+entries:
+
+```
+[ 8] zero-feature path bit-identical (all flags OFF ⇒ canonical trajectory)              PASS
+[11] site lattice OFF ⇒ prior continuous surface path reproduced bit-identically         PASS
+```
+
+together with the discrete-site fixtures that cover the modified kernel directly — `[12]` fresh bind snaps
+onto the lattice at the actin surface radius, `[13]` the site frame rolls/translates/bends with the material
+frame, `[14]` the bound site id is latched for the whole attachment, `[15]/[16]` site exclusivity and
+spacing, and `[25]` the axial-torque identity `τ = Ractin × F_tangential` (an identity, not a fit).
+
+**`./scripts/run_lasertrap.sh -motor-regression` — Gates A–F PASS, `VERDICT: PASS`:**
+
+```
+GateB common-core identity:              max|Δ| = 0.00e+00  ⇒ PASS (shared core)
+GateC EXPLICIT registry ≡ frozen builder: max|Δpose| = 0.00e+00 ⇒ PASS (bit-identical)
+GateD CALIBRATED registry ≡ frozen builder: max|Δpose| = 0.00e+00 ⇒ PASS (bit-identical)
+GateE live stroke: explicit = 7.27 (7.27), calibrated = 6.90 (6.90) ⇒ PASS
+GateF serialize/restart identity: PASS
+```
+
+`max|Δ| = 0` on the common core is the direct check that splitting the motor Brownian mask into per-body
+channels is arithmetically inert at policy 0.
+
+Combined with gates E1–E3 of this task's own suite (offset recording alters no binding decision and no
+trajectory bit; the per-channel bits at 0 are bit-identical to the canonical mask; all three channels off is
+bit-identical to the global switch), **the default-off claim is verified rather than asserted.**
 
 ## 13. Limitations
 
