@@ -1,0 +1,3 @@
+group,n_events,zone_centre_nm,A_TZx,mean_s_TZ_nm,sem_s_TZ_nm,mean_xi_harness_nm,sem_xi,mean_xi_Vilfan_nm,mean_theta_rad,sem_theta,mean_life_steps,kD_over_kA,vilfan_predicted_xi_nm
+graded native,8120,30.375,-0.0099,0.0516,0.1137,-0.0676,0.0312,0.0676,0.01229,0.00561,439.2,18.216,-0.0218
+graded mirrored,2290,0.675,0.0131,0.0215,0.2094,0.0795,0.0599,-0.0795,0.03471,0.03777,473.8,16.884,-0.0235

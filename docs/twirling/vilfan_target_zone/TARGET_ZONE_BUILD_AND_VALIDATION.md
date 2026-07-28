@@ -8,6 +8,14 @@ changed.
 
 ---
 
+> **FOLLOW-ON — this report's native-lattice conclusion has been superseded in part.**
+> `VILFAN_GRADED_BINDING_VALIDATION.md` implements Vilfan's *actual* graded competing-site attachment law
+> (Biophys J 97(4):1130–1137, Eqs 1–2) and finds that **native 13/6 actin does support deep periodic target
+> zones (96 % modulation, one per 13 subunits)**. The §9 conclusion below — that actin's real lattice cannot
+> provide coherent zone passage — is correct *for the hard-gate rule tested here*, but is **not** a property
+> of the lattice. Read §9 as a statement about the rule, and see the follow-on report for the native-lattice
+> result.
+
 ## 1. Executive conclusion
 
 **Verdict: the target-zone attachment asymmetry is reproduced inside SoftBox under favourable deterministic

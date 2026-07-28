@@ -65,6 +65,9 @@ public final class VilfanGradedBindingHarness {
             }
         }
         new File(OUT).mkdirs();
+        // Per-attachment event records are written by the fixture harness, which owns writeEvents(); point
+        // it at THIS study's directory so the two studies never share a run directory.
+        VilfanTargetZoneDeterministicHarness.OUT = OUT;
         // Apply the declared lawn strip BEFORE any scene is built (the fixture harness does this in its own
         // main; this harness has its own entry point and must do it too, or the default 3.0 x 1.0 um mat is
         // used and the motor count is 150x larger than intended).
