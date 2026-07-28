@@ -167,6 +167,7 @@ public final class VilfanTargetZoneDeterministicHarness {
         r.fixP = FloatArray.fromElements((float) r.axis[0], (float) r.axis[1], (float) r.axis[2],
                 (float) VCMD, 0f, CLAMP_TILT ? 1f : 0f, PRESCRIBE ? 1f : 0f);
         ChiralSiteHarness.seedPrevY(r.f, 0, r.prevY);
+        fillZoneCentres(r);
         double rise = ExplicitCompleteMatHarness.siteRise(LATTICE);
         double stair = ExplicitCompleteMatHarness.siteStairPhase(LATTICE);
         double twist = r.e.chiP.get(2);                       // already carries the mirror sign
@@ -633,17 +634,38 @@ public final class VilfanTargetZoneDeterministicHarness {
         ck("C6 accessible azimuthal fraction = zone width / pi", Math.abs(frac - expect) < 0.02,
                 String.format(Locale.US, "accessible %.4f of the circle (expect %.4f)", frac, expect));
     }
-    /** The kernel's zone-centre direction for motor m, recomputed host-side from the same simulated vectors. */
-    static double[] zoneCentreDirection(Rig r, int m) {
+    /**
+     * Fill the per-motor TARGET-ZONE CENTRE DIRECTION: the radial direction from the filament axis toward
+     * each motor's FIXED SUBSTRATE TETHER POINT ({@code g4E[m]}, where its S2 emerges from the coverslip).
+     *
+     * <p>This is the motor's surface-side reach geometry and, for a lawn beneath the filament, the
+     * substrate-facing radial direction — the quantity gate C5 measures. It is deliberately NOT built from
+     * the head's instantaneous pose: the head moves, so a zone referenced to it would follow the head and
+     * would not be a zone at all (that error was caught by gate C5 and is recorded in the report).
+     *
+     * <p>The direction is perpendicular to the axis and referenced to the axis LINE, so it is invariant
+     * under the fixture's prescribed axial translation and under filament roll. The fixture also clamps the
+     * tilt, so it is constant for the whole run and is filled once at build.
+     */
+    static void fillZoneCentres(Rig r) {
         int n = r.nSeg, N = r.N;
         double cx = r.f.coord.get(0), cy = r.f.coord.get(n), cz = r.f.coord.get(2*n);
         double ux = r.axis[0], uy = r.axis[1], uz = r.axis[2];
-        double fx = r.e.outGeom.get(6*N + m), fy = r.e.outGeom.get(7*N + m), fz = r.e.outGeom.get(8*N + m);
-        double rx = fx - cx, ry = fy - cy, rz = fz - cz;
-        double d = rx*ux + ry*uy + rz*uz;
-        rx -= d*ux; ry -= d*uy; rz -= d*uz;
-        double l = Math.sqrt(rx*rx + ry*ry + rz*rz);
-        return l > 1e-12 ? new double[]{ rx/l, ry/l, rz/l } : new double[]{ 0, 0, 0 };
+        for (int m = 0; m < N; m++) {
+            double[] E = r.G.g4E[m];
+            double rx = E[0] - cx, ry = E[1] - cy, rz = E[2] - cz;
+            double d = rx*ux + ry*uy + rz*uz;
+            rx -= d*ux; ry -= d*uy; rz -= d*uz;
+            double l = Math.sqrt(rx*rx + ry*ry + rz*rz);
+            if (l > 1e-12) { rx /= l; ry /= l; rz /= l; } else { rx = ry = rz = 0; }
+            r.e.tzOff.set(N + m, (float) rx); r.e.tzOff.set(2*N + m, (float) ry); r.e.tzOff.set(3*N + m, (float) rz);
+        }
+    }
+
+    /** The zone-centre direction actually in force for motor m (read back from the buffer the kernel reads). */
+    static double[] zoneCentreDirection(Rig r, int m) {
+        int N = r.N;
+        return new double[]{ r.e.tzOff.get(N + m), r.e.tzOff.get(2*N + m), r.e.tzOff.get(3*N + m) };
     }
     /** Signed offset of a site at material azimuth {@code phi} from a zone centre at material azimuth {@code psi}. */
     static double syntheticDelta(Rig r, double psi, double phi) {
@@ -726,22 +748,23 @@ public final class VilfanTargetZoneDeterministicHarness {
         ck("E2 per-channel motor Brownian bits = 0 ⇒ bit-identical to the canonical mask", dE == 0.0,
                 String.format(Locale.US, "max|Δcoord|=%.3e µm over %d steps", dE, K));
         BR_S2NODE = s1; BR_CONV = s2; BR_HEAD = s3;
-        // E3: the three per-channel bits ON together == the single global brownOn=0 switch.
+        // E3: the three per-channel bits set == the single global motor-Brownian switch (matc[2] = 0).
+        // BOTH arms are built through buildRig so they share an identical scene, identical zone-centre
+        // buffer and identical feature state; the ONLY difference is HOW the motor Brownian is silenced.
         BR_S2NODE = false; BR_CONV = false; BR_HEAD = false;
         configure();
         Rig re = buildRig(SEED0);
-        for (int t = 0; t < K; t++) ExplicitCompleteMatHarness.stepGlidingCPU(re.e, t, SEED0);
-        ExplicitCompleteMatHarness.resetBrownianPolicy();
-        ExplicitCompleteMatHarness.BR_FIL_AXIAL = BR_FIL_AX; ExplicitCompleteMatHarness.BR_FIL_TRANS = BR_FIL_TR;
-        ExplicitCompleteMatHarness.BR_FIL_ROLL = BR_FIL_ROLL; ExplicitCompleteMatHarness.BR_FIL_OTHROT = BR_FIL_OTH;
-        Glide2D Gg = TwoBodyConverterMotor.buildS2Mat(DENSITY, DT, 40.0,
-                TwoBodyConverterMotor.EXPLICIT_GLIDE_SLACK_NM, SEED0, RIGID_FIL);
-        var eg = ExplicitCompleteMatHarness.packExMat(Gg, 0);    // brownOn = 0 ⇒ every motor channel off
-        for (int t = 0; t < K; t++) ExplicitCompleteMatHarness.stepGlidingCPU(eg, t, SEED0);
+        for (int t = 0; t < K; t++) step(re, t, SEED0);
+        BR_S2NODE = true; BR_CONV = true; BR_HEAD = true;      // policy bits clear ...
+        configure();
+        Rig rg = buildRig(SEED0);
+        rg.e.matc.set(2, 0);                                    // ... and silence via the global switch instead
+        for (int t = 0; t < K; t++) step(rg, t, SEED0);
         double dF = 0;
-        for (int i = 0; i < 3 * re.nSeg; i++) dF = Math.max(dF, Math.abs(re.f.coord.get(i) - Gg.fil.coord.get(i)));
-        ck("E3 all three motor channels OFF ≡ the global motor-Brownian switch OFF", dF == 0.0,
-                String.format(Locale.US, "max|Δcoord|=%.3e µm over %d steps", dF, K));
+        for (int i2 = 0; i2 < 3 * re.nSeg; i2++) dF = Math.max(dF, Math.abs(re.f.coord.get(i2) - rg.f.coord.get(i2)));
+        ck("E3 all three motor channels OFF ≡ the global motor-Brownian switch OFF",
+                dF == 0.0 && re.roll == rg.roll,
+                String.format(Locale.US, "max|Δcoord|=%.3e µm, Δroll=%.3e over %d steps", dF, re.roll - rg.roll, K));
         BR_S2NODE = s1; BR_CONV = s2; BR_HEAD = s3; configure();
     }
 
@@ -761,6 +784,30 @@ public final class VilfanTargetZoneDeterministicHarness {
                 Math.abs(om[0]) < 2 * om[1] || om[1] == 0 && om[0] == 0,
                 String.format(Locale.US, "Omega = %+.4e ± %.4e rad/s (%.2fσ)", om[0], om[1],
                         om[1] > 0 ? Math.abs(om[0]/om[1]) : 0.0));
+
+        // F3/F4 — THE TRUE ACHIRAL NULL. F1/F2 above turn the target zone off but leave the HELICAL LATTICE
+        // in place, and a helical lattice combined with off-axis attachment is itself a chirality source: the
+        // nearest accessible site's azimuth still advances systematically as the filament slides. So F1/F2
+        // do NOT isolate fixture artifacts. Setting the azimuthal advance to 180 deg per site makes the site
+        // set {0, 180, 0, 180, ...} MIRROR-INVARIANT (mirroring negates the advance, and -180 = +180), so the
+        // lattice carries no handedness at all. Any systematic torque surviving here would be an artifact of
+        // the fixture or the implementation, not physics.
+        double savedStair = ExplicitCompleteMatHarness.SITE_FIX_STAIR_DEG;
+        ExplicitCompleteMatHarness.SITE_FIX_STAIR_DEG = 180.0;
+        ZONE_ON = false; configure();
+        List<Res> ra = new ArrayList<>();
+        for (int i = 0; i < Math.min(SEEDS, 4); i++) ra.add(runArm(SEED0 + i, Math.min(STEPS, 8000)));
+        ExplicitCompleteMatHarness.SITE_FIX_STAIR_DEG = savedStair;
+        ZONE_ON = sz; configure();
+        double[] ta = meanSem(col(ra, x -> x.meanTau)), oa = meanSem(col(ra, x -> x.omega));
+        ck("F3 ACHIRAL lattice (180 deg/site) ⇒ no systematic axial torque",
+                Math.abs(ta[0]) < 2 * ta[1] || (ta[1] == 0 && ta[0] == 0),
+                String.format(Locale.US, "tau = %+.4e ± %.4e N·m (%.2fσ)", ta[0], ta[1],
+                        ta[1] > 0 ? Math.abs(ta[0]/ta[1]) : 0.0));
+        ck("F4 ACHIRAL lattice (180 deg/site) ⇒ no systematic axial rotation",
+                Math.abs(oa[0]) < 2 * oa[1] || (oa[1] == 0 && oa[0] == 0),
+                String.format(Locale.US, "Omega = %+.4e ± %.4e rad/s (%.2fσ)", oa[0], oa[1],
+                        oa[1] > 0 ? Math.abs(oa[0]/oa[1]) : 0.0));
     }
 
     /** G — numerical health. */

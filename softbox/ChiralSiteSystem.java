@@ -178,6 +178,11 @@ public final class ChiralSiteSystem {
      * anchor. A fresh bind with no site inside {@code captureUm} is RELEASED (site-limited binding — an
      * honest loss, not renormalised).
      *
+     * <p>{@code tzData} (FloatArray, 4N): {@code [0*N+m]} OUT = the signed target-zone offset of the chosen
+     * site at attachment (NaN when free); {@code [1..3*N+m]} IN = this motor's zone-centre direction (the
+     * radial direction from the filament axis toward its fixed substrate tether point). A zero vector
+     * disables the gate for that motor.
+     *
      * <p>Writes {@code bindArc} (the site's axial coordinate), {@code bindAzim} (the site azimuth PLUS the
      * askew offset {@code epsBind}) and {@code bindSite} (the persistent global site id, −1 when free).
      * Established bonds are NOT re-snapped: the site ID is retained for the whole attachment.
@@ -185,7 +190,7 @@ public final class ChiralSiteSystem {
     public static void siteSnap(IntArray boundSeg, IntArray prevBound, IntArray justBound,
             DoubleArray outGeom, FloatArray filCoord, FloatArray filUVec, FloatArray filYVec,
             FloatArray filSegLength, FloatArray segCumArc, FloatArray bindArc, FloatArray bindAzim,
-            IntArray bindSite, FloatArray tzOff, DoubleArray chiP, IntArray counts) {
+            IntArray bindSite, FloatArray tzData, DoubleArray chiP, IntArray counts) {
         int N = counts.get(0), nSeg = counts.get(3);
         int mode = (int) chiP.get(0);
         double rise = chiP.get(1), twistRate = chiP.get(2), stairPhase = chiP.get(3), Ract = chiP.get(4);
@@ -223,12 +228,15 @@ public final class ChiralSiteSystem {
                 // direction — the equivalence is MEASURED, not assumed (gate C4).
                 double chx = 0.0, chy = 0.0, chz = 0.0; boolean tzOk = false;
                 if (tzAct) {
-                    double fo = footArc - halfLen;
-                    double rx = fx - (cx + fo * ux), ry = fy - (cy + fo * uy), rz = fz - (cz + fo * uz);
-                    double rd = rx * ux + ry * uy + rz * uz;
-                    rx -= rd * ux; ry -= rd * uy; rz -= rd * uz;
-                    double rl = rx * rx + ry * ry + rz * rz;
-                    if (rl > 1e-24) { double ir = 1.0 / Math.sqrt(rl); chx = rx * ir; chy = ry * ir; chz = rz * ir; tzOk = true; }
+                    // Supplied per-motor zone-centre direction: the radial direction from the filament axis
+                    // toward THIS motor's fixed SUBSTRATE TETHER POINT (its S2 emergence point). The tether
+                    // point is where the motor is attached to the coverslip, so this is the motor's surface-
+                    // side reach geometry and — for a lawn beneath the filament — the substrate-facing radial
+                    // direction. It is deliberately NOT built from the head's instantaneous pose: the head
+                    // moves, and a zone that follows the head is no zone at all.
+                    chx = tzData.get(N + m); chy = tzData.get(2 * N + m); chz = tzData.get(3 * N + m);
+                    double cl = chx * chx + chy * chy + chz * chz;
+                    if (cl > 1e-12) { double ic = 1.0 / Math.sqrt(cl); chx *= ic; chy *= ic; chz *= ic; tzOk = true; }
                 }
                 for (int j = -halfSearch; j <= halfSearch; j++) {
                     int k = k0 + j;
@@ -265,10 +273,10 @@ public final class ChiralSiteSystem {
                     // askew BOUND-interface offset: a rotation in the LOCAL site tangent plane. mirror flips the
                     // site's tangential sense (the chirality control) so a mirrored lattice reverses the offset.
                     bindAzim.set(m, (float) (bestPhi + mirror * epsBind));
-                    if (tzAct) tzOff.set(m, (float) bestDel);   // the signed zone offset AT ATTACHMENT
+                    if (tzAct) tzData.set(m, (float) bestDel);   // the signed zone offset AT ATTACHMENT
                 }
             }
-            if (bs < 0) { bindSite.set(m, -1); if (tzAct) tzOff.set(m, Float.NaN); }
+            if (bs < 0) { bindSite.set(m, -1); if (tzAct) tzData.set(m, Float.NaN); }
             justBound.set(m, jb);
             prevBound.set(m, bs);
         }

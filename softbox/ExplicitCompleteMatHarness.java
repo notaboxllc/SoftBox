@@ -532,7 +532,10 @@ public final class ExplicitCompleteMatHarness {
                 CONV_SKEW_RAMP, CONV_SKEW_RAMP_ONSET,
                 // [25] Vilfan target-zone accessibility half-width (rad; <=0 ⇒ OFF), [26] record-offset flag.
                 TZ_ZONE_HALF_DEG * Math.PI / 180.0, TZ_ZONE_RECORD || tzZoneOn() ? 1.0 : 0.0);
-        e.tzOff = new FloatArray(N); e.tzOff.init(Float.NaN);   // signed zone offset at attachment (NaN = none)
+        // tzData (4N): [0..N) OUT signed zone offset at attachment; [N..4N) IN per-motor zone-centre
+        // direction (filled by the fixture harness from each motor's substrate tether point; 0 = gate off)
+        e.tzOff = new FloatArray(4 * N); e.tzOff.init(0f);
+        for (int m = 0; m < N; m++) e.tzOff.set(m, Float.NaN);
         // Per-motor CONVERTER FRAME (stride 13, planar): [0..2] b*, [3..5] econv*, [6..8] eup*, [9..11] gauge
         // offset (µm), [12] flag. ALL ZERO ⇒ flag 0 ⇒ matBeamGeom / matS2SolveStep take the VERBATIM canonical
         // branch reading the base frame ⇒ byte-identical when the feature is off (it is never even wired).
