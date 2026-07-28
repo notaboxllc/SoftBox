@@ -356,7 +356,57 @@ rigor heads, exactly as the mechanism predicts.
 
 ## 5. Stage 2 — duration pilot
 
-*(filled in from `RUN_LOGS/lowatp/stage2_pilot_gpu.txt`)*
+**Decision: 200 ms, common to every condition.** Log: `RUN_LOGS/lowatp/stage2_pilot_gpu.txt`; driver log
+`RUN_LOGS/lowatp/stage2_driver.txt`.
+
+### 5.1 Design — nested prefixes of ONE trajectory
+
+The pilot runs **one** trajectory per (ATP, ε sign, seed) at the longest pilot duration and reads every shorter
+window out of that **same** trajectory as a genuine prefix `[0, W]`, each with the same 25 % equilibration
+convention the production estimator uses. So the nested comparison isolates *duration* and nothing else — it
+can never be confounded by a different realization — and it costs nothing beyond the longest run. The dense
+prefix trace is also written to `<id>.trace.tsv`, so any other sub-window can be re-derived offline without
+rerunning anything.
+
+2 matched seeds, both ε signs, at 5 / 10 / 20 µM and the reference; nested windows 20 / 50 / 100 / 200 ms.
+
+### 5.2 A first pass at 100 ms was rejected, on evidence
+
+A 100 ms pilot was run first and **abandoned**: at 5 µM the ε-ODD roll rate was still growing across its
+nested windows (−19.2 → −68.6 → −111.1 rad/s), i.e. 100 ms is only ~5 bound lifetimes there. Evidence
+retained under `RUN_LOGS/lowatp/prelim_100ms/`. The pilot was relaunched at 200 ms, where its arms double as
+production records. The 200 ms run's own 100 ms prefix reproduces the abandoned run to −111.17 vs −111.10
+rad/s, confirming trajectory reproducibility across the relaunch.
+
+### 5.3 The binding condition — 5 µM (seed-paired, n = 2)
+
+| window | v_even µm/s | Ω_odd rad/s | turns/µm | \|disp\| µm | Δ vs previous window (v / Ω / turns) | G3 half-vs-full | roll R² |
+|---|---|---|---|---|---|---|---|
+| 20 ms | −0.1086 | −55.24 | −101.06 | 0.0016 ✗ | — | 22.8 % ✗ | 0.488 |
+| 50 ms | −0.0793 | −29.28 | −59.59 | 0.0030 ✗ | 26.9 / 47.0 ✗ / 41.0 % ✗ | 22.8 % ✗ | 0.452 |
+| 100 ms | −0.1615 | −58.24 | −73.92 | 0.0121 ✗ | 50.9 / 49.7 ✗ / 19.4 % | 11.0 % ✓ | 0.867 |
+| **200 ms** | **−0.1551** | **−57.09** | **−60.65** | **0.0233 ✓** | **4.0 / 2.0 / 18.0 % ✓** | **14.0 % ✓** | **0.830** |
+
+**G1 (≥100 completed stroke episodes per matched ±ε seed pair):** 370 (seed 101) and 476 (seed 102). ✓
+
+At 200 ms v_even and Ω_odd move only **4 %** and **2 %** from the previous window — an order of magnitude
+inside the 25 % requirement — while at 100 ms the displacement gate fails outright (0.0121 < 0.02 µm) and
+Ω_odd swings 50 %. The roll fit quality rises from R² 0.45 to 0.83–0.87 between 50 and 100 ms and is stable
+thereafter, so no startup transient dominates the fitted slope at 200 ms (G5), and the bound population is
+stationary from ~50 ms onward (G6).
+
+**Mechanistic cross-check that the ATP mapping is doing what Stage 0 derived:** measured bound residence at
+5 µM is **20.8–21.3 ms** across all four arms, against the predicted 1/atpOn = 20 ms rigor wait plus the ~1 ms
+remainder of the cycle.
+
+### 5.4 Duration decision
+
+5 µM is the slowest, hardest condition; the higher concentrations converge faster (shorter bound lifetime,
+faster gliding), so the shortest duration passing every gate at 5 µM is the shortest **common** duration.
+**200 ms is used for every condition**, so no ATP-specific durations and no separate common-window analysis
+are needed. Equilibration stays at the preregistered 25 % (= 50 ms ≈ 2.4 bound lifetimes at 5 µM); the pilot
+gave no evidence that a longer fixed equilibration is required. No 50 µM bridge condition was triggered — the
+20 µM → reference gap is spanned by a monotone, well-resolved ladder (§7).
 
 ---
 
