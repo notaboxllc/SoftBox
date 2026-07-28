@@ -362,6 +362,36 @@ rigor heads, exactly as the mechanism predicts.
 
 ## 6. Stage 3 — production configuration and results
 
+### 6.1 Configuration — inherited verbatim from the completed viscosity campaign
+
+Everything below is the controlling starting point, unchanged. **The only variable that moves across arms is
+[ATP].**
+
+| item | value | source |
+|---|---|---|
+| solvent viscosity η | 0.01 Pa·s | viscosity campaign's lowest trustworthy η |
+| timestep dt | 2.5×10⁻⁷ s | the mechanically scaled `dt(η) = dt₀·η/η₀` |
+| filament | 12 segments, Brownian **ON** (all four channels) | `TwoBodyConverterMotor.G4_NSEG` |
+| free S2 | homogeneous 40 nm | canonical L40 geometry |
+| motor density | 400 heads/µm² | canonical |
+| motors | N = 1200 | as built by `buildS2Mat` at this density |
+| actin sites | discrete, surface bond ON, native lattice | canonical |
+| converter skew | **linear ramp**, ε = +15° and −15° | the confirmed mechanism |
+| target-zone | OFF | task requirement |
+| old binding/interface skew | OFF | task requirement |
+| roll spring | OFF | not referenced by this lineage |
+| rigor mechanical rupture | **OFF** (`RUPTURE_MODE = 0`) | §2.7 — as the viscosity campaign had it |
+| equilibration | 25 % of the run | unless the pilot demanded otherwise (§5) |
+| runner | GPU device-resident, monitored, **no fallback** | `run_gpu_monitored.sh`; a lowering failure throws |
+
+Per-record provenance retained: [ATP] and effective `atpOn`, η, dt, physical duration, equilibration
+fraction, seed, ε sign, mirror flag, git revision, boot id, rupture mode, runner, and the full observable set
+(gliding slope, body-fixed roll slope, torque, all four phase-resolved angular impulses, bound population,
+state occupancy, attachment/stroke/detachment counts, ATP-triggered vs rigor-rupture detachments, physical
+pre- and post-stroke lifetimes, numerical-health counters).
+
+### 6.2 Results
+
 *(filled in from `RUN_LOGS/lowatp/stage3_*.txt`)*
 
 ---
@@ -386,4 +416,50 @@ rigor heads, exactly as the mechanism predicts.
 
 ## 10. Experimental comparison, limits, work not done, next recommendation
 
-*(filled in)*
+### 10.1 Experimental comparators (POST-HOC — comparisons, never optimization targets)
+
+| quantity | experiment | this study |
+|---|---|---|
+| [ATP] | ≈5–20 µM | 5, 10, 20 µM (+ the frozen reference) |
+| gliding speed | ≈0.1–0.5 µm/s | *(§7)* |
+| mean myosin-II twirling pitch | ≈0.47 ± 0.20 µm | *(§7)* |
+| pitch vs filament velocity | comparatively insensitive | *(§7)* |
+
+Nothing was changed after seeing output. No ATP, viscosity, skew, density or detachment parameter was
+adjusted to improve agreement, and no ATP response curve was fitted back into the motor.
+
+### 10.2 Limits carried by this result
+
+1. **The µM axis inherits the frozen `atpOn`.** The implied second-order constant is ≈1.0×10⁷ M⁻¹s⁻¹ against
+   a classic actomyosin ≈1–2×10⁶ M⁻¹s⁻¹ (§2.5). Under the alternative anchor every µM label multiplies by 5
+   with identical physics; the effective hazard in s⁻¹ is reported everywhere so the relabelling is trivial.
+2. **Rigor mechanical rupture is OFF on this lineage** (§2.7), so these arms are the **pure ATP-limited**
+   limit. Stage 1A′ shows the rupture-ON crossover lies inside the experimental window (73 % rupture at
+   5 µM), so a rupture-ON ladder would differ materially — that is a separate, declared study, not a defect
+   here.
+3. **η = 0.01 Pa·s, not water.** The viscosity study established that this lineage's absolute speeds and
+   engagement are viscosity-dependent, and that the canonical 0.1 Pa·s suppresses twirling below
+   detectability. All statements here are at 0.01 Pa·s.
+4. **ε = ±15° is a causal perturbation, not a measured biological skew.** The pitch comparison is an
+   order-of-magnitude statement about a *mechanism*, not an estimate of a structural angle.
+5. **Single filament per arm.** Seed-to-seed spread is the dominant statistical term; the seed is the
+   independent unit throughout.
+6. **Temperature stitch.** The cycle is a multi-temperature literature compilation (canonical inventory);
+   `atpOn` in particular is a Lymn & Taylor ~20 °C lower bound on a rate "too fast to measure".
+
+### 10.3 Experiments deliberately NOT run
+
+- A **rupture-ON low-ATP ladder** (the natural companion to Stage 1A′) — it changes the frozen motor
+  configuration and would break comparability with the viscosity campaign.
+- **ATP below 5 µM or above 20 µM** other than the reference, except the 50 µM bridge if the pilot triggered
+  it (§5) — outside the experimental window and not needed for the transfer test.
+- The **5–15° skew map**, the **Vilfan reconstruction**, **viscosity below 0.01 Pa·s**, **density**, **S2**,
+  **catch/slip recalibration**, **force-law redesign**, and any **contractile-network** campaign — all
+  explicitly out of scope for this task.
+- A **mirror control at the reference [ATP]** is run only if the reference twirl is itself resolved; the
+  viscosity campaign already established that at the canonical η it is not, and a mirror test of an
+  unresolved quantity reverses nothing.
+
+### 10.4 Next recommendation
+
+*(filled in with the result)*

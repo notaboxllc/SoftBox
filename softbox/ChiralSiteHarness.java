@@ -113,6 +113,7 @@ public final class ChiralSiteHarness {
     /** Nested PHYSICAL windows (s) the pilot reads out of ONE trajectory prefix. */
     static double[] NESTED_MS = { 20, 50, 100, 200, 500 };
     static double  ATP_DUR_MS = -1.0;         // -atp-duration-ms <ms> (production/pilot physical duration)
+    static boolean ATP_MAP_NESTED = true;     // -atp-no-nested: drop the production nested-prefix readout
     static double  EQUIL_FRAC = 0.25;                           // -equil-frac: startup transient discarded
     static int     NBLK      = 5;                               // measurement blocks for the block-SEM
     static int     NTRACE    = 60;                              // stationarity trace samples in the measure window
@@ -256,6 +257,7 @@ public final class ChiralSiteHarness {
                                         for (int k = 0; k < p.length; k++) ATP_MAP[k] = Double.parseDouble(p[k].trim()); }
                 case "-atp-nested-ms" -> { String[] p = args[++i].split(","); NESTED_MS = new double[p.length];
                                         for (int k = 0; k < p.length; k++) NESTED_MS[k] = Double.parseDouble(p[k].trim()); }
+                case "-atp-no-nested" -> ATP_MAP_NESTED = false;
                 case "-atp-eps-deg" -> ATP_EPS_DEG = Double.parseDouble(args[++i]);
                 default -> { }
             }
@@ -4427,6 +4429,9 @@ public final class ChiralSiteHarness {
     // ------------------------------------------------------------------ STAGE 3: the production ATP ladder
     static void runAtpMap(double durMs) {
         FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; BUDGET = true;
+        // Production keeps the nested prefix readout ON: it is analysis-only, costs nothing measurable, and
+        // makes the COMMON-WINDOW comparison across conditions of different duration available WITHOUT a rerun.
+        NESTED_ON = ATP_MAP_NESTED;
         boolean savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM;
         ExplicitCompleteMatHarness.EPISODE_TELEM = true;
         CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;      // the confirmed mechanism, unmodified
@@ -4439,7 +4444,7 @@ public final class ChiralSiteHarness {
                 for (int i = 0; i < SEEDS; i++) atpArm(uM, sgn, SEED + i, durS, tally);
         System.out.printf("%n  records: %d reused, %d newly run, %d expected%n",
                 tally[0], tally[1], 2*ATP_MAP.length*SEEDS);
-        CONV_RAMP_ARM = null; BUDGET = false;
+        NESTED_ON = false; CONV_RAMP_ARM = null; BUDGET = false;
         ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem; cfgOff(); EPS_CONV_ARM = 0;
         reportAtpMap(durS);
         if (ATP_MIRROR < 0) reportAtpMirror(durS);

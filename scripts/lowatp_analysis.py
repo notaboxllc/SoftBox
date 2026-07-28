@@ -241,7 +241,9 @@ def main():
     ap.add_argument("--duration-ms", type=float, required=True)
     ap.add_argument("--mirror", action="store_true")
     ap.add_argument("--outdir", default="RUN_LOGS/lowatp")
+    ap.add_argument("--rec-dir", default=REC_DIR)
     a = ap.parse_args()
+    globals()["REC_DIR"] = a.rec_dir
     os.makedirs(a.outdir, exist_ok=True)
     tag = "lowatp_d%dms%s" % (round(a.duration_ms), "_mirror" if a.mirror else "")
 
