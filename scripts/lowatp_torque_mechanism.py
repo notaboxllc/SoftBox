@@ -257,11 +257,26 @@ def main():
 
     # =============================================================== STEP 3 — closure
     print("\n\n### STEP 3 — TORQUE-ROTATION CLOSURE\n")
-    gsegs = sorted({round(d["gseg"], 34) for S in pair.values() for d in S})
-    gseg = gsegs[0] if gsegs else float("nan")
+    # gamma_roll reconstruction, robust to MIXED-VINTAGE records. qOmega was corrected on 2026-07-28 from the
+    # single-segment to the whole-filament roll drag, so tau*qOmega/omega yields gamma_SEGMENT for records
+    # written before the fix and gamma_FILAMENT (= NSEG * gamma_segment) for records written after. Both are
+    # accepted, but each is CHECKED to be one of exactly those two values -- anything else is a real change in
+    # configuration and is reported rather than absorbed.
+    raw = [d["gseg"] for S in pair.values() for d in S if math.isfinite(d["gseg"])]
+    gseg = min(raw) if raw else float("nan")
     gfil = NSEG * gseg
+    nseg_conv = sum(1 for g in raw if abs(g / gseg - 1) < 1e-6)
+    nfil_conv = sum(1 for g in raw if abs(g / gfil - 1) < 1e-6)
+    odd_conv = len(raw) - nseg_conv - nfil_conv
+    gsegs = [gseg] if odd_conv == 0 else sorted(set(raw))
     print("  gamma_roll (per segment, reconstructed exactly as tau*qOmega/omega): %.6e N·m·s" % gseg)
-    print("  distinct values across all arms: %d  (invariant configuration => must be 1)" % len(gsegs))
+    print("  record vintages: %d pre-fix (segment convention), %d post-fix (filament convention), %d UNEXPECTED"
+          % (nseg_conv, nfil_conv, odd_conv))
+    if odd_conv:
+        print("  *** %d record(s) reconstruct to neither gamma_segment nor NSEG*gamma_segment — configuration "
+              "is NOT invariant; investigate before using these numbers ***" % odd_conv)
+    else:
+        print("  every arm reconstructs to gamma_segment or NSEG*gamma_segment => configuration invariant")
     print("  gamma_roll (whole filament) = NSEG * gamma_segment = %d * %.4e = %.6e N·m·s" % (NSEG, gseg, gfil))
     print("""
   BOOKKEEPING NOTE -- a defect in a DIAGNOSTIC field, not in any physics or claim.

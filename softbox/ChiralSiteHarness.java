@@ -1667,6 +1667,18 @@ public final class ChiralSiteHarness {
         long ruptureEvents, rateCapWarns;      // pulled from mot.ruptureStats when rigor rupture is compiled in
         double[] occBound = new double[4];     // BOUND-head occupancy fractions, indexed by MotorStore.NUC_*
         double[] occAll   = new double[4];     // whole-population occupancy fractions
+        // ---- SIGNED PER-HEAD TORQUE DECOMPOSITION (the STEP-5 / STEP-6 instrumentation the pilot lacked) ----
+        // All are TIME-AVERAGES over the measurement window of a per-step reduction across bound heads, so each
+        // is directly comparable with r.tau (which is the time-average of the signed SUM). Analysis-only: every
+        // input is a value the measurement loop already computes, and nothing is written back into the sim.
+        double tauPos, tauNeg;              // summed POSITIVE / NEGATIVE per-head axial torque
+        double nTauPos, nTauNeg;            // mean count of positive- / negative-torque heads
+        double[] tauByState = new double[4], nByState = new double[4];   // by MotorStore.NUC_*
+        double tauPre, tauPost, nPre, nPost;                             // by pre- / post-stroke phase
+        // axial mechanical power classification: F_axial * v_filament > 0 = PULLER, < 0 = DRAGGER
+        double tauPull, tauDrag, nPull, nDrag, fAxPull, fAxDrag;
+        double residPull, residDrag; long nDetPull, nDetDrag;            // residence by terminal class
+        double vFilMean;
         // Nested-window prefix readout (populated only when NESTED_ON): one entry per NESTED_MS window that fits.
         // nesVhalf/nesOmHalf are the SAME window's FINAL HALF [W/2, W] — the preregistered "final half vs full
         // post-equilibration window" stability check. nesRaw is the retained dense prefix trace.
@@ -1853,6 +1865,15 @@ public final class ChiralSiteHarness {
             java.util.List<double[]> trace = new java.util.ArrayList<>();
             // §LOW-ATP: occupancy + detachment-cause counters (analysis-only, measurement window)
             long[] occB = new long[4], occA = new long[4];
+            // §STEP5/6 signed per-head torque decomposition accumulators (summed over steps, divided at the end)
+            double aTauPos = 0, aTauNeg = 0, aNTauPos = 0, aNTauNeg = 0;
+            double[] aTauState = new double[4], aNState = new double[4];
+            double aTauPre = 0, aTauPost = 0, aNPre = 0, aNPost = 0;
+            double aTauPull = 0, aTauDrag = 0, aNPull = 0, aNDrag = 0, aFaxPull = 0, aFaxDrag = 0;
+            double aResidPull = 0, aResidDrag = 0; long nDetPull = 0, nDetDrag = 0;
+            double aVfil = 0;
+            double prevGl = Double.NaN;          // previous projected centroid, for the instantaneous v_filament
+            int[] lastClass = new int[N];        // +1 puller / -1 dragger / 0 unclassified, at the previous step
             // §LOW-ATP nested-window prefix trace: sampled from step 0 so any leading sub-window is a genuine
             // trajectory PREFIX of the full run (never a restart). {t_phys, meanRoll, glide, cumBinds, cumStrokes,
             // cumDetach, cumBoundSteps}. Off by default ⇒ nothing is allocated and no sample is taken.
@@ -1892,6 +1913,9 @@ public final class ChiralSiteHarness {
                     continue;
                 }
                 double sn = 0, sa = 0; int nb = 0;
+                // instantaneous axial filament velocity for the puller/dragger classification (µm/s)
+                double vFil = Double.isNaN(prevGl) ? 0.0 : (gl - prevGl) / DTR;
+                prevGl = gl; aVfil += vFil;
                 for (int m = 0; m < N; m++) {
                     int bs = G.mot.boundSeg.get(m), nu = G.mot.nucleotideState.get(m);
                     if (bs >= 0 && prevBs[m] < 0) { binds++; if (lawn != null) clsBinds[lawn[m] <= clsSplit ? 0 : 1]++; }
@@ -1903,6 +1927,10 @@ public final class ChiralSiteHarness {
                         if (nu == MotorStore.NUC_ATP) r.detachAtp++;
                         else if (nu == MotorStore.NUC_NONE) r.detachRigor++;
                         else r.detachOther++;
+                        // residence attributed to the axial class the head occupied on its LAST bound step
+                        if (lastClass[m] > 0) { aResidPull += age[m] * DTR; nDetPull++; }
+                        else if (lastClass[m] < 0) { aResidDrag += age[m] * DTR; nDetDrag++; }
+                        lastClass[m] = 0;
                     }
                     if (nu >= 0 && nu < 4) { occA[nu]++; if (bs >= 0) occB[nu]++; }
                     if (nested != null) {
@@ -1944,6 +1972,14 @@ public final class ChiralSiteHarness {
                     double fax = G.bondData.get(d+6)*f.uVec.get(bs) + G.bondData.get(d+7)*f.uVec.get(nSeg+bs)
                             + G.bondData.get(d+8)*f.uVec.get(2*nSeg+bs);
                     faxAcc += fax;
+                    // ---- §STEP5/6 signed per-head decomposition (pure reductions over values already computed) --
+                    if (tau > 0) { aTauPos += tau; aNTauPos++; } else if (tau < 0) { aTauNeg += tau; aNTauNeg++; }
+                    if (nu >= 0 && nu < 4) { aTauState[nu] += tau; aNState[nu]++; }
+                    if (strokeLag[m] >= 0) { aTauPost += tau; aNPost++; } else { aTauPre += tau; aNPre++; }
+                    double power = fax * vFil;                 // axial mechanical power of this head
+                    if (power > 0)      { aTauPull += tau; aNPull++; aFaxPull += fax; lastClass[m] = +1; }
+                    else if (power < 0) { aTauDrag += tau; aNDrag++; aFaxDrag += fax; lastClass[m] = -1; }
+                    else lastClass[m] = 0;
                     // ---- PHASE A: route this step's axial angular impulse into its bound-cycle bucket -----------
                     if (L != null) L.accumulate(m, t, bs, tau, fax, ftan, dRoll[bs], stroked, prevNb, a.mirror);
                     if (lawn != null) { int c = lawn[m] <= clsSplit ? 0 : 1;
@@ -2030,6 +2066,20 @@ public final class ChiralSiteHarness {
                 for (int m = 0; m < N; m++) { ev += G.mot.ruptureStats.get(2*m); wr += G.mot.ruptureStats.get(2*m + 1); }
                 r.ruptureEvents = ev; r.rateCapWarns = wr;
             }
+            // §STEP5/6: convert the per-step sums to time-averages over the measurement window
+            double invMeas = measSteps > 0 ? 1.0/measSteps : 0.0;
+            r.tauPos = aTauPos*invMeas; r.tauNeg = aTauNeg*invMeas;
+            r.nTauPos = aNTauPos*invMeas; r.nTauNeg = aNTauNeg*invMeas;
+            for (int k = 0; k < 4; k++) { r.tauByState[k] = aTauState[k]*invMeas; r.nByState[k] = aNState[k]*invMeas; }
+            r.tauPre = aTauPre*invMeas; r.tauPost = aTauPost*invMeas;
+            r.nPre = aNPre*invMeas; r.nPost = aNPost*invMeas;
+            r.tauPull = aTauPull*invMeas; r.tauDrag = aTauDrag*invMeas;
+            r.nPull = aNPull*invMeas; r.nDrag = aNDrag*invMeas;
+            r.fAxPull = aFaxPull*invMeas; r.fAxDrag = aFaxDrag*invMeas;
+            r.residPull = nDetPull > 0 ? aResidPull/nDetPull : Double.NaN;
+            r.residDrag = nDetDrag > 0 ? aResidDrag/nDetDrag : Double.NaN;
+            r.nDetPull = nDetPull; r.nDetDrag = nDetDrag;
+            r.vFilMean = aVfil*invMeas;
             if (nested != null) r.nested(nested, steps * DTR);
             for (int i = 0; i < 3*nSeg; i++) if (!Float.isFinite(f.coord.get(i))) r.invalid++;
             if (GPU) {
@@ -4138,6 +4188,14 @@ public final class ChiralSiteHarness {
             "occNoneB", "occAtpB", "occAdpPiB", "occAdpB",
             "occNoneA", "occAtpA", "occAdpPiA", "occAdpB2",
             "bindsPerS", "detachPerS", "preLifeS", "postLifeS", "residenceS", "avgBoundFrac",
+            // §STEP5/6 signed per-head torque decomposition (added 2026-07-28; absent in earlier records,
+            // which therefore read back as NaN here -- that is intended and is how mixed-vintage record sets
+            // stay analysable rather than being silently rejected)
+            "tauPos", "tauNeg", "nTauPos", "nTauNeg",
+            "tauSNone", "tauSAtp", "tauSAdpPi", "tauSAdp", "nSNone", "nSAtp", "nSAdpPi", "nSAdp",
+            "tauPre", "tauPost", "nPre", "nPost",
+            "tauPull", "tauDrag", "nPull", "nDrag", "fAxPull", "fAxDrag",
+            "residPullS", "residDragS", "nDetPull", "nDetDrag", "vFilMean",
         };
         String[] base = ChiralSiteHarness.POW_KEYS;
         String[] all = new String[base.length + extra.length];
@@ -4167,6 +4225,14 @@ public final class ChiralSiteHarness {
         v[i++] = base[POWK("postLife")] * DTR;
         v[i++] = r.meanResidenceSteps * DTR;
         v[i++] = r.avgBound;
+        v[i++] = r.tauPos; v[i++] = r.tauNeg; v[i++] = r.nTauPos; v[i++] = r.nTauNeg;
+        for (int k = 0; k < 4; k++) v[i++] = r.tauByState[k];
+        for (int k = 0; k < 4; k++) v[i++] = r.nByState[k];
+        v[i++] = r.tauPre; v[i++] = r.tauPost; v[i++] = r.nPre; v[i++] = r.nPost;
+        v[i++] = r.tauPull; v[i++] = r.tauDrag; v[i++] = r.nPull; v[i++] = r.nDrag;
+        v[i++] = r.fAxPull; v[i++] = r.fAxDrag;
+        v[i++] = r.residPull; v[i++] = r.residDrag; v[i++] = r.nDetPull; v[i++] = r.nDetDrag;
+        v[i++] = r.vFilMean;
         return v;
     }
     static void atpWrite(String id, double[] v, String provenance) throws java.io.IOException {
