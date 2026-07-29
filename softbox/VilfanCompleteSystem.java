@@ -89,6 +89,11 @@ public final class VilfanCompleteSystem {
         public double warmupUm    = 1.0;
         public double turnsTarget = 8.0;
         public double travelCapUm = 60.0;      // hard cap on adaptive extension
+        /** If > 0 the analysis window is defined by TIME, not travel: warm-up ends at warmupTimeS
+         *  and the run ends at analysisTimeS after it. A travel-threshold window is biased when the
+         *  filament can move backward (it stops preferentially on a forward fluctuation); a
+         *  fixed-time window is unbiased by construction. */
+        public double warmupTimeS = 0.0, analysisTimeS = 0.0;
         /** absolute safety nets. A zero-velocity control (d = 0) never reaches a travel target, so
          *  every run also carries an event and a simulated-time cap. Hitting one is REPORTED. */
         public long   maxEvents   = 200_000_000L;
@@ -125,8 +130,24 @@ public final class VilfanCompleteSystem {
          *  fine-grid trapezoid along the same analytic trajectory, and record the discrepancy. */
         public boolean hazardCrossCheck = false;
         public int     hazardCrossGrid  = 20000;
+        /** axial-Brownian gate: check every Nth substep, refining it to this bridge depth. */
+        public long    hazardCheckStride = 997;
+        public int     hazardCheckDepth  = 4;
+
+        /* ---- restored realism #2: FDT-consistent AXIAL Brownian motion (roll stays deterministic) ---- */
+        public boolean axialBrownian = false;
+        /** base anchor step for the axial stochastic grid, seconds. Refinement halves it. */
+        public double anchorDtS = 5.0e-6;
+        /** refinement level L: the realised step is anchorDtS / 2^L, inserted by OU BRIDGE so the
+         *  coarse and refined trajectories are the same stochastic path (Stage 4-D axis). */
+        public int refineLevel = 0;
+        /** max bridge halvings when locating the terminal event inside an accepted substep. */
+        public int bridgeMaxLevel = 14;
+        /** hysteresis bands (nm) for scale-aware zone-centre recrossing counting. */
+        public double[] recrossBandsNm = {0.0, 0.5, 1.0, 2.7, 5.0};
 
         public boolean overdamped() { return "overdamped".equals(mechanics); }
+        public boolean brownian()   { return overdamped() && axialBrownian; }
 
         public Config copy() {
             try { return (Config) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); }
@@ -177,6 +198,7 @@ public final class VilfanCompleteSystem {
             this.gammaX     = c.dragScale * VilfanDrag.gammaXwork(c.etaPaS, c.lengthUm, c.filRadiusUm);
             this.gammaTheta = c.dragScale * VilfanDrag.gammaThetaWork(c.etaPaS, c.lengthUm, c.filRadiusUm);
         } else { this.gammaX = 0.0; this.gammaTheta = 0.0; }
+        this.DX = (gammaX > 0) ? c.kBT / gammaX : 0.0;
     }
 
     public Config config()   { return c; }
@@ -313,8 +335,16 @@ public final class VilfanCompleteSystem {
         public double  zonePassageS;                    // L / |v - omega*L/pi|
         public double  maxDynResidF, maxDynResidM;      // dynamic closure residuals
         public long    hazEvals, rootIters, branchCrossings, degenerateBranch, transientRootEvents;
+        /* ---- axial Brownian (Stage 5) ---- */
+        public boolean axialBrownian;
+        public double  DXnm2PerS, anchorDtS, sdXconstrainedNm;
+        public int     refineLevel;
+        public long    nSubsteps, nBridgeDraws, nFreeDiffSteps, zoneCentreCrossRaw;
+        public double  pathLenNm, netFwdNm, maxBackNm;
+        public long[]  recFwd = new long[0], recBwd = new long[0];
+        public double[] recBands = new double[0];
         public long    xcheckN;
-        public double  xcheckMaxRel, maxEventJumpX, maxEventJumpTheta;
+        public double  xcheckMaxRel, xcheckMeanRel, xcheckBias, xcheckBiasSem, maxEventJumpX, maxEventJumpTheta;
         public long    nEventsAnalysed;
         public double  wallClockS;
         public String  note = "";
@@ -450,7 +480,7 @@ public final class VilfanCompleteSystem {
     /** total transition rate k_total(X, Theta) at an arbitrary filament state. The bound-state part
      *  ({@code boundRateCur}) does not depend on the filament state — no chemical rate in this model
      *  is load-dependent — so only the detached attachment hazards are re-evaluated. */
-    private double kTotalAt(double Xv, double Tv) {
+    public double kTotalAt(double Xv, double Tv) {
         double reachLo = Xv - (c.window + 1) * a, reachHi = Xv + (nSites - 1) * a + (c.window + 1) * a;
         int lo = lowerBound(xM, reachLo), hi = upperBound(xM, reachHi);
         double s = 0.0;
@@ -496,8 +526,19 @@ public final class VilfanCompleteSystem {
     private double boundRateCur;
     private long hazEvals, rootIters, branchCrossings, degenerateBranch, transientRootEvents;
     private double maxDynResidF, maxDynResidM;
+    private double DX;                       // kBT/gammaX, nm^2/s
+    private long   anchorIdx;                // monotone address for the axial noise stream
+    private long   nSubsteps, nBridgeDraws, nFreeDiffSteps;
+    // ---- Stage-5 target-zone recrossing diagnostics ----
+    private double[] recNetFwd, recNetBwd;   // per hysteresis band
+    private long[]   recFwd, recBwd;
+    private double[] recRef;                 // per-band reference (last confirmed side)
+    private int[]    recSide;
+    private double   pathLenNm, maxBackNm, runMaxX;
+    private double   prevZone = Double.NaN;
+    private long     zoneCentreCrossRaw;
     private long   xcheckN;
-    private double xcheckMaxRel;
+    private double xcheckMaxRel, xcheckSum, xcheckSigned, xcheckSq;
     private double maxEventJumpX, maxEventJumpTheta;
 
     /** independent uniform fine-grid trapezoid of k along the analytic trajectory on [0,s]. */
@@ -720,6 +761,174 @@ public final class VilfanCompleteSystem {
         return -1;
     }
 
+    /* ==================== STOCHASTIC AXIAL PATH + HAZARD COUPLING (Stage 1-2) ====================
+     *
+     * With axial Brownian motion the filament's axial coordinate is no longer a smooth analytic
+     * trajectory, so the deterministic cumulative-hazard solver cannot be reused: the attachment
+     * hazards kA_i[X(t), Theta(t)] depend on the REALISED stochastic path. The process is therefore
+     * integrated as a coupled stochastic path / cumulative-hazard system:
+     *
+     *   1. draw H* = -ln r
+     *   2. step the realised axial OU path and the deterministic roll path together on an anchor grid
+     *   3. accumulate dH/dt = k_total[X(t), Theta(t), states] along that realised path
+     *   4. stop at H = H*; 5. evaluate all legal rates there; 6. select by rate fraction;
+     *   7. continue from the SAME continuous X and Theta.
+     *
+     * X uses the EXACT OU transition (no discretisation error in the marginal law); the hazard is
+     * integrated by Simpson with the midpoint supplied by the exact OU BRIDGE, so refining a step
+     * never redraws independent noise. Theta is propagated exactly as in the deterministic study.
+     */
+
+    /** stationary axial variance for the current bound set, kBT/(Nb K). */
+    private double varInfX(int nb) { return (nb > 0 && K > 0) ? c.kBT / (nb * K) : Double.POSITIVE_INFINITY; }
+
+    /** one exact axial step: OU when the filament is held, free diffusion when it is not. */
+    private double axialStep(double Xeq, double x0, double tauX, int nb, double dt, long addr) {
+        double z = VilfanAxialBrownian.gauss(c.seed, VilfanAxialBrownian.STREAM_AXIAL, addr);
+        if (nb > 0 && K > 0) return VilfanAxialBrownian.ouStep(Xeq, x0, tauX, varInfX(nb), dt, z);
+        nFreeDiffSteps++;
+        return VilfanAxialBrownian.freeStep(x0, DX, dt, z);
+    }
+
+    /** exact bridge midpoint of the axial path already pinned at (xa, xb) over [0, T]. */
+    private double axialBridgeMid(double Xeq, double xa, double xb, double tauX, int nb,
+                                  double T, long addr) {
+        nBridgeDraws++;
+        double z = VilfanAxialBrownian.gauss(c.seed, VilfanAxialBrownian.STREAM_BRIDGE, addr);
+        if (nb > 0 && K > 0) return VilfanAxialBrownian.ouBridgeMid(Xeq, xa, xb, tauX, varInfX(nb), T, z);
+        return VilfanAxialBrownian.freeBridgeMid(xa, xb, DX, T, z);
+    }
+
+    /**
+     * Advance to the next chemical event along a realised stochastic axial path.
+     * @return elapsed time, or -1 if the total rate vanished.
+     */
+    private double advanceStochastic(SplittableRandom rngTime) {
+        double Hrem = Math.log(1.0 / (1.0 - rngTime.nextDouble()));
+        double tAcc = 0.0;
+        double dtBase = c.anchorDtS / (1L << c.refineLevel);
+
+        for (int guard = 0; guard < 20_000_000; guard++) {
+            int nb = countBound();
+            if (nb == 0) nbZeroEvents++;
+            double Xeq = xEqNow(), Teq = thetaEqNow();
+            double tauX = (nb > 0 && K > 0) ? gammaX / (nb * K) : Double.POSITIVE_INFINITY;
+            double tauT = (nb > 0 && kTheta > 0.0) ? gammaTheta / (nb * kTheta) : Double.POSITIVE_INFINITY;
+
+            // a deterministic roll branch crossing truncates the substep so no trajectory ever
+            // steps silently across the +-pi discontinuity
+            double tBr = (nb > 0) ? nextBranchCrossing(Theta, Teq, tauT)[0] : Double.POSITIVE_INFINITY;
+            double[] brInfo = (nb > 0) ? nextBranchCrossing(Theta, Teq, tauT) : new double[]{Double.POSITIVE_INFINITY, -1, 0};
+            double dt = Math.min(dtBase, tBr);
+            boolean branchEnds = (tBr <= dtBase);
+
+            double X0 = X, T0 = Theta;
+            long addr = anchorIdx++;
+            double Xn = axialStep(Xeq, X0, tauX, nb, dt, addr);
+            double Tn = relaxT(Teq, T0, tauT, dt);
+            double Xm = axialBridgeMid(Xeq, X0, Xn, tauX, nb, dt, addr);
+            double Tm = relaxT(Teq, T0, tauT, 0.5 * dt);
+
+            double k0 = kTotalAt(X0, T0), km = kTotalAt(Xm, Tm), k1 = kTotalAt(Xn, Tn);
+            if (!(k0 > 0) && !(km > 0) && !(k1 > 0)) return -1;
+            double Hs = dt / 6.0 * (k0 + 4 * km + k1);
+            nSubsteps++;
+
+            if (Hs >= Hrem) {                       // the event falls inside this substep
+                double t = locateInSubstep(Xeq, Teq, X0, T0, Xn, Tn, tauX, tauT, nb, dt, Hrem, addr);
+                return tAcc + t;
+            }
+            if (c.hazardCrossCheck && (nSubsteps % c.hazardCheckStride) == 0) {
+                double ref = refineH(Xeq, Teq, X0, T0, Xn, Tn, tauX, tauT, nb, dt, addr, c.hazardCheckDepth);
+                double sgn = (Hs - ref) / Math.max(1e-300, ref);
+                double rel = Math.abs(sgn);
+                if (rel > xcheckMaxRel) xcheckMaxRel = rel;
+                xcheckSum += rel; xcheckSigned += sgn; xcheckSq += sgn * sgn; xcheckN++;
+            }
+            Hrem -= Hs; tAcc += dt;
+            pathLenNm += Math.abs(Xn - X0);
+            X = Xn; Theta = Tn;
+            updateRecrossing();
+            if (branchEnds && brInfo[1] >= 0) { branchN[(int) brInfo[1]] += (int) brInfo[2]; branchCrossings++; }
+        }
+        return -1;
+    }
+
+    /**
+     * Locate the terminal chemical event inside an accepted substep by BROWNIAN-BRIDGE refinement:
+     * the substep is halved repeatedly, each midpoint drawn from the exact OU bridge conditioned on
+     * the endpoints already realised, so the located time lies on the SAME stochastic path. X and
+     * Theta are left standing at the event time.
+     */
+    private double locateInSubstep(double Xeq, double Teq, double xa, double ta, double xb, double tb,
+                                   double tauX, double tauT, int nb, double T, double target, long addr) {
+        double t0 = 0.0, x0 = xa, th0 = ta, len = T, acc = 0.0;
+        long a = addr;
+        for (int lvl = 0; lvl < c.bridgeMaxLevel; lvl++) {
+            double half = 0.5 * len;
+            a = VilfanAxialBrownian.hash(a, 0x9E3779B9L, lvl);
+            double xm = axialBridgeMid(Xeq, x0, xb, tauX, nb, len, a);
+            double thm = relaxT(Teq, th0, tauT, half);
+            double kL0 = kTotalAt(x0, th0), kLm = kTotalAt(
+                    axialBridgeMid(Xeq, x0, xm, tauX, nb, half, a ^ 0x5DEECE66DL),
+                    relaxT(Teq, th0, tauT, 0.25 * len)), kLm2 = kTotalAt(xm, thm);
+            double HL = half / 6.0 * (kL0 + 4 * kLm + kLm2);
+            if (acc + HL >= target) { xb = xm; tb = thm; len = half; }       // event in the first half
+            else { acc += HL; t0 += half; x0 = xm; th0 = thm; len = half; } // event in the second half
+        }
+        X = x0; Theta = th0;
+        pathLenNm += Math.abs(x0 - xa);
+        updateRecrossing();
+        return t0;
+    }
+
+    /**
+     * NUMERICAL GATE: the cumulative-hazard quadrature error of ONE substep, isolated from the
+     * ensemble sampling noise.
+     * <p>
+     * Refining the whole simulation shifts event times and therefore decorrelates the trajectory, so
+     * comparing ensemble statistics across refinement levels measures sampling noise, not
+     * discretisation error. Instead we take a substep with its endpoints ALREADY realised and
+     * subdivide it by nested Brownian bridges, reusing the same midpoint draws at every level, so the
+     * coarse and refined estimates are integrals of literally the same stochastic path. The
+     * difference is then purely the quadrature error.
+     */
+    private double refineH(double Xeq, double Teq, double xa, double tha, double xb, double thb,
+                           double tauX, double tauT, int nb, double T, long addr, int depth) {
+        double xm = axialBridgeMid(Xeq, xa, xb, tauX, nb, T, addr);
+        double thm = relaxT(Teq, tha, tauT, 0.5 * T);
+        if (depth <= 0) return T / 6.0 * (kTotalAt(xa, tha) + 4 * kTotalAt(xm, thm) + kTotalAt(xb, thb));
+        return refineH(Xeq, Teq, xa, tha, xm, thm, tauX, tauT, nb, 0.5 * T, addr * 2 + 1, depth - 1)
+             + refineH(Xeq, Teq, xm, thm, xb, thb, tauX, tauT, nb, 0.5 * T, addr * 2 + 2, depth - 1);
+    }
+
+    /** Stage-5 scale-aware zone-centre crossing diagnostics, updated at every accepted substep. */
+    private void updateRecrossing() {
+        if (recSide == null) return;
+        if (X > runMaxX) runMaxX = X;
+        double back = runMaxX - X;
+        if (back > maxBackNm) maxBackNm = back;
+        double z = zoneCoord(X, Theta, 0.0);      // zone coordinate of a reference anchor at 0
+        if (!Double.isNaN(prevZone)) {
+            // raw sign change of the zone coordinate about the centre (jitter-dominated; reported
+            // only to show WHY a hysteresis band is required)
+            if (prevZone > 0 != z > 0 && Math.abs(prevZone - z) < 0.5 * LNm) zoneCentreCrossRaw++;
+        }
+        prevZone = z;
+        // hysteretic counting in the AXIAL coordinate: a crossing is confirmed only after the
+        // filament has moved band/2 beyond the centre, so sub-nanometre thermal jitter about the
+        // centre is not counted as a physical revisit
+        for (int b = 0; b < recSide.length; b++) {
+            double band = c.recrossBandsNm[b];
+            double d = X - recRef[b];
+            if (d > 0.5 * LNm) { recRef[b] += LNm; }                 // advanced a whole zone period
+            if (Math.abs(d) < band * 0.5) continue;
+            int side = d > 0 ? +1 : -1;
+            if (recSide[b] == 0) { recSide[b] = side; continue; }
+            if (side != recSide[b]) { if (side > 0) recFwd[b]++; else recBwd[b]++; recSide[b] = side; }
+        }
+    }
+
     /** locate s in [s0,s1] with integral_{s0}^{s} k = target, by safeguarded Newton (H' = k > 0). */
     private double rootInSegment(double Xeq, double Teq, double X0, double T0, double tauX, double tauT,
                                  double s0, double s1, double target, double absTol) {
@@ -769,6 +978,9 @@ public final class VilfanCompleteSystem {
         state  = new int[nM];
         siteOf = new int[nM];
         branchN = new int[nM];
+        int nBands = c.recrossBandsNm.length;
+        recFwd = new long[nBands]; recBwd = new long[nBands];
+        recRef = new double[nBands]; recSide = new int[nBands];
         Arrays.fill(siteOf, -1);
         occupied = new boolean[nSites];
         hazCache = new double[nM];
@@ -832,7 +1044,7 @@ public final class VilfanCompleteSystem {
             if (c.overdamped()) {
                 // piecewise-deterministic: evolve the mechanics and the cumulative hazard together
                 // until H reaches an exponential threshold. X and Theta MOVE here, continuously.
-                dt = advanceOverdamped(rngTime);
+                dt = c.brownian() ? advanceStochastic(rngTime) : advanceOverdamped(rngTime);
                 if (dt < 0) {
                     R.note = "HALT: ktotal = 0 during overdamped advance at t=" + t + " X=" + X;
                     break;
@@ -985,6 +1197,12 @@ public final class VilfanCompleteSystem {
             // progress is measured along the direction the stroke drives (polarity), so the same
             // rule terminates a native run and a polarity-reversed control.
             double prog = c.polarity * X;
+            if (c.warmupTimeS > 0.0) {                       // preregistered fixed-TIME window
+                if (tW < 0.0 && t >= c.warmupTimeS) { tW = t; xW = X; thW = Theta; }
+                if (tW >= 0.0 && t - tW >= c.analysisTimeS) break;
+                if (nEv >= c.maxEvents) { R.note += " [event cap]"; break; }
+                continue;
+            }
             if (tW < 0.0 && prog >= c.warmupUm * 1000.0) { tW = t; xW = X; thW = Theta; }
             if (tW >= 0.0) {
                 double travelled = c.polarity * (X - xW) / 1000.0;
@@ -1050,7 +1268,19 @@ public final class VilfanCompleteSystem {
         R.maxDynResidF = maxDynResidF; R.maxDynResidM = maxDynResidM;
         R.hazEvals = hazEvals; R.rootIters = rootIters; R.branchCrossings = branchCrossings;
         R.degenerateBranch = degenerateBranch; R.transientRootEvents = transientRootEvents;
+        R.axialBrownian = c.axialBrownian; R.DXnm2PerS = DX;
+        R.anchorDtS = c.anchorDtS; R.refineLevel = c.refineLevel;
+        R.nSubsteps = nSubsteps; R.nBridgeDraws = nBridgeDraws; R.nFreeDiffSteps = nFreeDiffSteps;
+        R.zoneCentreCrossRaw = zoneCentreCrossRaw;
+        R.pathLenNm = pathLenNm; R.netFwdNm = X - xW; R.maxBackNm = maxBackNm;
+        R.recFwd = recFwd; R.recBwd = recBwd; R.recBands = c.recrossBandsNm;
         R.xcheckN = xcheckN; R.xcheckMaxRel = xcheckMaxRel;
+        R.xcheckMeanRel = (xcheckN > 0) ? xcheckSum / xcheckN : 0.0;
+        if (xcheckN > 1) {
+            R.xcheckBias = xcheckSigned / xcheckN;
+            double var = (xcheckSq - xcheckSigned * xcheckSigned / xcheckN) / (xcheckN - 1);
+            R.xcheckBiasSem = Math.sqrt(Math.max(0, var) / xcheckN);
+        }
         R.maxEventJumpX = maxEventJumpX; R.maxEventJumpTheta = maxEventJumpTheta;
         R.nEventsAnalysed = nEvAnalysed;
         R.meanInterEventS = (nEvAnalysed > 0) ? dT / nEvAnalysed : 0.0;
@@ -1067,6 +1297,7 @@ public final class VilfanCompleteSystem {
             double cApp = Math.abs(R.velUmPerS * 1000.0 - R.omegaRadPerS * LNm / Math.PI);
             R.zonePassageS = (cApp > 0) ? LNm / cApp : Double.POSITIVE_INFINITY;
         }
+        if (R.medianNb > 0 && K > 0) R.sdXconstrainedNm = Math.sqrt(c.kBT / (R.medianNb * K));
         R.wallClockS = (System.nanoTime() - wall0) / 1e9;
         return R;
     }

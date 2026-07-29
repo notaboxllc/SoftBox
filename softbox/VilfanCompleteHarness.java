@@ -229,6 +229,15 @@ public final class VilfanCompleteHarness {
         kv(b, "transientRootEvents", R.transientRootEvents); kv(b, "nEventsAnalysed", R.nEventsAnalysed);
         kv(b, "maxEventJumpX", R.maxEventJumpX); kv(b, "maxEventJumpTheta", R.maxEventJumpTheta);
         kv(b, "xcheckN", R.xcheckN); kv(b, "xcheckMaxRel", R.xcheckMaxRel);
+        kv(b, "axialBrownian", R.axialBrownian); kv(b, "DXnm2PerS", R.DXnm2PerS);
+        kv(b, "anchorDtS", R.anchorDtS); kv(b, "refineLevel", R.refineLevel);
+        kv(b, "sdXconstrainedNm", R.sdXconstrainedNm);
+        kv(b, "nSubsteps", R.nSubsteps); kv(b, "nBridgeDraws", R.nBridgeDraws);
+        kv(b, "nFreeDiffSteps", R.nFreeDiffSteps); kv(b, "zoneCentreCrossRaw", R.zoneCentreCrossRaw);
+        kv(b, "pathLenNm", R.pathLenNm); kv(b, "netFwdNm", R.netFwdNm); kv(b, "maxBackNm", R.maxBackNm);
+        b.append("  \"recBands\": ").append(java.util.Arrays.toString(R.recBands)).append(",\n");
+        b.append("  \"recFwd\": ").append(java.util.Arrays.toString(R.recFwd)).append(",\n");
+        b.append("  \"recBwd\": ").append(java.util.Arrays.toString(R.recBwd)).append(",\n");
         kv(b, "note", "\"" + R.note.replace("\"", "'") + "\"");
         b.append("  \"xaHist\": ").append(java.util.Arrays.toString(R.xaHist)).append(",\n");
         b.append("  \"shadowHist\": ").append(java.util.Arrays.toString(R.shadowHist)).append("\n");
