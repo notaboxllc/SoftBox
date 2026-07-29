@@ -218,6 +218,15 @@ public final class VilfanCompleteHarness {
         kv(b, "equilNonConverged", R.equilNonConverged); kv(b, "nbZeroEvents", R.nbZeroEvents);
         kv(b, "haveShadow", R.haveShadow); kv(b, "shadowMeanXaNm", R.shadowMeanXa);
         kv(b, "travelCapHit", R.travelCapHit); kv(b, "wallClockS", R.wallClockS);
+        kv(b, "mechanics", "\"" + R.mechanics + "\""); kv(b, "etaPaS", R.etaPaS);
+        kv(b, "dragScale", c.dragScale); kv(b, "filRadiusUm", c.filRadiusUm);
+        kv(b, "gammaXpNsPerNm", R.gammaX); kv(b, "gammaThetapNnmSPerRad", R.gammaTheta);
+        kv(b, "tauXmedS", R.tauXmed); kv(b, "tauThetaMedS", R.tauThetaMed); kv(b, "medianNb", R.medianNb);
+        kv(b, "meanInterEventS", R.meanInterEventS); kv(b, "zonePassageS", R.zonePassageS);
+        kv(b, "maxDynResidFpN", R.maxDynResidF); kv(b, "maxDynResidMpNnm", R.maxDynResidM);
+        kv(b, "hazEvals", R.hazEvals); kv(b, "rootIters", R.rootIters);
+        kv(b, "branchCrossings", R.branchCrossings); kv(b, "degenerateBranch", R.degenerateBranch);
+        kv(b, "transientRootEvents", R.transientRootEvents); kv(b, "nEventsAnalysed", R.nEventsAnalysed);
         kv(b, "note", "\"" + R.note.replace("\"", "'") + "\"");
         b.append("  \"xaHist\": ").append(java.util.Arrays.toString(R.xaHist)).append(",\n");
         b.append("  \"shadowHist\": ").append(java.util.Arrays.toString(R.shadowHist)).append("\n");

@@ -100,6 +100,34 @@ public final class VilfanCompleteSystem {
         public double equilTolRad = 1e-13;
         public int    equilMaxIter = 200;
 
+        /* ---------- restored realism: finite filament drag (overdamped mechanics) ----------
+         * "quasistatic" = Vilfan Eq (5), the validated reference. "overdamped" replaces it with
+         *     gammaX     dX/dt     = sum_j F_j
+         *     gammaTheta dTheta/dt = sum_j M_j
+         * using the SAME Vilfan force and torque laws. Nothing else changes: no inertia, no
+         * Brownian term, no extra degree of freedom, no load dependence of any chemical rate. */
+        public String mechanics = "quasistatic";
+        /** solvent viscosity, Pa*s. Assay reference 0.01 (CLAUDE.md viscosity study). */
+        public double etaPaS = VilfanDrag.ETA_ASSAY;
+        /** filament radius for the drag formula, microns (Constants.actinWidth/2 = 0.0035). */
+        public double filRadiusUm = VilfanDrag.RADIUS_UM;
+        /** VALIDATION ONLY (gate D): multiplies both drag coefficients. dragScale -> 0 must
+         *  recover the quasi-static result. Never anything but 1.0 in a physics arm. */
+        public double dragScale = 1.0;
+        /** relative tolerance on the cumulative-hazard quadrature (gate C convergence axis). */
+        public double hazTolRel = 1e-10;
+        /** relative tolerance on the located event time. */
+        public double rootTolRel = 1e-13;
+        /** transient horizon in units of the slowest relaxation time; exp(-40) ~ 4e-18. */
+        public double settleFactor = 40.0;
+
+        /** GATE ONLY: re-derive every located event's cumulative hazard by an independent uniform
+         *  fine-grid trapezoid along the same analytic trajectory, and record the discrepancy. */
+        public boolean hazardCrossCheck = false;
+        public int     hazardCrossGrid  = 20000;
+
+        public boolean overdamped() { return "overdamped".equals(mechanics); }
+
         public Config copy() {
             try { return (Config) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); }
         }
@@ -123,6 +151,9 @@ public final class VilfanCompleteSystem {
     private final double grooveSlope;
     private final double LNm;
 
+    /** whole-filament drag, working units. Zero unless mechanics = overdamped. */
+    private final double gammaX, gammaTheta;
+
     public VilfanCompleteSystem(Config cfg) {
         this.c = cfg.copy();
         this.a = c.aNm;
@@ -142,6 +173,10 @@ public final class VilfanCompleteSystem {
         double d2 = wrapPi(2.0 * c.theta0Rad());
         this.grooveSlope = (c.aNm == 0.0) ? 0.0 : d2 / (2.0 * c.aNm);
         this.LNm = (grooveSlope == 0.0) ? Double.POSITIVE_INFINITY : Math.PI / Math.abs(grooveSlope);
+        if (c.overdamped()) {
+            this.gammaX     = c.dragScale * VilfanDrag.gammaXwork(c.etaPaS, c.lengthUm, c.filRadiusUm);
+            this.gammaTheta = c.dragScale * VilfanDrag.gammaThetaWork(c.etaPaS, c.lengthUm, c.filRadiusUm);
+        } else { this.gammaX = 0.0; this.gammaTheta = 0.0; }
     }
 
     public Config config()   { return c; }
@@ -151,6 +186,13 @@ public final class VilfanCompleteSystem {
 
     /** azimuth of site i relative to the filament frame: (i*theta0) mod 2pi, EXACT (no drift). */
     public double baseAzim(int i) { return azimTable[Math.floorMod(i, c.latQ)]; }
+
+    /* ==================== finite-drag coefficients (overdamped mode only) ==================== */
+
+    /** whole-filament axial drag, pN*s/nm (zero in quasi-static mode — never referenced there). */
+    public double gammaX()     { return gammaX; }
+    /** whole-filament ROLL drag about the long axis, pN*nm*s/rad. */
+    public double gammaTheta() { return gammaTheta; }
 
     /** wrap to (-pi, pi] — Vilfan's "n chosen such that Theta + i*theta0 + 2*pi*n falls into [-pi,pi]". */
     public static double wrapPi(double x) { return x - TWO_PI * Math.rint(x / TWO_PI); }
@@ -262,6 +304,18 @@ public final class VilfanCompleteSystem {
         public double[] shadowHist = new double[40];
 
         public boolean travelCapHit;
+        /* ---- finite-drag (overdamped) diagnostics ---- */
+        public String  mechanics = "quasistatic";
+        public double  etaPaS, gammaX, gammaTheta;      // pN*s/nm, pN*nm*s/rad
+        public double  tauXmed, tauThetaMed;            // s, from the MEDIAN bound-head count
+        public double  medianNb;
+        public double  meanInterEventS;                 // analysed window
+        public double  zonePassageS;                    // L / |v - omega*L/pi|
+        public double  maxDynResidF, maxDynResidM;      // dynamic closure residuals
+        public long    hazEvals, rootIters, branchCrossings, degenerateBranch, transientRootEvents;
+        public long    xcheckN;
+        public double  xcheckMaxRel, maxEventJumpX, maxEventJumpTheta;
+        public long    nEventsAnalysed;
         public double  wallClockS;
         public String  note = "";
     }
@@ -366,8 +420,10 @@ public final class VilfanCompleteSystem {
 
     /* ==================== per-motor total attachment hazard ==================== */
 
-    private int nearestSite(double xMj) {
-        int i0 = (int) Math.rint((xMj - X) / a);
+    private int nearestSite(double xMj) { return nearestSiteAt(X, xMj); }
+
+    private int nearestSiteAt(double Xv, double xMj) {
+        int i0 = (int) Math.rint((xMj - Xv) / a);
         if (i0 < 0) i0 = 0;
         if (i0 > nSites - 1) i0 = nSites - 1;
         return i0;
@@ -375,14 +431,32 @@ public final class VilfanCompleteSystem {
 
     /** sum_i kA_i for a detached motor; ignores occupancy if {@code respectOccupancy} is false. */
     private double motorHazard(double xMj, boolean respectOccupancy) {
-        int i0 = nearestSite(xMj);
+        return motorHazardAt(X, Theta, xMj, respectOccupancy);
+    }
+
+    /** the same sum evaluated at an ARBITRARY filament state — needed because under finite drag
+     *  X and Theta evolve continuously between chemical events, so the hazards are time-dependent. */
+    private double motorHazardAt(double Xv, double Tv, double xMj, boolean respectOccupancy) {
+        int i0 = nearestSiteAt(Xv, xMj);
         int lo = Math.max(0, i0 - c.window), hi = Math.min(nSites - 1, i0 + c.window);
         double sum = 0.0;
         for (int i = lo; i <= hi; i++) {
             if (respectOccupancy && c.singleOccupancy && occupied[i]) continue;
-            sum += siteHazard(X, Theta, xMj, i);
+            sum += siteHazard(Xv, Tv, xMj, i);
         }
         return sum;
+    }
+
+    /** total transition rate k_total(X, Theta) at an arbitrary filament state. The bound-state part
+     *  ({@code boundRateCur}) does not depend on the filament state — no chemical rate in this model
+     *  is load-dependent — so only the detached attachment hazards are re-evaluated. */
+    private double kTotalAt(double Xv, double Tv) {
+        double reachLo = Xv - (c.window + 1) * a, reachHi = Xv + (nSites - 1) * a + (c.window + 1) * a;
+        int lo = lowerBound(xM, reachLo), hi = upperBound(xM, reachHi);
+        double s = 0.0;
+        for (int j = lo; j < hi; j++) if (state[j] == DETACHED) s += motorHazardAt(Xv, Tv, xM[j], true);
+        hazEvals++;
+        return s + boundRateCur;
     }
 
     /** pick a site within a detached motor's own cumulative, given a residual in [0, hazard). */
@@ -397,6 +471,239 @@ public final class VilfanCompleteSystem {
             if (acc > residual) return i;
         }
         return last;   // float round-off fallback: the last legal site
+    }
+
+    /* ==================== overdamped mechanics (the one restored realism) ====================
+     *
+     *   gammaX     dX/dt     = sum_j F_j = N_b K     (Xeq - X)
+     *   gammaTheta dTheta/dt = sum_j M_j = N_b Ktheta(ThetaEq - Theta)
+     *
+     * Both are EXACT rearrangements of Vilfan's Eq (4) summed over the bound set, so between
+     * chemical events (fixed bound set, fixed angular branches) the motion is exactly exponential
+     * relaxation toward the SAME (Xeq, ThetaEq) that Eq (5) would have jumped to instantly:
+     *
+     *   X(s)     = Xeq     + (X0     - Xeq)     exp(-s/tauX),      tauX     = gammaX     /(N_b K)
+     *   Theta(s) = ThetaEq + (Theta0 - ThetaEq) exp(-s/tauTheta),  tauTheta = gammaTheta /(N_b Ktheta)
+     *
+     * The mechanics is therefore propagated ANALYTICALLY, not by a numerical integrator, and the
+     * only numerics are the cumulative-hazard quadrature and the event-time root. Angular branch
+     * crossings are located analytically and applied as explicit segment boundaries, so no
+     * trajectory ever jumps silently across the +-pi discontinuity.
+     */
+
+    /** branch integer n_j per motor, defined while bound: theta_j = Theta + b_j + 2*pi*n_j. */
+    private int[] branchN;
+    private double boundRateCur;
+    private long hazEvals, rootIters, branchCrossings, degenerateBranch, transientRootEvents;
+    private double maxDynResidF, maxDynResidM;
+    private long   xcheckN;
+    private double xcheckMaxRel;
+    private double maxEventJumpX, maxEventJumpTheta;
+
+    /** independent uniform fine-grid trapezoid of k along the analytic trajectory on [0,s]. */
+    private double gridHazard(double Xeq, double Teq, double X0, double T0,
+                              double tauX, double tauT, double s, int n) {
+        double h = s / n, sum = 0.0;
+        double prev = kAt(Xeq, Teq, X0, T0, tauX, tauT, 0.0);
+        for (int i = 1; i <= n; i++) {
+            double cur = kAt(Xeq, Teq, X0, T0, tauX, tauT, i * h);
+            sum += 0.5 * (prev + cur) * h; prev = cur;
+        }
+        return sum;
+    }
+    private void crossCheck(double Xeq, double Teq, double X0, double T0,
+                            double tauX, double tauT, double s, double target) {
+        if (!c.hazardCrossCheck || !(s > 0) || !(target > 0)) return;
+        double g = gridHazard(Xeq, Teq, X0, T0, tauX, tauT, s, c.hazardCrossGrid);
+        double rel = Math.abs(g - target) / target;
+        if (rel > xcheckMaxRel) xcheckMaxRel = rel;
+        xcheckN++;
+    }
+
+    private int countBound() {
+        int nb = 0;
+        for (int j = 0; j < xM.length; j++) if (state[j] != DETACHED) nb++;
+        return nb;
+    }
+
+    /** the quasi-static axial target — identical expression to {@code equilibrate()}'s X. */
+    private double xEqNow() {
+        double s = 0.0; int nb = 0;
+        for (int j = 0; j < xM.length; j++) {
+            if (state[j] == DETACHED) continue;
+            s += xM[j] + ((state[j] == PRE_PS) ? 0.0 : delta) - siteOf[j] * a;
+            nb++;
+        }
+        return nb > 0 ? s / nb : X;
+    }
+
+    /** the angular target implied by the CURRENT branch assignment (no re-wrapping). */
+    private double thetaEqNow() {
+        double s = 0.0; int nb = 0;
+        for (int j = 0; j < xM.length; j++) {
+            if (state[j] == DETACHED) continue;
+            s += baseAzim(siteOf[j]) + TWO_PI * branchN[j];
+            nb++;
+        }
+        return nb > 0 ? -s / nb : Theta;
+    }
+
+    /** set motor j's branch so that its angle lies in (-pi, pi] at the current Theta. */
+    private void setBranch(int j) {
+        double raw = Theta + baseAzim(siteOf[j]);
+        branchN[j] = -(int) Math.rint(raw / TWO_PI);
+    }
+
+    /** earliest angular branch crossing on the exponential approach Theta0 -> ThetaEq, or +inf.
+     *  Returns {time, motorIndex, direction}; direction -1 means the angle leaves through +pi. */
+    private double[] nextBranchCrossing(double T0, double Teq, double tauT) {
+        if (kTheta <= 0.0 || !(tauT > 0) || T0 == Teq) return new double[]{Double.POSITIVE_INFINITY, -1, 0};
+        boolean up = Teq > T0;
+        double best = Double.POSITIVE_INFINITY; int bj = -1; double bd = 0;
+        for (int j = 0; j < xM.length; j++) {
+            if (state[j] == DETACHED) continue;
+            double off = baseAzim(siteOf[j]) + TWO_PI * branchN[j];
+            // theta_j(s) = Theta(s) + off ; crosses +pi going up, -pi going down
+            double Tc = (up ? Math.PI : -Math.PI) - off;
+            if (up ? !(Tc > T0 && Tc < Teq) : !(Tc < T0 && Tc > Teq)) continue;
+            double s = -tauT * Math.log((Tc - Teq) / (T0 - Teq));
+            if (s > 0 && s < best) { best = s; bj = j; bd = up ? -1 : +1; }
+        }
+        return new double[]{best, bj, bd};
+    }
+
+    /** adaptive Simpson of k_total along the analytic trajectory, on [s0, s1]. */
+    private double quadK(double Xeq, double Teq, double X0, double T0,
+                         double tauX, double tauT, double s0, double s1, double absTol) {
+        double f0 = kAt(Xeq, Teq, X0, T0, tauX, tauT, s0);
+        double fm = kAt(Xeq, Teq, X0, T0, tauX, tauT, 0.5 * (s0 + s1));
+        double f1 = kAt(Xeq, Teq, X0, T0, tauX, tauT, s1);
+        return simpsonRec(Xeq, Teq, X0, T0, tauX, tauT, s0, s1, f0, fm, f1,
+                          (s1 - s0) / 6.0 * (f0 + 4 * fm + f1), absTol, 24);
+    }
+
+    private double simpsonRec(double Xeq, double Teq, double X0, double T0, double tauX, double tauT,
+                              double s0, double s1, double f0, double fm, double f1,
+                              double whole, double absTol, int depth) {
+        double sm = 0.5 * (s0 + s1);
+        double fl = kAt(Xeq, Teq, X0, T0, tauX, tauT, 0.5 * (s0 + sm));
+        double fr = kAt(Xeq, Teq, X0, T0, tauX, tauT, 0.5 * (sm + s1));
+        double left  = (sm - s0) / 6.0 * (f0 + 4 * fl + fm);
+        double right = (s1 - sm) / 6.0 * (fm + 4 * fr + f1);
+        double err = left + right - whole;
+        if (depth <= 0 || Math.abs(err) <= 15.0 * absTol) return left + right + err / 15.0;
+        return simpsonRec(Xeq, Teq, X0, T0, tauX, tauT, s0, sm, f0, fl, fm, left, absTol / 2, depth - 1)
+             + simpsonRec(Xeq, Teq, X0, T0, tauX, tauT, sm, s1, fm, fr, f1, right, absTol / 2, depth - 1);
+    }
+
+    public static double relaxPublic(double eq, double v0, double tau, double s) {
+        return (tau > 0 && Double.isFinite(tau)) ? eq + (v0 - eq) * Math.exp(-s / tau) : eq;
+    }
+
+    private double relaxX(double Xeq, double X0, double tauX, double s) {
+        return (tauX > 0) ? Xeq + (X0 - Xeq) * Math.exp(-s / tauX) : Xeq;
+    }
+    private double relaxT(double Teq, double T0, double tauT, double s) {
+        if (kTheta <= 0.0) return T0;
+        return (tauT > 0 && Double.isFinite(tauT)) ? Teq + (T0 - Teq) * Math.exp(-s / tauT) : Teq;
+    }
+    private double kAt(double Xeq, double Teq, double X0, double T0, double tauX, double tauT, double s) {
+        return kTotalAt(relaxX(Xeq, X0, tauX, s), relaxT(Teq, T0, tauT, s));
+    }
+
+    /**
+     * Piecewise-deterministic advance to the next chemical event.
+     * <p>
+     * Draws an exponential CUMULATIVE-HAZARD threshold {@code H* = -ln r}, then evolves the
+     * mechanics and {@code dH/dt = k_total[X(t), Theta(t)]} together until {@code H = H*}. The rate
+     * is NEVER frozen over the interval. On return X and Theta stand at the event time and are
+     * continuous through it; the caller re-evaluates the instantaneous rates there and selects the
+     * transition by their rate fractions.
+     *
+     * @return the elapsed time, or -1 if the total rate vanished (caller halts).
+     */
+    private double advanceOverdamped(SplittableRandom rngTime) {
+        double Hrem = Math.log(1.0 / (1.0 - rngTime.nextDouble()));
+        double tAcc = 0.0;
+
+        for (int guard = 0; guard < 1_000_000; guard++) {
+            int nb = countBound();
+            double kNow = kTotalAt(X, Theta);
+            if (!(kNow > 0.0)) return -1;
+
+            if (nb == 0) {                       // no bound head: zero force, X and Theta frozen
+                nbZeroEvents++;
+                return tAcc + Hrem / kNow;       // hazard is then constant
+            }
+
+            double Xeq = xEqNow(), Teq = thetaEqNow();
+            // A degree of freedom with zero stiffness feels no force, so it does not relax at all
+            // and contributes NO transient: its relaxation time is formally infinite but the
+            // trajectory is constant. Counting it in the settle horizon would diverge.
+            double tauX = (K > 0.0)      ? gammaX     / (nb * K)      : Double.POSITIVE_INFINITY;
+            double tauT = (kTheta > 0.0) ? gammaTheta / (nb * kTheta) : Double.POSITIVE_INFINITY;
+            double X0 = X, T0 = Theta;
+
+            double tauMax = Math.max((K > 0.0) ? tauX : 0.0, (kTheta > 0.0) ? tauT : 0.0);
+            double tSettle = c.settleFactor * tauMax;
+            double[] br = nextBranchCrossing(T0, Teq, tauT);
+            double tBranch = br[0];
+
+            // horizon of this analytic segment
+            boolean branchFirst = tBranch < tSettle;
+            double sEnd = branchFirst ? tBranch : tSettle;
+
+            // cumulative hazard over the transient part of the segment
+            double absTol = c.hazTolRel * kNow * Math.max(sEnd, 1e-300);
+            double Hseg = (sEnd > 0) ? quadK(Xeq, Teq, X0, T0, tauX, tauT, 0.0, sEnd, absTol) : 0.0;
+
+            if (Hseg >= Hrem) {                  // the event falls inside the transient
+                transientRootEvents++;
+                double s = rootInSegment(Xeq, Teq, X0, T0, tauX, tauT, 0.0, sEnd, Hrem, absTol);
+                if (guard == 0) crossCheck(Xeq, Teq, X0, T0, tauX, tauT, s, Hrem);
+                X = relaxX(Xeq, X0, tauX, s); Theta = relaxT(Teq, T0, tauT, s);
+                return tAcc + s;
+            }
+            Hrem -= Hseg; tAcc += sEnd;
+            X = relaxX(Xeq, X0, tauX, sEnd); Theta = relaxT(Teq, T0, tauT, sEnd);
+
+            if (branchFirst) {                   // apply the branch crossing and continue
+                int j = (int) br[1];
+                branchN[j] += (int) br[2];
+                branchCrossings++;
+                continue;
+            }
+
+            // settled: the filament has reached (Xeq, ThetaEq) to exp(-settleFactor), so k_total is
+            // constant from here on and no further branch crossing can occur in this segment.
+            if (Double.isFinite(tBranch)) degenerateBranch++;
+            double kInf = kTotalAt(X, Theta);
+            if (!(kInf > 0.0)) return -1;
+            double sFull = sEnd + Hrem / kInf;
+            if (guard == 0) crossCheck(Xeq, Teq, X0, T0, tauX, tauT, sFull, Hrem + Hseg);
+            X = relaxX(Xeq, X0, tauX, sFull); Theta = relaxT(Teq, T0, tauT, sFull);
+            return tAcc + Hrem / kInf;
+        }
+        return -1;
+    }
+
+    /** locate s in [s0,s1] with integral_{s0}^{s} k = target, by safeguarded Newton (H' = k > 0). */
+    private double rootInSegment(double Xeq, double Teq, double X0, double T0, double tauX, double tauT,
+                                 double s0, double s1, double target, double absTol) {
+        double lo = s0, hi = s1;
+        double s = s0 + (s1 - s0) * 0.5;
+        for (int it = 0; it < 100; it++) {
+            rootIters++;
+            double H = quadK(Xeq, Teq, X0, T0, tauX, tauT, s0, s, absTol);
+            double f = H - target;
+            if (Math.abs(f) <= Math.max(absTol, c.rootTolRel * target)) return s;
+            if (f > 0) hi = s; else lo = s;
+            double k = kAt(Xeq, Teq, X0, T0, tauX, tauT, s);
+            double sn = (k > 0) ? s - f / k : 0.5 * (lo + hi);
+            s = (sn > lo && sn < hi) ? sn : 0.5 * (lo + hi);
+            if (hi - lo <= c.rootTolRel * Math.max(hi, 1e-300)) return s;
+        }
+        return s;
     }
 
     /* ==================== the run (algorithm steps 2-7) ==================== */
@@ -428,6 +735,7 @@ public final class VilfanCompleteSystem {
         int nM = xM.length;
         state  = new int[nM];
         siteOf = new int[nM];
+        branchN = new int[nM];
         Arrays.fill(siteOf, -1);
         occupied = new boolean[nSites];
         hazCache = new double[nM];
@@ -444,6 +752,8 @@ public final class VilfanCompleteSystem {
         double sTorqT = 0, sForceT = 0, sTorqPer = 0, sForcePer = 0, wT = 0;
         int[] xaHist = new int[40];
         double[] shadowHist = new double[40];
+        int[] nbHist = new int[0];
+        long nEvAnalysed = 0;
         double shadowW = 0, shadowWX = 0, shadowWTh = 0;
         // least-squares accumulators over the analysed window
         double lsN = 0, lsT = 0, lsT2 = 0, lsX = 0, lsTX = 0, lsTh = 0, lsTTh = 0;
@@ -477,17 +787,63 @@ public final class VilfanCompleteSystem {
                 }
             }
             ktotal += boundRate;
+            boundRateCur = boundRate;
             if (!(ktotal > 0.0)) {
                 R.note = "HALT: ktotal = 0 (no legal transition) at t=" + t + " X=" + X;
                 break;
             }
 
             // ---------- step 3: waiting time ----------
-            double dt = expWait(rngTime, ktotal);
+            double dt;
+            double X0i = X, Th0i = Theta;
+            if (c.overdamped()) {
+                // piecewise-deterministic: evolve the mechanics and the cumulative hazard together
+                // until H reaches an exponential threshold. X and Theta MOVE here, continuously.
+                dt = advanceOverdamped(rngTime);
+                if (dt < 0) {
+                    R.note = "HALT: ktotal = 0 during overdamped advance at t=" + t + " X=" + X;
+                    break;
+                }
+                // dynamic closure at the event time: the analytic relaxation rate must reproduce the
+                // directly summed Vilfan force and torque. The torque arm is a genuine cross-check —
+                // it compares the branch-integer bookkeeping against an independent wrapPi sum.
+                if (nb > 0) {
+                    double sFd = 0, sMd = 0;
+                    for (int j = 0; j < nM; j++) {
+                        if (state[j] == DETACHED) continue;
+                        double dj = (state[j] == PRE_PS) ? 0.0 : delta;
+                        sFd += headForce(X, xM[j], siteOf[j], dj);
+                        sMd += headTorque(Theta, siteOf[j]);
+                    }
+                    double xdot = (xEqNow() - X) * (nb * K) / gammaX;
+                    double rF = Math.abs(gammaX * xdot - sFd);
+                    if (rF > maxDynResidF) maxDynResidF = rF;
+                    if (kTheta > 0.0) {
+                        double tdot = (thetaEqNow() - Theta) * (nb * kTheta) / gammaTheta;
+                        double rM = Math.abs(gammaTheta * tdot - sMd);
+                        if (rM > maxDynResidM) maxDynResidM = rM;
+                    }
+                }
+                // rates must be re-read at the state the filament actually reached
+                reachLo = X - (c.window + 1) * a; reachHi = X + (nSites - 1) * a + (c.window + 1) * a;
+                jLo = lowerBound(xM, reachLo); jHi = upperBound(xM, reachHi);
+                ktotal = boundRate;
+                for (int j = 0; j < nM; j++) hazCache[j] = 0.0;
+                for (int j = jLo; j < jHi; j++) {
+                    if (state[j] != DETACHED) continue;
+                    hazCache[j] = motorHazard(xM[j], true);
+                    ktotal += hazCache[j];
+                }
+                if (!(ktotal > 0.0)) { R.note = "HALT: ktotal = 0 at located event time"; break; }
+            } else {
+                dt = expWait(rngTime, ktotal);
+            }
 
             // ---------- time-weighted accumulation over [t, t+dt) ----------
             boolean analysed = (tW >= 0.0);
             if (analysed) {
+                if (nbHist.length == 0) nbHist = new int[nM + 1];
+                nbHist[nb]++; nEvAnalysed++;
                 for (int j = 0; j < nM; j++) occ[state[j]] += dt;
                 boundTime += nb * dt;
                 double sF = 0, sM = 0;
@@ -497,7 +853,14 @@ public final class VilfanCompleteSystem {
                     sF += headForce(X, xM[j], siteOf[j], dj);
                     sM += headTorque(Theta, siteOf[j]);
                 }
-                sForceT += sF * dt; sTorqT += sM * dt;
+                if (c.overdamped()) {
+                    // EXACT time integrals: integral(sum F)dt = gammaX * dX and
+                    // integral(sum M)dt = gammaTheta * dTheta, straight from the equations of motion.
+                    sForceT += gammaX * (X - X0i);
+                    sTorqT  += gammaTheta * (Theta - Th0i);
+                } else {
+                    sForceT += sF * dt; sTorqT += sM * dt;
+                }
                 if (nb > 0) { sForcePer += (sF / nb) * dt; sTorqPer += (sM / nb) * dt; }
                 wT += dt;
                 lsN += dt; lsT += t * dt; lsT2 += t * t * dt;
@@ -554,6 +917,7 @@ public final class VilfanCompleteSystem {
             }
 
             // ---------- step 5: apply the transition, then re-equilibrate ----------
+            double Xpre = X, Tpre = Theta;      // continuity witness (overdamped: must not change)
             if (kind == 0) {
                 if (chosenSite < 0) { R.note = "BLOCKER: no legal site for chosen attachment"; break; }
                 // observables are read AT THE INSTANT OF BINDING, before re-equilibration
@@ -561,6 +925,7 @@ public final class VilfanCompleteSystem {
                 double xiA = strain(X, xM[chosen], chosenSite);
                 double thA = wrapPi(Theta + baseAzim(chosenSite));
                 state[chosen] = PRE_PS; siteOf[chosen] = chosenSite; occupied[chosenSite] = true;
+                if (c.overdamped()) setBranch(chosen);   // fix the angular branch at the binding pose
                 nAtt++;
                 if (analysed) {
                     sXa += xz; sXa2 += xz * xz; sXiA += xiA; sXiA2 += xiA * xiA;
@@ -573,7 +938,14 @@ public final class VilfanCompleteSystem {
             else {                  occupied[siteOf[chosen]] = false; siteOf[chosen] = -1;
                                     state[chosen] = DETACHED; nDet++; }
 
-            equilibrate();
+            // Under finite drag X and Theta are CONTINUOUS through the event: the transition changes
+            // the force and torque discontinuously, and the filament then relaxes toward the new
+            // target over a finite time. No displacement is applied here.
+            if (c.overdamped()) {
+                double jX = Math.abs(X - Xpre), jT = Math.abs(Theta - Tpre);
+                if (jX > maxEventJumpX) maxEventJumpX = jX;
+                if (jT > maxEventJumpTheta) maxEventJumpTheta = jT;
+            } else equilibrate();
             nEv++;
 
             // ---------- warm-up boundary + step 6: termination ----------
@@ -640,6 +1012,28 @@ public final class VilfanCompleteSystem {
             R.shadowHist = shadowHist;
         }
         R.travelCapHit = capHit;
+        R.mechanics = c.mechanics; R.etaPaS = c.etaPaS;
+        R.gammaX = gammaX; R.gammaTheta = gammaTheta;
+        R.maxDynResidF = maxDynResidF; R.maxDynResidM = maxDynResidM;
+        R.hazEvals = hazEvals; R.rootIters = rootIters; R.branchCrossings = branchCrossings;
+        R.degenerateBranch = degenerateBranch; R.transientRootEvents = transientRootEvents;
+        R.xcheckN = xcheckN; R.xcheckMaxRel = xcheckMaxRel;
+        R.maxEventJumpX = maxEventJumpX; R.maxEventJumpTheta = maxEventJumpTheta;
+        R.nEventsAnalysed = nEvAnalysed;
+        R.meanInterEventS = (nEvAnalysed > 0) ? dT / nEvAnalysed : 0.0;
+        if (nbHist.length > 0 && nEvAnalysed > 0) {          // median bound-head count
+            long cum = 0; int med = 0;
+            for (int k = 0; k < nbHist.length; k++) { cum += nbHist[k]; if (cum * 2 >= nEvAnalysed) { med = k; break; } }
+            R.medianNb = med;
+            if (c.overdamped() && med > 0) {
+                R.tauXmed     = gammaX / (med * K);
+                R.tauThetaMed = (kTheta > 0) ? gammaTheta / (med * kTheta) : Double.POSITIVE_INFINITY;
+            }
+        }
+        if (LNm > 0 && Double.isFinite(LNm)) {               // target-zone passage time, L/|c|
+            double cApp = Math.abs(R.velUmPerS * 1000.0 - R.omegaRadPerS * LNm / Math.PI);
+            R.zonePassageS = (cApp > 0) ? LNm / cApp : Double.POSITIVE_INFINITY;
+        }
         R.wallClockS = (System.nanoTime() - wall0) / 1e9;
         return R;
     }
