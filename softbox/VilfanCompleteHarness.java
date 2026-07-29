@@ -61,16 +61,23 @@ public final class VilfanCompleteHarness {
         if (a.contains("-native"))      { campaign(nativeArms()); return; }
         if (a.contains("-alpha-check")) { campaign(alphaArms()); return; }
         if (a.contains("-report"))      { report(); return; }
+        int il = a.indexOf("-list");
+        if (il >= 0) {
+            String stage = (il + 1 < a.size()) ? a.get(il + 1) : "all";
+            for (Arm arm : listFor(stage)) if (!Files.exists(Path.of(RUNDIR, arm.id() + ".json"))) out.println(arm.id());
+            return;
+        }
         int ia = a.indexOf("-arm");
         if (ia >= 0 && ia + 1 < a.size()) { runOneArm(a.get(ia + 1)); return; }
         out.println("no mode selected; see the class javadoc.");
     }
 
+    /** banner goes to stderr so that -list emits a clean, pipe-safe arm list. */
     static void banner() {
-        out.println("=========================================================================");
-        out.println(" VILFAN-COMPLETE REFERENCE  (Vilfan 2009, Biophys J 97:1130; arXiv:0906.0784v1)");
-        out.println(" CPU only. No CUDA / TornadoVM / TaskGraph / device context is touched.");
-        out.println("=========================================================================");
+        System.err.println("=========================================================================");
+        System.err.println(" VILFAN-COMPLETE REFERENCE  (Vilfan 2009, Biophys J 97:1130; arXiv:0906.0784v1)");
+        System.err.println(" CPU only. No CUDA / TornadoVM / TaskGraph / device context is touched.");
+        System.err.println("=========================================================================");
     }
 
     /* =============================== arm definitions =============================== */
@@ -104,20 +111,27 @@ public final class VilfanCompleteHarness {
         return L;
     }
 
-    static List<Arm> paperArms()  { return armsFor("paper",  paperBase(),  new double[]{0.1}, new double[]{4}, new long[]{101, 102}); }
-    static List<Arm> nativeArms() { return armsFor("native", nativeBase(), new double[]{0.1}, new double[]{4}, new long[]{101, 102}); }
+    static List<Arm> paperArms()  { return armsFor("paper",  paperBase(),  new double[]{0.1}, new double[]{4}, new long[]{101, 102, 103, 104}); }
+    static List<Arm> nativeArms() { return armsFor("native", nativeBase(), new double[]{0.1}, new double[]{4}, new long[]{101, 102, 103, 104}); }
     static List<Arm> sweepArms()  {
         return armsFor("sweep", paperBase(), new double[]{0.03, 0.10, 0.30, 1.0, 3.0, 10.0, 18.2},
-                       new double[]{4}, new long[]{101, 102});
+                       new double[]{4}, new long[]{101, 102, 103, 104});
     }
-    static List<Arm> alphaArms()  { return armsFor("alpha", paperBase(), new double[]{0.1}, new double[]{6, 8}, new long[]{101, 102}); }
+    static List<Arm> alphaArms()  { return armsFor("alpha", paperBase(), new double[]{0.1}, new double[]{6, 8}, new long[]{101, 102, 103, 104}); }
     static List<Arm> noDepArms()  {
         List<Arm> L = new ArrayList<>();
-        for (long s : new long[]{101, 102}) {
+        for (long s : new long[]{101, 102, 103, 104}) {
             Config c = paperBase(); c.seed = s; c.noDepletionControl = true;
             L.add(new Arm(String.format(Locale.ROOT, "nodep_kd0.1_a4_s%d_native", s), c));
         }
         return L;
+    }
+    static List<Arm> listFor(String stage) {
+        return switch (stage) {
+            case "paper"  -> paperArms();  case "nodep"  -> noDepArms();
+            case "sweep"  -> sweepArms();  case "native" -> nativeArms();
+            case "alpha"  -> alphaArms();  default       -> allArms();
+        };
     }
     static List<Arm> allArms() {
         List<Arm> L = new ArrayList<>();
@@ -184,6 +198,9 @@ public final class VilfanCompleteHarness {
         kv(b, "thetaWarmRad", R.thetaWarm); kv(b, "thetaEndRad", R.thetaEnd);
         kv(b, "velUmPerS", R.velUmPerS); kv(b, "omegaRadPerS", R.omegaRadPerS);
         kv(b, "velLsqUmPerS", R.velLsq); kv(b, "omegaLsqRadPerS", R.omegaLsq);
+        kv(b, "velFirstHalf", R.velFirstHalf); kv(b, "velSecondHalf", R.velSecondHalf);
+        kv(b, "omegaFirstHalf", R.omegaFirstHalf); kv(b, "omegaSecondHalf", R.omegaSecondHalf);
+        kv(b, "meanAttachTorquePnNm", R.meanAttachTorque);
         kv(b, "turns", R.turns); kv(b, "pitchUmPerTurn", R.pitchUmPerTurn);
         kv(b, "invPitchPerUm", R.invPitchPerUm);
         kv(b, "nEvents", R.nEvents); kv(b, "nAttach", R.nAttach); kv(b, "nStroke", R.nStroke);

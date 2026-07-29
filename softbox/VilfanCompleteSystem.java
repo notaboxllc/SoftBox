@@ -227,6 +227,12 @@ public final class VilfanCompleteSystem {
 
         /** least-squares slopes over the analysed window (robustness cross-check on the endpoints) */
         public double velLsq, omegaLsq;
+        /** stationarity: the analysed window split in two equal halves of SIMULATED TIME */
+        public double velFirstHalf, velSecondHalf, omegaFirstHalf, omegaSecondHalf;
+        /** mean torque INJECTED AT ATTACHMENT, M_A = -Ktheta * theta_A, pN*nm. The equilibrium
+         *  per-head torque is identically zero (that is Eq 5), so this is the signed, mirror-odd
+         *  torque that actually drives the rotation. */
+        public double meanAttachTorque;
 
         public long   nEvents, nAttach, nStroke, nAdpRelease, nDetach;
         public double meanBound, dutyRatio;
@@ -443,6 +449,9 @@ public final class VilfanCompleteSystem {
         double lsN = 0, lsT = 0, lsT2 = 0, lsX = 0, lsTX = 0, lsTh = 0, lsTTh = 0;
 
         boolean capHit = false;
+        // subsampled trajectory over the analysed window, for the stationarity split
+        int traceCap = 40000, traceN = 0, traceStride = 1; long traceCount = 0;
+        double[] trT = new double[traceCap], trX = new double[traceCap], trTh = new double[traceCap];
 
         while (true) {
             // ---------- step 2: total transition rate ----------
@@ -493,6 +502,14 @@ public final class VilfanCompleteSystem {
                 wT += dt;
                 lsN += dt; lsT += t * dt; lsT2 += t * t * dt;
                 lsX += X * dt; lsTX += t * X * dt; lsTh += Theta * dt; lsTTh += t * Theta * dt;
+
+                if (traceCount++ % traceStride == 0) {
+                    if (traceN == traceCap) {          // decimate in place, double the stride
+                        for (int k = 0; k < traceCap / 2; k++) { trT[k] = trT[2*k]; trX[k] = trX[2*k]; trTh[k] = trTh[2*k]; }
+                        traceN = traceCap / 2; traceStride *= 2;
+                    }
+                    trT[traceN] = t; trX[traceN] = X; trTh[traceN] = Theta; traceN++;
+                }
 
                 if (c.noDepletionControl) {
                     // SHADOW measurement: the same moving attachment landscape evaluated for EVERY
@@ -590,6 +607,14 @@ public final class VilfanCompleteSystem {
             R.velLsq   = (vTT > 0) ? ((lsTX / lsN - mT * mX) / vTT) / 1000.0 : 0.0;
             R.omegaLsq = (vTT > 0) ?  (lsTTh / lsN - mT * mTh) / vTT : 0.0;
         }
+        // stationarity: split the analysed window at the midpoint of SIMULATED TIME
+        if (traceN > 4) {
+            double tMid = 0.5 * (trT[0] + trT[traceN - 1]);
+            int mid = 0; while (mid < traceN - 1 && trT[mid] < tMid) mid++;
+            double d1 = trT[mid] - trT[0], d2 = trT[traceN - 1] - trT[mid];
+            if (d1 > 0) { R.velFirstHalf  = (trX[mid] - trX[0]) / 1000.0 / d1; R.omegaFirstHalf  = (trTh[mid] - trTh[0]) / d1; }
+            if (d2 > 0) { R.velSecondHalf = (trX[traceN-1] - trX[mid]) / 1000.0 / d2; R.omegaSecondHalf = (trTh[traceN-1] - trTh[mid]) / d2; }
+        }
         R.nEvents = nEv; R.nAttach = nAtt; R.nStroke = nPS; R.nAdpRelease = nADP; R.nDetach = nDet;
         R.meanBound = (dT > 0) ? boundTime / dT : 0.0;
         R.dutyRatio = (nM > 0) ? R.meanBound / countReachable() : 0.0;
@@ -599,6 +624,7 @@ public final class VilfanCompleteSystem {
             R.meanXa = sXa / nXa;  R.sdXa  = sd(sXa, sXa2, nXa);
             R.meanXiA= sXiA / nXa; R.sdXiA = sd(sXiA, sXiA2, nXa);
             R.meanThA= sThA / nXa; R.sdThA = sd(sThA, sThA2, nXa);
+            R.meanAttachTorque = -kTheta * R.meanThA;      // M_A = -Ktheta * theta_A  (Eq 4)
         }
         if (wT > 0) {
             R.meanTotalForce = sForceT / wT; R.meanTotalTorque = sTorqT / wT;
