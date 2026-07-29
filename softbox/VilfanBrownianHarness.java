@@ -124,7 +124,7 @@ public final class VilfanBrownianHarness {
         for (long s : PILOT) { Config c = base(); c.dNm = 0.0;   L.addAll(pair("ctl_d0", c, s, false)); }
         for (long s : PILOT) { Config c = base(); c.latP = 0; c.latQ = 1; L.addAll(pair("ctl_achiral", c, s, false)); }
         // Brownian OFF through the SAME campaign infrastructure and the SAME fixed-time window
-        for (long s : PROD) { Config c = base(); c.axialBrownian = false; L.addAll(pair("ctl_broff", c, s, false)); }
+        for (long s : new long[]{101, 102, 103, 104}) { Config c = base(); c.axialBrownian = false; L.addAll(pair("ctl_broff", c, s, false)); }
         return L;
     }
     static List<Arm> paperArms() {
