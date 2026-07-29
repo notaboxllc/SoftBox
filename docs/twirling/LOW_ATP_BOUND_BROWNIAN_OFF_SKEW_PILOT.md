@@ -168,6 +168,150 @@ nothing.
 
 ---
 
-## 5–19
+## 5. Stage 3 gates — results
 
-*(filled in after the gates and the campaign)*
+`./scripts/run_chiral_sites.sh -bbrown-fixtures -eta 0.01` → **17 PASS, 0 FAIL** (CPU, deterministic).
+`./scripts/run_gpu_monitored.sh ./scripts/run_chiral_sites.sh -bbrown-equiv -gpu -eta 0.01` → **PASS**.
+Logs: `docs/twirling/data/boundbrown_stage3_gates.txt`, `..._gate_i_gpu.txt`,
+`..._regression_fixtures_diff.txt`.
+
+### 5.1 Gate A — detached-search preservation
+
+Fixture: all 1200 motors forbidden to bind (so the bound mask can never fire), 400 steps, **filament
+Brownian held ON in both arms** so the comparison isolates the bound mask alone.
+
+| quantity | result |
+|---|---|
+| max\|Δ S2 beam nodes\| | **0** |
+| max\|Δ (φ, ψ)\| | **0** |
+| max\|Δ headRef\| , max\|Δ headOmega\| | **0** , **0** |
+| nucleotide-state mismatches | **0** |
+| bound-motor samples (must be none) | 0 |
+| binding-gate probe: candidate segment **and** candidate arc mismatches | **0** of 19 200 evaluations |
+| detached head MSD | 2.12×10⁻⁴ µm² at 200 steps → 2.60×10⁻⁴ µm² at 400 steps (RMS **14.6 → 16.1 nm**) |
+
+The search is **bit-identical**, not merely statistically similar, and it is live and still growing. The MSD
+is sub-diffusive because the head is tethered by its own 40 nm S2 beam — a bounded search, as intended.
+
+Binding-opportunity and site-selection statistics were probed with `matBindGateOnly`, which *evaluates* the
+full 8-gate geometric contract and writes the candidate segment + arc to scratch **without committing** —
+so the probe cannot itself perturb the run.
+
+### 5.2 Gates B and D — bound mechanical quietness, and no hidden bound kicks
+
+**Method (the strongest form available, and enumeration-independent).** Warm up 600 steps with binding and
+chemistry live so the bound population and its geometry are real, not synthetic. Then freeze: zero every
+nucleotide transition rate in place (no state is reset, no pose is touched — the cycle kernel still runs and
+still draws, it simply cannot fire), forbid new binds, and optionally thin the bound population. Run the
+SAME prepared state twice with **different runSeeds**. Because every stream in the program is a counter-based
+hash of a key containing `runSeed`, a seed change re-randomises *all* of them at once. If any stochastic
+mechanical term still reached a bound motor or the filament — whether or not I enumerated it in §1 — the two
+trajectories would separate.
+
+| fixture | n bound | Δ filament coord | Δ filament uVec | Δ S2 nodes (bound) | Δ bondData (bound) | Σ\|randForce\|+\|randTorque\| |
+|---|---|---|---|---|---|---|
+| one bound motor | 1 | **0** | **0** | **0** | **0** | **0** |
+| all bound motors | 12 | **0** | **0** | **0** | **0** | **0** |
+| asymmetric (6 of 12) | 6 | **0** | **0** | **0** | **0** | **0** |
+| *control: one bound, Brownian ON* | 1 | 9.24×10⁻³ | 1.77×10⁻² | 6.55×10⁻³ | 4.32×10⁻¹² | 9.10×10⁻⁸ |
+| *control: all bound, Brownian ON* | 13 | 5.54×10⁻³ | 2.27×10⁻² | 8.57×10⁻³ | 6.56×10⁻¹² | 9.10×10⁻⁸ |
+| *control: asymmetric, Brownian ON* | 7 | 4.89×10⁻³ | 1.41×10⁻² | 8.78×10⁻³ | 6.60×10⁻¹² | 9.10×10⁻⁸ |
+
+**Gate D is satisfied exactly**: the accumulated filament stochastic impulse over the measurement window is
+identically zero, and the seed-invariance result extends that to *every* source, audited or not. The
+canonical controls diverge by ~10⁻² µm, so the gate has teeth.
+
+### 5.3 Gate C — deterministic relaxation preserved
+
+Same prepared frozen fixture, suppressed mode.
+
+| check | result |
+|---|---|
+| `randForce` maximum | **0** (exactly) |
+| one step reproduced from the integrator's own law `F·dt/γ`, using the buffers it read | max\|actual − predicted\| = **2.34×10⁻⁸ µm**, = 0.20 % of the 1.20×10⁻⁵ µm step, and **below the float32 coordinate floor** (4 ulp = 2.38×10⁻⁷ µm) |
+| relaxation, 400 steps | per-step \|Δcoord\| 9.00×10⁻⁶ → 2.53×10⁻⁶ µm (**×0.28**); Σ\|F8\| 1.94×10⁻¹¹ → 1.34×10⁻¹¹ N (**×0.69**) |
+| per-bond force closure, max\|head F + segment F\| | **0** (bit-for-bit), against \|F8\| up to 5.24×10⁻¹² N |
+
+Drag is demonstrably active — the motion *is* `F·dt/γ` to the representational floor — and the strained
+bound state relaxes toward a fixed point rather than freezing or drifting.
+
+### 5.4 Gate E — binding and detachment continuity
+
+| condition | arm | binds | detaches | \|ΔFil\| at transition | \|ΔFil\| ordinary | ratio | \|ΔPose\| at transition | \|ΔPose\| ordinary |
+|---|---|---|---|---|---|---|---|---|
+| 5 µM (production) | CANONICAL | 18 | 0 | 1.790×10⁻³ | 1.832×10⁻³ | 0.98 | 1.258×10⁻¹ | 2.717×10⁻¹ |
+| 5 µM (production) | **SUPPRESSED** | 17 | 0 | **4.210×10⁻⁴** | 4.260×10⁻⁵ | 9.88 | **5.706×10⁻²** | 1.144×10⁻² |
+| 2000 µM (fixture only) | CANONICAL | 18 | 6 | 1.845×10⁻³ | 1.826×10⁻³ | 1.01 | 1.075×10⁻¹ | 2.633×10⁻¹ |
+| 2000 µM (fixture only) | **SUPPRESSED** | 17 | 5 | **2.982×10⁻⁴** | 4.193×10⁻⁵ | 7.11 | **6.998×10⁻²** | 1.093×10⁻² |
+
+**Read the absolute columns, not the ratio.** Suppression *reduces* transition-step motion — filament by
+4.2× at 5 µM and 6.2× at saturating ATP, motor pose by 2.2× and 1.5× — which is the opposite of a kick. The
+transition/ordinary **ratio** rises (0.98 → 9.9) only because suppression collapses the *ordinary-step
+denominator* ~40×. What that rise exposes is the model's own **physical force onset at attachment**
+(documented for this motor: zero coordinate discontinuity, first step ∝ dt), which was previously buried
+under thermal motion. Structurally there is nothing else it could be: the gate multiplies an RHS term,
+writes no state, resets no pose and re-seeds nothing.
+
+**Why the second condition exists.** At 5 µM the mean rigor lifetime is `1/atpOn` = 20 ms = 80 000 steps, so
+a 1500-step fixture sees *zero* detachments and the detachment half of the gate would be untested. The
+saturating-ATP arm rescales **only** the ATP-uptake hazard, is labelled fixture-only, and changes nothing
+about the production condition.
+
+### 5.5 Gate F — RNG isolation
+
+- chemistry trajectory **bit-identical** across the mode (gate A, 0 mismatches over 400 steps × 1200 motors);
+- binding-gate and site-selection **bit-identical** (0 of 19 200);
+- motor-lawn placement and the initial condition **identical** across the mode;
+- packed policy: `matc[3]` = 0 (canonical) / 1 (suppressed; bit0 = bound-off);
+- salts disjoint, and chemistry uses a 32-bit `wangHash` on an `int` key while the mechanical streams use a
+  64-bit mixer on a `long` key — different functions, so aliasing is impossible even at equal arguments;
+- no state write, no re-seed, no counter advance, no draw-count dependence.
+
+**Whether draws are "consumed but ignored" while bound: neither.** The draw is simply not taken. With
+counter-based streams that is exactly equivalent to consuming and discarding it, and it costs nothing.
+
+### 5.6 Gate G — the Brownian-ON default is untouched
+
+- `matc[3] == 0` in canonical mode ⇒ `matS2SolveStep` and `headRollStep` take the verbatim path;
+- all four filament channel masks are 1.0 (an IEEE identity multiply), and the mask task is not even wired;
+- **cross-build regression:** `./scripts/run_chiral_sites.sh -fixtures -eta 0.01` is **byte-identical**
+  between this build and the parent build (`feature/lowatp-small-skew-pilot`, 81d2909) — 23 gates, including
+  every `headRollStep` and registry gate. `diff` returns zero lines
+  (`docs/twirling/data/boundbrown_regression_fixtures_diff.txt`);
+- record ids: canonical `atp_u0005.00_e0150_d00200000_p_101`, suppressed
+  `atp_u0005.00_e0150_bdso_d00200000_p_101` — no aliasing in either direction.
+
+### 5.7 Gate H — zero-skew mechanical null
+
+| check | result |
+|---|---|
+| `chiP[16]` (converter skew, rad) | **exactly 0.0**; `convSkewOn()` = OFF |
+| `epsBind` (actin-side binding skew) | exactly 0 |
+| `epsStroke` (interface step skew) | exactly 0 |
+| registry stiffness `k_Ω` | exactly 0 ⇒ max\|head registry couple\| = **0** |
+| prepared achiral fixture, 3600 bound samples | Σ τ_axial = −9.53×10⁻¹⁹ N·m, Σ\|τ_axial\| = 4.53×10⁻¹⁸ N·m |
+
+No imposed chiral parameter is active and no stochastic mechanical torque source remains. The nonzero net in
+the *frozen prepared* fixture is the deterministic achiral residue of one particular frozen geometry with 12
+held motors — it is not a chirality and not a noise source. The meaningful null is the production ε = 0 arm
+(§9), which is run with the full stochastic search and chemistry.
+
+### 5.8 Gate I — CPU/GPU equivalence, device-resident
+
+Full pilot scene (12-segment chain, discrete native lattice, surface bond, 5 µM, 1200 motors), 300
+device-resident steps, **no fallback**.
+
+| ε | bind mism | site mism | nucleotide mism | max\|ΔbondData\| | max\|Δτ_axial\| (tol) | max\|Δ cumulative roll\| | max\|Δ filament coord\| | filament \|rand\| CPU/GPU | bound CPU/GPU |
+|---|---|---|---|---|---|---|---|---|---|
+| 0° | **0** | **0** | **0** | 1.20×10⁻¹⁶ N | 1.21×10⁻²⁵ (4.76×10⁻²²) | 1.72×10⁻¹¹ rad | 5.96×10⁻⁸ µm | **0 / 0** | 10 / 10 |
+| +15° | **0** | **0** | **0** | 1.20×10⁻¹⁶ N | 1.24×10⁻²⁵ (4.78×10⁻²²) | 1.93×10⁻¹¹ rad | 5.96×10⁻⁸ µm | **0 / 0** | 10 / 10 |
+
+Every **decision** channel — binding state, site selection, nucleotide state — is exact on both runners; the
+mechanical channels agree to float32 last-bit; the Brownian-mode state itself is confirmed to have crossed to
+the device (`matc[3] = 1`, `brChan = [0 0 0 0]`).
+
+---
+
+## 6–19
+
+*(filled in after the campaign)*
