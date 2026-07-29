@@ -294,7 +294,10 @@ public final class ChiralSiteSystem {
      *       on the head, {@code −tau} about eBind on the FILAMENT (added into the seg-side torque slot).</li>
      *   <li><b>Brownian</b> (optional, own stream): {@code tauB = sqrt(2 kT gammaOmega/dt) * g} — a
      *       thermostat, no reaction, applied bound AND unbound (a bound head is quieted only by the
-     *       registry stiffness itself, never by a state switch).</li>
+     *       registry stiffness itself, never by a state switch) — UNLESS the noncanonical, default-0
+     *       binding-state Brownian mask {@code matc[3]} is set (bit0 ⇒ quiet when bound, bit1 ⇒ quiet when
+     *       unbound), which is the head-roll half of DETACHED_SEARCH_ONLY. {@code matc[3]==0} is
+     *       arithmetically bit-identical to the canonical path.</li>
      *   <li>Rotate {@code headRef} about eBind by {@code dOmega_step = (tau + tauB)*dt/gammaOmega}
      *       (Rodrigues, exact for the perpendicular component), accumulate {@code omega}.</li>
      * </ol>
@@ -312,6 +315,11 @@ public final class ChiralSiteSystem {
         int brownOn = (int) chiP.get(10), rollOn = (int) chiP.get(11);
         double mirror = chiP.get(13);
         long tt = matc.get(0), seed = matc.get(1);
+        // NONCANONICAL, default-0 binding-state Brownian mask (the head-roll twin of the matS2SolveStep gate):
+        // matc[3] bit0 ⇒ a BOUND head's roll thermostat is silenced, bit1 ⇒ an UNBOUND head's is. The registry
+        // couple, the parallel transport and the Rodrigues rotation are untouched, so a masked head still
+        // responds to its registry stiffness and still transports its material reference.
+        int mPolicy = matc.get(3);
         for (@Parallel int m = 0; m < N; m++) {
             headTau.set(m, 0f); headMis.set(m, 0f);
             if (rollOn == 0) continue;
@@ -380,7 +388,10 @@ public final class ChiralSiteSystem {
             headTau.set(m, (float) tau); headMis.set(m, (float) mis);
             // --- Brownian thermostat (no reaction) ----------------------------------------------------
             double tauB = 0.0;
-            if (brownOn != 0) tauB = Math.sqrt(2.0 * Constants.kT * gam / dt) * gauss(seed, tt, OMEGA_SALT + (long) m * 7919L);
+            int brownM = brownOn;                                      // binding-state gate (matc[3]; 0 ⇒ canonical)
+            if (s >= 0) { if ((mPolicy & 1) != 0) brownM = 0; }
+            else        { if ((mPolicy & 2) != 0) brownM = 0; }
+            if (brownM != 0) tauB = Math.sqrt(2.0 * Constants.kT * gam / dt) * gauss(seed, tt, OMEGA_SALT + (long) m * 7919L);
             double dOm = (tau + tauB) * dt / gam;
             // --- rotate headRef about eBind by dOm (Rodrigues; headRef ⊥ eBind ⇒ the cross term is exact)
             double c = Math.cos(dOm), sn = Math.sin(dOm);

@@ -44,6 +44,45 @@ public final class ChiralSiteHarness {
     static double  DTR       = DT;                              // -halfdt ⇒ DT/2 (timestep refinement check)
 
     // ---------------------------------------------------------------------------------------------------------
+    // MECHANICAL-BROWNIAN MODE (noncanonical, DEFAULT = CANONICAL ⇒ every existing path byte-identical).
+    //
+    //   CANONICAL              every mechanical Brownian channel active in every binding state (the frozen model).
+    //   DETACHED_SEARCH_ONLY   the ONLY stochastic MECHANICAL forcing left is the DETACHED motor's search:
+    //                            * filament translational Brownian (axial + transverse) ........ OFF
+    //                            * filament rotational Brownian (roll + bend/tumble) ........... OFF
+    //                            * bound motor: S2 beam-node force, converter phi torque,
+    //                              lever/actin-bond psi torque, head-roll thermostat ........... OFF
+    //                            * UNBOUND motor: all of the above ............................. ON (the search)
+    //                            * chemistry (nucleotide cycle, catch-slip release, refractory)   ON (untouched)
+    //                            * binding (geometric gate on the searched pose) ................ untouched
+    //                          Deterministic drag, every elastic law, the Hessian, the solve and every reaction
+    //                          are untouched, so a quieted bound motor still relaxes, strokes, bears load and
+    //                          detaches. The switch is per-motor and per-step: it follows boundSeg with no
+    //                          impulse, no pose reset and no state snap at either transition.
+    //
+    // RNG isolation is STRUCTURAL, not bookkeeping: every stream here is a counter-based wang hash keyed on
+    // (slot, step, seed, salt), so a draw that is not taken cannot shift any other draw. The chemistry salts
+    // (0x4E55 / 0x4D54 / 0x52465241), the mechanical salts (0x4811 / 0x4841 / 0x4842 / 0x484F4D47) and the
+    // filament salts (BrownianForceSystem's six wang hashes) are disjoint and independently addressed.
+    // ---------------------------------------------------------------------------------------------------------
+    static final int MB_CANONICAL = 0, MB_DETACHED_SEARCH_ONLY = 1;
+    static int MECH_BROWN_MODE = MB_CANONICAL;   // -mech-brownian-mode canonical|detached-search-only
+    static boolean dsoMode() { return MECH_BROWN_MODE == MB_DETACHED_SEARCH_ONLY; }
+    static String mechBrownModeName() { return dsoMode() ? "DETACHED_SEARCH_ONLY" : "CANONICAL"; }
+    /** The record-id token for the mechanical-Brownian mode. EMPTY for CANONICAL, so every stored
+     *  Brownian-on record keeps its exact id and stays readable; "_bdso" for DETACHED_SEARCH_ONLY, a token
+     *  no existing id contains, so a suppressed arm can never alias onto a Brownian-on one (or vice versa). */
+    static String mechBrownTag() { return dsoMode() ? "_bdso" : ""; }
+    /** The channel-by-channel statement of the mode, for banners, provenance and the report. */
+    static String mechBrownChannelString() {
+        boolean dso = dsoMode();
+        return String.format("filament[trans=%s rot=%s] motor-bound[S2=%s phi=%s psi=%s headRoll=%s] "
+                + "motor-unbound(search)=ON chemistry=STOCHASTIC binding=untouched",
+                (!dso && FIL_BROWN) ? "ON" : "OFF", (!dso && FIL_BROWN) ? "ON" : "OFF",
+                dso ? "OFF" : "ON", dso ? "OFF" : "ON", dso ? "OFF" : "ON", dso ? "OFF" : "ON");
+    }
+
+    // ---------------------------------------------------------------------------------------------------------
     // COHERENT WHOLE-SYSTEM SOLVENT VISCOSITY (noncanonical, DEFAULT-OFF; docs/VISCOSITY_SENSITIVITY_FINDINGS.md).
     //
     // `-eta <Pa·s>` scales EVERY solvent-derived drag channel the assay owns by r = eta/Constants.aeta:
@@ -143,7 +182,7 @@ public final class ChiralSiteHarness {
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean etaAudit = false, etaControls = false, etaMap = false, etaReport = false, etaMirrorRep = false;
         boolean atpFix = false, atpPilot = false, atpMap = false, atpReport = false, atpMirrorRep = false, atpNull = false;
-        boolean atpEquiv = false, skewFix = false;
+        boolean atpEquiv = false, skewFix = false, bbrownFix = false, bbrownEquiv = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
                 convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false, s2DtCmp = false, studyB = false, studyBRep = false;
@@ -158,6 +197,17 @@ public final class ChiralSiteHarness {
                 case "-twirl-dt" -> dtCheck = true;
                 case "-filament-segments" -> FIL_SEGS = Integer.parseInt(args[++i]);
                 case "-filament-brownian" -> FIL_BROWN = args[++i].equals("on");
+                case "-mech-brownian-mode", "-mechanical-brownian-mode" -> {
+                    String v = args[++i];
+                    MECH_BROWN_MODE = switch (v) {
+                        case "canonical" -> MB_CANONICAL;
+                        case "detached-search-only", "detached_search_only" -> MB_DETACHED_SEARCH_ONLY;
+                        default -> throw new IllegalArgumentException(
+                                "-mech-brownian-mode: expected canonical|detached-search-only, got " + v);
+                    };
+                }
+                case "-bbrown-fixtures" -> bbrownFix = true;
+                case "-bbrown-equiv" -> bbrownEquiv = true;
                 case "-halfdt" -> DTR = DT / 2.0;
                 case "-equil-frac" -> EQUIL_FRAC = Double.parseDouble(args[++i]);
                 case "-blocks" -> NBLK = Integer.parseInt(args[++i]);
@@ -283,6 +333,8 @@ public final class ChiralSiteHarness {
             if (twirlMode) makeTwirlMovies(jsDir); else makeMovies(jsDir);
             TornadoCrashDiagnostic.normalMainReturn("mode=3js"); return; }
         if (skewFix)         ok = runSkewFixtures();
+        else if (bbrownFix)  ok = runBoundBrownianFixtures();
+        else if (bbrownEquiv) ok = runBoundBrownianEquiv();
         else if (atpFix)     ok = runAtpFixtures();
         else if (atpEquiv)   ok = runAtpEquiv();
         else if (atpPilot)   runAtpPilot(ATP_DUR_MS > 0 ? ATP_DUR_MS : 200.0);
@@ -373,9 +425,14 @@ public final class ChiralSiteHarness {
         // the campaign observables (filament pose + bondData + bindAzim) must cross back EVERY step on the device
         // path; telemetryOn() is what gates that copy-out set, and it must be on even for the no-feature control.
         ExplicitCompleteMatHarness.TELEMETRY = GPU;
-        // FILAMENT Brownian channels only (all four together). Motor/S2 Brownian stays ON in EVERY arm — no
-        // binding-state quieting is ever requested here (motorBrownPolicy() stays 0 ⇒ matS2SolveStep bit-identical).
-        ExplicitCompleteMatHarness.setBrownianPolicy(FIL_BROWN, FIL_BROWN, FIL_BROWN, FIL_BROWN, true, true);
+        // MECHANICAL BROWNIAN POLICY — the ONE place the mode reaches the device.
+        //   CANONICAL             : filament channels follow FIL_BROWN; motor Brownian ON in BOTH binding states
+        //                           (motorBrownPolicy() == 0 ⇒ matS2SolveStep / headRollStep bit-identical).
+        //   DETACHED_SEARCH_ONLY  : all four filament channels OFF *and* the bound-motor channels OFF; the
+        //                           UNBOUND motor keeps every channel, which is the binding search.
+        boolean dso = dsoMode();
+        boolean fb = FIL_BROWN && !dso;
+        ExplicitCompleteMatHarness.setBrownianPolicy(fb, fb, fb, fb, /*motUnbound*/ true, /*motBound*/ !dso);
     }
     /** the converter skew of the CURRENT arm (set by the -conv-* modes; 0 everywhere else). */
     static double EPS_CONV_ARM = 0.0;
@@ -4198,6 +4255,9 @@ public final class ChiralSiteHarness {
             "tauPre", "tauPost", "nPre", "nPost",
             "tauPull", "tauDrag", "nPull", "nDrag", "fAxPull", "fAxDrag",
             "residPullS", "residDragS", "nDetPull", "nDetDrag", "vFilMean",
+            // condition provenance added 2026-07-29 (bound-Brownian pilot). Earlier records read back NaN here,
+            // which the loaders treat as "canonical, skew from the id" — the only vintage that predates the flag.
+            "epsDeg", "brownMode", "filBrownOn", "motBrownBound", "motBrownUnbound",
         };
         String[] base = ChiralSiteHarness.POW_KEYS;
         String[] all = new String[base.length + extra.length];
@@ -4235,6 +4295,11 @@ public final class ChiralSiteHarness {
         v[i++] = r.fAxPull; v[i++] = r.fAxDrag;
         v[i++] = r.residPull; v[i++] = r.residDrag; v[i++] = r.nDetPull; v[i++] = r.nDetDrag;
         v[i++] = r.vFilMean;
+        v[i++] = sgn * ATP_EPS_DEG;                       // the SIGNED converter skew this arm actually ran at
+        v[i++] = MECH_BROWN_MODE;                         // 0 = CANONICAL, 1 = DETACHED_SEARCH_ONLY
+        v[i++] = dsoMode() ? 0 : (FIL_BROWN ? 1 : 0);     // filament Brownian channels live?
+        v[i++] = dsoMode() ? 0 : 1;                       // BOUND-motor mechanical Brownian live?
+        v[i++] = 1;                                       // UNBOUND-motor (search) Brownian live? — ALWAYS
         return v;
     }
     static void atpWrite(String id, double[] v, String provenance) throws java.io.IOException {
@@ -4251,8 +4316,9 @@ public final class ChiralSiteHarness {
     static double[] atpRead(String id) {
         java.io.File f = new java.io.File(ATP_DIR, id + ".tsv");
         // legacy fallback: an untagged record is accepted ONLY when the current skew is the 15° the untagged
-        // campaign was run at, so a 1° or 2° run can never alias onto a 15° record.
-        if (!f.exists() && Math.abs(Math.abs(ATP_EPS_DEG) - LEGACY_EPS_DEG) < 1e-9) {
+        // campaign was run at AND the mechanical-Brownian mode is CANONICAL — every untagged record was written
+        // with every Brownian channel live, so a suppressed-Brownian run must never fall back onto one.
+        if (!f.exists() && !dsoMode() && Math.abs(Math.abs(ATP_EPS_DEG) - LEGACY_EPS_DEG) < 1e-9) {
             String legacy = id.replaceFirst("_e\\d{4}_", "_");
             java.io.File g = new java.io.File(ATP_DIR, legacy + ".tsv");
             if (g.exists()) f = g;
@@ -4279,8 +4345,8 @@ public final class ChiralSiteHarness {
      *  ±15° records predate the tag, so a legacy fallback keeps them readable — but ONLY at ε = 15°, which is
      *  the skew they were actually run at. Any other ε has no legacy form and can never alias onto them. */
     static String atpId(double uM, int sgn, int seed, double durS, double mirror) {
-        return String.format(Locale.US, "atp_u%07.2f_e%04d_d%08d_%s%s%d", uM,
-                (int) Math.round(Math.abs(ATP_EPS_DEG) * 10), Math.round(durS * 1e6),
+        return String.format(Locale.US, "atp_u%07.2f_e%04d%s_d%08d_%s%s%d", uM,
+                (int) Math.round(Math.abs(ATP_EPS_DEG) * 10), mechBrownTag(), Math.round(durS * 1e6),
                 mirror < 0 ? "m_" : "", sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed);
     }
     /** The pre-2026-07-28 id, WITHOUT the ε tag. Valid only for the ±15° campaign that wrote it. */
@@ -4291,9 +4357,11 @@ public final class ChiralSiteHarness {
     static final double LEGACY_EPS_DEG = 15.0;   // the only skew the untagged records were ever run at
     static String atpProvenance(double uM, double durS) {
         return powProvenance() + String.format(Locale.US,
-                " eta=%.4g dt=%.4e atpUM=%.4g atpOn=%.6g durationS=%.6g eps=%.1f mirror=%.0f rupture_mode=%d gpu=%s",
+                " eta=%.4g dt=%.4e atpUM=%.4g atpOn=%.6g durationS=%.6g eps=%.1f mirror=%.0f rupture_mode=%d gpu=%s"
+                + " mechBrownian=%s (%s)",
                 ETA, DTR, uM, atpOnFor(uM), durS, ATP_EPS_DEG, ATP_MIRROR,
-                ExplicitCompleteMatHarness.RIGOR_ON ? 1 : 0, GPU);
+                ExplicitCompleteMatHarness.RIGOR_ON ? 1 : 0, GPU,
+                mechBrownModeName(), mechBrownChannelString());
     }
 
     /** Run (or reuse) ONE low-ATP arm. STEPS/DTR must already be set for the requested physical duration. */
@@ -4371,6 +4439,11 @@ public final class ChiralSiteHarness {
                 + "  ⇒ detachment pathway(s): " + (ExplicitCompleteMatHarness.RIGOR_ON
                     ? "ATP binding + mechanical rigor rupture (competing hazards)" : "ATP binding ONLY"));
         System.out.println("  BOTH phenotypes come from these same runs: gliding = eps-EVEN, twirling = eps-ODD.");
+        System.out.println("  MECHANICAL BROWNIAN MODE: " + mechBrownModeName());
+        System.out.println("    " + mechBrownChannelString());
+        if (dsoMode())
+            System.out.println("    ⇒ detached motors still SEARCH stochastically; chemistry, catch-slip release and"
+                    + " site selection are UNTOUCHED. Record ids carry the '_bdso' token.");
         System.out.println("  provenance: " + atpProvenance(ATP_MAP[0], durS));
     }
 
@@ -4586,6 +4659,7 @@ public final class ChiralSiteHarness {
                 uM, SEEDS, durS*1e3);
         System.out.println("  A zero-skew converter must produce NO resolved signed chiral rotation. The ±eps");
         System.out.println("  half-split of these same eps = 0 runs is the estimator's own noise floor.");
+        System.out.println("  MECHANICAL BROWNIAN MODE: " + mechBrownModeName() + "  [" + mechBrownChannelString() + "]");
         int[] tally = new int[2];
         double savedEps = ATP_EPS_DEG; ATP_EPS_DEG = 0.0;
         for (int i = 0; i < SEEDS; i++) atpArm(uM, 0, SEED + i, durS, tally);
@@ -4946,6 +5020,594 @@ public final class ChiralSiteHarness {
         DTR = DT * ETA / Constants.aeta; EPS_CONV_ARM = deg; CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
         try { cfg(2, true, 0.0, 0.0, 0.0, true, 1.0, true); return build(SEED); }
         finally { EPS_CONV_ARM = savedConv; DTR = savedDt; GPU = savedGpu; CONV_RAMP_ARM = savedRamp; cfgOff(); }
+    }
+
+    // ==========================================================================================================
+    // BOUND-MOTOR BROWNIAN SUPPRESSION — STAGE 3 VALIDATION GATES (CPU; deterministic; seconds)
+    //
+    // Report: docs/twirling/LOW_ATP_BOUND_BROWNIAN_OFF_SKEW_PILOT.md
+    //
+    // The load-bearing design point these gates exploit: every stochastic stream in this assay is a
+    // COUNTER-BASED hash of (slot, step, runSeed, salt) with NO carried state. Two consequences are used
+    // throughout and are worth stating once:
+    //
+    //   (i)  A draw that is NOT taken cannot shift any other draw. Suppressing a Brownian term therefore
+    //        cannot perturb the chemistry, binding or site-selection streams — RNG isolation is structural,
+    //        not bookkeeping, and needs no "consume-then-discard" machinery.
+    //   (ii) Changing the runSeed re-randomises EVERY stream at once. So "the bound subsystem is
+    //        mechanically quiet" can be tested by SEED INVARIANCE of the bound subsystem's trajectory —
+    //        a test that is INDEPENDENT OF MY ENUMERATION of Brownian sources. If any stochastic term of
+    //        any kind still reached a bound motor or the filament, a seed change would move it.
+    // ==========================================================================================================
+    static final class BBScene { Glide2D G; ExplicitCompleteMatHarness.ExMat e; }
+
+    /** Build the FROZEN pilot scene (12-seg chain, discrete native sites, surface bond, linear converter ramp,
+     *  5 µM, eta/dt of the campaign) at an EXPLICIT mechanical-Brownian policy, so a gate can vary ONE channel
+     *  family at a time rather than only the two packaged modes. Leaves the statics configured — the step
+     *  function reads several of them — so callers must finish with {@link #bbRestore}. */
+    static BBScene bbPrepare(double epsDeg, boolean filBrown, boolean motBound, int seed) {
+        GPU = false; ATP_UM = 5.0; DTR = DT * ETA / Constants.aeta;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        EPS_CONV_ARM = epsDeg; CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        cfg(2, true, 0.0, 0.0, 0.0, true, 1.0, true);
+        ExplicitCompleteMatHarness.setBrownianPolicy(filBrown, filBrown, filBrown, filBrown, true, motBound);
+        BBScene s = new BBScene();
+        s.G = build(seed);
+        s.e = ExplicitCompleteMatHarness.packExMat(s.G, 1);
+        return s;
+    }
+    static void bbRestore() { CONV_RAMP_ARM = null; EPS_CONV_ARM = 0; ATP_UM = -1.0; cfgOff(); }
+
+    /** Freeze the chemistry IN PLACE: zero every nucleotide transition rate. No state is reset, no pose is
+     *  touched — the cycle kernel still runs and still draws, it simply can never fire, so a prepared bound
+     *  population stays bound in its current nucleotide state and the mechanics become the only dynamics. */
+    static void bbFreezeChemistry(Glide2D G) { for (int i = 1; i <= 7; i++) G.mot.nucParams.set(i, 0f); }
+    /** Forbid further binding (the geometric gate is skipped for every motor). Existing bonds are untouched. */
+    static void bbNoBind(ExplicitCompleteMatHarness.ExMat e) { for (int m = 0; m < e.N; m++) e.noBind.set(m, 1); }
+
+    static double bbMaxDiff(FloatArray a, FloatArray b) {
+        double d = 0; for (int i = 0; i < a.getSize(); i++) d = Math.max(d, Math.abs(a.get(i) - b.get(i))); return d; }
+    static double bbMaxDiff(DoubleArray a, DoubleArray b) {
+        double d = 0; for (int i = 0; i < a.getSize(); i++) d = Math.max(d, Math.abs(a.get(i) - b.get(i))); return d; }
+    static int bbMismatch(IntArray a, IntArray b) {
+        int n = 0; for (int i = 0; i < a.getSize(); i++) if (a.get(i) != b.get(i)) n++; return n; }
+    /** max|Δ| over the BOUND motors only, on a planar per-motor buffer of the given stride (rows × N). */
+    static double bbMaxDiffBound(DoubleArray a, DoubleArray b, IntArray boundSeg, int N, int rows) {
+        double d = 0;
+        for (int m = 0; m < N; m++) { if (boundSeg.get(m) < 0) continue;
+            for (int r = 0; r < rows; r++) d = Math.max(d, Math.abs(a.get(r * N + m) - b.get(r * N + m))); }
+        return d;
+    }
+    static double bbMaxDiffBoundF(FloatArray a, FloatArray b, IntArray boundSeg, int N, int stride) {
+        double d = 0;
+        for (int m = 0; m < N; m++) { if (boundSeg.get(m) < 0) continue;
+            for (int c = 0; c < stride; c++) d = Math.max(d, Math.abs(a.get(m * stride + c) - b.get(m * stride + c))); }
+        return d;
+    }
+    /** Mean squared head displacement from the reference pose, over all motors (µm²). */
+    static double bbHeadMsd(ExplicitCompleteMatHarness.ExMat e, double[] h0, int N) {
+        double s = 0;
+        for (int m = 0; m < N; m++) {
+            double dx = e.outGeom.get(3 * N + m) - h0[m], dy = e.outGeom.get(4 * N + m) - h0[N + m],
+                   dz = e.outGeom.get(5 * N + m) - h0[2 * N + m];
+            s += dx * dx + dy * dy + dz * dz;
+        }
+        return s / N;
+    }
+    static int bbCountBound(IntArray boundSeg) {
+        int n = 0; for (int m = 0; m < boundSeg.getSize(); m++) if (boundSeg.get(m) >= 0) n++; return n; }
+
+    /**
+     * Stage-3 gates A–H for DETACHED_SEARCH_ONLY. CPU runner throughout, deterministic, no GPU time.
+     * Gate I (CPU/GPU equivalence) is {@code -bbrown-equiv}, which needs the device.
+     */
+    static boolean runBoundBrownianFixtures() {
+        passN = failN = 0;
+        double dt = DT * ETA / Constants.aeta;
+        System.out.printf(Locale.US, "%n=== BOUND-MOTOR BROWNIAN SUPPRESSION — STAGE 3 GATES (CPU; eta = %.4g, dt = %.4e s) ===%n", ETA, dt);
+        System.out.println("  mode under test: DETACHED_SEARCH_ONLY");
+        System.out.println("    filament translational + rotational Brownian ......... OFF");
+        System.out.println("    BOUND motor: S2 node force, converter phi, lever psi,");
+        System.out.println("                 head-roll thermostat ..................... OFF");
+        System.out.println("    UNBOUND motor: all of the above ...................... ON  (the binding search)");
+        System.out.println("    nucleotide cycle / catch-slip release / refractory .... STOCHASTIC (untouched)");
+        System.out.println("    binding gate, site selection, motor-lawn placement .... untouched");
+
+        // ---- A. DETACHED-SEARCH PRESERVATION -----------------------------------------------------------------
+        // All motors forbidden to bind. Then the bound mask can never fire, so switching it on MUST leave the
+        // motor subsystem bit-identical. Filament Brownian is held ON in BOTH arms so this isolates the bound
+        // mask alone (the filament channels are gate B/D's business).
+        System.out.println("\n  ---- A. detached-search preservation (all motors detached; filament Brownian ON in both) ----");
+        int KA = 400;
+        BBScene a1 = bbPrepare(15.0, true, true,  101); bbNoBind(a1.e);
+        BBScene a2 = bbPrepare(15.0, true, false, 101); bbNoBind(a2.e);
+        int N = a1.e.N;
+        // the head position lives in outGeom, which is only WRITTEN by matBeamGeom during a step, so the MSD
+        // baseline must be taken AFTER the first step -- reading it from the freshly packed (zeroed) buffer
+        // would measure the absolute head coordinate, not a displacement.
+        double[] h0 = new double[3 * N];
+        int candMism = 0, nucMism = 0, boundEver = 0;
+        double dNodes = 0, dQ = 0, dHeadRef = 0, dHeadOm = 0, msd = 0;
+        IntArray c1 = new IntArray(2 * N), c2 = new IntArray(2 * N);
+        IntArray gateOpen = new IntArray(N); gateOpen.init(0);   // the PROBE evaluates the gate; it never commits
+        DoubleArray ca1 = new DoubleArray(N), ca2 = new DoubleArray(N);
+        long candTot = 0;
+        double msdMid = 0;
+        for (int t = 0; t < KA; t++) {
+            ExplicitCompleteMatHarness.stepGlidingCPU(a1.e, t, 101);
+            ExplicitCompleteMatHarness.stepGlidingCPU(a2.e, t, 101);
+            if (t == 0) for (int m = 0; m < N; m++) {
+                h0[m] = a1.e.outGeom.get(3 * N + m); h0[N + m] = a1.e.outGeom.get(4 * N + m);
+                h0[2 * N + m] = a1.e.outGeom.get(5 * N + m); }
+            if (t == KA / 2) msdMid = bbHeadMsd(a1.e, h0, N);
+            dNodes   = Math.max(dNodes,   bbMaxDiff(a1.e.nodes, a2.e.nodes));
+            dQ       = Math.max(dQ,       bbMaxDiff(a1.e.q, a2.e.q));
+            dHeadRef = Math.max(dHeadRef, bbMaxDiff(a1.e.headRef, a2.e.headRef));
+            dHeadOm  = Math.max(dHeadOm,  bbMaxDiff(a1.e.headOmega, a2.e.headOmega));
+            nucMism += bbMismatch(a1.G.mot.nucleotideState, a2.G.mot.nucleotideState);
+            boundEver += bbCountBound(a1.G.mot.boundSeg) + bbCountBound(a2.G.mot.boundSeg);
+            if (t % 25 == 0) {   // BINDING-OPPORTUNITY statistics: the gate is EVALUATED, never committed
+                c1.init(0); c2.init(0);
+                TwoBodyBeamAnalyticGpu.matBindGateOnly(a1.e.active, gateOpen, a1.G.mot.boundSeg,
+                        a1.G.mot.nucleotideState, a1.e.outGeom, a1.e.q, a1.G.fil.coord, a1.G.fil.uVec,
+                        a1.G.fil.segLength, a1.e.params, a1.e.bindP, a1.e.eupP, c1, ca1, a1.e.exCounts);
+                TwoBodyBeamAnalyticGpu.matBindGateOnly(a2.e.active, gateOpen, a2.G.mot.boundSeg,
+                        a2.G.mot.nucleotideState, a2.e.outGeom, a2.e.q, a2.G.fil.coord, a2.G.fil.uVec,
+                        a2.G.fil.segLength, a2.e.params, a2.e.bindP, a2.e.eupP, c2, ca2, a2.e.exCounts);
+                for (int m = 0; m < N; m++) {
+                    if (c1.get(m) != c2.get(m)) candMism++;
+                    if (ca1.get(m) != ca2.get(m)) candMism++;
+                    if (c1.get(m) >= 0) candTot++;
+                }
+            }
+        }
+        msd = bbHeadMsd(a1.e, h0, N);
+        bbRestore();
+        note(String.format(Locale.US, "%d steps, N=%d motors, none ever bound (%d bound-samples): "
+                + "max|dS2nodes|=%.3e max|dPhiPsi|=%.3e max|dHeadRef|=%.3e max|dHeadOmega|=%.3e nucMism=%d",
+                KA, N, boundEver, dNodes, dQ, dHeadRef, dHeadOm, nucMism));
+        ck(1, "A: detached motor SEARCH is bit-identical with the bound mask on vs off",
+                dNodes == 0.0 && dQ == 0.0 && dHeadRef == 0.0 && dHeadOm == 0.0 && boundEver == 0);
+        note(String.format(Locale.US, "detached head MSD (from step 1): %.4e µm² at %d steps -> %.4e µm² at %d "
+                + "steps (RMS %.2f -> %.2f nm) — the detached motor EXPLORES and keeps exploring",
+                msdMid, KA / 2, msd, KA, 1e3 * Math.sqrt(msdMid), 1e3 * Math.sqrt(msd)));
+        ck(2, "A: the detached search is live and keeps exploring (head MSD > 0 and growing)",
+                msd > 0.0 && msd > msdMid);
+        note(String.format(Locale.US, "binding-opportunity probe: %d gate evaluations sampled, candidate segment"
+                + " AND candidate arc mismatches = %d", (KA / 25) * N, candMism));
+        ck(3, "A: binding-opportunity + site-selection statistics identical (gate segment and arc bit-equal)",
+                candMism == 0 && candTot > 0);
+        ck(4, "F: chemistry (nucleotide) trajectory bit-identical across the Brownian mode", nucMism == 0);
+
+        // ---- B/D. BOUND MECHANICAL QUIETNESS, by SEED INVARIANCE ---------------------------------------------
+        // Prepared bound population, chemistry frozen, no further binding, DETACHED_SEARCH_ONLY. Re-run the SAME
+        // prepared state under a DIFFERENT runSeed: every stochastic stream in the program is re-randomised.
+        // If any stochastic mechanical term still reached a bound motor or the filament — enumerated by me or
+        // not — the two trajectories would separate. Requirement: EXACTLY zero difference.
+        System.out.println("\n  ---- B/D. bound mechanical quietness + no hidden bound kicks (seed-invariance) ----");
+        note("a bound-state stochastic impulse from ANY source would break seed invariance; this test does not");
+        note("depend on the source enumeration being complete.");
+        System.out.printf("    %-26s %8s %12s %12s %12s %12s %10s%n",
+                "fixture", "nBound", "d filCoord", "d filUVec", "d S2nodes", "d bondData", "Srand");
+        boolean quietOk = true, controlOk = true;
+        for (int variant = 0; variant < 3; variant++) {
+            int keep = variant == 0 ? 1 : (variant == 1 ? Integer.MAX_VALUE : -1);   // 1 bound / all bound / asymmetric
+            double[] r = bbQuietFixture(keep, false, 101, 999);          // DETACHED_SEARCH_ONLY
+            double[] rc = bbQuietFixture(keep, true, 101, 999);          // CANONICAL control (must NOT be quiet)
+            String nm = variant == 0 ? "one bound motor" : (variant == 1 ? "all bound motors" : "asymmetric (half bound)");
+            System.out.printf(Locale.US, "    %-26s %8.0f %12.3e %12.3e %12.3e %12.3e %10.3e%n",
+                    nm, r[0], r[1], r[2], r[3], r[4], r[5]);
+            System.out.printf(Locale.US, "    %-26s %8.0f %12.3e %12.3e %12.3e %12.3e %10.3e   <- CANONICAL control%n",
+                    "  (same, Brownian ON)", rc[0], rc[1], rc[2], rc[3], rc[4], rc[5]);
+            quietOk &= r[0] > 0 && r[1] == 0.0 && r[2] == 0.0 && r[3] == 0.0 && r[4] == 0.0 && r[5] == 0.0;
+            controlOk &= rc[1] > 0.0 || rc[3] > 0.0;                     // the gate has teeth
+        }
+        ck(5, "B: filament + BOUND-motor trajectory is EXACTLY seed-invariant (1 / many / asymmetric bound)", quietOk);
+        ck(6, "D: total filament stochastic impulse is EXACTLY zero (Sigma|randForce|+|randTorque| = 0)", quietOk);
+        ck(7, "B: the same fixture with Brownian ON is NOT seed-invariant (the gate has teeth)", controlOk);
+
+        // ---- C. DETERMINISTIC RELAXATION PRESERVED -----------------------------------------------------------
+        System.out.println("\n  ---- C. deterministic elastic relaxation + drag are preserved ----");
+        boolean cOk = bbRelaxFixture();
+
+        // ---- E. BINDING / DETACHMENT CONTINUITY ---------------------------------------------------------------
+        System.out.println("\n  ---- E. binding and detachment continuity (no mode-switch kick) ----");
+        boolean eOk = bbContinuityFixture();
+
+        // ---- F. RNG ISOLATION (structural statement + the salt inventory) --------------------------------------
+        System.out.println("\n  ---- F. RNG isolation ----");
+        note("streams are counter-based hashes of (slot, step, runSeed, salt) with NO carried state, so an");
+        note("untaken draw cannot shift any other stream. Salt inventory on this assay's step:");
+        note("  chemistry      NucleotideCycleSystem.wangHash   salts 0x4E55 (cycle) 0x4D54 (release) 0x52465241 (refractory)");
+        note("  motor mech     TwoBodyBeamAnalyticGpu.brownTorqueD  salts 0x4811+ (S2 nodes) 0x4841+ (phi) 0x4842+ (psi)");
+        note("  head roll      ChiralSiteSystem.gauss             salt  0x484F4D47 (\"HOMG\")");
+        note("  filament       BrownianForceSystem.wangHash       base (slot,step,seed), six hashes");
+        note("chemistry uses a 32-bit int wangHash; the mechanical streams use a 64-bit long mixer — different");
+        note("functions on disjoint salts, so no aliasing is possible even at equal arguments.");
+        note("the mode is applied as a MULTIPLICATIVE/branch gate on an RHS term only: no state write, no");
+        note("re-seed, no counter advance, no draw-count dependence anywhere.");
+        ck(11, "F: the mechanical-Brownian mode changes no chemistry/binding/site RNG stream (gate 4 + structural)",
+                nucMism == 0 && candMism == 0);
+        BBScene lp = bbPrepare(15.0, true, true, 101);
+        BBScene lq = bbPrepare(15.0, false, false, 101);
+        boolean lawnSame = bbMaxDiff(lp.e.nodes, lq.e.nodes) == 0.0
+                        && bbMaxDiff(lp.G.mot.body.coord, lq.G.mot.body.coord) == 0.0
+                        && bbMaxDiff(lp.G.fil.coord, lq.G.fil.coord) == 0.0;
+        int lawnPolicyP = lp.e.matc.get(3), lawnPolicyQ = lq.e.matc.get(3);
+        bbRestore();
+        ck(12, "F: motor-lawn placement and the initial condition are identical across the mode", lawnSame);
+        note(String.format("packed matc[3]: CANONICAL = %d (canonical), DETACHED_SEARCH_ONLY = %d (bit0 = bound-off)",
+                lawnPolicyP, lawnPolicyQ));
+
+        // ---- G. BROWNIAN-ON REGRESSION ------------------------------------------------------------------------
+        System.out.println("\n  ---- G. Brownian-ON default is untouched ----");
+        int savedMode = MECH_BROWN_MODE; MECH_BROWN_MODE = MB_CANONICAL;
+        BBScene gc = bbPrepare(15.0, true, true, 101);
+        int canonPolicy = gc.e.matc.get(3);
+        float[] brChan = new float[4]; for (int i = 0; i < 4; i++) brChan[i] = gc.e.brChan.get(i);
+        String canonId = atpId(5.0, +1, 101, 0.2, 1.0);
+        MECH_BROWN_MODE = MB_DETACHED_SEARCH_ONLY;
+        String dsoId = atpId(5.0, +1, 101, 0.2, 1.0);
+        MECH_BROWN_MODE = savedMode;
+        bbRestore();
+        ck(13, "G: in CANONICAL mode matc[3] == 0 -> matS2SolveStep and headRollStep take the VERBATIM path",
+                canonPolicy == 0);
+        ck(14, "G: in CANONICAL mode all four filament Brownian channel masks are 1.0 (identity multiply)",
+                brChan[0] == 1f && brChan[1] == 1f && brChan[2] == 1f && brChan[3] == 1f);
+        note("CANONICAL id : " + canonId);
+        note("DSO id       : " + dsoId);
+        ck(15, "G: the suppressed mode cannot alias onto a Brownian-ON record id", !canonId.equals(dsoId)
+                && dsoId.contains("_bdso") && !canonId.contains("_bdso"));
+
+        // ---- H. ZERO-SKEW MECHANICAL NULL ---------------------------------------------------------------------
+        System.out.println("\n  ---- H. zero-skew mechanical null under full suppression ----");
+        boolean hOk = bbZeroSkewNull();
+
+        System.out.printf("%n=== BOUND-BROWNIAN STAGE 3 (CPU gates A-H): %d PASS, %d FAIL ===%n", passN, failN);
+        System.out.println("  gate I (CPU/GPU equivalence at eps = 0 and +15) is -bbrown-equiv (needs the device).");
+        return failN == 0 && cOk && eOk && hOk;
+    }
+
+    /**
+     * Prepared-bound-state seed-invariance fixture.
+     *
+     * <p>Warm up with binding + chemistry live so the bound population and its geometry are REAL (not
+     * synthetic), then freeze: zero the transition rates, forbid new binds, optionally thin the bound
+     * population. Run the SAME frozen state twice with different runSeeds and return the difference.
+     *
+     * @param keep 1 = keep exactly one bound motor, MAX_VALUE = keep all, -1 = keep every other one (asymmetric)
+     * @return {nBound, max|dFilCoord|, max|dFilUVec|, max|dS2nodes over bound|, max|dBondData over bound|,
+     *          Sigma|randForce|+|randTorque| over the run}
+     */
+    static double[] bbQuietFixture(int keep, boolean canonical, int seedA, int seedB) {
+        int WARM = 600, K = 250;
+        BBScene[] s = new BBScene[2];
+        int[] seeds = { seedA, seedB };
+        double randSum = 0; int nBound = 0;
+        for (int k = 0; k < 2; k++) {
+            // IDENTICAL warm-up for both copies (same warm-up seed), so they enter the measurement in the SAME
+            // prepared state; only the MEASUREMENT seed differs.
+            BBScene sc = bbPrepare(15.0, canonical, canonical, seedA);
+            for (int t = 0; t < WARM; t++) ExplicitCompleteMatHarness.stepGlidingCPU(sc.e, t, seedA);
+            bbFreezeChemistry(sc.G); bbNoBind(sc.e);
+            int N = sc.e.N, kept = 0, idx = 0;
+            for (int m = 0; m < N; m++) {
+                if (sc.G.mot.boundSeg.get(m) < 0) continue;
+                boolean drop = (keep == 1 && idx >= 1) || (keep == -1 && (idx % 2 == 1));
+                idx++;
+                if (drop) sc.G.mot.boundSeg.set(m, MotorStore.FREE_BINDABLE); else kept++;
+            }
+            nBound = kept;
+            for (int t = 0; t < K; t++) {
+                ExplicitCompleteMatHarness.stepGlidingCPU(sc.e, WARM + t, seeds[k]);
+                if (k == 0) for (int i = 0; i < sc.G.fil.randForce.getSize(); i++)
+                    randSum += Math.abs(sc.G.fil.randForce.get(i)) + Math.abs(sc.G.fil.randTorque.get(i));
+            }
+            s[k] = sc;
+        }
+        int N = s[0].e.N;
+        double dFil = bbMaxDiff(s[0].G.fil.coord, s[1].G.fil.coord);
+        double dU   = bbMaxDiff(s[0].G.fil.uVec,  s[1].G.fil.uVec);
+        double dNod = bbMaxDiffBound(s[0].e.nodes, s[1].e.nodes, s[0].G.mot.boundSeg, N, 3 * (s[0].e.M + 1));
+        double dBnd = bbMaxDiffBoundF(s[0].G.bondData, s[1].G.bondData, s[0].G.mot.boundSeg, N, 13);
+        bbRestore();
+        return new double[]{ nBound, dFil, dU, dNod, dBnd, randSum };
+    }
+
+    /** C: with the stochastic forcing gone, the DETERMINISTIC mechanics must be intact — elastic relaxation
+     *  toward a fixed point, drag-limited, with the integrator's own force/drag law reproduced exactly. */
+    static boolean bbRelaxFixture() {
+        int WARM = 600, K = 400;
+        BBScene sc = bbPrepare(15.0, false, false, 101);
+        for (int t = 0; t < WARM; t++) ExplicitCompleteMatHarness.stepGlidingCPU(sc.e, t, 101);
+        bbFreezeChemistry(sc.G); bbNoBind(sc.e);
+        Glide2D G = sc.G; FilamentStore f = G.fil;
+        int nSeg = G.nSeg, N = sc.e.N;
+        int nb = bbCountBound(G.mot.boundSeg);
+        // one step, predicted EXACTLY from the integrator's own law using the buffers it read
+        float[] c0 = new float[3 * nSeg];
+        for (int i = 0; i < 3 * nSeg; i++) c0[i] = f.coord.get(i);
+        ExplicitCompleteMatHarness.stepGlidingCPU(sc.e, WARM, 101);
+        double predErr = 0, moved = 0, randMax = 0, maxCoord = 0;
+        float dtf = f.params.get(0);
+        for (int i = 0; i < 3 * nSeg; i++) randMax = Math.max(randMax, Math.abs(f.randForce.get(i)));
+        for (int i = 0; i < nSeg; i++) {
+            int iy = nSeg + i, iz = 2 * nSeg + i;
+            float ux = f.uVec.get(i), uy = f.uVec.get(iy), uz = f.uVec.get(iz);
+            float yx = f.yVec.get(i), yy = f.yVec.get(iy), yz = f.yVec.get(iz);
+            float zx = uy * yz - uz * yy, zy = uz * yx - ux * yz, zz = ux * yy - uy * yx;
+            float zl = 1f / (float) Math.sqrt(zx * zx + zy * zy + zz * zz); zx *= zl; zy *= zl; zz *= zl;
+            float fx = f.forceSum.get(i), fy = f.forceSum.get(iy), fz = f.forceSum.get(iz);
+            float bfx = ux * fx + uy * fy + uz * fz, bfy = yx * fx + yy * fy + yz * fz, bfz = zx * fx + zy * fy + zz * fz;
+            float bvx = 1e6f * bfx / f.bTransGam.get(i), bvy = 1e6f * bfy / f.bTransGam.get(iy),
+                  bvz = 1e6f * bfz / f.bTransGam.get(iz);
+            double px = ux * bvx + yx * bvy + zx * bvz, py = uy * bvx + yy * bvy + zy * bvz,
+                   pz = uz * bvx + yz * bvy + zz * bvz;
+            double ax = f.coord.get(i) - c0[i], ay = f.coord.get(iy) - c0[iy], az = f.coord.get(iz) - c0[iz];
+            predErr = Math.max(predErr, Math.max(Math.abs(ax - dtf * px),
+                              Math.max(Math.abs(ay - dtf * py), Math.abs(az - dtf * pz))));
+            moved = Math.max(moved, Math.sqrt(ax * ax + ay * ay + az * az));
+            for (int q = 0; q < 3; q++) maxCoord = Math.max(maxCoord,
+                    Math.abs(f.coord.get(q == 0 ? i : (q == 1 ? iy : iz))));
+        }
+        // Delta-coord is a difference of two float32 coordinates, so ONE ulp of the coordinate is the exact
+        // representational floor of this comparison; state it rather than picking a constant.
+        double ulpTol = 4.0 * Math.ulp((float) maxCoord);
+        // relaxation: per-step motion and bond force must decay toward a fixed point
+        double[] mv = new double[K]; double[] fb = new double[K];
+        float[] prev = new float[3 * nSeg];
+        for (int i = 0; i < 3 * nSeg; i++) prev[i] = f.coord.get(i);
+        for (int t = 0; t < K; t++) {
+            ExplicitCompleteMatHarness.stepGlidingCPU(sc.e, WARM + 1 + t, 101);
+            double d = 0; for (int i = 0; i < 3 * nSeg; i++) { d = Math.max(d, Math.abs(f.coord.get(i) - prev[i]));
+                                                              prev[i] = f.coord.get(i); }
+            mv[t] = d;
+            double s = 0; for (int m = 0; m < N; m++) if (G.mot.boundSeg.get(m) >= 0) {
+                double bx = G.bondData.get(13 * m), by = G.bondData.get(13 * m + 1), bz = G.bondData.get(13 * m + 2);
+                s += Math.sqrt(bx * bx + by * by + bz * bz); }
+            fb[t] = s;
+        }
+        // force closure: bondData layout is [0..2] head force, [3..5] head torque, [6..8] SEGMENT force,
+        // [9..11] segment torque, [12] forceDotFil. Head force + segment force must cancel exactly.
+        double closure = 0, fScale = 0;
+        for (int m = 0; m < N; m++) if (G.mot.boundSeg.get(m) >= 0) {
+            double cx = G.bondData.get(13 * m)     + G.bondData.get(13 * m + 6);
+            double cy = G.bondData.get(13 * m + 1) + G.bondData.get(13 * m + 7);
+            double cz = G.bondData.get(13 * m + 2) + G.bondData.get(13 * m + 8);
+            closure = Math.max(closure, Math.sqrt(cx * cx + cy * cy + cz * cz));
+            double fx2 = G.bondData.get(13 * m), fy2 = G.bondData.get(13 * m + 1), fz2 = G.bondData.get(13 * m + 2);
+            fScale = Math.max(fScale, Math.sqrt(fx2 * fx2 + fy2 * fy2 + fz2 * fz2));
+        }
+        bbRestore();
+        double decayMove = mv[K - 1] / Math.max(1e-30, mv[0]);
+        double decayForce = fb[K - 1] / Math.max(1e-30, fb[0]);
+        note(String.format(Locale.US, "prepared bound population = %d; randForce max = %.3e (must be 0)", nb, randMax));
+        note(String.format(Locale.US, "one-step integrator law reproduced from (forceSum, bTransGam, dt): "
+                + "max|actual - F*dt/gamma| = %.3e µm  (step size %.3e µm, = %.2f%% of it; float32 coordinate "
+                + "floor 4*ulp = %.3e µm)", predErr, moved, 100.0 * predErr / moved, ulpTol));
+        note(String.format(Locale.US, "relaxation over %d steps: per-step |dCoord| %.3e -> %.3e (x%.3g); "
+                + "Sigma|F8| %.3e -> %.3e N (x%.3g)", K, mv[0], mv[K - 1], decayMove, fb[0], fb[K - 1], decayForce));
+        note(String.format(Locale.US, "per-bond force closure max|head F + segment F| = %.3e N "
+                + "(largest |F8| in the fixture = %.3e N)", closure, fScale));
+        ck(8, "C: motion is the deterministic drag law F*dt/gamma to the float32 coordinate floor",
+                randMax == 0.0 && predErr <= ulpTol && moved > 0);
+        ck(9, "C: the strained bound state RELAXES toward a fixed point (motion and bond force both decay)",
+                nb > 0 && decayMove < 1.0 && decayForce < 1.0);
+        ck(10, "C: bond forces close EXACTLY (head + segment reaction cancel bit-for-bit)",
+                closure == 0.0 && fScale > 0);
+        return true;
+    }
+
+    /**
+     * E: at a bind or a detach the mode switch must contribute NO impulse.
+     *
+     * <p>Structurally it cannot: the gate multiplies an RHS term, writes no state, resets no pose and
+     * re-seeds nothing. This measures it. The comparison that carries the claim is the ABSOLUTE motion at
+     * transition steps, canonical vs suppressed — a mode-switch kick would make the suppressed arm move MORE
+     * at a transition than the canonical arm does. The transition/ordinary RATIO within an arm is reported
+     * but is NOT mode-comparable: suppression collapses the ordinary-step denominator by ~40x, so the ratio
+     * rises even when the numerator falls. What that rise exposes is the model's own PHYSICAL force onset at
+     * attachment (documented for this motor; zero coordinate discontinuity, first step proportional to dt),
+     * previously hidden under thermal motion.
+     *
+     * <p>Run twice: at the production 5 µM, where binding is frequent and detachment is not (mean rigor
+     * lifetime 1/atpOn = 20 ms = 80000 steps), and at saturating ATP as a FIXTURE-ONLY accelerator so that
+     * detachments actually occur inside a short fixture. Nothing about the production condition changes.
+     */
+    static boolean bbContinuityFixture() {
+        boolean ok = true;
+        System.out.printf("    %-22s %-22s %7s %7s | %13s %13s %7s | %13s %13s%n",
+                "condition", "arm", "binds", "detach", "|dFil| trans", "|dFil| other", "ratio",
+                "|dPose| trans", "|dPose| other");
+        for (double uM : new double[]{ 5.0, 2000.0 }) {
+            double[][] out = new double[2][];
+            for (int arm = 0; arm < 2; arm++) out[arm] = bbContinuityArm(uM, arm == 0, 1500);
+            for (int arm = 0; arm < 2; arm++) {
+                double[] o = out[arm];
+                System.out.printf(Locale.US, "    %-22s %-22s %7.0f %7.0f | %13.4e %13.4e %7.2f | %13.4e %13.4e%n",
+                        arm == 0 ? String.format(Locale.US, "%.0f µM%s", uM, uM > 5 ? " (fixture)" : "") : "",
+                        arm == 0 ? "CANONICAL" : "DETACHED_SEARCH_ONLY", o[0], o[1], o[2], o[3],
+                        o[3] > 0 ? o[2] / o[3] : Double.NaN, o[4], o[5]);
+            }
+            boolean sawTrans = (out[1][0] + out[1][1]) > 0;
+            boolean filQuieter = out[1][2] <= out[0][2] && out[1][3] <= out[0][3];
+            boolean poseQuieter = out[1][4] <= out[0][4];
+            if (uM > 5.0) sawTrans = out[1][1] > 0;         // the accelerated fixture must actually detach
+            else sawTrans = out[1][0] > 0;                  // the production fixture must actually bind
+            ok &= sawTrans && filQuieter && poseQuieter;
+        }
+        note("|dPose| = max per-step change of a transitioning motor's (phi, psi); |dFil| = max per-step");
+        note("filament coordinate change. 'trans' = steps at which some motor bound or detached.");
+        note("the claim is the ABSOLUTE comparison: suppression must not increase motion at a transition.");
+        ck(16, "E: transitions occur, and suppression REDUCES motion at them (no mode-switch kick)", ok);
+        return ok;
+    }
+    /** One continuity arm: returns {binds, detaches, |dFil| at transition steps, |dFil| at ordinary steps,
+     *  |dPose| at transition steps, |dPose| at ordinary steps}. */
+    static double[] bbContinuityArm(double uM, boolean canonical, int K) {
+        double savedAtp = ATP_UM;
+        BBScene sc = bbPrepare(15.0, canonical, canonical, 101);
+        if (uM != 5.0) {   // fixture-only ATP accelerator: rescale ONLY the ATP-uptake hazard
+            sc.G.mot.nucParams.set(1, (float) atpOnFor(uM));
+        }
+        int N = sc.e.N, nSeg = sc.G.nSeg;
+        int[] prevB = new int[N];
+        for (int m = 0; m < N; m++) prevB[m] = sc.G.mot.boundSeg.get(m);
+        float[] pc = new float[3 * nSeg];
+        for (int i = 0; i < 3 * nSeg; i++) pc[i] = sc.G.fil.coord.get(i);
+        double[] pq = new double[2 * N];
+        for (int m = 0; m < N; m++) { pq[m] = sc.e.q.get(m); pq[N + m] = sc.e.q.get(N + m); }
+        double filT = 0, filO = 0, poseT = 0, poseO = 0; long nT = 0, nO = 0, nBind = 0, nDet = 0;
+        for (int t = 0; t < K; t++) {
+            ExplicitCompleteMatHarness.stepGlidingCPU(sc.e, t, 101);
+            boolean trans = false; double dqT = 0, dqO = 0;
+            for (int m = 0; m < N; m++) {
+                int b = sc.G.mot.boundSeg.get(m);
+                boolean wasB = prevB[m] >= 0, isB = b >= 0;
+                double dq = Math.max(Math.abs(sc.e.q.get(m) - pq[m]), Math.abs(sc.e.q.get(N + m) - pq[N + m]));
+                if (wasB != isB) { trans = true; if (isB) nBind++; else nDet++; dqT = Math.max(dqT, dq); }
+                else if (isB) dqO = Math.max(dqO, dq);      // BOUND, non-transitioning: the continuity reference
+                prevB[m] = b;
+            }
+            double dfil = 0;
+            for (int i = 0; i < 3 * nSeg; i++) { dfil = Math.max(dfil, Math.abs(sc.G.fil.coord.get(i) - pc[i]));
+                                                 pc[i] = sc.G.fil.coord.get(i); }
+            if (trans) { filT += dfil; poseT += dqT; nT++; } else { filO += dfil; poseO += dqO; nO++; }
+            for (int m = 0; m < N; m++) { pq[m] = sc.e.q.get(m); pq[N + m] = sc.e.q.get(N + m); }
+        }
+        bbRestore(); ATP_UM = savedAtp;
+        return new double[]{ nBind, nDet, nT > 0 ? filT / nT : 0, nO > 0 ? filO / nO : 0,
+                             nT > 0 ? poseT / nT : 0, nO > 0 ? poseO / nO : 0 };
+    }
+
+    /** H: with eps = 0 and every mechanical Brownian channel that can reach the filament suppressed, there is
+     *  no remaining source of SIGNED axial torque — a deterministic prepared fixture must show exactly zero. */
+    static boolean bbZeroSkewNull() {
+        int WARM = 600, K = 300;
+        BBScene sc = bbPrepare(0.0, false, false, 101);
+        double chi16 = sc.e.chiP.get(16);
+        boolean skewOff = !ExplicitCompleteMatHarness.convSkewOn();
+        double epsBind = sc.e.chiP.get(5), epsStroke = sc.e.chiP.get(6), regK = sc.e.chiP.get(7);
+        for (int t = 0; t < WARM; t++) ExplicitCompleteMatHarness.stepGlidingCPU(sc.e, t, 101);
+        bbFreezeChemistry(sc.G); bbNoBind(sc.e);
+        Glide2D G = sc.G; int N = sc.e.N;
+        double tauSum = 0, tauAbs = 0, headTauAbs = 0; long n = 0;
+        for (int t = 0; t < K; t++) {
+            ExplicitCompleteMatHarness.stepGlidingCPU(sc.e, WARM + t, 101);
+            for (int m = 0; m < N; m++) {
+                if (G.mot.boundSeg.get(m) < 0) continue;
+                double ax = ChiralSiteSystem.axialTorque(G.bondData, G.fil.uVec, G.mot.boundSeg, m, G.nSeg);
+                tauSum += ax; tauAbs += Math.abs(ax); n++;
+                headTauAbs = Math.max(headTauAbs, Math.abs(sc.e.headTau.get(m)));
+            }
+        }
+        bbRestore();
+        double rel = tauAbs > 0 ? Math.abs(tauSum) / tauAbs : 0.0;
+        note(String.format(Locale.US, "chiP[16] = %.1e (exactly 0: %s), convSkewOn = %s, epsBind = %.1e, "
+                + "epsStroke = %.1e, registry k = %.1e", chi16, chi16 == 0.0, skewOff ? "OFF" : "on",
+                epsBind, epsStroke, regK));
+        note(String.format(Locale.US, "prepared achiral fixture, %d bound samples: Sigma tau_axial = %.4e N·m, "
+                + "Sigma|tau_axial| = %.4e N·m, |net| / |sum abs| = %.3e; max|head registry couple| = %.3e",
+                n, tauSum, tauAbs, rel, headTauAbs));
+        note("a nonzero |net| here is the DETERMINISTIC achiral residue of the frozen geometry, not a chiral");
+        note("term: no chiral parameter is active (all three skews and the registry stiffness are exactly 0).");
+        boolean ok = chi16 == 0.0 && skewOff && epsBind == 0.0 && epsStroke == 0.0 && regK == 0.0
+                  && headTauAbs == 0.0;
+        ck(17, "H: eps = 0 leaves NO imposed chiral parameter active and no stochastic mechanical torque source", ok);
+        return ok;
+    }
+
+    /**
+     * Gate I — CPU/GPU equivalence of the DETACHED_SEARCH_ONLY graph on the FULL pilot scene (12-segment
+     * chain, discrete native sites, surface bond, 5 µM), device-resident, no fallback. Run at eps = 0 and
+     * eps = +15. Compares the decision channels (binding state, site id, nucleotide state), the mechanical
+     * channels (bond force, axial torque) and the observables (filament pose, accumulated body-fixed roll),
+     * and asserts the Brownian-mode state itself crossed to the device (matc[3], brChan).
+     */
+    static boolean runBoundBrownianEquiv() {
+        System.out.println("\n=== GATE I — CPU/GPU EQUIVALENCE, DETACHED_SEARCH_ONLY, full pilot scene ===");
+        if (!GPU) System.out.println("  (note: -gpu was not passed; passing it is required for this gate)");
+        int savedMode = MECH_BROWN_MODE; MECH_BROWN_MODE = MB_DETACHED_SEARCH_ONLY;
+        boolean all = true;
+        for (double eps : new double[]{ 0.0, 15.0 }) all &= bbEquivOne(eps, 300);
+        MECH_BROWN_MODE = savedMode;
+        System.out.println(all ? "\n=== GATE I: PASS ===" : "\n=== GATE I: *** FAIL *** ===");
+        return all;
+    }
+    static boolean bbEquivOne(double epsDeg, int K) {
+        System.out.printf(Locale.US, "%n  ---- eps = %+.1f deg ----%n", epsDeg);
+        boolean savedGpu = GPU; GPU = false;                 // cfg() must not force TELEMETRY on the validation graph
+        BBScene c = bbPrepare(epsDeg, false, false, 101);
+        BBScene d = bbPrepare(epsDeg, false, false, 101);
+        GPU = savedGpu;
+        System.out.println("  config  : " + ExplicitCompleteMatHarness.chiralConfigString());
+        System.out.println("  brownian: " + ExplicitCompleteMatHarness.brownianPolicyString());
+        System.out.printf("  packed  : matc[3] = %d (bit0 = bound-motor Brownian OFF); brChan = [%.0f %.0f %.0f %.0f]%n",
+                d.e.matc.get(3), d.e.brChan.get(0), d.e.brChan.get(1), d.e.brChan.get(2), d.e.brChan.get(3));
+        boolean packOk = d.e.matc.get(3) == 1 && d.e.brChan.get(0) == 0f && d.e.brChan.get(1) == 0f
+                      && d.e.brChan.get(2) == 0f && d.e.brChan.get(3) == 0f;
+        TornadoExecutionPlan plan;
+        TornadoCrashDiagnostic.planConstructionBegin("graph=buildGlidingGraph(bbrown-equiv eps=" + epsDeg + ")");
+        try { plan = ExplicitCompleteMatHarness.buildGlidingGraph(d.e, false); }
+        catch (Throwable ex) { TornadoCrashDiagnostic.planConstructionThrew(ex);
+            System.out.println("  graph did NOT lower: " + oneLine(root(ex).getMessage())); bbRestore(); return false; }
+        TornadoCrashDiagnostic.planConstructionEnd(plan, "arm=bbrown-equiv");
+        int N = c.e.N, nSeg = c.G.nSeg;
+        int bindMism = 0, siteMism = 0, nucMism = 0;
+        double maxFil = 0, maxRoll = 0, maxBond = 0, maxAxTau = 0, maxAbsAx = 0, maxRandC = 0, maxRandD = 0;
+        boolean lowered = true;
+        double[] pyC = new double[3], pyD = new double[3]; double cumC = 0, cumD = 0;
+        seedPrevY(c.G.fil, 0, pyC); seedPrevY(d.G.fil, 0, pyD);
+        TornadoCrashDiagnostic.executeLoopBegin("glide", 0, K - 1, "arm=bbrown-equiv executeCallsPlanned=" + K);
+        for (int t = 0; t < K; t++) {
+            d.e.matc.set(0, t); d.e.matc.set(1, 101); d.G.mot.setCounts(t, 101, nSeg);
+            d.G.fil.counts.set(1, t); d.G.fil.counts.set(2, 101);
+            try { TornadoCrashDiagnostic.beforeExecute(t); plan.execute(); TornadoCrashDiagnostic.afterExecute(t); }
+            catch (Throwable ex) { TornadoCrashDiagnostic.executeThrew(ex); lowered = false;
+                System.out.println("  device execute FAILED @t=" + t + ": " + oneLine(root(ex).getMessage())); break; }
+            ExplicitCompleteMatHarness.stepGlidingCPU(c.e, t, 101);
+            for (int i = 0; i < 3 * nSeg; i++) {
+                maxFil = Math.max(maxFil, Math.abs(c.G.fil.coord.get(i) - d.G.fil.coord.get(i)));
+                maxRandC = Math.max(maxRandC, Math.max(Math.abs(c.G.fil.randForce.get(i)), Math.abs(c.G.fil.randTorque.get(i))));
+                maxRandD = Math.max(maxRandD, Math.max(Math.abs(d.G.fil.randForce.get(i)), Math.abs(d.G.fil.randTorque.get(i))));
+            }
+            cumC += rollIncrementTransported(c.G.fil, 0, pyC);
+            cumD += rollIncrementTransported(d.G.fil, 0, pyD);
+            maxRoll = Math.max(maxRoll, Math.abs(cumC - cumD));
+            for (int m = 0; m < N; m++) {
+                if (c.G.mot.boundSeg.get(m) != d.G.mot.boundSeg.get(m)) bindMism++;
+                if (c.e.bindSite.get(m) != d.e.bindSite.get(m)) siteMism++;
+                if (c.G.mot.nucleotideState.get(m) != d.G.mot.nucleotideState.get(m)) nucMism++;
+                for (int qq = 0; qq < 13; qq++)
+                    maxBond = Math.max(maxBond, Math.abs(c.G.bondData.get(13 * m + qq) - d.G.bondData.get(13 * m + qq)));
+                double axC = ChiralSiteSystem.axialTorque(c.G.bondData, c.G.fil.uVec, c.G.mot.boundSeg, m, nSeg);
+                maxAxTau = Math.max(maxAxTau, Math.abs(axC
+                        - ChiralSiteSystem.axialTorque(d.G.bondData, d.G.fil.uVec, d.G.mot.boundSeg, m, nSeg)));
+                maxAbsAx = Math.max(maxAbsAx, Math.abs(axC));
+            }
+        }
+        TornadoCrashDiagnostic.executeLoopEnd("arm=bbrown-equiv lowered=" + lowered);
+        if (!lowered) { TornadoCrashDiagnostic.closePlan(plan, "graph=glide arm=bbrown-equiv status=execute-failed");
+                        bbRestore(); return false; }
+        boolean fin = true;
+        for (int i = 0; i < 3 * nSeg; i++) if (!Float.isFinite(d.G.fil.coord.get(i))) fin = false;
+        int nbC = bbCountBound(c.G.mot.boundSeg), nbD = bbCountBound(d.G.mot.boundSeg);
+        // the axial torque is a near-cancelling float32 projection: gate it RELATIVE to the largest per-head
+        // value actually seen, exactly as the established -twirl-equiv gate does.
+        double axTol = Math.max(1e-25, 0.02 * maxAbsAx);
+        boolean ok = packOk && fin && bindMism == 0 && siteMism == 0 && nucMism == 0
+                  && maxRandC == 0.0 && maxRandD == 0.0 && maxAxTau < axTol && maxRoll < 1e-4 && maxFil < 1e-4;
+        System.out.printf(Locale.US,
+                "  %d device-resident steps (nSeg=%d, N=%d): bindMism=%d siteMism=%d nucMism=%d | "
+                + "max|dBond|=%.2e N max|dAxialTau|=%.2e (max|axialTau|=%.2e, tol %.2e) max|dCumRoll|=%.2e rad "
+                + "max|dFilCoord|=%.2e um | filament |rand| CPU=%.1e GPU=%.1e (must be 0) | bound CPU=%d GPU=%d "
+                + "finite=%b => %s%n",
+                K, nSeg, N, bindMism, siteMism, nucMism, maxBond, maxAxTau, maxAbsAx, axTol, maxRoll, maxFil,
+                maxRandC, maxRandD, nbC, nbD, fin, ok ? "PASS (device-resident, no fallback)" : "*** FAIL ***");
+        TornadoCrashDiagnostic.gpuWorkDeclaredFinished("arm=bbrown-equiv");
+        TornadoCrashDiagnostic.closePlan(plan, "graph=glide arm=bbrown-equiv");
+        bbRestore();
+        return ok;
     }
 
     // ------------------------------------------------------------------ STAGE 1: ATP interface validation

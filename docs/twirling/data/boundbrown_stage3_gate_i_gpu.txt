@@ -1,0 +1,28 @@
+[monitored] run_id=20260729T175122Z-1183655
+[monitored] evidence dir: /home/jba/gpu-crash-records/monitored-runs/20260729T175122Z-1183655
+[monitored] recorder: running
+[monitored] java traces: /home/jba/tornado-crash-traces
+WARNING: Using incubator modules: jdk.incubator.vector
+[gpu-crash-trace] /home/jba/tornado-crash-traces/run-20260729T175122Z-pid1183687-chiral-actin-sites.log
+######## Discrete actin sites + head roll DOF + chiral bind/stroke (noncanonical, default-off) ########
+dt=2.50e-06  density=400 heads/µm²  seed=101  seeds=4  steps=4000  Ractin=3.50 nm  registryK=2.00e-21 N·m/rad
+
+=== GATE I — CPU/GPU EQUIVALENCE, DETACHED_SEARCH_ONLY, full pilot scene ===
+
+  ---- eps = +0.0 deg ----
+  config  : sites=every3(rise=8.100 nm, stair=0.0 deg) headRollDof=ON headRollBrownian=ON registryK=0.000e+00 N·m/rad binding-skew-deg=+0.00 [actin-side attachment azimuth] stroke-skew-deg=+0.00 [actin-side one-shot interface step] converter-stroke-skew-deg=+0.00 [MOTOR-side converter stroke-plane rotation, gauge=interface, stateGated=OFF, ramp=linear(onset=0.25)] siteExclusive=ON mirror=+1 capture=12.0 nm Ractin=3.50 nm randomBaseAzimuth=ON surfaceBond=ON
+  brownian: filament[axial=OFF transverse=OFF roll=OFF otherRot=OFF] motor[unbound=ON bound=OFF] (matc[3]=1)
+  packed  : matc[3] = 1 (bit0 = bound-motor Brownian OFF); brChan = [0 0 0 0]
+  300 device-resident steps (nSeg=12, N=1200): bindMism=0 siteMism=0 nucMism=0 | max|dBond|=1.20e-16 N max|dAxialTau|=1.21e-25 (max|axialTau|=2.38e-20, tol 4.76e-22) max|dCumRoll|=1.72e-11 rad max|dFilCoord|=5.96e-08 um | filament |rand| CPU=0.0e+00 GPU=0.0e+00 (must be 0) | bound CPU=10 GPU=10 finite=true => PASS (device-resident, no fallback)
+
+  ---- eps = +15.0 deg ----
+  config  : sites=every3(rise=8.100 nm, stair=0.0 deg) headRollDof=ON headRollBrownian=ON registryK=0.000e+00 N·m/rad binding-skew-deg=+0.00 [actin-side attachment azimuth] stroke-skew-deg=+0.00 [actin-side one-shot interface step] converter-stroke-skew-deg=+15.00 [MOTOR-side converter stroke-plane rotation, gauge=interface, stateGated=OFF, ramp=linear(onset=0.25)] siteExclusive=ON mirror=+1 capture=12.0 nm Ractin=3.50 nm randomBaseAzimuth=ON surfaceBond=ON
+  brownian: filament[axial=OFF transverse=OFF roll=OFF otherRot=OFF] motor[unbound=ON bound=OFF] (matc[3]=1)
+  packed  : matc[3] = 1 (bit0 = bound-motor Brownian OFF); brChan = [0 0 0 0]
+  300 device-resident steps (nSeg=12, N=1200): bindMism=0 siteMism=0 nucMism=0 | max|dBond|=1.20e-16 N max|dAxialTau|=1.24e-25 (max|axialTau|=2.39e-20, tol 4.78e-22) max|dCumRoll|=1.93e-11 rad max|dFilCoord|=5.96e-08 um | filament |rand| CPU=0.0e+00 GPU=0.0e+00 (must be 0) | bound CPU=10 GPU=10 finite=true => PASS (device-resident, no fallback)
+
+=== GATE I: PASS ===
+====================================================================================================
+[monitored] exit=0
+[monitored] java trace: /home/jba/tornado-crash-traces/run-20260729T175122Z-pid1183687-chiral-actin-sites.log
+[monitored] final marker: 2026-07-29T17:51:44.596588679Z seq=000042 elapsedMs=21655 pid=1183687 thread=gpu-crash-shutdown-hook phase=SHUTDOWN_HOOK_COMPLETED assay=chiral-actin-sites

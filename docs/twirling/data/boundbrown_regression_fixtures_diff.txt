@@ -1,0 +1,5 @@
+# Gate G cross-build regression: ./scripts/run_chiral_sites.sh -fixtures -eta 0.01
+#   parent worktree: /home/jba/Code/softbox-lowatp-small-skew  (branch feature/lowatp-small-skew-pilot, 81d2909)
+#   this worktree  : feature/lowatp-bound-brownian-off-pilot
+# diff of the two full outputs:
+(empty -> BYTE-IDENTICAL)

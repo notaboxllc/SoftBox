@@ -1,0 +1,88 @@
+WARNING: Using incubator modules: jdk.incubator.vector
+######## Discrete actin sites + head roll DOF + chiral bind/stroke (noncanonical, default-off) ########
+dt=2.50e-06  density=400 heads/µm²  seed=101  seeds=4  steps=4000  Ractin=3.50 nm  registryK=2.00e-21 N·m/rad
+
+=== BOUND-MOTOR BROWNIAN SUPPRESSION — STAGE 3 GATES (CPU; eta = 0.01000, dt = 2.5000e-07 s) ===
+  mode under test: DETACHED_SEARCH_ONLY
+    filament translational + rotational Brownian ......... OFF
+    BOUND motor: S2 node force, converter phi, lever psi,
+                 head-roll thermostat ..................... OFF
+    UNBOUND motor: all of the above ...................... ON  (the binding search)
+    nucleotide cycle / catch-slip release / refractory .... STOCHASTIC (untouched)
+    binding gate, site selection, motor-lawn placement .... untouched
+
+  ---- A. detached-search preservation (all motors detached; filament Brownian ON in both) ----
+       400 steps, N=1200 motors, none ever bound (0 bound-samples): max|dS2nodes|=0.000e+00 max|dPhiPsi|=0.000e+00 max|dHeadRef|=0.000e+00 max|dHeadOmega|=0.000e+00 nucMism=0
+  [ 1] A: detached motor SEARCH is bit-identical with the bound mask on vs off PASS
+       detached head MSD (from step 1): 2.1213e-04 µm² at 200 steps -> 2.6046e-04 µm² at 400 steps (RMS 14.56 -> 16.14 nm) — the detached motor EXPLORES and keeps exploring
+  [ 2] A: the detached search is live and keeps exploring (head MSD > 0 and growing) PASS
+       binding-opportunity probe: 19200 gate evaluations sampled, candidate segment AND candidate arc mismatches = 0
+  [ 3] A: binding-opportunity + site-selection statistics identical (gate segment and arc bit-equal) PASS
+  [ 4] F: chemistry (nucleotide) trajectory bit-identical across the Brownian mode PASS
+
+  ---- B/D. bound mechanical quietness + no hidden bound kicks (seed-invariance) ----
+       a bound-state stochastic impulse from ANY source would break seed invariance; this test does not
+       depend on the source enumeration being complete.
+    fixture                      nBound   d filCoord    d filUVec    d S2nodes   d bondData      Srand
+    one bound motor                   1    0.000e+00    0.000e+00    0.000e+00    0.000e+00  0.000e+00
+      (same, Brownian ON)             1    9.242e-03    1.773e-02    6.552e-03    4.318e-12  9.095e-08   <- CANONICAL control
+    all bound motors                 12    0.000e+00    0.000e+00    0.000e+00    0.000e+00  0.000e+00
+      (same, Brownian ON)            13    5.538e-03    2.268e-02    8.571e-03    6.557e-12  9.095e-08   <- CANONICAL control
+    asymmetric (half bound)           6    0.000e+00    0.000e+00    0.000e+00    0.000e+00  0.000e+00
+      (same, Brownian ON)             7    4.894e-03    1.409e-02    8.778e-03    6.603e-12  9.095e-08   <- CANONICAL control
+  [ 5] B: filament + BOUND-motor trajectory is EXACTLY seed-invariant (1 / many / asymmetric bound) PASS
+  [ 6] D: total filament stochastic impulse is EXACTLY zero (Sigma|randForce|+|randTorque| = 0) PASS
+  [ 7] B: the same fixture with Brownian ON is NOT seed-invariant (the gate has teeth) PASS
+
+  ---- C. deterministic elastic relaxation + drag are preserved ----
+       prepared bound population = 12; randForce max = 0.000e+00 (must be 0)
+       one-step integrator law reproduced from (forceSum, bTransGam, dt): max|actual - F*dt/gamma| = 2.343e-08 µm  (step size 1.200e-05 µm, = 0.20% of it; float32 coordinate floor 4*ulp = 2.384e-07 µm)
+       relaxation over 400 steps: per-step |dCoord| 9.000e-06 -> 2.534e-06 (x0.282); Sigma|F8| 1.938e-11 -> 1.339e-11 N (x0.691)
+       per-bond force closure max|head F + segment F| = 0.000e+00 N (largest |F8| in the fixture = 5.237e-12 N)
+  [ 8] C: motion is the deterministic drag law F*dt/gamma to the float32 coordinate floor PASS
+  [ 9] C: the strained bound state RELAXES toward a fixed point (motion and bond force both decay) PASS
+  [10] C: bond forces close EXACTLY (head + segment reaction cancel bit-for-bit) PASS
+
+  ---- E. binding and detachment continuity (no mode-switch kick) ----
+    condition              arm                      binds  detach |  |dFil| trans  |dFil| other   ratio | |dPose| trans |dPose| other
+    5 µM                   CANONICAL                   18       0 |    1.7898e-03    1.8319e-03    0.98 |    1.2576e-01    2.7169e-01
+                           DETACHED_SEARCH_ONLY        17       0 |    4.2100e-04    4.2602e-05    9.88 |    5.7062e-02    1.1440e-02
+    2000 µM (fixture)      CANONICAL                   18       6 |    1.8446e-03    1.8260e-03    1.01 |    1.0745e-01    2.6330e-01
+                           DETACHED_SEARCH_ONLY        17       5 |    2.9821e-04    4.1926e-05    7.11 |    6.9982e-02    1.0933e-02
+       |dPose| = max per-step change of a transitioning motor's (phi, psi); |dFil| = max per-step
+       filament coordinate change. 'trans' = steps at which some motor bound or detached.
+       the claim is the ABSOLUTE comparison: suppression must not increase motion at a transition.
+  [16] E: transitions occur, and suppression REDUCES motion at them (no mode-switch kick) PASS
+
+  ---- F. RNG isolation ----
+       streams are counter-based hashes of (slot, step, runSeed, salt) with NO carried state, so an
+       untaken draw cannot shift any other stream. Salt inventory on this assay's step:
+         chemistry      NucleotideCycleSystem.wangHash   salts 0x4E55 (cycle) 0x4D54 (release) 0x52465241 (refractory)
+         motor mech     TwoBodyBeamAnalyticGpu.brownTorqueD  salts 0x4811+ (S2 nodes) 0x4841+ (phi) 0x4842+ (psi)
+         head roll      ChiralSiteSystem.gauss             salt  0x484F4D47 ("HOMG")
+         filament       BrownianForceSystem.wangHash       base (slot,step,seed), six hashes
+       chemistry uses a 32-bit int wangHash; the mechanical streams use a 64-bit long mixer — different
+       functions on disjoint salts, so no aliasing is possible even at equal arguments.
+       the mode is applied as a MULTIPLICATIVE/branch gate on an RHS term only: no state write, no
+       re-seed, no counter advance, no draw-count dependence anywhere.
+  [11] F: the mechanical-Brownian mode changes no chemistry/binding/site RNG stream (gate 4 + structural) PASS
+  [12] F: motor-lawn placement and the initial condition are identical across the mode PASS
+       packed matc[3]: CANONICAL = 0 (canonical), DETACHED_SEARCH_ONLY = 1 (bit0 = bound-off)
+
+  ---- G. Brownian-ON default is untouched ----
+  [13] G: in CANONICAL mode matc[3] == 0 -> matS2SolveStep and headRollStep take the VERBATIM path PASS
+  [14] G: in CANONICAL mode all four filament Brownian channel masks are 1.0 (identity multiply) PASS
+       CANONICAL id : atp_u0005.00_e0150_d00200000_p_101
+       DSO id       : atp_u0005.00_e0150_bdso_d00200000_p_101
+  [15] G: the suppressed mode cannot alias onto a Brownian-ON record id PASS
+
+  ---- H. zero-skew mechanical null under full suppression ----
+       chiP[16] = 0.0e+00 (exactly 0: true), convSkewOn = OFF, epsBind = 0.0e+00, epsStroke = 0.0e+00, registry k = 0.0e+00
+       prepared achiral fixture, 3600 bound samples: Sigma tau_axial = -9.5338e-19 N·m, Sigma|tau_axial| = 4.5295e-18 N·m, |net| / |sum abs| = 2.105e-01; max|head registry couple| = 0.000e+00
+       a nonzero |net| here is the DETERMINISTIC achiral residue of the frozen geometry, not a chiral
+       term: no chiral parameter is active (all three skews and the registry stiffness are exactly 0).
+  [17] H: eps = 0 leaves NO imposed chiral parameter active and no stochastic mechanical torque source PASS
+
+=== BOUND-BROWNIAN STAGE 3 (CPU gates A-H): 17 PASS, 0 FAIL ===
+  gate I (CPU/GPU equivalence at eps = 0 and +15) is -bbrown-equiv (needs the device).
+====================================================================================================
