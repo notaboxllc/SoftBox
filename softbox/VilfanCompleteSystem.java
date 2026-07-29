@@ -146,8 +146,20 @@ public final class VilfanCompleteSystem {
         /** hysteresis bands (nm) for scale-aware zone-centre recrossing counting. */
         public double[] recrossBandsNm = {0.0, 0.5, 1.0, 2.7, 5.0};
 
+        /* ---- restored realism #3: FDT-consistent ROLL Brownian torque (axial stays deterministic) ---- */
+        public boolean rollBrownian = false;
+        /** cap on the probability that a bridge crosses a wrapPi boundary undetected, per substep. */
+        public double  crossTol = 1e-4;
+        /** angular hysteresis bands (rad) for scale-aware branch-crossing counting. */
+        public double[] rollBands = {0.0, 0.01, 0.025, 0.05, 0.10};
+        /** +1 native. -1 realises dW -> -dW, the mirror transform of the stochastic roll equation;
+         *  paired with latSign = +1 it gives a PATHWISE mirror arm (correctness gate, Stage 5A).
+         *  Independent-noise mirror arms instead offset the seed and keep noiseSign = +1. */
+        public int rollNoiseSign = +1;
+
         public boolean overdamped() { return "overdamped".equals(mechanics); }
-        public boolean brownian()   { return overdamped() && axialBrownian; }
+        /** the axial and roll flags are INDEPENDENT and are never silently coupled. */
+        public boolean brownian()   { return overdamped() && (axialBrownian || rollBrownian); }
 
         public Config copy() {
             try { return (Config) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); }
@@ -199,6 +211,8 @@ public final class VilfanCompleteSystem {
             this.gammaTheta = c.dragScale * VilfanDrag.gammaThetaWork(c.etaPaS, c.lengthUm, c.filRadiusUm);
         } else { this.gammaX = 0.0; this.gammaTheta = 0.0; }
         this.DX = (gammaX > 0) ? c.kBT / gammaX : 0.0;
+        this.DTheta = (gammaTheta > 0) ? c.kBT / gammaTheta : 0.0;
+        this.noiseSign = c.rollNoiseSign;
     }
 
     public Config config()   { return c; }
@@ -343,6 +357,13 @@ public final class VilfanCompleteSystem {
         public double  pathLenNm, netFwdNm, maxBackNm;
         public long[]  recFwd = new long[0], recBwd = new long[0];
         public double[] recBands = new double[0];
+        /* ---- roll Brownian (Stage 7) ---- */
+        public boolean rollBrownian;
+        public double  DThetaRad2PerS, sdThetaConstrainedRad, tauThetaMedS2;
+        public long    nRollCross, nRollSubdiv, nFreeRollSteps;
+        public double  maxMissProb, meanMissProb, windingRad;
+        public long[]  rollBandCross = new long[0];
+        public double[] rollBands = new double[0];
         public long    xcheckN;
         public double  xcheckMaxRel, xcheckMeanRel, xcheckBias, xcheckBiasSem, maxEventJumpX, maxEventJumpTheta;
         public long    nEventsAnalysed;
@@ -527,6 +548,12 @@ public final class VilfanCompleteSystem {
     private long hazEvals, rootIters, branchCrossings, degenerateBranch, transientRootEvents;
     private double maxDynResidF, maxDynResidM;
     private double DX;                       // kBT/gammaX, nm^2/s
+    private double DTheta;                   // kBT/gammaTheta, rad^2/s
+    private long   nFreeRollSteps, nRollCross, nRollSubdiv;
+    private double maxMissProb, sumMissProb;
+    private long[] rollBandCross; private double[] rollBandRef; private int[] rollBandSide;
+    private double windingRad;
+    private int    noiseSign = +1;
     private long   anchorIdx;                // monotone address for the axial noise stream
     private long   nSubsteps, nBridgeDraws, nFreeDiffSteps;
     // ---- Stage-5 target-zone recrossing diagnostics ----
@@ -781,6 +808,62 @@ public final class VilfanCompleteSystem {
 
     /** stationary axial variance for the current bound set, kBT/(Nb K). */
     private double varInfX(int nb) { return (nb > 0 && K > 0) ? c.kBT / (nb * K) : Double.POSITIVE_INFINITY; }
+    /** stationary ROLL variance for the current bound set, kBT/(Nb Ktheta). */
+    private double varInfT(int nb) { return (nb > 0 && kTheta > 0) ? c.kBT / (nb * kTheta) : Double.POSITIVE_INFINITY; }
+
+    public static final int STREAM_ROLL = 0x524F4C4C;      // "ROLL"
+    public static final int STREAM_RBRG = 0x52425247;      // "RBRG"
+
+    /**
+     * One exact roll step. Between wrapPi branch crossings the summed Vilfan torque is linear,
+     * sum_j M_j = Nb Ktheta (ThetaEq - Theta), so Theta is an exact OU process and the finite-time
+     * transition carries no discretisation error in the marginal law. With no bound head (or
+     * Ktheta = 0) the torque vanishes and the step is free rotational diffusion.
+     * <p>
+     * {@code noiseSign} implements the mirror transform of the STOCHASTIC equation: under
+     * Theta -> -Theta the Wiener path must transform as dW -> -dW, so an antisymmetric-noise mirror
+     * arm passes -1 here. Using the same same-signed increments would NOT be the mirror transform.
+     */
+    private double rollStep(double Teq, double t0, double tauT, int nb, double dt, long addr, int noiseSign) {
+        double z = noiseSign * VilfanAxialBrownian.gauss(c.seed, STREAM_ROLL, addr);
+        if (nb > 0 && kTheta > 0) return VilfanAxialBrownian.ouStep(Teq, t0, tauT, varInfT(nb), dt, z);
+        nFreeRollSteps++;
+        return t0 + Math.sqrt(2.0 * DTheta * dt) * z;
+    }
+
+    private double rollBridgeMid(double Teq, double ta, double tb, double tauT, int nb,
+                                 double T, long addr, int noiseSign) {
+        nBridgeDraws++;
+        double z = noiseSign * VilfanAxialBrownian.gauss(c.seed, STREAM_RBRG, addr);
+        if (nb > 0 && kTheta > 0) return VilfanAxialBrownian.ouBridgeMid(Teq, ta, tb, tauT, varInfT(nb), T, z);
+        return VilfanAxialBrownian.freeBridgeMid(ta, tb, DTheta, T, z);
+    }
+
+    /**
+     * Distance in Theta to the nearest active wrapPi boundary over the bound set.
+     * <p>
+     * Head j's torque changes branch when wrapPi(Theta + b_j) reaches +-pi, i.e. at
+     * Theta = +-pi - b_j. The nearest such boundary is therefore pi - max_j |theta_j|. Substeps are
+     * shrunk until the angular RMS increment is small against this distance, which bounds the
+     * probability that a bridge crosses a boundary between same-side endpoints.
+     */
+    private double distToBoundary() {
+        double worst = Math.PI;
+        for (int j = 0; j < xM.length; j++) {
+            if (state[j] == DETACHED) continue;
+            double d = Math.PI - Math.abs(wrapPi(Theta + baseAzim(siteOf[j])));
+            if (d < worst) worst = d;
+        }
+        return worst;
+    }
+
+    /** Brownian-bridge probability that a path from a to b crossed level c, given bridge variance v. */
+    static double bridgeCrossProb(double a, double b, double cLev, double v) {
+        if (v <= 0) return 0.0;
+        double pa = cLev - a, pb = cLev - b;
+        if (pa * pb <= 0) return 1.0;                       // endpoints straddle: crossing is certain
+        return Math.exp(-2.0 * pa * pb / v);
+    }
 
     /** one exact axial step: OU when the filament is held, free diffusion when it is not. */
     private double axialStep(double Xeq, double x0, double tauX, int nb, double dt, long addr) {
@@ -902,6 +985,136 @@ public final class VilfanCompleteSystem {
              + refineH(Xeq, Teq, xm, thm, xb, thb, tauX, tauT, nb, 0.5 * T, addr * 2 + 2, depth - 1);
     }
 
+    /**
+     * Advance to the next chemical event with DETERMINISTIC axial motion and STOCHASTIC roll.
+     * <p>
+     * Branch bookkeeping under a diffusing Theta is handled by re-deriving each bound head's branch
+     * from the current Theta every substep — which is exactly what wrapPi does — so the branch
+     * integers can never drift out of sync with the torque law. What the substep must still respect
+     * is that the summed torque is only LINEAR in Theta while no head crosses a +-pi boundary: a
+     * crossing shifts ThetaEq by 2*pi/Nb. The substep is therefore shrunk until the angular RMS
+     * increment is small against the distance to the nearest active boundary, which bounds the
+     * probability of an undetected same-side bridge crossing; that residual probability is
+     * accumulated and reported (gate B).
+     */
+    private double advanceRollStochastic(SplittableRandom rngTime) {
+        double Hrem = Math.log(1.0 / (1.0 - rngTime.nextDouble()));
+        double tAcc = 0.0;
+        double dtBase = c.anchorDtS / (1L << c.refineLevel);
+
+        for (int guard = 0; guard < 20_000_000; guard++) {
+            int nb = countBound();
+            if (nb == 0) nbZeroEvents++;
+            for (int j = 0; j < xM.length; j++) if (state[j] != DETACHED) setBranch(j);
+            double Xeq = xEqNow(), Teq = thetaEqNow();
+            double tauX = (nb > 0 && K > 0) ? gammaX / (nb * K) : Double.POSITIVE_INFINITY;
+            double tauT = (nb > 0 && kTheta > 0) ? gammaTheta / (nb * kTheta) : Double.POSITIVE_INFINITY;
+
+            // shrink the substep until the angular RMS increment is small against the nearest boundary
+            double dt = dtBase, dBnd = distToBoundary();
+            double sig = rollSigma(tauT, nb, dt);
+            int sub = 0;
+            while (sig > 0.25 * dBnd && sub < 20 && dt > 1e-12) { dt *= 0.5; sig = rollSigma(tauT, nb, dt); sub++; }
+            if (sub > 0) nRollSubdiv++;
+
+            double X0 = X, T0 = Theta;
+            long addr = anchorIdx++;
+            double Xn = relaxX(Xeq, X0, tauX, dt);
+            double Tn = rollStep(Teq, T0, tauT, nb, dt, addr, noiseSign);
+            double Tm = rollBridgeMid(Teq, T0, Tn, tauT, nb, dt, addr, noiseSign);
+            double Xm = relaxX(Xeq, X0, tauX, 0.5 * dt);
+
+            // residual missed-crossing probability over this substep (bridge formula, worst boundary)
+            double v = 2.0 * sig * sig;
+            double pMiss = 0.0;
+            for (int j = 0; j < xM.length; j++) {
+                if (state[j] == DETACHED) continue;
+                double off = baseAzim(siteOf[j]) + TWO_PI * branchN[j];
+                for (int sgn = -1; sgn <= 1; sgn += 2) {
+                    double Tc = sgn * Math.PI - off;
+                    double pc = bridgeCrossProb(T0, Tn, Tc, v);
+                    if (pc < 1.0) pMiss = Math.max(pMiss, pc);
+                    else nRollCross++;
+                }
+            }
+            if (pMiss > maxMissProb) maxMissProb = pMiss;
+            sumMissProb += pMiss;
+
+            double k0 = kTotalAt(X0, T0), km = kTotalAt(Xm, Tm), k1 = kTotalAt(Xn, Tn);
+            if (!(k0 > 0) && !(km > 0) && !(k1 > 0)) return -1;
+            double Hs = dt / 6.0 * (k0 + 4 * km + k1);
+            nSubsteps++;
+            if (c.hazardCrossCheck && (nSubsteps % c.hazardCheckStride) == 0) {
+                double ref = refineHRoll(Xeq, Teq, X0, T0, Xn, Tn, tauX, tauT, nb, dt, addr, c.hazardCheckDepth);
+                double sgn2 = (Hs - ref) / Math.max(1e-300, ref);
+                if (Math.abs(sgn2) > xcheckMaxRel) xcheckMaxRel = Math.abs(sgn2);
+                xcheckSum += Math.abs(sgn2); xcheckSigned += sgn2; xcheckSq += sgn2 * sgn2; xcheckN++;
+            }
+
+            if (Hs >= Hrem) {
+                double t = locateRoll(Xeq, Teq, X0, T0, Xn, Tn, tauX, tauT, nb, dt, Hrem, addr);
+                return tAcc + t;
+            }
+            Hrem -= Hs; tAcc += dt;
+            windingRad += Math.abs(Tn - T0);
+            X = Xn; Theta = Tn;
+            updateRollBands();
+            updateRecrossing();
+        }
+        return -1;
+    }
+
+    /** RMS roll increment over dt: OU-stationary when held, free diffusion when not. */
+    private double rollSigma(double tauT, int nb, double dt) {
+        if (nb > 0 && kTheta > 0 && Double.isFinite(tauT)) {
+            double e = Math.exp(-dt / tauT);
+            return Math.sqrt(varInfT(nb) * (1.0 - e * e));
+        }
+        return Math.sqrt(2.0 * DTheta * dt);
+    }
+
+    private double refineHRoll(double Xeq, double Teq, double xa, double tha, double xb, double thb,
+                               double tauX, double tauT, int nb, double T, long addr, int depth) {
+        double thm = rollBridgeMid(Teq, tha, thb, tauT, nb, T, addr, noiseSign);
+        double xm = relaxX(Xeq, xa, tauX, 0.5 * T);
+        if (depth <= 0) return T / 6.0 * (kTotalAt(xa, tha) + 4 * kTotalAt(xm, thm) + kTotalAt(xb, thb));
+        return refineHRoll(Xeq, Teq, xa, tha, xm, thm, tauX, tauT, nb, 0.5 * T, addr * 2 + 1, depth - 1)
+             + refineHRoll(Xeq, Teq, xm, thm, xb, thb, tauX, tauT, nb, 0.5 * T, addr * 2 + 2, depth - 1);
+    }
+
+    /** locate the terminal event inside a roll substep by OU-bridge halving on the same path. */
+    private double locateRoll(double Xeq, double Teq, double xa, double tha, double xb, double thb,
+                              double tauX, double tauT, int nb, double T, double target, long addr) {
+        double t0 = 0, x0 = xa, th0 = tha, len = T, acc = 0; long a = addr;
+        for (int lvl = 0; lvl < c.bridgeMaxLevel; lvl++) {
+            double half = 0.5 * len;
+            a = VilfanAxialBrownian.hash(a, 0x9E3779B9L, lvl);
+            double thm = rollBridgeMid(Teq, th0, thb, tauT, nb, len, a, noiseSign);
+            double xm = relaxX(Xeq, x0, tauX, half);
+            double kq = kTotalAt(relaxX(Xeq, x0, tauX, 0.25 * len),
+                                 rollBridgeMid(Teq, th0, thm, tauT, nb, half, a ^ 0x5DEECE66DL, noiseSign));
+            double HL = half / 6.0 * (kTotalAt(x0, th0) + 4 * kq + kTotalAt(xm, thm));
+            if (acc + HL >= target) { xb = xm; thb = thm; len = half; }
+            else { acc += HL; t0 += half; x0 = xm; th0 = thm; len = half; }
+        }
+        X = x0; Theta = th0;
+        updateRollBands(); updateRecrossing();
+        return t0;
+    }
+
+    /** scale-aware angular hysteresis counting, the roll analogue of the axial band ladder. */
+    private void updateRollBands() {
+        if (rollBandSide == null) return;
+        for (int b = 0; b < rollBandSide.length; b++) {
+            double band = c.rollBands[b], d = Theta - rollBandRef[b];
+            if (Math.abs(d) < band * 0.5) continue;
+            int side = d > 0 ? +1 : -1;
+            if (rollBandSide[b] == 0) { rollBandSide[b] = side; rollBandRef[b] = Theta; continue; }
+            if (side != rollBandSide[b]) { rollBandCross[b]++; rollBandSide[b] = side; }
+            rollBandRef[b] = Theta;
+        }
+    }
+
     /** Stage-5 scale-aware zone-centre crossing diagnostics, updated at every accepted substep. */
     private void updateRecrossing() {
         if (recSide == null) return;
@@ -981,6 +1194,9 @@ public final class VilfanCompleteSystem {
         int nBands = c.recrossBandsNm.length;
         recFwd = new long[nBands]; recBwd = new long[nBands];
         recRef = new double[nBands]; recSide = new int[nBands];
+        rollBandCross = new long[c.rollBands.length];
+        rollBandRef = new double[c.rollBands.length];
+        rollBandSide = new int[c.rollBands.length];
         Arrays.fill(siteOf, -1);
         occupied = new boolean[nSites];
         hazCache = new double[nM];
@@ -1044,7 +1260,8 @@ public final class VilfanCompleteSystem {
             if (c.overdamped()) {
                 // piecewise-deterministic: evolve the mechanics and the cumulative hazard together
                 // until H reaches an exponential threshold. X and Theta MOVE here, continuously.
-                dt = c.brownian() ? advanceStochastic(rngTime) : advanceOverdamped(rngTime);
+                dt = c.rollBrownian ? advanceRollStochastic(rngTime)
+                   : c.axialBrownian ? advanceStochastic(rngTime) : advanceOverdamped(rngTime);
                 if (dt < 0) {
                     R.note = "HALT: ktotal = 0 during overdamped advance at t=" + t + " X=" + X;
                     break;
@@ -1274,6 +1491,10 @@ public final class VilfanCompleteSystem {
         R.zoneCentreCrossRaw = zoneCentreCrossRaw;
         R.pathLenNm = pathLenNm; R.netFwdNm = X - xW; R.maxBackNm = maxBackNm;
         R.recFwd = recFwd; R.recBwd = recBwd; R.recBands = c.recrossBandsNm;
+        R.rollBrownian = c.rollBrownian; R.DThetaRad2PerS = DTheta;
+        R.nRollCross = nRollCross; R.nRollSubdiv = nRollSubdiv; R.nFreeRollSteps = nFreeRollSteps;
+        R.maxMissProb = maxMissProb; R.meanMissProb = (nSubsteps > 0) ? sumMissProb / nSubsteps : 0;
+        R.windingRad = windingRad; R.rollBandCross = rollBandCross; R.rollBands = c.rollBands;
         R.xcheckN = xcheckN; R.xcheckMaxRel = xcheckMaxRel;
         R.xcheckMeanRel = (xcheckN > 0) ? xcheckSum / xcheckN : 0.0;
         if (xcheckN > 1) {
@@ -1298,6 +1519,10 @@ public final class VilfanCompleteSystem {
             R.zonePassageS = (cApp > 0) ? LNm / cApp : Double.POSITIVE_INFINITY;
         }
         if (R.medianNb > 0 && K > 0) R.sdXconstrainedNm = Math.sqrt(c.kBT / (R.medianNb * K));
+        if (R.medianNb > 0 && kTheta > 0) {
+            R.sdThetaConstrainedRad = Math.sqrt(c.kBT / (R.medianNb * kTheta));
+            R.tauThetaMedS2 = gammaTheta / (R.medianNb * kTheta);
+        }
         R.wallClockS = (System.nanoTime() - wall0) / 1e9;
         return R;
     }

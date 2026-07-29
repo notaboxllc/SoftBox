@@ -228,6 +228,13 @@ public final class VilfanCompleteHarness {
         kv(b, "branchCrossings", R.branchCrossings); kv(b, "degenerateBranch", R.degenerateBranch);
         kv(b, "transientRootEvents", R.transientRootEvents); kv(b, "nEventsAnalysed", R.nEventsAnalysed);
         kv(b, "maxEventJumpX", R.maxEventJumpX); kv(b, "maxEventJumpTheta", R.maxEventJumpTheta);
+        kv(b, "rollBrownian", R.rollBrownian); kv(b, "DThetaRad2PerS", R.DThetaRad2PerS);
+        kv(b, "sdThetaConstrainedRad", R.sdThetaConstrainedRad); kv(b, "tauThetaMedS", R.tauThetaMedS2);
+        kv(b, "nRollCross", R.nRollCross); kv(b, "nRollSubdiv", R.nRollSubdiv);
+        kv(b, "nFreeRollSteps", R.nFreeRollSteps); kv(b, "maxMissProb", R.maxMissProb);
+        kv(b, "meanMissProb", R.meanMissProb); kv(b, "windingRad", R.windingRad);
+        b.append("  \"rollBands\": ").append(java.util.Arrays.toString(R.rollBands)).append(",\n");
+        b.append("  \"rollBandCross\": ").append(java.util.Arrays.toString(R.rollBandCross)).append(",\n");
         kv(b, "xcheckN", R.xcheckN); kv(b, "xcheckMaxRel", R.xcheckMaxRel);
         kv(b, "axialBrownian", R.axialBrownian); kv(b, "DXnm2PerS", R.DXnm2PerS);
         kv(b, "anchorDtS", R.anchorDtS); kv(b, "refineLevel", R.refineLevel);
