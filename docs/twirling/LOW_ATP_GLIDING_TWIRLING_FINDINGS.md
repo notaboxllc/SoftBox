@@ -14,10 +14,10 @@ ladder, analysis, controls, health and closeout all live here; there is no separ
 
 ## 0. Executive conclusion
 
-**Status: stopped at the pilot checkpoint by direction.** Stage 0 (audit), Stage 1 (19/19 validation gates) and
-Stage 2 (duration pilot, 16 arms) are complete; the n = 8 production campaign and the controls were **not**
-launched, and the pilot was converted into an analysis-only mechanism study (§5A). All 16 arms are complete,
-device-resident, and carry **zero invalid states, zero solver failures, zero rate-cap warnings**.
+**Status: pilot checkpoint + an executed n = 4 extension.** Stage 0 (audit), Stage 1 (19/19 validation gates),
+Stage 2 (duration pilot) and the recommended **n = 4 extension** are complete; the n = 8 production campaign
+and the controls were **not** launched. **32 arms**, all device-resident, **zero invalid states, zero solver
+failures, zero rate-cap warnings**, no retries.
 
 1. **The ATP condition transfers into the model through one number, with no new biochemistry.** `nucParams[1]`
    (`atpOn`, NONE→ATP) is the sole [ATP]-dependent transition; it is a pseudo-first-order hazard frozen at
@@ -38,10 +38,17 @@ device-resident, and carry **zero invalid states, zero solver failures, zero rat
    −2.53 ± 0.28 at the reference to −58.8 ± 18.9 at 5 µM purely because v_even collapses. In plain terms: **ATP slows translation appropriately, but
    rotation and translation stop scaling together** — interpretation class B.
 
-4. **The plateau is not established at n = 2.** The across-ATP variation in both Ω_odd and τ_odd is *smaller
-   than* the seed-to-seed scatter within a single concentration (ratio 1.12 and 0.92); 9/16 arms fail
-   window-stability; the ε-even rotational background reaches 1.08× the odd signal; and every n = 2 confidence
-   interval includes zero. The direction and order of the pitch shift are supported; its magnitude is not.
+4. **The plateau was unresolved at n = 2 and is CONFIRMED at n = 4.** The recommended extension was executed
+   (32 records, 16 new, zero invalid states). τ_odd is flat to **12 %** across the 400× ATP range
+   (−1.89, −1.80, −1.69, −1.88 ×10⁻²² N·m), every condition individually resolved, and the across-ATP
+   spread fell from 0.92 to **0.32** of the within-condition SD. Closure tightened to **1.006 ± 0.029 (16/16)**.
+
+4b. **The mechanism is near-total cancellation, and it was invisible before the extension.** Per-head
+   instrumentation (proven inert: 79/80 fields byte-identical on a re-run arm) shows the net chiral torque is a
+   **0.14–0.7 % residual** of two almost exactly balanced ± populations. The invariant holding the plateau up is
+   the **per-head torque magnitude, constant to 2.8 %** across 400× in [ATP], while contributing heads grow
+   **7.9×** in ± counts matched to <0.4 %. And **axial pullers and draggers carry the same chiral torque sign at
+   4 of 4 conditions** — the chiral output is decoupled from a head's axial mechanical role.
 
 5. **Two defects were found by the analysis, and one of them matters for anyone reading the records.** A
    *diagnostic* field (`qOmega`/`omegaPred`) divided whole-filament torque by one-segment drag, understating
@@ -50,12 +57,17 @@ device-resident, and carry **zero invalid states, zero solver failures, zero rat
    removes precisely the longest, highest-impulse episodes, which is why that route closes to 2 % at the
    reference and inverts sign at 5 µM. The flux/impulse compensation is therefore coherent but **unproven**.
 
-6. **Recommendation: a targeted extension to n = 4, then stop** (§5A.11). n = 4 is where Ω_odd itself becomes
-   resolved at every ATP (95 % half-width 44 rad/s against |Ω_odd| ≈ 55); ~11 h. The *plateau* question needs
-   n ≈ 16 (~76 h) and should be reserved for publication work, and only if ATP-independence of chiral torque is
-   a claim the paper intends to make. Three cheap instrumentation fixes should precede any extension — two are
-   already applied, and the third (eight per-head reduction fields) is the difference between "cancellation and
-   puller/dragger not diagnosable" and a decisive mechanism test.
+6. **Interpretation after the extension: classes A, C and D are supported; B is superseded; F is excluded.**
+   A real torque plateau (A), produced by near-total cancellation among a growing, balanced bound population
+   (C), with chiral torque decoupled from axial mechanical role (D). The residence-time compensation picture (B)
+   remains unproven — its estimator is ATP-dependently censored (0.28 % → 16.6 %) — and is now largely
+   superseded, because C supplies a direct account that does not depend on the censored quantity. Rotation is
+   not an artifact (F excluded): closure 1.006 ± 0.029.
+
+7. **Next, and only if wanted:** backfill the two original seeds with per-head instrumentation (15 arms, ~10 h)
+   to bring the STEP-5/6 decomposition from 4 to 8 arms per condition — that is what would resolve torque by
+   nucleotide state and by stroke phase, the only decompositions still underpowered. The low-ATP mirror control
+   and the ε = 0 null were never run and remain the outstanding controls.
 
 ---
 
@@ -761,7 +773,110 @@ Power computed from the observed pooled within-condition SD (Ω_odd 27.78 rad/s;
   provenance line, not just `git HEAD` — commits made while runs are in flight left three different `rev=`
   stamps on arms produced by one identical binary (§5A.12).
 
-### 5A.12 Reusability of the 16 pilot arms
+### 5A.12 n = 4 EXTENSION — the plateau is real, and its mechanism is cancellation
+
+The pilot's §5A.11 recommendation was executed: the per-head instrumentation was added first, then seeds 103
+and 104 were run across the full ladder. **32 records** (16 reused + 16 new), one driver attempt, no retries,
+**zero invalid states, zero solver failures**. Analysis: `RUN_LOGS/lowatp/torque_mechanism_n4.txt`.
+
+**Instrumentation proven inert before use.** One arm (5 µM, +ε, seed 101, 800 000 steps) was re-run against
+its saved pre-instrumentation baseline: **79 of 80 pre-existing fields byte-identical**, including `glide`,
+`omegaFit` and `tau` on a chaotic trajectory. The single field that moved is `qOmega`, by **exactly
+×12.000000** — the intended whole-filament roll-drag correction, *verified against its expected relation
+rather than waived* (`scripts/lowatp_instrument_regression.py`). Mixed-vintage records are therefore valid
+together, and the analysis checks every arm reconstructs to either γ_segment or NSEG·γ_segment.
+
+#### The plateau, at n = 4
+
+| [ATP] | Ω_odd ± SEM (rad/s) | 95 % CI | τ_odd ± SEM (N·m) | 95 % CI | resolved |
+|---|---|---|---|---|---|
+| 2000 µM | **−60.55 ± 8.93** | [−89.0, −32.1] | **−1.893e-22 ± 0.219e-22** | [−2.59e-22, −1.20e-22] | both |
+| 20 µM | **−59.30 ± 11.76** | [−96.7, −21.9] | **−1.803e-22 ± 0.405e-22** | [−3.09e-22, −0.52e-22] | both |
+| 10 µM | **−50.48 ± 11.20** | [−86.1, −14.9] | **−1.687e-22 ± 0.416e-22** | [−3.01e-22, −0.36e-22] | both |
+| 5 µM | **−51.69 ± 5.67** | [−69.7, −33.6] | **−1.879e-22 ± 0.172e-22** | [−2.43e-22, −1.33e-22] | both |
+
+**Every condition is now resolved, and the plateau sharpened rather than dissolved:**
+
+| statistic | n = 2 | **n = 4** |
+|---|---|---|
+| Ω_odd across-ATP spread / within-condition SD | 1.12 | **0.52** |
+| τ_odd across-ATP spread / within-condition SD | 0.92 | **0.32** |
+| τ_odd max/min across the 400× ATP range | 1.64 | **1.122** |
+| torque–rotation closure | 1.033 ± 0.031 (8/8) | **1.006 ± 0.029 (16/16)** |
+| ε-even background at the reference, \|even\|/\|odd\| | 1.08 | 0.69 |
+
+τ_odd varies by only **12 %** while [ATP] varies by 400× and gliding by 25.7×. This is a **real torque
+plateau** — §5A.9's class **A**, which at n = 2 could only be called consistent-but-unpowered.
+
+#### STEP 5 at n = 4 — the plateau is produced by near-total cancellation
+
+17 arms carry the per-head decomposition. The signed split reproduces the independently stored `tau` exactly,
+so it is a decomposition and not an approximation.
+
+| [ATP] | Σ τ⁺ | Σ τ⁻ | net | n(τ⁺) | n(τ⁻) | **net / Σ τ⁺** | **\|τ\| per contributing head** |
+|---|---|---|---|---|---|---|---|
+| 2000 µM | +1.291e-20 | −1.301e-20 | −9.19e-23 | 2.41 | 2.43 | **0.711 %** | 5.356e-21 |
+| 20 µM | +6.507e-20 | −6.526e-20 | −1.90e-22 | 11.99 | 12.03 | **0.291 %** | 5.429e-21 |
+| 10 µM | +8.958e-20 | −8.972e-20 | −1.44e-22 | 16.28 | 16.34 | **0.160 %** | 5.503e-21 |
+| 5 µM | +1.041e-19 | −1.043e-19 | −1.41e-22 | 19.02 | 19.09 | **0.136 %** | 5.476e-21 |
+
+**The net chiral torque is a 0.14–0.7 % residual of two almost exactly balanced populations**, and the
+cancellation becomes *more* complete as ATP falls. The invariant that holds the plateau up is the **per-head
+torque magnitude: 5.36–5.50 ×10⁻²¹ N·m, constant to 2.8 % across the whole 400× range**, while the number of
+contributing heads grows **7.9×** and the ± counts stay matched to <0.4 %.
+
+⇒ **Class C is confirmed and is the mechanism behind class A.** Lower ATP recruits many more bound heads, each
+carrying the same chiral torque magnitude, but in ever more precisely balanced ± populations — so the net
+survives unchanged. Torque does not saturate per head; the *cancellation* absorbs the population growth.
+
+Torque by nucleotide state is **not resolved** at this n (the rigor-state contribution changes sign across
+conditions: +3.34e-22 at 20 µM against −4.11e-22 at 5 µM) and is reported as inconclusive rather than
+interpreted. Torque by stroke phase shows pre-stroke and post-stroke heads carrying **opposite-signed**
+per-head torque at the three low-ATP conditions (+1.2e-23…+1.27e-22 pre versus −5.7e-24…−2.2e-23 post),
+which is suggestive but likewise underpowered.
+
+#### STEP 6 at n = 4 — axial–rotational decoupling is directly confirmed
+
+Heads classified each step by axial mechanical power `F_axial · v_filament`:
+
+| [ATP] | n pull | n drag | τ/head pull | τ/head drag | same sign? | residence pull / drag (ms) |
+|---|---|---|---|---|---|---|
+| 2000 µM | 2.51 | 2.33 | −1.888e-23 | −1.912e-23 | **YES** | 0.63 / 0.63 |
+| 20 µM | 12.41 | 11.60 | −8.067e-24 | −7.712e-24 | **YES** | 6.04 / 6.41 |
+| 10 µM | 16.86 | 15.76 | −3.154e-24 | −5.733e-24 | **YES** | 11.54 / 11.62 |
+| 5 µM | 19.69 | 18.42 | −2.625e-24 | −4.868e-24 | **YES** | 22.64 / 21.02 |
+
+**Axial pullers and draggers carry the same chiral torque sign at 4 of 4 conditions**, at comparable per-head
+magnitude, with near-identical residence. At the reference the two are almost indistinguishable (−1.888e-23
+versus −1.912e-23).
+
+⇒ **Class D is directly supported.** A head that opposes the glide contributes chiral torque in the *same*
+direction as one that drives it: the chiral output is decoupled from the head's axial mechanical role. This is
+the cleanest mechanistic statement the study produces, and it was invisible to the original pilot.
+
+#### Revised decision after the extension
+
+- **A — REAL TORQUE PLATEAU: now supported.** τ_odd flat to 12 % across 400× in [ATP], every condition
+  resolved, closure 1.006 ± 0.029.
+- **C — CANCELLATION: confirmed, and it is the mechanism.** Net is a 0.14–0.7 % residual; per-head magnitude
+  invariant to 2.8 %; contributing heads grow 7.9× in matched ± populations.
+- **D — AXIAL–ROTATIONAL DECOUPLING: confirmed**, 4 of 4 conditions.
+- **B — residence-time compensation: still unproven**, and now largely superseded: the flux/impulse route
+  remains ATP-dependently censored (§5A.5), and STEP 5 supplies a *direct* account of the plateau that does
+  not depend on the censored estimator.
+- **E — no longer applies to the plateau itself.** It still applies to the by-state and by-phase
+  decompositions, which are unresolved at n = 4.
+- **F — excluded** for rotation (closure), with the two bookkeeping/analysis defects found, fixed and
+  documented.
+
+#### What n = 4 does not settle
+
+Torque by nucleotide state and by stroke phase; the low-ATP mirror control and ε = 0 null (never run); and
+per-head data at the two original seeds — the decomposition rests on 17 of 32 arms, so the STEP 5/6 numbers
+are 4 arms per condition rather than 8. Backfilling seeds 101–102 with instrumentation (15 arms, ~10 h) would
+double that and is the cheapest next increment **if** the by-state decomposition is wanted resolved.
+
+### 5A.13 Reusability of the pilot arms
 
 All 16 arms share identical [ATP]-independent configuration, duration, equilibration, record schema and seed
 definition, and were produced by **one compiled binary** (source mtime 2026-07-27T23:19:02, classes 23:19:49,

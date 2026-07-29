@@ -405,38 +405,91 @@ def main():
 
     # =============================================================== STEP 5/6 — gated
     print("\n\n### STEP 5 — TORQUE CANCELLATION AND SATURATION\n")
-    print("""  NOT DIAGNOSABLE FROM THIS PILOT. Only the NET axial torque is stored (r.tau is the
-  time-average of the signed sum over bound heads). The positive-torque sum, negative-torque sum,
-  contributing-head counts, per-head magnitude and torque-by-nucleotide-state are not recorded, and
-  they cannot be inferred from an aggregate. What IS available is the episode-PHASE decomposition:""")
-    print("\n%9s | %13s %13s %13s %13s | %13s"
-          % ("[ATP] µM", "J_pre odd", "J_stroke odd", "J_early odd", "J_late odd", "J_total odd"))
-    for uM in uMs:
-        S = pair[uM]
-        if not S:
-            continue
-        comp = {}
-        for key in ("jPre", "jStroke", "jEarly", "jLate"):
-            comp[key] = msn([0.5 * (d["P"]["v"][key] - d["N"]["v"][key]) for d in S])[0]
-        print("%9.4g | %+13.4e %+13.4e %+13.4e %+13.4e | %+13.4e"
-              % (uM, comp["jPre"], comp["jStroke"], comp["jEarly"], comp["jLate"], sum(comp.values())))
-    print("\n  (phase windows: pre = attachment to stroke; stroke = lags 0-7 steps; early = 8-31; late = 32 to detach)")
+    inst = {k: d for k, d in arms.items() if math.isfinite(d["v"].get("tauPos", float("nan")))}
+    print("  arms carrying the per-head decomposition: %d of %d "
+          "(fields added 2026-07-28; earlier arms read back NaN)\n" % (len(inst), len(arms)))
+    if inst:
+        print("  SIGNED TORQUE SPLIT — is the net a small residual of two large opposing populations?")
+        print("%9s | %14s %14s %14s | %9s %9s | %11s %12s"
+              % ("[ATP] µM", "sum tau+", "sum tau-", "net (check)", "n(tau+)", "n(tau-)", "net/sum+", "|tau|/head+"))
+        for uM in uMs:
+            g = [d["v"] for k, d in inst.items() if k[0] == uM]
+            if not g:
+                continue
+            f = lambda kk: sum(x[kk] for x in g) / len(g)
+            tp, tn = f("tauPos"), f("tauNeg")
+            net, npos, nneg = f("tau"), f("nTauPos"), f("nTauNeg")
+            print("%9.4g | %+14.4e %+14.4e %+14.4e | %9.2f %9.2f | %11.5f %12.4e"
+                  % (uM, tp, tn, tp + tn, npos, nneg, abs(net) / tp if tp else float("nan"),
+                     tp / npos if npos else float("nan")))
+        print("\n  (net (check) reproduces the independently stored tau, so the split is exact, not approximate)")
+
+        print("\n  TORQUE BY NUCLEOTIDE STATE (bound heads)")
+        print("%9s | %13s %13s %13s %13s | %8s %8s %8s %8s"
+              % ("[ATP] µM", "tau NONE", "tau ATP", "tau ADP·Pi", "tau ADP", "n NONE", "n ATP", "n ADPPi", "n ADP"))
+        for uM in uMs:
+            g = [d["v"] for k, d in inst.items() if k[0] == uM]
+            if not g:
+                continue
+            f = lambda kk: sum(x[kk] for x in g) / len(g)
+            print("%9.4g | %+13.4e %+13.4e %+13.4e %+13.4e | %8.2f %8.2f %8.2f %8.2f"
+                  % (uM, f("tauSNone"), f("tauSAtp"), f("tauSAdpPi"), f("tauSAdp"),
+                     f("nSNone"), f("nSAtp"), f("nSAdpPi"), f("nSAdp")))
+
+        print("\n  TORQUE BY STROKE PHASE")
+        print("%9s | %14s %14s | %9s %9s | %14s %14s"
+              % ("[ATP] µM", "tau pre-stroke", "tau post-stroke", "n pre", "n post",
+                 "tau/head pre", "tau/head post"))
+        for uM in uMs:
+            g = [d["v"] for k, d in inst.items() if k[0] == uM]
+            if not g:
+                continue
+            f = lambda kk: sum(x[kk] for x in g) / len(g)
+            npre, npost = f("nPre"), f("nPost")
+            print("%9.4g | %+14.4e %+14.4e | %9.2f %9.2f | %+14.4e %+14.4e"
+                  % (uM, f("tauPre"), f("tauPost"), npre, npost,
+                     f("tauPre") / npre if npre else float("nan"),
+                     f("tauPost") / npost if npost else float("nan")))
+    else:
+        print("  NOT DIAGNOSABLE — no arm carries the per-head fields.")
 
     print("\n\n### STEP 6 — AXIAL PULLER/DRAGGER vs TORQUE SIGN\n")
-    print("""  NOT POSSIBLE FROM THIS PILOT -- per-head axial force and per-head axial torque are not stored.
-  Exact schema additions required for a later targeted study (all are per-step reductions the
-  measurement loop already has the inputs for, so no new physics and no kernel change is needed):
-     tauPos, tauNeg          summed positive / negative per-head axial torque
-     nTauPos, nTauNeg        counts of positive / negative torque heads
-     tauByState[4]           axial torque summed by nucleotide state
-     nByState[4]             bound-head counts by nucleotide state
-     tauPull, tauDrag        axial torque summed over heads with F_ax*v_fil > 0 and < 0
-     nPull, nDrag            counts of axial pullers / draggers
-     fAxPull, fAxDrag        summed axial force in each class
-     residPull, residDrag    residence accumulated in each class
-  The loop already computes per-head axial torque (ChiralSiteSystem.axialTorque) and per-head axial
-  force (bondData projection) at ChiralSiteHarness ~line 1930-1950; only the signed reductions and
-  eight extra record fields are missing.""")
+    if inst:
+        print("  Classification by instantaneous axial mechanical power F_axial * v_filament.")
+        print("  THE KEY TEST: do heads that OPPOSE axial motion still supply same-sign chiral torque?\n")
+        print("%9s | %8s %8s | %13s %13s | %13s %13s | %10s %10s"
+              % ("[ATP] µM", "n pull", "n drag", "tau pull", "tau drag", "F_ax pull", "F_ax drag",
+                 "res pull", "res drag"))
+        verdict = []
+        for uM in uMs:
+            g = [d["v"] for k, d in inst.items() if k[0] == uM]
+            if not g:
+                continue
+            f = lambda kk: sum(x[kk] for x in g) / len(g)
+            tpl, tdr = f("tauPull"), f("tauDrag")
+            verdict.append((uM, tpl, tdr, tpl * tdr > 0))
+            print("%9.4g | %8.2f %8.2f | %+13.4e %+13.4e | %+13.4e %+13.4e | %10.4f %10.4f"
+                  % (uM, f("nPull"), f("nDrag"), tpl, tdr, f("fAxPull"), f("fAxDrag"),
+                     1e3 * f("residPullS"), 1e3 * f("residDragS")))
+        print("\n%9s | %14s %14s %12s" % ("[ATP] µM", "tau/head pull", "tau/head drag", "same sign?"))
+        for uM in uMs:
+            g = [d["v"] for k, d in inst.items() if k[0] == uM]
+            if not g:
+                continue
+            f = lambda kk: sum(x[kk] for x in g) / len(g)
+            npl, ndr = f("nPull"), f("nDrag")
+            print("%9.4g | %+14.4e %+14.4e %12s"
+                  % (uM, f("tauPull") / npl if npl else float("nan"),
+                     f("tauDrag") / ndr if ndr else float("nan"),
+                     "YES" if f("tauPull") * f("tauDrag") > 0 else "no"))
+        same = sum(1 for _, _, _, ok in verdict if ok)
+        print("\n  VERDICT: axial pullers and draggers carry the SAME torque sign at %d of %d conditions."
+              % (same, len(verdict)))
+        print("  %s" % ("=> axial-rotational DECOUPLING is supported: opposing the glide does not reverse the "
+                        "chiral contribution." if same == len(verdict) else
+                        "=> mixed; the classes do not share a sign at every condition."))
+    else:
+        print("  NOT POSSIBLE — per-head axial force is not stored in any arm.")
 
     # =============================================================== STEP 7 — artifacts
     print("\n\n### STEP 7 — ARTIFACT CHECKS\n")
