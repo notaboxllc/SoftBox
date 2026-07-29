@@ -1,5 +1,42 @@
 # Soft Box Project Journal
 
+### 2026-07-28 (later) — n=4 EXTENSION: the low-ATP torque plateau is REAL, and its mechanism is near-total cancellation
+
+**What was done.** Executed the pilot's own recommendation (option 2): added the per-head signed-torque and
+axial puller/dragger instrumentation FIRST, proved it inert, then extended the ladder to n=4. **32 records**
+(16 reused + 16 new), one driver attempt, no retries, **0 invalid / 0 solver / 0 rate-cap**.
+
+**Instrumentation proven inert before use.** Re-running one arm (5 µM, +ε, seed 101, 800k steps) against its
+saved pre-instrumentation baseline left **79 of 80 pre-existing fields byte-identical**, including `glide`,
+`omegaFit` and `tau` on a chaotic trajectory. The one field that moved is `qOmega`, by **exactly ×12.000000**
+— the intended whole-filament roll-drag fix, checked against its expected relation rather than waived.
+
+**What was learned.**
+- **The plateau is REAL.** τ_odd across a 400× ATP range: −1.893, −1.803, −1.687, −1.879 ×10⁻²² N·m —
+  **max/min 1.122, i.e. 12 % variation**, every condition individually resolved. Across-ATP spread / within-
+  condition SD fell **0.92 → 0.32** (Ω_odd 1.12 → 0.52). Closure tightened to **1.006 ± 0.029 over 16/16 arms**.
+  At n=2 this could only be called consistent-but-unpowered; at n=4 it is class **A**, supported.
+- **Its mechanism is near-total CANCELLATION (class C confirmed).** Net chiral torque is a **0.14–0.7 %
+  residual** of two almost exactly balanced populations (Σ τ⁺ ≈ +1.04e-19 vs Σ τ⁻ ≈ −1.04e-19 at 5 µM), and the
+  cancellation becomes MORE complete as ATP falls (0.711 % → 0.136 %). The invariant holding the plateau up is
+  the **per-head torque magnitude: 5.36–5.50e-21 N·m, constant to 2.8 %** across the whole range, while
+  contributing heads grow **7.9×** with ± counts matched to <0.4 %. So the plateau is not "torque saturates" —
+  it is "population grows, cancellation absorbs it exactly".
+- **Chiral torque is DECOUPLED from axial mechanical role (class D confirmed).** Heads classified each step by
+  `F_axial · v_filament`: axial pullers and draggers carry the **same** torque sign at **4 of 4** conditions, at
+  comparable per-head magnitude and near-identical residence (at the reference, −1.888e-23 vs −1.912e-23).
+  A head opposing the glide contributes chirality in the same direction as one driving it.
+- **Class B is superseded, not rescued.** The flux/impulse route stays ATP-dependently censored (0.28 % →
+  16.6 %); class C now accounts for the plateau directly, using only uncensored per-step quantities.
+- **Reported as UNRESOLVED, not interpreted:** torque by nucleotide state (rigor contribution changes sign
+  across conditions) and by stroke phase — both rest on 4 arms per condition, since only 17 of 32 arms carry the
+  decomposition.
+
+**Open / not run.** Backfill of seeds 101–102 with instrumentation (15 arms, ~10 h) would take the per-head
+decomposition to 8 arms per condition and is what would resolve the by-state and by-phase splits. The low-ATP
+mirror control and the ε=0 null were never run and remain the outstanding controls for any low-ATP chirality
+claim.
+
 ### 2026-07-28 — LOW-[ATP] CONDITION TRANSFER: gliding transfers, rotation does not; the pitch match sits at the WRONG ATP
 
 **What was done.** Bounded condition-transfer study asking whether the frozen motor reproduces the experimental

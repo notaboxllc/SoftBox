@@ -587,8 +587,9 @@ prototype toward a stiffer, mechanically recognizable motor.
 
 ## 9c. Low-[ATP] condition transfer (exploratory pilot, 2026-07-28)
 
-**Working interpretation, not a settled result** — 16 arms at n = 2 seeds; the powered campaign was
-deliberately not run. Report: `docs/twirling/LOW_ATP_GLIDING_TWIRLING_FINDINGS.md`.
+**Settled for the plateau and its mechanism; controls still outstanding.** 32 arms at n = 4 seeds (pilot +
+executed extension); the n = 8 campaign was deliberately not run. Report:
+`docs/twirling/LOW_ATP_GLIDING_TWIRLING_FINDINGS.md`.
 
 The experimental myosin-II twirling assay uses ~5-20 uM ATP to slow translation. Changing ONLY the assay ATP
 concentration, through the model's own nucleotide law and with no motor parameter retuned:
@@ -602,9 +603,14 @@ concentration, through the model's own nucleotide law and with no motor paramete
   flat TORQUE, not an observable defect. Turns-per-um rises from -2.53 to -58.8 purely because v_even collapses.
 - **The pitch match sits at the wrong ATP.** The model reproduces the experimental pitch (0.47 +/- 0.20 um) at
   SATURATING ATP (-0.396 um), but gives -0.017 um at 5 uM, the condition the experiment actually used.
-- **Not established at n = 2.** Across-ATP variation in Omega_odd and tau_odd is smaller than the
-  within-condition seed scatter; 9/16 arms fail window stability; the eps-even rotational background reaches
-  1.08x the odd signal; every CI includes zero.
+- **The plateau is REAL (confirmed at n = 4).** tau_odd flat to **12%** across the 400x ATP range, every
+  condition individually resolved, across-ATP spread down to 0.32 of the within-condition SD, closure
+  **1.006 +/- 0.029 (16/16)**.
+- **Its mechanism is near-total cancellation.** Net chiral torque is a **0.14-0.7% residual** of two balanced
+  +/- populations; the **per-head torque magnitude is invariant to 2.8%** across 400x in [ATP] while
+  contributing heads grow **7.9x** with +/- counts matched to <0.4%.
+- **Chiral torque is decoupled from axial role:** axial pullers and draggers carry the same torque sign at
+  4 of 4 conditions. Torque by nucleotide state and by stroke phase remain UNRESOLVED (4 arms per condition).
 
 **ATP interface (reusable).** `nucParams[1]` (`atpOn`, NONE->ATP) is the sole [ATP]-dependent transition, a
 pseudo-first-order hazard frozen at 2.0e4/s for saturating ATP. `-atp-uM` scales it linearly, anchored on the
@@ -616,9 +622,10 @@ binding is the sole detachment pathway.
 segment's roll drag until 2026-07-28; records written before the fix carry `qOmega` low by nSeg = 12. No claim
 ever used the field.
 
-**Next:** extend selected low-ATP conditions to n = 4 (~11 h) to resolve Omega_odd itself; n ~ 16 (~76 h) is
-required for the plateau question and is publication-only. Add per-head signed-torque and axial puller/dragger
-reduction fields first -- torque cancellation and axial-rotational decoupling were not diagnosable without them.
+**Next:** backfill the two original seeds with per-head instrumentation (15 arms, ~10 h) to take the per-head
+decomposition from 4 to 8 arms per condition, which is what would resolve torque by nucleotide state and by
+stroke phase. The low-ATP mirror control and the eps = 0 null were never run and are the outstanding controls
+for any low-ATP chirality claim.
 
 ---
 

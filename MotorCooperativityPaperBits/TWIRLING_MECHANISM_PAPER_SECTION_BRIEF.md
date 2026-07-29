@@ -438,7 +438,23 @@ What the section may use:
   window stability, the eps-even rotational background reaches 1.08x the odd signal, and every confidence
   interval includes zero. The direction and order of the pitch shift are supported; the magnitude is not.
 
-Not run and therefore not claimable: eps = 0 null at low ATP, low-ATP mirror control, any n >= 4 statistics.
+**Extended to n = 4 (32 arms).** The plateau sharpened rather than dissolved, and the mechanism became visible:
+
+- **A real torque plateau.** tau_odd is flat to **12%** across the 400x ATP range (-1.89, -1.80, -1.69,
+  -1.88 e-22 N.m), every condition individually resolved, across-ATP spread down to 0.32 of the
+  within-condition SD. Torque-rotation closure tightened to **1.006 +/- 0.029 over 16/16 arms**.
+- **Its mechanism is near-total cancellation.** Net chiral torque is a **0.14-0.7% residual** of two almost
+  exactly balanced +/- populations. The invariant is the **per-head torque magnitude, constant to 2.8%** across
+  400x in [ATP], while contributing heads grow **7.9x** with +/- counts matched to <0.4%.
+- **Chiral torque is decoupled from axial mechanical role.** Axial pullers and draggers carry the **same**
+  torque sign at 4 of 4 conditions, at comparable per-head magnitude and near-identical residence.
+
+This is a usable mechanistic statement for the section: a small handed working stroke produces a chiral torque
+whose PER-HEAD magnitude is set by geometry and is insensitive to the nucleotide cycle's speed, while the net
+population output is set by how completely the +/- populations cancel.
+
+Not run and therefore not claimable: eps = 0 null at low ATP, low-ATP mirror control, torque by nucleotide
+state or by stroke phase (both unresolved at 4 arms per condition), and any n >= 8 statistics.
 
 ## 14. Open computational work
 
@@ -453,12 +469,13 @@ Not run and therefore not claimable: eps = 0 null at low ATP, low-ATP mirror con
 8. Run the 0°, 5°, 10°, 15° angle map at selected viscosity.
 9. Develop a preregistered experimental-style twirling classifier.
 10. Validate the axial step for the final illustrative skew using the blinded tweezers assay.
-11. **Low-ATP follow-up (new, from §13b).** Extend selected low-ATP conditions to n = 4 (~11 h) so Omega_odd
-    itself is resolved at every ATP; do NOT use n = 8 for the plateau question (it still falls short at
-    spread/SEM 2.61), and reserve n ~ 16 (~76 h) for publication work only if ATP-independence of chiral torque
-    becomes a claim. Before extending, add the eight per-head reduction fields (signed torque split by sign and
-    by nucleotide state; axial puller/dragger classification) -- the pilot could not diagnose torque cancellation
-    or axial-rotational decoupling at all without them.
+11. ~~**Low-ATP follow-up.** Extend to n = 4; add the per-head reduction fields.~~ **DONE** - executed, and it
+    settled the plateau (real, 12% flat), its mechanism (near-total cancellation, per-head magnitude invariant to
+    2.8%) and the axial decoupling (4/4). See §13b.
+12. **Low-ATP remaining work (new).** Backfill the two original seeds with per-head instrumentation (15 arms,
+    ~10 h) to take the STEP-5/6 decomposition from 4 to 8 arms per condition -- that is what would resolve torque
+    by nucleotide state and by stroke phase. Then the low-ATP mirror control and the eps = 0 null, which were
+    never run and are the outstanding controls for any low-ATP chirality claim.
 
 ---
 
