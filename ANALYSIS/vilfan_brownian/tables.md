@@ -139,9 +139,9 @@
 
 ### Numerical health
 
-- arms **52**, events **12,627,053**, stochastic substeps **1,272,624,555**, bridge draws **1,573,921,103**
+- arms **56**, events **13,545,568**, stochastic substeps **1,388,289,068**, bridge draws **1,715,304,036**
 - max event discontinuity |ΔX| = **0 nm**, |ΔΘ| = **0 rad**
-- max roll closure residual |γ_Θ Θ̇ − ΣM| = **1.3e-10 pN·nm**
-- free-diffusion substeps (Nb = 0): **2,199**; zero-bound equilibrations 2,207
+- max roll closure residual |γ_Θ Θ̇ − ΣM| = **1.38e-10 pN·nm**
+- free-diffusion substeps (Nb = 0): **2,468**; zero-bound equilibrations 2,476
 - angular branch crossings: **0**
 - travel-cap hits: 0

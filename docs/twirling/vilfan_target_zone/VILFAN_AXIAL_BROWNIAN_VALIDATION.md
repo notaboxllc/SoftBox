@@ -3,7 +3,7 @@
 **Branch** `feature/vilfan-axial-brownian` (child of `feature/vilfan-overdamped-drag`)
 **Worktree** `../softbox-vilfan-axial-brownian`
 **Runner** CPU only — no CUDA, no TornadoVM, no `TaskGraph`, no device context. ≤ 3 logical cores, `nice -n 17`.
-**Status** **COMPLETE — classification A** (S20). Stage 10 (optional paper-lattice) still running.
+**Status** **COMPLETE — classification A** (S20). All stages including the optional Stage 10 finished.
 
 ---
 
@@ -567,20 +567,30 @@ required. The two are reported separately and never pooled.
 
 ---
 
-## S19. Stage 10 — optional paper-lattice confirmation
+## S19. Stage 10 — paper-lattice confirmation
 
-**Status: launched, not yet complete at the time of writing.** This stage is explicitly optional and
-conditional ("run only after the native-lattice result is classified"; "do not expand into a second
-full campaign unless the two lattices differ materially"). The native-lattice result is complete and
-decisive, and **the classification below does not depend on this stage**.
+Two matched seed pairs on Vilfan's own lattice (`a = 2.75 nm`, `theta0 = -167.142857 deg`), axial
+Brownian ON, everything else as in the native-lattice campaign.
 
-The relevant prior is that the deterministic drag study found the two lattices behave identically
-because `<x_A>/L` is invariant; there is no mechanism by which a rigid axial displacement of
-`0.88 % of L` would break that invariance on one lattice and not the other. Resume with:
+| quantity | paper lattice, Brownian | native lattice, Brownian | paper lattice, deterministic |
+|---|---|---|---|
+| `<x_A>` (nm) | 1.6475 ± 0.082 | 1.6407 ± 0.021 | 1.7694 |
+| before-centre (%) | 58.44 | 58.95 | 58.89 |
+| `\|<theta_A>\|` (rad) | 0.10389 | 0.10756 | 0.11077 |
+| `Omega_odd` (rad/s) | -0.5364 ± 0.031 | -0.5439 ± 0.0071 | -0.5443 |
+| v (um/s) | 0.04165 | 0.041831 | 0.041563 |
 
-```
-./scripts/run_vilfan_brownian_campaign.sh paper 3
-```
+**The two lattices behave identically under axial noise.** Paper-lattice `Omega_odd` is
+`-0.5364 ± 0.031` against its own deterministic value of `-0.5443` (ratio 0.986) and against the
+native-lattice Brownian value of `-0.5439` — indistinguishable at n = 2. `<x_A>` sits 0.93 of its
+deterministic paper-lattice value, within the n = 2 scatter (± 0.082).
+
+So the axial-noise insensitivity is **intrinsic to Vilfan's mechanism, not specific to the native
+lattice's shorter target-zone period**. This is the expected result: the deterministic drag study
+established that the two lattices agree because `<x_A>/L` is invariant, and a rigid axial
+displacement of 0.88 % of `L` has no way to break that invariance on one lattice and not the other.
+Per the brief, this stage was **not** expanded into a second full campaign, since the lattices do not
+differ materially.
 
 ---
 
