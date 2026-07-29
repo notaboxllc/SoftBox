@@ -716,6 +716,13 @@ equilibration was a safe assumption, and the study now says by how much — the 
 
 ---
 
+> **Follow-on study.** FDT-consistent AXIAL Brownian motion has since been added and validated:
+> `VILFAN_AXIAL_BROWNIAN_VALIDATION.md`, classification **A** — the depletion mechanism survives,
+> with every amplitude within 5 % of the deterministic numbers reported here and the
+> real-minus-shadow depletion bias resolved at 227 sigma. Subunit-scale target-zone backtracking
+> does occur (1.22 backward crossings per zone passage) but does not disrupt depletion, because a
+> rigid axial shift cannot reorder motor availability. ROLL Brownian motion remains NOT executed.
+
 ## S14. Recommendation for the Brownian study — NOT executed here
 
 **This task stops here.** No thermal force of any kind was added; no transverse, height, tilt or
