@@ -127,13 +127,35 @@ def pairs_of(arms, brown, eps):
 
 
 def gamma_fil(arms):
-    graw = []
+    """Whole-filament roll drag, derived per record and cross-checked, NOT assumed.
+
+    Each record stores tau, omega and qOmega with qOmega = omega/omegaPred and omegaPred = tau/gamma, so
+    tau*qOmega/omega == gamma identically. WHICH gamma depends on the record's vintage: records written
+    after the whole-filament-roll-drag fix carry gamma_FILAMENT, older ones carry
+    gamma_SEGMENT = gamma_filament / NSEG.
+
+    Taking min() over the set and multiplying by NSEG -- the parent pilot's method -- only lands on the
+    right answer when at least one OLD-vintage record is present to be the minimum. On an all-new-vintage
+    set, which is exactly what this pilot produces, it inflates gamma by NSEG and corrupts every closure
+    number. So: cluster the per-record values, take the LARGEST cluster centre as gamma_filament, and
+    report any record that matches neither gamma_filament nor gamma_filament/NSEG."""
+    graw = {}
     for k, d in arms.items():
         v = d["v"]
         if v.get("omega"):
-            graw.append(v["tau"] * v["qOmega"] / v["omega"])
-    g = min(graw) if graw else float("nan")
-    return g, NSEG * g
+            graw[k] = v["tau"] * v["qOmega"] / v["omega"]
+    if not graw:
+        return float("nan"), ([], []), []
+    hi = max(graw.values())
+    fil, seg, odd = [], [], []
+    for k, g in graw.items():
+        if abs(g / hi - 1.0) < 1e-3:
+            fil.append(k)
+        elif abs(g * NSEG / hi - 1.0) < 1e-3:
+            seg.append(k)
+        else:
+            odd.append((k, g))
+    return hi, (fil, seg), odd
 
 
 def floor_sigma(arms, brown):
@@ -197,7 +219,7 @@ def main():
           % ("OK (every tagged record agrees with its stored brownMode field)" if not bad
              else "MISMATCH in " + ", ".join(bad)))
 
-    gseg, gfil = gamma_fil(arms)
+    gfil, (gfil_recs, gseg_recs), godd = gamma_fil(arms)
 
     # ---------------------------------------------------------------- 2. paired observables
     for brown in ("off", "on"):
@@ -262,7 +284,13 @@ def main():
 
     # ---------------------------------------------------------------- 5. torque-rotation closure
     print("\n\n### 5. TORQUE-ROTATION CLOSURE (whole-filament roll drag)\n")
-    print("  gamma_segment = %.6e ; gamma_filament = NSEG*gamma_segment = %.6e N·m·s" % (gseg, gfil))
+    print("  gamma_filament = %.6e N·m·s   (derived per record as tau*qOmega/omega, not assumed)" % gfil)
+    print("    records carrying gamma_filament: %d ; records carrying gamma_filament/NSEG (old vintage): %d"
+          % (len(gfil_recs), len(gseg_recs)))
+    if godd:
+        print("    *** records matching NEITHER (closure for these is not trustworthy):")
+        for k, g in godd:
+            print("        %s eps=%g %s seed=%d -> gamma = %.6e" % (k[0], k[1], k[2], k[3], g))
     print("%6s %7s %6s | %14s %13s %13s %10s" % ("brown", "eps", "seed", "tau_odd", "Om_odd meas",
                                                  "Om_odd pred", "meas/pred"))
     closure = defaultdict(list)
