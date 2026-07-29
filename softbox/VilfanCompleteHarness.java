@@ -227,6 +227,8 @@ public final class VilfanCompleteHarness {
         kv(b, "hazEvals", R.hazEvals); kv(b, "rootIters", R.rootIters);
         kv(b, "branchCrossings", R.branchCrossings); kv(b, "degenerateBranch", R.degenerateBranch);
         kv(b, "transientRootEvents", R.transientRootEvents); kv(b, "nEventsAnalysed", R.nEventsAnalysed);
+        kv(b, "maxEventJumpX", R.maxEventJumpX); kv(b, "maxEventJumpTheta", R.maxEventJumpTheta);
+        kv(b, "xcheckN", R.xcheckN); kv(b, "xcheckMaxRel", R.xcheckMaxRel);
         kv(b, "note", "\"" + R.note.replace("\"", "'") + "\"");
         b.append("  \"xaHist\": ").append(java.util.Arrays.toString(R.xaHist)).append(",\n");
         b.append("  \"shadowHist\": ").append(java.util.Arrays.toString(R.shadowHist)).append("\n");

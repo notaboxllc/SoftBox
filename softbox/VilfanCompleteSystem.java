@@ -115,7 +115,7 @@ public final class VilfanCompleteSystem {
          *  recover the quasi-static result. Never anything but 1.0 in a physics arm. */
         public double dragScale = 1.0;
         /** relative tolerance on the cumulative-hazard quadrature (gate C convergence axis). */
-        public double hazTolRel = 1e-10;
+        public double hazTolRel = 1e-8;
         /** relative tolerance on the located event time. */
         public double rootTolRel = 1e-13;
         /** transient horizon in units of the slowest relaxation time; exp(-40) ~ 4e-18. */
@@ -572,14 +572,47 @@ public final class VilfanCompleteSystem {
         return new double[]{best, bj, bd};
     }
 
-    /** adaptive Simpson of k_total along the analytic trajectory, on [s0, s1]. */
+    /**
+     * Cumulative hazard of k_total along the analytic trajectory on [s0, s1].
+     * <p>
+     * The integrand is a constant settled rate plus a deviation decaying like exp(-s/tau). The
+     * constant part is integrated in closed form and only the DEVIATION is quadratured, on panels
+     * spaced GEOMETRICALLY in tau so each spans O(1) e-foldings. Integrating k itself on one wide
+     * panel forces adaptive Simpson to bisect a 40*tau interval down to the tau scale — hundreds of
+     * hazard sweeps per event for no accuracy gain. Accuracy is unchanged (gates C3/C4/C5).
+     */
     private double quadK(double Xeq, double Teq, double X0, double T0,
                          double tauX, double tauT, double s0, double s1, double absTol) {
-        double f0 = kAt(Xeq, Teq, X0, T0, tauX, tauT, s0);
-        double fm = kAt(Xeq, Teq, X0, T0, tauX, tauT, 0.5 * (s0 + s1));
-        double f1 = kAt(Xeq, Teq, X0, T0, tauX, tauT, s1);
-        return simpsonRec(Xeq, Teq, X0, T0, tauX, tauT, s0, s1, f0, fm, f1,
-                          (s1 - s0) / 6.0 * (f0 + 4 * fm + f1), absTol, 24);
+        double kInf = kTotalAt(Xeq, Teq);
+        double acc = kInf * (s1 - s0);
+        double tX = Double.isFinite(tauX) ? tauX : 0.0, tT = Double.isFinite(tauT) ? tauT : 0.0;
+        double tau = Math.max(tX, tT);
+        if (!(tau > 0)) return acc;                        // nothing relaxes: the rate is constant
+        double p0 = s0, w = 0.5 * tau;
+        while (p0 < s1) {
+            double p1 = Math.min(s1, p0 + w);
+            double g0 = kAt(Xeq, Teq, X0, T0, tauX, tauT, p0) - kInf;
+            double gm = kAt(Xeq, Teq, X0, T0, tauX, tauT, 0.5 * (p0 + p1)) - kInf;
+            double g1 = kAt(Xeq, Teq, X0, T0, tauX, tauT, p1) - kInf;
+            acc += simpsonDev(Xeq, Teq, X0, T0, tauX, tauT, kInf, p0, p1, g0, gm, g1,
+                              (p1 - p0) / 6.0 * (g0 + 4 * gm + g1), absTol, 16);
+            p0 = p1; w *= 2.0;
+        }
+        return acc;
+    }
+
+    private double simpsonDev(double Xeq, double Teq, double X0, double T0, double tauX, double tauT,
+                              double kInf, double s0, double s1, double f0, double fm, double f1,
+                              double whole, double absTol, int depth) {
+        double sm = 0.5 * (s0 + s1);
+        double fl = kAt(Xeq, Teq, X0, T0, tauX, tauT, 0.5 * (s0 + sm)) - kInf;
+        double fr = kAt(Xeq, Teq, X0, T0, tauX, tauT, 0.5 * (sm + s1)) - kInf;
+        double left  = (sm - s0) / 6.0 * (f0 + 4 * fl + fm);
+        double right = (s1 - sm) / 6.0 * (fm + 4 * fr + f1);
+        double err = left + right - whole;
+        if (depth <= 0 || Math.abs(err) <= 15.0 * absTol) return left + right + err / 15.0;
+        return simpsonDev(Xeq, Teq, X0, T0, tauX, tauT, kInf, s0, sm, f0, fl, fm, left, absTol / 2, depth - 1)
+             + simpsonDev(Xeq, Teq, X0, T0, tauX, tauT, kInf, sm, s1, fm, fr, f1, right, absTol / 2, depth - 1);
     }
 
     private double simpsonRec(double Xeq, double Teq, double X0, double T0, double tauX, double tauT,

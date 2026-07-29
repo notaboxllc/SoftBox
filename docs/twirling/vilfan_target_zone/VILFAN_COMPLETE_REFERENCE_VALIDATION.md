@@ -948,6 +948,14 @@ digitising Fig 6's three panels to a precision they do not support, and is not c
 
 ---
 
+> **Follow-on study (rung 1–2 of the ladder below).** Finite filament drag has since been
+> restored and validated: `VILFAN_OVERDAMPED_DRAG_VALIDATION.md`, classification **A** — the
+> mechanism survives quantitatively, with every amplitude within 6 % of the quasi-static
+> numbers reported here. That study also corrects one statistic in S13 below: the
+> "branch reassignment on ~50 % of events" figure counts equilibrations in which `Θ` moved,
+> not `±π` branch crossings, which are far rarer (zero in its production runs). Diagnostic
+> only; no number in this report changes.
+
 ## S16. The ordered realism-restoration ladder (NOT executed here)
 
 **Nothing on this ladder was built, and this task stops here.** It is recorded so the next study
