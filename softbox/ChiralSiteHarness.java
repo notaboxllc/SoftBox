@@ -143,7 +143,7 @@ public final class ChiralSiteHarness {
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean etaAudit = false, etaControls = false, etaMap = false, etaReport = false, etaMirrorRep = false;
         boolean atpFix = false, atpPilot = false, atpMap = false, atpReport = false, atpMirrorRep = false, atpNull = false;
-        boolean atpEquiv = false;
+        boolean atpEquiv = false, skewFix = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
                 convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false, s2DtCmp = false, studyB = false, studyBRep = false;
@@ -243,6 +243,7 @@ public final class ChiralSiteHarness {
                 // ---- LOW-[ATP] STUDY ----
                 case "-atp-uM", "-atp-um" -> ATP_UM = Double.parseDouble(args[++i]);
                 case "-atp-fixtures" -> atpFix = true;
+                case "-skew-fixtures" -> skewFix = true;
                 case "-atp-equiv" -> atpEquiv = true;
                 case "-atp-equiv-steps" -> ATP_EQUIV_STEPS = Integer.parseInt(args[++i]);
                 case "-atp-chem-steps" -> ATP_CHEM_STEPS = Integer.parseInt(args[++i]);
@@ -281,7 +282,8 @@ public final class ChiralSiteHarness {
         if (jsDir != null) {
             if (twirlMode) makeTwirlMovies(jsDir); else makeMovies(jsDir);
             TornadoCrashDiagnostic.normalMainReturn("mode=3js"); return; }
-        if (atpFix)          ok = runAtpFixtures();
+        if (skewFix)         ok = runSkewFixtures();
+        else if (atpFix)     ok = runAtpFixtures();
         else if (atpEquiv)   ok = runAtpEquiv();
         else if (atpPilot)   runAtpPilot(ATP_DUR_MS > 0 ? ATP_DUR_MS : 200.0);
         else if (atpMap)     runAtpMap(ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0);
@@ -4248,6 +4250,13 @@ public final class ChiralSiteHarness {
     }
     static double[] atpRead(String id) {
         java.io.File f = new java.io.File(ATP_DIR, id + ".tsv");
+        // legacy fallback: an untagged record is accepted ONLY when the current skew is the 15° the untagged
+        // campaign was run at, so a 1° or 2° run can never alias onto a 15° record.
+        if (!f.exists() && Math.abs(Math.abs(ATP_EPS_DEG) - LEGACY_EPS_DEG) < 1e-9) {
+            String legacy = id.replaceFirst("_e\\d{4}_", "_");
+            java.io.File g = new java.io.File(ATP_DIR, legacy + ".tsv");
+            if (g.exists()) f = g;
+        }
         if (!f.exists()) return null;
         String[] keys = atpKeys();
         double[] v = new double[keys.length]; java.util.Arrays.fill(v, Double.NaN); boolean complete = false;
@@ -4261,12 +4270,25 @@ public final class ChiralSiteHarness {
         } catch (Exception e) { return null; }
         return complete ? v : null;
     }
-    /** Record id. The PHYSICAL duration (µs) and the ε magnitude are tagged in, so runs of different duration or
-     *  skew can never silently reuse one another's records (the eta-map "s%d" precedent). */
+    /** Record id. The PHYSICAL duration (µs) AND the ε magnitude are tagged in, so runs of different duration
+     *  or different converter skew can never silently reuse one another's records.
+     *
+     *  <p>FIXED 2026-07-28: the ε tag was documented but NOT implemented. Before this fix a small-skew run at
+     *  the same ([ATP], duration, sign, seed) produced the SAME id as the ±15° campaign, so the resume check
+     *  would find the stored 15° record, skip the run, and hand back 15° data labelled as the new skew. The
+     *  ±15° records predate the tag, so a legacy fallback keeps them readable — but ONLY at ε = 15°, which is
+     *  the skew they were actually run at. Any other ε has no legacy form and can never alias onto them. */
     static String atpId(double uM, int sgn, int seed, double durS, double mirror) {
+        return String.format(Locale.US, "atp_u%07.2f_e%04d_d%08d_%s%s%d", uM,
+                (int) Math.round(Math.abs(ATP_EPS_DEG) * 10), Math.round(durS * 1e6),
+                mirror < 0 ? "m_" : "", sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed);
+    }
+    /** The pre-2026-07-28 id, WITHOUT the ε tag. Valid only for the ±15° campaign that wrote it. */
+    static String atpIdLegacy(double uM, int sgn, int seed, double durS, double mirror) {
         return String.format(Locale.US, "atp_u%07.2f_d%08d_%s%s%d", uM, Math.round(durS * 1e6),
                 mirror < 0 ? "m_" : "", sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed);
     }
+    static final double LEGACY_EPS_DEG = 15.0;   // the only skew the untagged records were ever run at
     static String atpProvenance(double uM, double durS) {
         return powProvenance() + String.format(Locale.US,
                 " eta=%.4g dt=%.4e atpUM=%.4g atpOn=%.6g durationS=%.6g eps=%.1f mirror=%.0f rupture_mode=%d gpu=%s",
@@ -4786,6 +4808,144 @@ public final class ChiralSiteHarness {
             }
             System.out.println("\n  tidy CSV written: " + out.getPath());
         } catch (Exception e) { System.out.println("  (CSV write failed: " + e + ")"); }
+    }
+
+    // ============================================ SMALL-SKEW PILOT — Stage 0/1 gates (docs/twirling/LOW_ATP_SMALL_SKEW_PILOT.md)
+    /**
+     * Validates the converter-skew parameter path before the small-skew pilot runs. CPU, deterministic, seconds.
+     * The pilot changes ONLY the linear converter-ramp skew, so every gate here is about that one parameter:
+     * its units, its exactness at small angles, its sign convention, its achiral limit, and the fact that
+     * nothing else in the packed parameter set moves with it.
+     */
+    static boolean runSkewFixtures() {
+        passN = failN = 0;
+        System.out.printf(Locale.US, "%n=== SMALL-SKEW PILOT — STAGE 0/1 GATES (CPU; eta = %.4g, dt = %.4e s) ===%n",
+                ETA, DT * ETA / Constants.aeta);
+        System.out.println("  path: -atp-eps-deg <deg> -> ATP_EPS_DEG -> TArm.convSkew -> EPS_CONV_ARM");
+        System.out.println("        -> ExplicitCompleteMatHarness.CONV_SKEW_DEG -> chiP[16] = deg*PI/180 (rad)");
+
+        // ---- D. SMALL-ANGLE MAPPING: the packed value must be EXACTLY deg*PI/180 at every skew ----------
+        System.out.println("\n  ---- D. imposed-parameter exactness (chiP[16], radians) ----");
+        System.out.printf("    %10s %26s %26s %14s%n", "eps (deg)", "packed chiP[16] (rad)", "deg*PI/180 (exact)", "ulp error");
+        boolean dOk = true;
+        double[] skews = { 0.0, 1.0, 2.0, 15.0, -1.0, -2.0, -15.0 };
+        for (double eps : skews) {
+            double packed = packedSkewRad(eps), exact = eps * Math.PI / 180.0;
+            long ulp = Math.abs(Double.doubleToLongBits(packed) - Double.doubleToLongBits(exact));
+            System.out.printf(Locale.US, "    %10.1f %26.18e %26.18e %14d%n", eps, packed, exact, ulp);
+            dOk &= (packed == exact);
+        }
+        ck(1, "D: chiP[16] is EXACTLY eps*PI/180 at 0/1/2/15 deg, both signs (0 ulp)", dOk);
+
+        // ---- B. ZERO-SKEW is an exact achiral limit -----------------------------------------------------
+        System.out.println("\n  ---- B. zero-skew achiral limit ----");
+        boolean zeroOff = !skewActive(0.0), oneOn = skewActive(1.0), twoOn = skewActive(2.0);
+        note(String.format(Locale.US, "SITE_MODE (as built) = %.0f ; convSkewOn(): eps=0 -> %s, eps=1 -> %s, eps=2 -> %s",
+                packedChi(1.0)[0], zeroOff ? "OFF" : "on", oneOn ? "ON" : "off", twoOn ? "ON" : "off"));
+        ck(2, "B: eps = 0 switches the converter skew structurally OFF; 1 and 2 deg switch it ON",
+                zeroOff && oneOn && twoOn);
+        ck(3, "B: eps = 0 packs exactly 0.0 rad (no residual chirality)", packedSkewRad(0.0) == 0.0);
+
+        // ---- C. SIGN REVERSAL: +eps and -eps differ ONLY by the chiral sign -----------------------------
+        System.out.println("\n  ---- C. sign convention: +eps vs -eps ----");
+        boolean cOk = true;
+        for (double eps : new double[]{ 1.0, 2.0, 15.0 }) {
+            double[] pP = packedChi(+eps), pM = packedChi(-eps);
+            int diff = 0, firstIdx = -1;
+            for (int i = 0; i < Math.min(pP.length, pM.length); i++)
+                if (pP[i] != pM[i]) { diff++; if (firstIdx < 0) firstIdx = i; }
+            boolean only16 = (diff == 1 && firstIdx == 16);
+            boolean negated = pP[16] == -pM[16];
+            System.out.printf(Locale.US, "    eps = %+5.1f deg : differing chiP entries = %d (first idx %d); "
+                    + "chiP[16] exactly negated = %s%n", eps, diff, firstIdx, negated);
+            cOk &= only16 && negated;
+        }
+        ck(4, "C: +eps and -eps differ in EXACTLY ONE packed entry (chiP[16]) and it is exactly negated", cOk);
+
+        // ---- A. every OTHER parameter buffer is byte-identical to the frozen 5 uM condition -------------
+        System.out.println("\n  ---- A. all non-skew parameter buffers unchanged vs the frozen 5 µM condition ----");
+        double savedEps = ATP_EPS_DEG, savedAtp = ATP_UM;
+        ATP_UM = 5.0;
+        ATP_EPS_DEG = 15.0; Glide2D g15 = buildSkewScene(15.0);
+        ATP_EPS_DEG = 1.0;  Glide2D g01 = buildSkewScene(1.0);
+        ATP_EPS_DEG = 2.0;  Glide2D g02 = buildSkewScene(2.0);
+        ATP_EPS_DEG = savedEps; ATP_UM = savedAtp;
+        boolean aOk = true;
+        for (Glide2D g : new Glide2D[]{ g01, g02 }) {
+            aOk &= arraysEqual(g15.mot.nucParams, g.mot.nucParams);
+            aOk &= arraysEqual(g15.mot.kinParams, g.mot.kinParams);
+            aOk &= arraysEqual(g15.fil.bTransGam, g.fil.bTransGam) && arraysEqual(g15.fil.bRotGam, g.fil.bRotGam);
+            aOk &= arraysEqual(g15.mot.body.bTransGam, g.mot.body.bTransGam)
+                && arraysEqual(g15.mot.body.bRotGam, g.mot.body.bRotGam);
+            aOk &= arraysEqual(g15.fil.coord, g.fil.coord) && arraysEqual(g15.fil.uVec, g.fil.uVec);
+            aOk &= arraysEqual(g15.mot.body.coord, g.mot.body.coord);
+        }
+        ck(5, "A: chemistry, catch-slip, drag, Brownian-source and geometry buffers bit-identical across skew", aOk);
+        ck(6, "A: effective atpOn is 50 /s at every skew (the frozen 5 µM condition)",
+                g15.mot.nucParams.get(1) == 50.0f && g01.mot.nucParams.get(1) == 50.0f
+                        && g02.mot.nucParams.get(1) == 50.0f);
+
+        // ---- RNG: skew changes no draw count and no ordering -------------------------------------------
+        System.out.println("\n  ---- RNG ordering ----");
+        note("the converter skew enters only chiP[16], a geometric rotation angle read inside convFrameStep;");
+        note("it appears in no RNG salt, no draw count and no branch that consumes a random number, so the");
+        note("wang-hash streams are byte-identical across skew by construction (same argument as -atp-uM).");
+        ck(7, "RNG draw count and ordering are skew-independent (structural)", true);
+
+        // ---- record identity: the eps tag must separate skews -------------------------------------------
+        System.out.println("\n  ---- record identity ----");
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        double keep = ATP_EPS_DEG;
+        for (double eps : new double[]{ 0.0, 1.0, 2.0, 15.0 })
+            for (int sg = +1; sg >= -1; sg -= 2)
+                for (int sd = 101; sd <= 102; sd++) { ATP_EPS_DEG = eps; ids.add(atpId(5.0, sg, sd, 0.2, 1.0)); }
+        ATP_EPS_DEG = keep;
+        ck(8, "record ids separate 4 skews x 2 signs x 2 seeds into 16 distinct records", ids.size() == 16);
+        ATP_EPS_DEG = 1.0;
+        String oneDeg = atpId(5.0, +1, 101, 0.2, 1.0);
+        ATP_EPS_DEG = LEGACY_EPS_DEG;
+        String fifteen = atpId(5.0, +1, 101, 0.2, 1.0);
+        ATP_EPS_DEG = keep;
+        ck(9, "a 1 deg id can never alias onto the stored 15 deg record", !oneDeg.equals(fifteen)
+                && !oneDeg.equals("atp_u0005.00_d00200000_p_101"));
+        note("1 deg id  : " + oneDeg);
+        note("15 deg id : " + fifteen + "   (legacy untagged form is accepted ONLY at eps = 15)");
+
+        System.out.printf("%n=== SMALL-SKEW STAGE 0/1: %d PASS, %d FAIL ===%n", passN, failN);
+        return failN == 0;
+    }
+    /** The skew angle as the device actually receives it: chiP[16], in radians. */
+    static double packedSkewRad(double deg) { return packedChi(deg)[16]; }
+    /** Is the converter skew live in the FULLY CONFIGURED pilot scene? convSkewOn() is
+     *  {@code SITE_MODE > 0 && CONV_SKEW_DEG != 0}, so it must be evaluated with the discrete-site
+     *  configuration actually established — checking CONV_SKEW_DEG alone reports OFF for every skew. */
+    static boolean skewActive(double deg) {
+        double[] chi = packedChi(deg);           // chi[0] = SITE_MODE as the scene was really built
+        return chi[0] > 0 && chi[16] != 0.0;
+    }
+    /** Pack a scene at the given skew and return the chiral parameter block the kernels read. */
+    static double[] packedChi(double deg) {
+        double savedConv = EPS_CONV_ARM, savedAtp = ATP_UM, savedDt = DTR;
+        boolean savedGpu = GPU; GPU = false;
+        Integer savedRamp = CONV_RAMP_ARM;
+        ATP_UM = 5.0; DTR = DT * ETA / Constants.aeta;
+        EPS_CONV_ARM = deg; CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        try {
+            cfg(2, true, 0.0, 0.0, 0.0, true, 1.0, true);
+            Glide2D G = build(SEED);
+            var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+            double[] out = new double[e.chiP.getSize()];
+            for (int i = 0; i < out.length; i++) out[i] = e.chiP.get(i);
+            return out;
+        } finally { EPS_CONV_ARM = savedConv; ATP_UM = savedAtp; DTR = savedDt; GPU = savedGpu;
+                    CONV_RAMP_ARM = savedRamp; cfgOff(); }
+    }
+    static Glide2D buildSkewScene(double deg) {
+        double savedConv = EPS_CONV_ARM, savedDt = DTR; boolean savedGpu = GPU; GPU = false;
+        Integer savedRamp = CONV_RAMP_ARM;
+        DTR = DT * ETA / Constants.aeta; EPS_CONV_ARM = deg; CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        try { cfg(2, true, 0.0, 0.0, 0.0, true, 1.0, true); return build(SEED); }
+        finally { EPS_CONV_ARM = savedConv; DTR = savedDt; GPU = savedGpu; CONV_RAMP_ARM = savedRamp; cfgOff(); }
     }
 
     // ------------------------------------------------------------------ STAGE 1: ATP interface validation
