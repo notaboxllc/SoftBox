@@ -1,0 +1,197 @@
+=== vilfan-lowocc stage=calib jobs=3 2026-07-30T01:41:55-07:00 ===
+cal_dens_r20.0
+cal_dens_r6.00
+cal_dens_r2.00
+cal_dens_r1.00
+cal_dens_r0.600
+cal_dens_r0.350
+cal_dens_r0.200
+cal_duty_kd5.000
+cal_duty_kd40.00
+cal_duty_kd150.0
+cal_duty_kd400.0
+cal_duty_kd900.0
+cal_duty_kd1800
+cal_duty_kd3600
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r6.00 ...   [run] cal_dens_r20.0 ...   [run] cal_dens_r2.00 ... Nb=12.05(med 6) P0=0.0002 gaps=1 gap=0.00195s C_Th=0.684 C_X=1.000 v=0.04085 om=-0.0701 <xA>=0.836 [31s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r1.00 ... Nb=3.80(med 4) P0=0.0026 gaps=2 gap=0.0133s C_Th=0.030 C_X=1.000 v=0.04186 om=-0.0230 <xA>=1.491 [10s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.600 ... Nb=2.43(med 3) P0=0.0106 gaps=7 gap=0.0153s C_Th=0.074 C_X=1.000 v=0.04994 om=-2.5690 <xA>=3.193 [6s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.350 ... Nb=1.62(med 2) P0=0.0382 gaps=24 gap=0.0161s C_Th=-0.001 C_X=1.000 v=0.04460 om=-3.7941 <xA>=-0.359 [3s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.200 ... Nb=0.00(med 0) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.00000 om=+0.0000 <xA>=0.000 [0s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd5.000 ... Nb=24.16(med 6) P0=0.0001 gaps=1 gap=0.000828s C_Th=0.776 C_X=1.000 v=0.03710 om=-0.5129 <xA>=1.653 [67s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd40.00 ... Nb=81.70(med 6) P0=0.0000 gaps=1 gap=0.000281s C_Th=0.911 C_X=1.000 v=0.04202 om=-0.5302 <xA>=1.460 [157s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd150.0 ... Nb=81.70(med 6) P0=0.0000 gaps=1 gap=0.000281s C_Th=0.911 C_X=1.000 v=0.04202 om=-0.5302 <xA>=1.460 [157s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd400.0 ... Nb=38.30(med 6) P0=0.0000 gaps=1 gap=0.000281s C_Th=0.911 C_X=1.000 v=0.32298 om=-1.9741 <xA>=0.740 [564s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd900.0 ... Nb=17.24(med 6) P0=0.0000 gaps=1 gap=0.000281s C_Th=0.911 C_X=1.000 v=1.18385 om=-3.0398 <xA>=0.337 [810s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd1800 ... Nb=7.62(med 6) P0=0.0626 gaps=110 gap=0.00564s C_Th=0.427 C_X=1.000 v=2.50274 om=-7.2237 <xA>=0.164 [763s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd3600 ... Nb=1.59(med 0) P0=0.6962 gaps=182 gap=0.00334s C_Th=0.562 C_X=1.000 v=0.99551 om=-0.3383 <xA>=0.019 [494s]
+Nb=1.16(med 0) P0=0.6691 gaps=462 gap=0.00892s C_Th=0.680 C_X=1.000 v=1.27979 om=+12.7177 <xA>=-0.208 [368s]
+=== vilfan-lowocc stage=calib jobs=3 2026-07-30T02:04:23-07:00 ===
+cal_dens_r20.0
+cal_dens_r6.00
+cal_dens_r2.00
+cal_dens_r1.00
+cal_dens_r0.600
+cal_dens_r0.350
+cal_dens_r0.200
+cal_duty_kd5.000
+cal_duty_kd40.00
+cal_duty_kd150.0
+cal_duty_kd400.0
+cal_duty_kd900.0
+cal_duty_kd1800
+cal_duty_kd3600
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r20.0 ...   [run] cal_dens_r6.00 ...   [run] cal_dens_r2.00 ... Nb=1.36(med 0) P0=0.6684 gaps=309 gap=0.00820s C_Th=0.636 C_X=1.000 v=1.22718 om=+3.5774 <xA>=0.034 [391s]
+=== done 2026-07-30T02:04:34-07:00 ===
+Nb=12.09(med 12) P0=0.0002 gaps=1 gap=0.00221s C_Th=-0.050 C_X=-0.920 v=0.04100 om=-0.7549 <xA>=1.084 [29s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r1.00 ... Nb=4.00(med 4) P0=0.0025 gaps=2 gap=0.0127s C_Th=0.219 C_X=0.223 v=0.03837 om=-0.5533 <xA>=0.872 [9s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.600 ... Nb=2.49(med 3) P0=0.0059 gaps=5 gap=0.0118s C_Th=-0.355 C_X=0.136 v=0.06636 om=-2.3025 <xA>=2.551 [6s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.350 ... Nb=1.63(med 2) P0=0.0278 gaps=16 gap=0.0176s C_Th=0.135 C_X=-0.309 v=0.06516 om=+1.5902 <xA>=-1.009 [4s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.200 ... Nb=0.00(med 0) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.00000 om=+0.0000 <xA>=0.000 [0s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd5.000 ... Nb=24.17(med 24) P0=0.0001 gaps=1 gap=0.000823s C_Th=0.872 C_X=-0.179 v=0.04118 om=-0.5644 <xA>=1.665 [66s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd40.00 ... Nb=82.23(med 83) P0=0.0000 gaps=1 gap=0.000277s C_Th=0.918 C_X=0.828 v=0.04187 om=-0.4421 <xA>=1.714 [154s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd150.0 ... Nb=82.23(med 83) P0=0.0000 gaps=1 gap=0.000277s C_Th=0.918 C_X=0.828 v=0.04187 om=-0.4421 <xA>=1.714 [150s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd400.0 ... Nb=38.21(med 38) P0=0.0000 gaps=1 gap=0.000277s C_Th=0.918 C_X=0.828 v=0.32439 om=-1.7552 <xA>=0.695 [565s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd900.0 ... Nb=7.74(med 9) P0=0.0565 gaps=105 gap=0.00533s C_Th=0.398 C_X=0.014 v=2.47108 om=-2.7621 <xA>=0.176 [741s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+[skip] cal_duty_kd1800
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd3600 ... Nb=17.31(med 18) P0=0.0000 gaps=1 gap=0.000277s C_Th=0.918 C_X=0.828 v=1.15995 om=-3.3007 <xA>=0.297 [809s]
+Nb=4.93(med 6) P0=0.0694 gaps=187 gap=0.00205s C_Th=0.596 C_X=0.222 v=4.08068 om=-2.3588 <xA>=0.021 [469s]
+Nb=3.06(med 4) P0=0.1239 gaps=476 gap=0.00116s C_Th=0.712 C_X=0.361 v=4.95849 om=-8.1132 <xA>=0.038 [361s]
+=== done 2026-07-30T02:26:03-07:00 ===
+=== vilfan-lowocc stage=calib jobs=3 2026-07-30T02:27:08-07:00 ===
+cal_dens_r20.0
+cal_dens_r6.00
+cal_dens_r2.00
+cal_dens_r1.00
+cal_dens_r0.600
+cal_dens_r0.350
+cal_dens_r0.200
+cal_duty_kd5.000
+cal_duty_kd40.00
+cal_duty_kd150.0
+cal_duty_kd400.0
+cal_duty_kd900.0
+cal_duty_kd1800
+cal_duty_kd3600
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r2.00 ...   [run] cal_dens_r6.00 ...   [run] cal_dens_r20.0 ... Nb=12.09(med 12) P0=0.0002 gaps=1 gap=0.00221s C_Th=-0.050 C_X=-0.920 v=0.04100 om=-0.7549 <xA>=1.084 [29s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r1.00 ... Nb=4.00(med 4) P0=0.0025 gaps=2 gap=0.0127s C_Th=0.219 C_X=0.223 v=0.03837 om=-0.5533 <xA>=0.872 [9s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.600 ... Nb=2.49(med 3) P0=0.0059 gaps=5 gap=0.0118s C_Th=-0.355 C_X=0.136 v=0.06636 om=-2.3025 <xA>=2.551 [6s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.350 ... Nb=1.63(med 2) P0=0.0278 gaps=16 gap=0.0176s C_Th=0.135 C_X=-0.309 v=0.06516 om=+1.5902 <xA>=-1.009 [4s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.200 ... Nb=0.00(med 0) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.00000 om=+0.0000 <xA>=0.000 [0s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd5.000 ... Nb=24.17(med 24) P0=0.0001 gaps=1 gap=0.000823s C_Th=0.872 C_X=-0.179 v=0.04118 om=-0.5644 <xA>=1.665 [66s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd40.00 ... Nb=82.23(med 83) P0=0.0000 gaps=1 gap=0.000277s C_Th=0.918 C_X=0.828 v=0.04187 om=-0.4421 <xA>=1.714 [154s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd150.0 ... Nb=82.23(med 83) P0=0.0000 gaps=1 gap=0.000277s C_Th=0.918 C_X=0.828 v=0.04187 om=-0.4421 <xA>=1.714 [150s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd400.0 ... Nb=38.21(med 38) P0=0.0000 gaps=1 gap=0.000277s C_Th=0.918 C_X=0.828 v=0.32439 om=-1.7552 <xA>=0.695 [565s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd900.0 ... Nb=7.75(med 9) P0=0.0559 gaps=105 gap=0.00533s C_Th=0.398 C_X=0.010 v=2.47108 om=-2.7621 <xA>=0.176 [740s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd1800 ... Nb=17.32(med 18) P0=0.0000 gaps=1 gap=0.000277s C_Th=0.918 C_X=0.828 v=1.15995 om=-3.3007 <xA>=0.297 [810s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd3600 ... Nb=4.94(med 6) P0=0.0687 gaps=188 gap=0.00204s C_Th=0.598 C_X=0.225 v=4.08068 om=-2.3588 <xA>=0.021 [471s]
+Nb=3.07(med 4) P0=0.1226 gaps=478 gap=0.00115s C_Th=0.713 C_X=0.365 v=4.95849 om=-8.1132 <xA>=0.038 [363s]
+Nb=3.30(med 5) P0=0.1807 gaps=410 gap=0.00243s C_Th=0.579 C_X=0.253 v=3.86757 om=+1.9232 <xA>=0.087 [395s]
+=== done 2026-07-30T02:49:21-07:00 ===
+=== vilfan-lowocc stage=calib jobs=3 2026-07-30T03:04:12-07:00 ===
+cal_dens_r20.0
+cal_dens_r6.00
+cal_dens_r2.00
+cal_dens_r1.00
+cal_dens_r0.600
+cal_dens_r0.350
+cal_dens_r0.200
+cal_duty_kd5.000
+cal_duty_kd40.00
+cal_duty_kd150.0
+cal_duty_kd400.0
+cal_duty_kd900.0
+cal_duty_kd1800
+cal_duty_kd3600
+cal_ka_ka50.00
+cal_ka_ka5.000
+cal_ka_ka1.000
+cal_ka_ka0.5000
+cal_ka_ka0.2500
+cal_ka_ka0.1200
+cal_ka_ka0.06000
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r6.00 ...   [run] cal_dens_r2.00 ...   [run] cal_dens_r20.0 ... Nb=12.23(med 12) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04100 om=-0.7549 <xA>=1.084 [29s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r1.00 ... Nb=4.05(med 4) P0=0.0024 gaps=1 gap=0.0194s C_Th=-0.526 C_X=1.000 v=0.03837 om=-0.5533 <xA>=0.872 [9s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.600 ... Nb=2.48(med 3) P0=0.0050 gaps=3 gap=0.0132s C_Th=-0.377 C_X=0.287 v=0.06636 om=-2.3025 <xA>=2.551 [6s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.350 ... Nb=1.58(med 2) P0=0.0306 gaps=12 gap=0.0205s C_Th=0.156 C_X=-0.204 v=0.06516 om=+1.5902 <xA>=-1.009 [4s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_dens_r0.200 ... Nb=0.00(med 0) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.00000 om=+0.0000 <xA>=0.000 [0s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd5.000 ... Nb=23.99(med 24) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04118 om=-0.5644 <xA>=1.665 [64s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd40.00 ... Nb=82.99(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04187 om=-0.4421 <xA>=1.714 [154s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd150.0 ... Nb=82.99(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04187 om=-0.4421 <xA>=1.714 [150s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd400.0 ... Nb=37.78(med 38) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.32439 om=-1.7552 <xA>=0.695 [567s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd900.0 ... Nb=7.53(med 9) P0=0.0699 gaps=104 gap=0.00538s C_Th=0.389 C_X=-0.016 v=2.47108 om=-2.7621 <xA>=0.176 [743s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd1800 ... Nb=17.35(med 18) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=1.15995 om=-3.3007 <xA>=0.297 [862s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_duty_kd3600 ... Nb=4.56(med 6) P0=0.1003 gaps=170 gap=0.00221s C_Th=0.562 C_X=0.203 v=4.08068 om=-2.3588 <xA>=0.021 [472s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_ka_ka50.00 ... Nb=2.66(med 5) P0=0.2719 gaps=339 gap=0.00286s C_Th=0.516 C_X=0.218 v=3.86757 om=+1.9232 <xA>=0.087 [396s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_ka_ka5.000 ... Nb=2.61(med 4) P0=0.1958 gaps=339 gap=0.00145s C_Th=0.660 C_X=0.317 v=4.95849 om=-8.1132 <xA>=0.038 [362s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_ka_ka1.000 ... Nb=80.79(med 81) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04155 om=-0.5371 <xA>=1.773 [338s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_ka_ka0.5000 ... Nb=33.99(med 34) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04234 om=-0.2902 <xA>=0.715 [1223s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_ka_ka0.2500 ... Nb=10.11(med 10) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04101 om=+0.1806 <xA>=0.285 [1584s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_ka_ka0.1200 ... Nb=5.20(med 6) P0=0.0136 gaps=6 gap=0.0455s C_Th=-0.089 C_X=-0.312 v=0.04708 om=+0.4090 <xA>=0.210 [1653s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] cal_ka_ka0.06000 ... Nb=2.27(med 3) P0=0.0943 gaps=25 gap=0.0757s C_Th=-0.011 C_X=-0.264 v=0.00088 om=-0.6843 <xA>=-0.294 [1753s]
+Nb=1.40(med 2) P0=0.2158 gaps=31 gap=0.140s C_Th=-0.006 C_X=-0.175 v=0.06411 om=-1.3243 <xA>=-0.545 [1614s]
+Nb=0.55(med 1) P0=0.5641 gaps=37 gap=0.311s C_Th=0.043 C_X=0.099 v=-0.01696 om=-3.3225 <xA>=-1.084 [1627s]
+=== done 2026-07-30T04:22:54-07:00 ===

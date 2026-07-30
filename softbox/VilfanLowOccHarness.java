@@ -42,6 +42,8 @@ public final class VilfanLowOccHarness {
         if (a.contains("-scales")) { scales(); return; }
         if (a.contains("-calib"))  { camp(calibArms()); return; }
         if (a.contains("-pilot"))  { camp(pilotArms()); return; }
+        if (a.contains("-gates"))  { camp(gateArms()); return; }
+        if (a.contains("-s1ext")) { camp(s1ExtArms()); return; }
         int il = a.indexOf("-list");
         if (il >= 0) { for (Arm m : listFor(il+1 < a.size() ? a.get(il+1) : "all"))
             if (!Files.exists(Path.of(RUNDIR, m.id()+".json"))) System.out.println(m.id()); return; }
@@ -74,6 +76,9 @@ public final class VilfanLowOccHarness {
      * Values are SELECTED from this map, not assumed. */
     static final double[] CAL_RHO = {20.0, 6.0, 2.0, 1.0, 0.6, 0.35, 0.2};
     static final double[] CAL_KD  = {5.0, 40.0, 150.0, 400.0, 900.0, 1800.0, 3600.0};
+    /** Regime-K axis: lower kA at FIXED density and kD. Velocity v = kD(d + xi_A) is independent of
+     *  kA, so this lowers occupancy WITHOUT the ~100x velocity increase the kD axis introduces. */
+    static final double[] CAL_KA  = {50.0, 5.0, 1.0, 0.5, 0.25, 0.12, 0.06};
 
     static List<Arm> calibArms() {
         List<Arm> L = new ArrayList<>();
@@ -87,48 +92,153 @@ public final class VilfanLowOccHarness {
             c.warmupTimeS = CAL_WARM; c.analysisTimeS = CAL_ANALYSIS;
             L.add(new Arm(String.format(Locale.ROOT, "cal_duty_kd%.4g", k), c));
         }
+
+        for (double k : CAL_KA) {
+            Config c = base(); c.kA = k; c.seed = 101;
+            // longer window: at low kA the gaps are ~100 ms, so 8 s would give too few
+            c.warmupTimeS = CAL_WARM; c.analysisTimeS = 20.0;
+            L.add(new Arm(String.format(Locale.ROOT, "cal_ka_ka%.4g", k), c));
+        }
+        Config g = base(); g.kD = 1800.0; g.seed = 101;
+        g.warmupTimeS = 1.0; g.analysisTimeS = 2.0;
+        L.add(new Arm("dbg_acct", g));
         return L;
     }
 
     /* ---------------- Stage 9: mechanism pilot ----------------
-     * Populated from the calibration map. Left as a named list so the selected parameter values are
-     * frozen in code before the pilot runs. */
-    static final Object[][] REGIMES = {
-        // {label, "dens"|"duty", value}
-        {"H",  "dens", 20.0},
-        {"M",  "dens", 2.0},
-        {"S1", "dens", 0.35},
-        {"S1d","duty", 1800.0},
+     * THREE regimes, FROZEN from the Stage-8 calibration map before any mechanism arm was run.
+     *
+     *   H   rho = 20,   kA = 50    N_b = 82.99  P(0) = 0        no gaps at all
+     *   S1  rho = 0.35, kA = 50    N_b =  1.58  P(0) = 0.031    mean gap 20.5 ms
+     *   K   rho = 20,   kA = 0.12  N_b =  1.40  P(0) = 0.216    mean gap 140 ms
+     *
+     * Regime K was selected on the two PREREGISTERED channels only -- mean N_b in [1,3], and zone
+     * passage time (or velocity) within 2x of S1:
+     *   N_b 1.396 in [1,3]; v 0.0641 vs S1 0.0652 um/s = 0.98x; zone passage 0.454 vs 0.767 s = 1.69x.
+     * kA = 0.25 was rejected (zone passage 5.4x, velocity 72x off); kA = 0.5 gives N_b = 5.2 (too
+     * high); kA = 0.06 gives N_b = 0.55 (too low). No twirling or depletion quantity was consulted.
+     *
+     * STRUCTURAL FINDING, reported rather than tuned around: lowering kA LENGTHENS the zero-bound gap
+     * (140 ms) instead of shortening it, because the reattachment flux at N_b = 0 is rho_reach * kA --
+     * 20 * 0.12 = 2.4 in K against 0.35 * 50 = 17.5 in S1. So K is NOT the "fast reattachment" control
+     * the brief anticipated; no such control exists in this model, since low occupancy at native
+     * velocity requires low attachment flux (rho or kA) while short gaps require high attachment flux,
+     * and the only lever that shortens bound lifetime without touching flux is kD, which sets the
+     * velocity v = kD (d + <xi_A>) directly. What K actually delivers is better suited to the question:
+     * a MATCHED-OCCUPANCY, MATCHED-VELOCITY regime with a 7x LONGER gap than S1, so K vs S1 isolates
+     * gap duration -- hence phase memory -- at fixed occupancy and fixed velocity.
+     */
+    /**
+     * @param pad extra motor field on BOTH sides, um. Only the SPARSE regime needs it: at
+     *   rho = 0.35 /um the 5.5 um filament has just 1.9 motors under it, so a Poisson field leaves it
+     *   MOTOR-FREE e^-1.925 = 15 % of the time, and it then free-diffuses sqrt(2 D_X t) ~ 4.7 um over
+     *   the window, in either direction -- off the unpadded field, which begins at -margin. At
+     *   rho = 20 /um there are ~110 motors under the filament at all times, a motor-free stretch is
+     *   impossible, and the pad would only add ~800 motors to every O(n_M) per-substep scan (2.6x
+     *   slower) for no effect.
+     */
+    record Regime(String label, double rho, double kA, double pad) {}
+    static final Regime[] REGIMES = {
+        new Regime("H",  20.0, 50.0,  0.0),
+        new Regime("S1",  0.35, 50.0, 20.0),
+        new Regime("K",  20.0,  0.12,  0.0),
     };
 
+    /**
+     * 12 arms = 3 regimes x 2 mirror signs x 2 seeds. Each arm carries its OWN matched-path shadow
+     * (noDepletionControl is a purely additive read-out: it consumes no RNG, removes no motor and
+     * applies no force), so the shadow is measured on the SAME realised X and Theta trajectory and is
+     * labelled with that trajectory's own gap history -- rather than on a separately generated path.
+     * Gate MP-1 checks the trajectory is bit-identical with the read-out on and off.
+     */
     static List<Arm> pilotArms() {
         List<Arm> L = new ArrayList<>();
-        for (Object[] r : REGIMES) {
-            String lab = (String) r[0], axis = (String) r[1]; double v = (Double) r[2];
-            for (long s : new long[]{101, 102}) {
+        for (Regime g : REGIMES)
+            for (long s : new long[]{101, 102})
                 for (int sign : new int[]{-1, +1}) {
                     Config c = base();
-                    if (axis.equals("dens")) c.densityPerUm = v; else c.kD = v;
-                    c.seed = (sign < 0) ? s : s + 500_000L;   // independent-noise mirror
+                    c.densityPerUm = g.rho(); c.kA = g.kA(); c.fieldPadUm = g.pad();
                     c.latSign = sign;
-                    L.add(new Arm(String.format(Locale.ROOT, "pil_%s_s%d_%s", lab, s,
+                    c.seed = (sign < 0) ? s : s + 500_000L;   // independent-noise mirror
+                    c.fieldSeed = s;                         // ...on the SAME motor field
+                    c.noDepletionControl = true;              // matched shadow, same path
+                    L.add(new Arm(String.format(Locale.ROOT, "pil_%s_s%d_%s", g.label(), s,
                             sign < 0 ? "native" : "mirror"), c));
                 }
-                Config sh = base();
-                if (axis.equals("dens")) sh.densityPerUm = v; else sh.kD = v;
-                sh.seed = s; sh.noDepletionControl = true;
-                L.add(new Arm(String.format(Locale.ROOT, "pilshadow_%s_s%d", lab, s), sh));
-            }
+        return L;
+    }
+
+    /* ---------------- short gates ----------------
+     * MP-1  matched-path integrity: shadow read-out on vs off must leave the path bit-identical.
+     * PW-*  PATHWISE mirror: same seed, lattice mirrored, roll noise sign flipped (mirror-ODD) and
+     *       axial noise left alone (mirror-EVEN). Under an exact mirror the roll must reverse and the
+     *       even part must sit at the numerical floor. Short by design -- these test symmetry of the
+     *       map, not an ensemble average.
+     */
+    static List<Arm> gateArms() {
+        List<Arm> L = new ArrayList<>();
+        for (Regime g : REGIMES) {
+            Config a = base(); a.densityPerUm = g.rho(); a.kA = g.kA(); a.fieldPadUm = g.pad();
+            a.seed = 101;
+            a.warmupTimeS = 2.0; a.analysisTimeS = 6.0;
+            Config b = cloneOf(a); b.noDepletionControl = true;
+            L.add(new Arm("gate_mp1off_" + g.label(), a));
+            L.add(new Arm("gate_mp1on_"  + g.label(), b));
+            Config n = cloneOf(a);                                  // pathwise mirror pair
+            Config m = cloneOf(a); m.latSign = +1; m.rollNoiseSign = -1; m.fieldSeed = a.seed;
+            L.add(new Arm("gate_pw_nat_" + g.label(), n));
+            L.add(new Arm("gate_pw_mir_" + g.label(), m));
         }
         return L;
     }
 
+    static Config cloneOf(Config a) {
+        Config c = base();
+        c.densityPerUm = a.densityPerUm; c.kA = a.kA; c.kD = a.kD; c.latSign = a.latSign;
+        c.fieldPadUm = a.fieldPadUm;
+        c.fieldSeed = a.fieldSeed;
+        c.seed = a.seed; c.warmupTimeS = a.warmupTimeS; c.analysisTimeS = a.analysisTimeS;
+        c.noDepletionControl = a.noDepletionControl; c.rollNoiseSign = a.rollNoiseSign;
+        return c;
+    }
+
+    /* ---------------- S1 sufficiency extension ----------------
+     * Runs only if the pilot's S1 gap-count / first-post-gap gates fall short. The brief's remedy is a
+     * longer fixed duration in all three regimes; this instead extends the DURATION 4x and the number
+     * of FIELD REALISATIONS to 8, in S1 only, for two stated reasons:
+     *   1. what limits S1 is not run length but the motor-field realisation -- with only rho*l = 1.9
+     *      motors under the filament, seeds 101 and 102 gave N_b = 3.74 and 3.57 with 6 and 9 gaps,
+     *      while another field gave N_b = 0.72 with 443 gaps. A longer run on one field measures one
+     *      local environment more precisely, which is the wrong quantity;
+     *   2. K costs ~3 h of CPU per 120 s of simulated time, so matching a 4x extension in all three
+     *      regimes would cost ~50 h for no gain in the load-bearing comparison, which is within-S1.
+     * H and K already pass their own sufficiency gates at 120 s.
+     */
+    static List<Arm> s1ExtArms() {
+        List<Arm> L = new ArrayList<>();
+        Regime g = REGIMES[1];                        // S1
+        for (long s : new long[]{101, 102, 103, 104, 105, 106, 107, 108})
+            for (int sign : new int[]{-1, +1}) {
+                Config c = base();
+                c.densityPerUm = g.rho(); c.kA = g.kA(); c.fieldPadUm = g.pad();
+                c.latSign = sign;
+                c.seed = (sign < 0) ? s : s + 500_000L;
+                c.fieldSeed = s;
+                c.noDepletionControl = true;
+                c.warmupTimeS = 24.0; c.analysisTimeS = 480.0;
+                L.add(new Arm(String.format(Locale.ROOT, "s1x_s%d_%s", s,
+                        sign < 0 ? "native" : "mirror"), c));
+            }
+        return L;
+    }
+
     static List<Arm> listFor(String st) {
-        return switch (st) { case "calib" -> calibArms(); case "pilot" -> pilotArms();
+        return switch (st) { case "calib" -> calibArms(); case "pilot" -> pilotArms(); case "gates" -> gateArms(); case "s1ext" -> s1ExtArms();
                              default -> allArms(); };
     }
     static List<Arm> allArms() {
-        List<Arm> L = new ArrayList<>(); L.addAll(calibArms()); L.addAll(pilotArms()); return L;
+        List<Arm> L = new ArrayList<>(); L.addAll(calibArms()); L.addAll(gateArms()); L.addAll(pilotArms());
+        L.addAll(s1ExtArms()); return L;
     }
 
     static void camp(List<Arm> arms) throws IOException {

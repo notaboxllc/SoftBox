@@ -1,0 +1,137 @@
+=== vilfan-lowocc stage=pilot jobs=6 2026-07-30T05:01:53-07:00 ===
+pil_H_s101_native
+pil_H_s101_mirror
+pil_H_s102_native
+pil_H_s102_mirror
+pil_S1_s101_native
+pil_S1_s101_mirror
+pil_S1_s102_native
+pil_S1_s102_mirror
+pil_K_s101_native
+pil_K_s101_mirror
+pil_K_s102_native
+pil_K_s102_mirror
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_S1_s101_mirror ...   [run] pil_H_s102_mirror ...   [run] pil_S1_s101_native ...   [run] pil_H_s101_mirror ...   [run] pil_H_s102_native ...   [run] pil_H_s101_native ... Nb=0.00(med 0) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.25289 om=-1.0840 <xA>=0.000 [1s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_S1_s102_native ... Nb=1.21(med 1) P0=0.1069 gaps=73 gap=0.0360s C_Th=0.062 C_X=0.034 v=0.06436 om=-0.5372 <xA>=-0.655 [17s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_S1_s102_mirror ... Nb=1.68(med 2) P0=0.0732 gaps=262 gap=0.0337s C_Th=0.101 C_X=0.102 v=0.03211 om=-0.1335 <xA>=1.922 [53s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_K_s101_native ... Nb=1.40(med 2) P0=0.0785 gaps=260 gap=0.0362s C_Th=0.042 C_X=0.009 v=0.01983 om=-0.8407 <xA>=-3.032 [49s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_K_s101_mirror ... === vilfan-lowocc stage=pilot jobs=6 2026-07-30T05:33:36-07:00 ===
+pil_H_s101_native
+pil_H_s101_mirror
+pil_H_s102_native
+pil_H_s102_mirror
+pil_S1_s101_native
+pil_S1_s101_mirror
+pil_S1_s102_native
+pil_S1_s102_mirror
+pil_K_s101_native
+pil_K_s101_mirror
+pil_K_s102_native
+pil_K_s102_mirror
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_H_s101_native ...   [run] pil_H_s102_mirror ...   [run] pil_H_s101_mirror ...   [run] pil_H_s102_native ...   [run]   [run] pil_S1_s101_nativepil_S1_s101_mirror ...  ... Nb=0.83(med 1) P0=0.1666 gaps=154 gap=0.0357s C_Th=0.120 C_X=-0.040 v=0.10176 om=+0.1058 <xA>=-0.061 [15s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_S1_s102_native ... Nb=3.74(med 4) P0=0.0009 gaps=6 gap=0.0190s C_Th=0.055 C_X=-0.260 v=0.03274 om=+1.5784 <xA>=-3.222 [119s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_S1_s102_mirror ... Nb=3.57(med 4) P0=0.0009 gaps=9 gap=0.0121s C_Th=-0.008 C_X=-0.310 v=0.04086 om=-0.0497 <xA>=0.762 [115s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_K_s101_native ... Nb=1.60(med 2) P0=0.0499 gaps=229 gap=0.0262s C_Th=0.155 C_X=-0.007 v=0.02839 om=-0.3642 <xA>=-0.283 [62s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_K_s101_mirror ... xargs: nice: terminated by signal 9
+xargs: nice: terminated by signal 9
+=== vilfan-lowocc stage=pilot jobs=6 2026-07-30T06:03:04-07:00 ===
+pil_H_s101_native
+pil_H_s101_mirror
+pil_H_s102_native
+pil_H_s102_mirror
+pil_S1_s101_native
+pil_S1_s101_mirror
+pil_S1_s102_native
+pil_S1_s102_mirror
+pil_K_s101_native
+pil_K_s101_mirror
+pil_K_s102_native
+pil_K_s102_mirror
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_H_s102_native ...   [run] pil_H_s102_mirror ...   [run] pil_H_s101_native ...   [run] pil_S1_s101_mirror ...   [run] pil_H_s101_mirror ...   [run] pil_S1_s101_native ... Nb=0.72(med 1) P0=0.2824 gaps=443 gap=0.0767s C_Th=0.065 C_X=0.025 v=0.04862 om=+0.1610 <xA>=-0.509 [38s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_S1_s102_native ... Nb=3.74(med 4) P0=0.0009 gaps=6 gap=0.0190s C_Th=0.055 C_X=-0.260 v=0.03274 om=+1.5784 <xA>=-3.222 [118s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_S1_s102_mirror ... Nb=3.57(med 4) P0=0.0009 gaps=9 gap=0.0121s C_Th=-0.008 C_X=-0.310 v=0.04086 om=-0.0497 <xA>=0.762 [124s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_K_s101_native ... Nb=1.60(med 2) P0=0.0499 gaps=229 gap=0.0262s C_Th=0.155 C_X=-0.007 v=0.02839 om=-0.3642 <xA>=-0.283 [62s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_K_s101_mirror ... xargs: nice: terminated by signal 9
+xargs: nice: terminated by signal 9
+=== vilfan-lowocc stage=pilot jobs=6 2026-07-30T06:26:02-07:00 ===
+pil_H_s101_native
+pil_H_s101_mirror
+pil_H_s102_native
+pil_H_s102_mirror
+pil_S1_s101_native
+pil_S1_s101_mirror
+pil_S1_s102_native
+pil_S1_s102_mirror
+pil_K_s101_native
+pil_K_s101_mirror
+pil_K_s102_native
+pil_K_s102_mirror
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_H_s101_mirror ...   [run] pil_H_s102_native ...   [run] pil_H_s102_mirror ...   [run] pil_S1_s101_native ...   [run] pil_S1_s101_mirror ...   [run] pil_H_s101_native ... Nb=3.71(med 4) P0=0.0004 gaps=5 gap=0.00949s C_Th=0.382 C_X=-0.185 v=0.03768 om=-1.1895 <xA>=-2.722 [140s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_S1_s102_native ... Nb=3.74(med 4) P0=0.0009 gaps=6 gap=0.0190s C_Th=0.055 C_X=-0.260 v=0.03274 om=+1.5784 <xA>=-3.222 [145s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_S1_s102_mirror ... Nb=3.57(med 4) P0=0.0009 gaps=9 gap=0.0121s C_Th=-0.008 C_X=-0.310 v=0.04086 om=-0.0497 <xA>=0.762 [115s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_K_s101_native ... Nb=3.66(med 4) P0=0.0005 gaps=6 gap=0.0102s C_Th=0.275 C_X=-0.199 v=0.03866 om=+0.3535 <xA>=0.972 [110s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_K_s101_mirror ... Nb=74.09(med 74) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04169 om=+0.5142 <xA>=1.522 [2270s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_K_s102_native ... Nb=82.52(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04144 om=+0.5177 <xA>=1.573 [2293s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_K_s102_mirror ... Nb=74.17(med 74) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04162 om=-0.4966 <xA>=1.525 [2406s]
+Nb=82.63(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04196 om=-0.5453 <xA>=1.674 [2532s]
+Nb=1.35(med 2) P0=0.2643 gaps=210 gap=0.151s C_Th=0.049 C_X=-0.034 v=0.02016 om=-1.8102 <xA>=0.169 [12546s]
+Nb=1.26(med 2) P0=0.2965 gaps=222 gap=0.161s C_Th=0.081 C_X=0.037 v=0.05062 om=+0.5884 <xA>=0.166 [13032s]
+Nb=1.41(med 2) P0=0.2183 gaps=196 gap=0.134s C_Th=0.033 C_X=0.055 v=0.04215 om=+0.4505 <xA>=-0.040 [13044s]
+Nb=1.38(med 2) P0=0.2481 gaps=216 gap=0.138s C_Th=0.083 C_X=-0.045 v=0.03009 om=+2.3715 <xA>=0.120 [13512s]
+=== done 2026-07-30T10:49:04-07:00 ===
+=== vilfan-lowocc stage=pilot jobs=6 2026-07-30T10:54:11-07:00 ===
+pil_S1_s101_native
+pil_S1_s101_mirror
+pil_S1_s102_native
+pil_S1_s102_mirror
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] pil_S1_s102_mirror ...   [run] pil_S1_s101_native ...   [run] pil_S1_s102_native ...   [run] pil_S1_s101_mirror ... Nb=3.57(med 4) P0=0.0009 gaps=9 gap=0.0121s C_Th=-0.008 C_X=-0.310 v=0.04086 om=-0.0497 <xA>=0.762 [115s]
+Nb=3.66(med 4) P0=0.0005 gaps=6 gap=0.0102s C_Th=0.275 C_X=-0.199 v=0.03866 om=+0.3535 <xA>=0.972 [117s]
+Nb=3.74(med 4) P0=0.0009 gaps=6 gap=0.0190s C_Th=0.055 C_X=-0.260 v=0.03274 om=+1.5784 <xA>=-3.222 [118s]
+Nb=3.71(med 4) P0=0.0004 gaps=5 gap=0.00949s C_Th=0.382 C_X=-0.185 v=0.03768 om=-1.1895 <xA>=-2.722 [138s]
+=== done 2026-07-30T10:56:29-07:00 ===

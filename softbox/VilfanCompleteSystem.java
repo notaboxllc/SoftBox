@@ -58,6 +58,10 @@ public final class VilfanCompleteSystem {
 
         public double lengthUm    = 5.5;    // Table I  l
         public double densityPerUm= 20.0;   // Table I  rho (1-D)
+        /** extra motor field laid on BOTH sides, um. Needed at low density, where the filament can
+         *  free-diffuse several um in either direction during a motor-free stretch; the unpadded field
+         *  starts at -margin and a backward excursion left it immediately. 0 = historical behaviour. */
+        public double fieldPadUm = 0.0;
 
         public double kA          = 50.0;     // Table I  s^-1
         public double kPS         = 10000.0;  // Table I  s^-1
@@ -88,6 +92,10 @@ public final class VilfanCompleteSystem {
         public double travelUm    = 5.0;
         public double warmupUm    = 1.0;
         public double turnsTarget = 8.0;
+        /** hard bound on the simulated time ONE advance may integrate before being declared stalled. */
+        public double maxAdvanceTimeS = 1.0e4;
+        /** motor-field placement seed; 0 = use {@code seed}. Lets a mirror arm share a field. */
+        public long fieldSeed = 0L;
         public double travelCapUm = 60.0;      // hard cap on adaptive extension
         /** If > 0 the analysis window is defined by TIME, not travel: warm-up ends at warmupTimeS
          *  and the run ends at analysisTimeS after it. A travel-threshold window is biased when the
@@ -373,8 +381,21 @@ public final class VilfanCompleteSystem {
         public double  zeroTimeFrac, meanGapS, maxGapS;
         public double  cThetaMem, sThetaMem, cXMem, cJointMem;
         public double  meanGapDXnm, meanGapDThRad;
-        public long    nFirstPostGap, nFirstPostGapBefore, nTethered, nTetheredBefore;
-        public double  meanFirstPostGapXa, meanTetheredXa;
+        public double  gapAccountRatio;
+        public double  occZeroTime, occZeroTimeEvt, occTotalTime;
+        public long    nZeroHazSubsteps;
+        public long    nMotorFreeSubsteps; public double motorFreeTimeS;
+        public double[] epDTh = new double[0], epDur = new double[0];
+        public double[] catXa2 = new double[4], binXa2 = new double[4];
+        public double[] epT0 = new double[0];
+        public double[] timeByOcc = new double[4];
+        /** decimated analysed-window trajectory: blockwise Omega, roll-drift R^2, burst waiting times. */
+        public double[] trcT = new double[0], trcX = new double[0], trcTh = new double[0];
+        public long nAcctBad; public double acctExcess;
+        public long[]  catN = new long[0], catBefore = new long[0], binN = new long[0], binBefore = new long[0];
+        public double[] catXa = new double[0], catTh = new double[0], catXi = new double[0];
+        public double[] binXa = new double[0], binTh = new double[0], binGap = new double[0];
+        public double[] shadowXaByLabel = new double[0], shadowWByLabel = new double[0];
         public long[]  occTrans = new long[6];        // 0->1,1->0,1->2,2->1,up,down
         public double[] travelByOcc = new double[0], rollByOcc = new double[0];
         public long[]  zeroDurHist = new long[0];
@@ -401,6 +422,27 @@ public final class VilfanCompleteSystem {
     private double[] hazCache;      // per-motor total attachment hazard (detached motors only)
 
     private long equilIterTotal, equilBranchChanges, equilNonConverged, nbZeroEvents;
+    private long nZeroHazSub;      // substeps with no motor anywhere in reach (free diffusion)
+    private long nMotorFreeSub;    // substeps taken with the enlarged motor-free step
+    private double motorFreeTime;  // simulated time spent in motor-free excursions, s
+    /** below this total rate a substep contributes < 1e-12 to the cumulative hazard over 100 us. */
+    private static final double HAZ_NEGLIGIBLE = 1.0e-9;
+
+    /**
+     * Distance, nm, from the filament's binding-reach interval to the nearest motor outside it; 0 if a
+     * motor is already inside. The filament occupies [X, X + (nSites-1)a] and reaches (window+1)a past
+     * each end.
+     */
+    private double distanceToReach() {
+        double w = (c.window + 1) * a;
+        double lo = X - w, hi = X + (nSites - 1) * a + w;
+        int i = lowerBound(xM, lo);
+        if (i < xM.length && xM[i] <= hi) return 0.0;
+        double best = Double.POSITIVE_INFINITY;
+        if (i < xM.length) best = Math.min(best, xM[i] - hi);
+        if (i > 0) best = Math.min(best, lo - xM[i - 1]);
+        return (best == Double.POSITIVE_INFINITY) ? 0.0 : Math.max(0.0, best);
+    }
     private double maxForceResid, maxTorqueResid;
 
     /* ==================== the motor field (algorithm step 1) ==================== */
@@ -936,7 +978,15 @@ public final class VilfanCompleteSystem {
             double Tm = relaxT(Teq, T0, tauT, 0.5 * dt);
 
             double k0 = kTotalAt(X0, T0), km = kTotalAt(Xm, Tm), k1 = kTotalAt(Xn, Tn);
-            if (!(k0 > 0) && !(km > 0) && !(k1 > 0)) return -1;
+            // ZERO TOTAL HAZARD IS NOT A TERMINAL CONDITION. At low motor density the 5.5 um
+            // filament frequently has NO motor beneath it at all -- at rho = 0.35 /um the mean
+            // number under the filament is 1.9, so a Poisson field leaves it motor-free e^-1.925 =
+            // 15 % of the time. The correct piecewise-deterministic semantics is that the cumulative
+            // hazard simply stops growing while the filament free-diffuses, and the SAME exponential
+            // threshold Hrem remains pending until a motor comes back within reach. Bailing out here
+            // (the previous behaviour) truncated exactly the longest zero-bound intervals this study
+            // exists to measure, and showed up as "HALT: ktotal = 0 during overdamped advance".
+            if (!(k0 > 0) && !(km > 0) && !(k1 > 0)) nZeroHazSub++;
             double Hs = dt / 6.0 * (k0 + 4 * km + k1);
             nSubsteps++;
 
@@ -1025,7 +1075,12 @@ public final class VilfanCompleteSystem {
         double tAcc = 0.0;
         double dtBase = c.anchorDtS / (1L << c.refineLevel);
 
-        for (int guard = 0; guard < 20_000_000; guard++) {
+        // The bound here is SIMULATED TIME, not a substep count. A fixed 20 M substep cap corresponds
+        // to only ~50 s at the 2.5 us motor-free substep, and at rho = 0.35 /um the attachment hazard
+        // while unbound can be ~1e-3 /s, so a genuine waiting time of tens of seconds is physics, not
+        // a stall -- it surfaced as "HALT: ktotal = 0 during overdamped advance" 57 s into an S1 arm.
+        // Integrating it honestly is the point: those are the longest zero-bound intervals in the study.
+        for (long guard = 0; tAcc < c.maxAdvanceTimeS && guard < 4_000_000_000L; guard++) {
             int nb = countBound();
             if (nb == 0) nbZeroEvents++;
             for (int j = 0; j < xM.length; j++) if (state[j] != DETACHED) setBranch(j);
@@ -1057,14 +1112,53 @@ public final class VilfanCompleteSystem {
             // by boundary proximity. The correct criterion is therefore an ABSOLUTE cap, which is
             // always satisfiable in ~log2((sig0/cap)^2) halvings. Correctness is established against a
             // very fine direct wrapPi reference (fixture S0-F7), not by a proximity tolerance.
+            // ---- MOTOR-FREE EXCURSION: adaptive step ----
+            // At low density the filament is regularly left with no motor within binding reach. The
+            // hazard there is not exactly zero -- it is the Gaussian tail, ~1e-40 -- so the exact-zero
+            // branch below never fires, yet the cumulative hazard cannot reach the threshold either.
+            // Substepping such a stretch at 2.5 us exhausted the 20 M substep guard and surfaced as
+            // "HALT: ktotal = 0 during overdamped advance" tens of seconds into an S1 arm.
+            //
+            // With no bound head there is no force and no torque, so X and Theta are EXACT free
+            // diffusion and the step size is limited only by (a) not diffusing into appreciable hazard
+            // unnoticed, and (b) keeping the roll diagnostics interpretable. The step is therefore
+            // enlarged so the axial RMS increment stays within a quarter of the distance to the nearest
+            // motor's reach boundary, capped at 100 us. The angular cap is skipped in this state
+            // because a torque-free Theta has no piecewise-linear slope to resolve.
+            boolean motorFree = false;
+            double dtFree = dtBase;
+            if (nb == 0) {
+                double kNow = kTotalAt(X, Theta);
+                if (kNow < HAZ_NEGLIGIBLE) {
+                    double gapNm = distanceToReach();
+                    if (DX > 0) {
+                        // resolve the geometry: RMS axial increment within a quarter of the distance to
+                        // the nearest motor's reach edge, but never coarser than 2 nm, well under the
+                        // lattice period a = 2.7 nm, so an appreciable-hazard region cannot be skipped
+                        double sigT = Math.max(2.0, 0.25 * gapNm);
+                        double d = (sigT * sigT) / (2.0 * DX);
+                        dtFree = Math.min(1.0e-4, Math.max(dtBase, d));
+                        motorFree = dtFree > dtBase;
+                        if (motorFree) { nMotorFreeSub++; motorFreeTime += dtFree; }
+                    }
+                }
+            }
             double dt = dtBase;
+            if (motorFree) dt = dtFree;
             double sig = rollSigma(tauT, nb, dt);
             int sub = 0;
-            while (sig > c.rollSigCapRad && sub < 60 && dt > 1e-15) {
+            while (!motorFree && sig > c.rollSigCapRad && sub < 60 && dt > 1e-15) {
                 dt *= 0.5; sig = rollSigma(tauT, nb, dt); sub++;
             }
             if (sub > 0) nRollSubdiv++;
-            if (sig > c.rollSigCapRad) nRollCapFail++;    // must remain 0; reported, never silent
+            // A deliberately enlarged motor-free step is NOT a cap failure. The cap exists solely to
+            // bound the error from using the pre-step branch assignment while the summed torque is
+            // piecewise-linear in Theta. An enlarged step is only ever taken with N_b = 0, where the
+            // angular potential is identically zero, Theta is exact free diffusion and there is no
+            // branch structure to resolve -- the same reasoning already established for the alpha = 0
+            // control arms. Counting them here made 12 of 16 sparse arms report cap failures whose
+            // count equalled nMotorFreeSubsteps EXACTLY, masking the counter's real purpose.
+            if (!motorFree && sig > c.rollSigCapRad) nRollCapFail++;   // must remain 0; never silent
 
             double X0 = X, T0 = Theta;
             long addr = anchorIdx++;
@@ -1102,7 +1196,10 @@ public final class VilfanCompleteSystem {
             }
 
             double k0 = kTotalAt(X0, T0), km = kTotalAt(Xm, Tm), k1 = kTotalAt(Xn, Tn);
-            if (!(k0 > 0) && !(km > 0) && !(k1 > 0)) return -1;
+            // Zero total hazard is NOT terminal here either -- see the identical note in the
+            // axial path. The cumulative hazard simply stops growing while the filament
+            // free-diffuses, with the same exponential threshold still pending.
+            if (!(k0 > 0) && !(km > 0) && !(k1 > 0)) nZeroHazSub++;
             double Hs = dt / 6.0 * (k0 + 4 * km + k1);
             nSubsteps++;
             if (c.hazardCrossCheck && (nSubsteps % c.hazardCheckStride) == 0) {
@@ -1119,16 +1216,19 @@ public final class VilfanCompleteSystem {
                 // a fraction ~1/(substeps per interval), which is negligible at low kD but dominant at
                 // high kD where an interval may be only one or two substeps long -- exactly the
                 // duty-lowered regime this study depends on.
-                if (occDiag != null) occDiag.substep(nb, t, X - xPre, Theta - tPre, tAbs + tAcc + t, X, Theta);
+                if (occDiag != null) occDiag.substep(nb, t, X - xPre, Theta - tPre);
                 return tAcc + t;
             }
             Hrem -= Hs; tAcc += dt;
             windingRad += Math.abs(Tn - T0);
             X = Xn; Theta = Tn;
             // low-occupancy instrumentation: occupancy distribution, zero-bound gaps, phase memory
-            if (occDiag != null) occDiag.substep(nb, dt, Xn - X0, Tn - T0, tAbs + tAcc, X, Theta);
-            updateRollBands();
-            updateRecrossing();
+            if (occDiag != null) occDiag.substep(nb, dt, Xn - X0, Tn - T0);
+            // The band / recrossing quantisers are only resolution-independent while the band greatly
+            // exceeds the per-step RMS increment (parent S12). An enlarged motor-free step violates
+            // that, and carries no mechanism in any case, so those stretches are excluded and the
+            // excluded time is reported (motorFreeTimeS).
+            if (!motorFree) { updateRollBands(); updateRecrossing(); }
         }
         return -1;
     }
@@ -1260,7 +1360,13 @@ public final class VilfanCompleteSystem {
         R.grooveSlope = grooveSlope;
 
         // deterministic, private streams keyed off the declared seed
-        SplittableRandom rngPlace = new SplittableRandom(c.seed * 1000003L + 11L);
+        // The motor FIELD seed is separable from the noise seed. An independent-noise mirror arm must
+        // sit on the SAME field as its native partner: at rho = 0.35 /um the field realisation dominates
+        // the occupancy (only 1.9 motors under the filament on average), and driving placement from the
+        // same seed as the noise gave a native/mirror pair with N_b = 3.74 against 0.72 -- not one
+        // regime measured twice. fieldSeed = 0 means "use seed", so every earlier run is unchanged.
+        long fSeed = (c.fieldSeed != 0) ? c.fieldSeed : c.seed;
+        SplittableRandom rngPlace = new SplittableRandom(fSeed * 1000003L + 11L);
         SplittableRandom rngTime  = new SplittableRandom(c.seed * 1000003L + 22L);
         SplittableRandom rngPick  = new SplittableRandom(c.seed * 1000003L + 33L);
 
@@ -1269,8 +1375,9 @@ public final class VilfanCompleteSystem {
         // whichever direction the filament actually travels; a polarity-reversed control glides -X.
         double margin = (c.window + 4) * a;
         double reach  = c.polarity * c.travelCapUm * 1000.0;
-        double fieldLo = Math.min(0.0, reach) - margin;
-        double fieldHi = Math.max(0.0, reach) + nSites * a + margin;
+        double pad = c.fieldPadUm * 1000.0;
+        double fieldLo = Math.min(0.0, reach) - margin - pad;
+        double fieldHi = Math.max(0.0, reach) + nSites * a + margin + pad;
         placeMotors(fieldLo, fieldHi, rngPlace);
         R.fieldLoNm = fieldLo; R.fieldHiNm = fieldHi; R.nMotors = xM.length;
 
@@ -1284,7 +1391,7 @@ public final class VilfanCompleteSystem {
         rollBands = new VilfanRollBands(c.rollBands);
         // helical coupling m: the effective groove advances pi in azimuth per zone period, so the
         // joint phase is 2*pi*dX/L + m*dTheta with m = 1 (both terms in units of the same cycle).
-        if (c.occDiagnostics) occDiag = new VilfanOccupancy(LNm, 1.0);
+        if (c.occDiagnostics) occDiag = new VilfanOccupancy(LNm, 1.0, 1.0 / c.kD);
         Arrays.fill(siteOf, -1);
         occupied = new boolean[nSites];
         hazCache = new double[nM];
@@ -1338,7 +1445,8 @@ public final class VilfanCompleteSystem {
             }
             ktotal += boundRate;
             boundRateCur = boundRate;
-            if (!(ktotal > 0.0)) {
+            if (!(ktotal > 0.0) && !c.overdamped()) {
+                // quasi-static has no dynamics to carry it out of a motor-free stretch
                 R.note = "HALT: ktotal = 0 (no legal transition) at t=" + t + " X=" + X;
                 break;
             }
@@ -1430,12 +1538,17 @@ public final class VilfanCompleteSystem {
                     // SHADOW measurement: the same moving attachment landscape evaluated for EVERY
                     // motor under the filament as if it were detached. Purely diagnostic — it removes
                     // no motor from the pool and generates no force.
+                    // MATCHED-PATH by construction: the shadow runs on the realised X and Theta of
+                    // THIS trajectory, so the conditional comparison uses the real arm's own gap
+                    // history and occupancy labels rather than an independently generated path.
+                    int shLab = (occDiag != null) ? occDiag.shadowLabel(nb, t) : -1;
                     for (int j = jLo; j < jHi; j++) {
                         double h = motorHazard(xM[j], false);
                         if (h <= 0) continue;
                         double xz = zoneCoord(X, Theta, xM[j]);
                         shadowW  += h * dt;
                         shadowWX += h * dt * xz;
+                        if (shLab >= 0) occDiag.shadow(shLab, h * dt, h * dt * xz);
                         int b = (int) Math.floor((xz / LNm + 0.5) * 40);
                         if (b >= 0 && b < 40) shadowHist[b] += h * dt;
                     }
@@ -1481,7 +1594,7 @@ public final class VilfanCompleteSystem {
                 nAtt++;
                 if (analysed) {
                     sXa += xz; sXa2 += xz * xz; sXiA += xiA; sXiA2 += xiA * xiA;
-                    if (occDiag != null) occDiag.attachment(nb, xz);
+                    if (occDiag != null) occDiag.attachment(nb, t, xz, thA, xiA);
                     sThA += thA; sThA2 += thA * thA; nXa++;
                     sCosTh += Math.cos(thA); sSinTh += Math.sin(thA);
                     int b = (int) Math.floor((xz / LNm + 0.5) * 40);
@@ -1496,6 +1609,11 @@ public final class VilfanCompleteSystem {
             // Under finite drag X and Theta are CONTINUOUS through the event: the transition changes
             // the force and torque discontinuously, and the filament then relaxes toward the new
             // target over a finite time. No displacement is applied here.
+            if (occDiag != null) {                 // exact-event-time occupancy transition
+                int nbAfter = countBound();
+                occDiag.setAnalysed(tW >= 0.0);
+                occDiag.transition(nbAfter, t, X, Theta);
+            }
             if (c.overdamped()) {
                 double jX = Math.abs(X - Xpre), jT = Math.abs(Theta - Tpre);
                 if (jX > maxEventJumpX) maxEventJumpX = jX;
@@ -1539,6 +1657,15 @@ public final class VilfanCompleteSystem {
             double vTT = lsT2 / lsN - mT * mT;
             R.velLsq   = (vTT > 0) ? ((lsTX / lsN - mT * mX) / vTT) / 1000.0 : 0.0;
             R.omegaLsq = (vTT > 0) ?  (lsTTh / lsN - mT * mTh) / vTT : 0.0;
+        }
+        // export a decimated copy of the analysed-window trajectory (<= 2000 points)
+        if (traceN > 1) {
+            int keep = Math.min(traceN, 2000), st = Math.max(1, traceN / keep);
+            int n2 = (traceN + st - 1) / st;
+            R.trcT = new double[n2]; R.trcX = new double[n2]; R.trcTh = new double[n2];
+            for (int k = 0, i = 0; i < traceN && k < n2; i += st, k++) {
+                R.trcT[k] = trT[i]; R.trcX[k] = trX[i]; R.trcTh[k] = trTh[i];
+            }
         }
         // stationarity: split the analysed window at the midpoint of SIMULATED TIME
         if (traceN > 4) {
@@ -1603,10 +1730,36 @@ public final class VilfanCompleteSystem {
             R.cThetaMem = o.cTheta(); R.sThetaMem = o.sTheta(); R.cXMem = o.cX(); R.cJointMem = o.cJoint();
             R.meanGapDXnm = (o.nGaps > 0) ? o.sumGapDX / o.nGaps : 0;
             R.meanGapDThRad = (o.nGaps > 0) ? o.sumGapDTh / o.nGaps : 0;
-            R.nFirstPostGap = o.nFirstPostGap; R.nFirstPostGapBefore = o.nFirstPostGapBefore;
-            R.nTethered = o.nTethered; R.nTetheredBefore = o.nTetheredBefore;
-            R.meanFirstPostGapXa = (o.nFirstPostGap > 0) ? o.sumFirstPostGapXa / o.nFirstPostGap : 0;
-            R.meanTetheredXa = (o.nTethered > 0) ? o.sumTetheredXa / o.nTethered : 0;
+            R.gapAccountRatio = o.gapAccountRatio();
+            R.occZeroTime = o.occTime[0]; R.occZeroTimeEvt = o.zeroTime; R.occTotalTime = o.totalTime;
+            R.nZeroHazSubsteps = nZeroHazSub;
+            R.nMotorFreeSubsteps = nMotorFreeSub; R.motorFreeTimeS = motorFreeTime;
+            R.epDTh = java.util.Arrays.copyOf(o.epDTh, o.nEp);
+            R.epDur = java.util.Arrays.copyOf(o.epDur, o.nEp);
+            R.nAcctBad = o.nAcctBad; R.acctExcess = o.acctExcess;
+            R.catXa2 = o.catXa2.clone(); R.binXa2 = o.binXa2.clone();
+            R.epT0 = java.util.Arrays.copyOf(o.epT0, o.nEp);
+            R.timeByOcc = o.timeAt.clone();
+            if (o.nAcctBad > 0) System.err.printf(
+                "OCC-1 DEBUG: %d intervals with residence != event-clock; excess=%.6g s max=%.6g s; by nb: %s%n",
+                o.nAcctBad, o.acctExcess, o.acctExcessMax, java.util.Arrays.toString(o.acctBadNb));
+            R.catN = o.catN.clone(); R.catBefore = o.catBefore.clone();
+            R.catXa = new double[4]; R.catTh = new double[4]; R.catXi = new double[4];
+            for (int i = 0; i < 4; i++) if (o.catN[i] > 0) {
+                R.catXa[i] = o.catXa[i] / o.catN[i];
+                R.catTh[i] = o.catTh[i] / o.catN[i];
+                R.catXi[i] = o.catXi[i] / o.catN[i];
+            }
+            R.binN = o.binN.clone(); R.binBefore = o.binBefore.clone();
+            R.binXa = new double[4]; R.binTh = new double[4]; R.binGap = new double[4];
+            for (int i = 0; i < 4; i++) if (o.binN[i] > 0) {
+                R.binXa[i] = o.binXa[i] / o.binN[i];
+                R.binTh[i] = o.binTh[i] / o.binN[i];
+                R.binGap[i] = o.binGapSum[i] / o.binN[i];
+            }
+            R.shadowXaByLabel = new double[4];
+            for (int i = 0; i < 4; i++) R.shadowXaByLabel[i] = (o.shW[i] > 0) ? o.shWX[i] / o.shW[i] : Double.NaN;
+            R.shadowWByLabel = o.shW.clone();
             R.occTrans = new long[]{o.t01, o.t10, o.t12, o.t21, o.tUp, o.tDown};
             R.travelByOcc = o.travelAt.clone(); R.rollByOcc = o.rollAt.clone();
             R.zeroDurHist = o.zeroDurHist.clone(); R.gapNbyDur = o.gapN.clone();

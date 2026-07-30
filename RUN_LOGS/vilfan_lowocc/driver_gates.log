@@ -1,0 +1,233 @@
+=== vilfan-lowocc stage=gates jobs=6 2026-07-30T04:46:55-07:00 ===
+gate_mp1off_H
+gate_mp1on_H
+gate_pw_nat_H
+gate_pw_mir_H
+gate_mp1off_S1
+gate_mp1on_S1
+gate_pw_nat_S1
+gate_pw_mir_S1
+gate_mp1off_K
+gate_mp1on_K
+gate_pw_nat_K
+gate_pw_mir_K
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run]   [run] gate_mp1off_H ... gate_mp1on_S1 ...   [run] gate_pw_mir_H ...   [run] gate_pw_nat_H ...   [run] gate_mp1off_S1 ...   [run] gate_mp1on_H ... Nb=1.58(med 2) P0=0.0303 gaps=9 gap=0.0203s C_Th=0.217 C_X=-0.192 v=0.05993 om=+1.3154 <xA>=-2.007 [4s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_S1 ... Nb=1.58(med 2) P0=0.0303 gaps=9 gap=0.0203s C_Th=0.217 C_X=-0.192 v=0.05993 om=+1.3154 <xA>=-2.007 [4s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_S1 ... Nb=1.58(med 2) P0=0.0303 gaps=9 gap=0.0203s C_Th=0.217 C_X=-0.192 v=0.05993 om=+1.3154 <xA>=-2.007 [3s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1off_K ... Nb=1.58(med 2) P0=0.0303 gaps=9 gap=0.0203s C_Th=0.217 C_X=-0.192 v=0.05993 om=-1.3154 <xA>=-2.007 [4s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1on_K ... === vilfan-lowocc stage=gates jobs=6 2026-07-30T04:48:27-07:00 ===
+gate_mp1off_H
+gate_mp1on_H
+gate_pw_nat_H
+gate_pw_mir_H
+gate_mp1off_S1
+gate_mp1on_S1
+gate_pw_nat_S1
+gate_pw_mir_S1
+gate_mp1off_K
+gate_mp1on_K
+gate_pw_nat_K
+gate_pw_mir_K
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_H ...   [run] gate_pw_nat_H ...   [run] gate_mp1off_H ...   [run] gate_mp1off_S1 ...   [run] gate_mp1on_S1 ...   [run] gate_mp1on_H ... Nb=1.58(med 2) P0=0.0303 gaps=9 gap=0.0203s C_Th=0.217 C_X=-0.192 v=0.05993 om=+1.3154 <xA>=-2.007 [4s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_S1 ... Nb=1.58(med 2) P0=0.0303 gaps=9 gap=0.0203s C_Th=0.217 C_X=-0.192 v=0.05993 om=+1.3154 <xA>=-2.007 [4s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_S1 ... Nb=1.58(med 2) P0=0.0303 gaps=9 gap=0.0203s C_Th=0.217 C_X=-0.192 v=0.05993 om=+1.3154 <xA>=-2.007 [4s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1off_K ... Nb=1.58(med 2) P0=0.0303 gaps=9 gap=0.0203s C_Th=0.217 C_X=-0.192 v=0.05993 om=-1.3154 <xA>=-2.007 [3s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1on_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [111s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [124s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [124s]
+Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=+0.4801 <xA>=1.766 [125s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [626s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [683s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [625s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=+0.0338 <xA>=0.109 [622s]
+=== done 2026-07-30T05:00:54-07:00 ===
+=== vilfan-lowocc stage=gates jobs=6 2026-07-30T05:06:59-07:00 ===
+gate_mp1off_H
+gate_mp1on_H
+gate_pw_nat_H
+gate_pw_mir_H
+gate_mp1off_S1
+gate_mp1on_S1
+gate_pw_nat_S1
+gate_pw_mir_S1
+gate_mp1off_K
+gate_mp1on_K
+gate_pw_nat_K
+gate_pw_mir_K
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1off_S1 ...   [run]   [run] gate_mp1on_S1 ... gate_pw_nat_H ...   [run] gate_mp1on_H ...   [run] gate_pw_mir_H ...   [run] gate_mp1off_H ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [7s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_S1 ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_S1 ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1off_K ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=-0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1on_K ... Exception in thread "main" java.lang.NoSuchFieldError: Class softbox.VilfanCompleteSystem$Result does not have member field 'double[] timeByOcc'
+	at softbox.VilfanCompleteHarness.toJson(VilfanCompleteHarness.java:247)
+	at softbox.VilfanLowOccHarness.run(VilfanLowOccHarness.java:220)
+	at softbox.VilfanLowOccHarness.runOne(VilfanLowOccHarness.java:212)
+	at softbox.VilfanLowOccHarness.main(VilfanLowOccHarness.java:50)
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_K ... Exception in thread "main" java.lang.NoSuchFieldError: Class softbox.VilfanCompleteSystem$Result does not have member field 'double[] timeByOcc'
+	at softbox.VilfanCompleteHarness.toJson(VilfanCompleteHarness.java:247)
+	at softbox.VilfanLowOccHarness.run(VilfanLowOccHarness.java:220)
+	at softbox.VilfanLowOccHarness.runOne(VilfanLowOccHarness.java:212)
+	at softbox.VilfanLowOccHarness.main(VilfanLowOccHarness.java:50)
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_K ... Exception in thread "main" java.lang.NoSuchFieldError: Class softbox.VilfanCompleteSystem$Result does not have member field 'double[] timeByOcc'
+	at softbox.VilfanCompleteHarness.toJson(VilfanCompleteHarness.java:247)
+	at softbox.VilfanLowOccHarness.run(VilfanLowOccHarness.java:220)
+	at softbox.VilfanLowOccHarness.runOne(VilfanLowOccHarness.java:212)
+	at softbox.VilfanLowOccHarness.main(VilfanLowOccHarness.java:50)
+Exception in thread "main" java.lang.NoSuchFieldError: Class softbox.VilfanCompleteSystem$Result does not have member field 'double[] timeByOcc'
+	at softbox.VilfanCompleteHarness.toJson(VilfanCompleteHarness.java:247)
+	at softbox.VilfanLowOccHarness.run(VilfanLowOccHarness.java:220)
+	at softbox.VilfanLowOccHarness.runOne(VilfanLowOccHarness.java:212)
+	at softbox.VilfanLowOccHarness.main(VilfanLowOccHarness.java:50)
+Exception in thread "main" java.lang.NoSuchFieldError: Class softbox.VilfanCompleteSystem$Result does not have member field 'double[] timeByOcc'
+	at softbox.VilfanCompleteHarness.toJson(VilfanCompleteHarness.java:247)
+	at softbox.VilfanLowOccHarness.run(VilfanLowOccHarness.java:220)
+	at softbox.VilfanLowOccHarness.runOne(VilfanLowOccHarness.java:212)
+	at softbox.VilfanLowOccHarness.main(VilfanLowOccHarness.java:50)
+=== vilfan-lowocc stage=gates jobs=6 2026-07-30T05:21:08-07:00 ===
+gate_mp1off_H
+gate_mp1on_H
+gate_pw_nat_H
+gate_pw_mir_H
+gate_mp1off_S1
+gate_mp1on_S1
+gate_pw_nat_S1
+gate_pw_mir_S1
+gate_mp1off_K
+gate_mp1on_K
+gate_pw_nat_K
+gate_pw_mir_K
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1on_S1 ...   [run] gate_pw_mir_H ...   [run] gate_mp1on_H ...   [run] gate_pw_nat_H ...   [run] gate_mp1off_H ...   [run] gate_mp1off_S1 ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_S1 ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_S1 ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [8s]
+Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=-0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1off_K ... === VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1on_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [112s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [124s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=+0.4801 <xA>=1.766 [125s]
+Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [125s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [623s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [681s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [624s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=+0.0338 <xA>=0.109 [623s]
+=== done 2026-07-30T05:33:36-07:00 ===
+=== vilfan-lowocc stage=gates jobs=6 2026-07-30T05:50:13-07:00 ===
+gate_mp1off_H
+gate_mp1on_H
+gate_pw_nat_H
+gate_pw_mir_H
+gate_mp1off_S1
+gate_mp1on_S1
+gate_pw_nat_S1
+gate_pw_mir_S1
+gate_mp1off_K
+gate_mp1on_K
+gate_pw_nat_K
+gate_pw_mir_K
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1on_S1 ...   [run] gate_mp1off_H ...   [run] gate_pw_nat_H ...   [run] gate_mp1on_H ...   [run] gate_mp1off_S1 ...   [run] gate_pw_mir_H ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_S1 ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_S1 ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1off_K ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=-0.4411 <xA>=-0.139 [7s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1on_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [112s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=+0.4801 <xA>=1.766 [124s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [124s]
+Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [125s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [648s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [727s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [647s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=+0.0338 <xA>=0.109 [647s]
+=== done 2026-07-30T06:03:04-07:00 ===
+=== vilfan-lowocc stage=gates jobs=6 2026-07-30T06:13:15-07:00 ===
+gate_mp1off_H
+gate_mp1on_H
+gate_pw_nat_H
+gate_pw_mir_H
+gate_mp1off_S1
+gate_mp1on_S1
+gate_pw_nat_S1
+gate_pw_mir_S1
+gate_mp1off_K
+gate_mp1on_K
+gate_pw_nat_K
+gate_pw_mir_K
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_H ...   [run] gate_pw_mir_H ...   [run] gate_mp1on_H ...   [run] gate_mp1off_H ...   [run] gate_mp1on_S1 ...   [run] gate_mp1off_S1 ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_S1 ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_S1 ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=+0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1off_K ... Nb=3.66(med 4) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.03075 om=-0.4411 <xA>=-0.139 [8s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_mp1on_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [112s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_nat_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [121s]
+=== VILFAN LOW-OCCUPANCY — CPU only, no CUDA/TornadoVM/TaskGraph ===
+  [run] gate_pw_mir_K ... Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=-0.4801 <xA>=1.766 [122s]
+Nb=83.23(med 83) P0=0.0000 gaps=0 gap=0.00s C_Th=NaN C_X=NaN v=0.04209 om=+0.4801 <xA>=1.766 [125s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [648s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [727s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=-0.0338 <xA>=0.109 [647s]
+Nb=1.43(med 2) P0=0.1782 gaps=13 gap=0.0830s C_Th=0.041 C_X=-0.173 v=0.05480 om=+0.0338 <xA>=0.109 [646s]
+=== done 2026-07-30T06:26:02-07:00 ===
