@@ -255,6 +255,60 @@ def main():
                   "sigma(spurious Omega_odd) = 0.5*sqrt(2)*RMS = %.3f rad/s" % (brown, rms, n, s))
     if sig.get("off") and sig.get("on"):
         print("  ROLL-NOISE FLOOR REDUCTION (suppressed vs canonical): %.1fx" % (sig["on"] / sig["off"]))
+    print("\n  CAVEAT ON THIS FLOOR FORMULA, which matters for the suppressed mode. It assumes the two arms of")
+    print("  a +/-eps pair DECORRELATE over the window, so their eps=0 rolls add in quadrature. That holds with")
+    print("  thermal forcing. With mechanical Brownian suppressed the paired arms share a lawn and RNG streams")
+    print("  and stay strongly CORRELATED, so much of the achiral roll CANCELS in the odd combination and the")
+    print("  true floor is SMALLER than this. The number above is therefore an UPPER BOUND on the suppressed")
+    print("  floor -- conservative for claiming a signal, and the same estimator as the canonical mode, so the")
+    print("  two are comparable. The same-seed table in 3b is the assumption-free version.")
+
+    # ------------------------------------------------- 3b. SAME-SEED comparison against the achiral null
+    # The sharpest test available, and it needs no floor model: at a FIXED seed, how far does a +/-eps arm
+    # sit from the eps=0 arm that shares its seed, its lawn and its RNG streams? If a skewed arm is
+    # indistinguishable from its own achiral null, there is nothing at that skew to resolve.
+    print("\n\n### 3b. EACH ARM vs THE ACHIRAL NULL AT THE SAME SEED\n")
+    print("%6s %7s %5s %6s | %11s %11s | %13s %13s | %11s %11s"
+          % ("brown", "eps", "sgn", "seed", "Omega", "d vs null", "tau", "d vs null", "glide", "d vs null"))
+    for brown in ("off", "on"):
+        nulls = {k[3]: arms[k]["v"] for k in arms if k[0] == brown and k[1] == 0.0}
+        if not nulls:
+            continue
+        for eps in sorted([x for x in epss if x != 0.0], reverse=True):
+            for sgn in ("p", "n"):
+                for sd in sorted({k[3] for k in arms if k[0] == brown and k[1] == eps}):
+                    d = arms.get((brown, eps, sgn, sd))
+                    z = nulls.get(sd)
+                    if not d or not z:
+                        continue
+                    v = d["v"]
+                    print("%6s %7.1f %5s %6d | %+11.3f %+11.3f | %+13.4e %+13.4e | %+11.4f %+11.4f"
+                          % (brown, eps, sgn, sd, v["omegaFit"], v["omegaFit"] - z["omegaFit"],
+                             v["tau"], v["tau"] - z["tau"], v["glide"], v["glide"] - z["glide"]))
+    print("\n  'd vs null' is the SAME-SEED difference from the eps = 0 arm. A skew that changes nothing")
+    print("  relative to its own achiral null cannot be producing a resolvable chiral response.")
+
+    # ---- the floor-free discriminator: is the +/-eps deviation from the shared null ANTISYMMETRIC? -------
+    # A genuine chiral response moves +eps and -eps in OPPOSITE directions away from the achiral null they
+    # both share. A common-mode effect (drift, achiral mechanics, trajectory scatter) moves them the SAME
+    # way. Define  A = (d+ + d-) / (|d+| + |d-|):  A ~ 0 => antisymmetric => chiral;
+    # |A| ~ 1 => both deviations share a sign => common-mode, NOT chiral. No noise model is needed.
+    print("\n  ANTISYMMETRY OF THE +/-eps DEVIATION FROM THE SHARED NULL  (A ~ 0 chiral, |A| ~ 1 common-mode)\n")
+    print("%6s %7s %6s | %11s %11s %9s | %13s %13s %9s"
+          % ("brown", "eps", "seed", "dOmega(+)", "dOmega(-)", "A_Omega", "dtau(+)", "dtau(-)", "A_tau"))
+    for brown in ("off", "on"):
+        nulls = {k[3]: arms[k]["v"] for k in arms if k[0] == brown and k[1] == 0.0}
+        for eps in sorted([x for x in epss if x != 0.0], reverse=True):
+            for sd in sorted({k[3] for k in arms if k[0] == brown and k[1] == eps}):
+                P, N, z = arms.get((brown, eps, "p", sd)), arms.get((brown, eps, "n", sd)), nulls.get(sd)
+                if not P or not N or not z:
+                    continue
+                dop = P["v"]["omegaFit"] - z["omegaFit"]; don = N["v"]["omegaFit"] - z["omegaFit"]
+                dtp = P["v"]["tau"] - z["tau"];           dtn = N["v"]["tau"] - z["tau"]
+                ao = (dop + don) / (abs(dop) + abs(don)) if (abs(dop) + abs(don)) > 0 else float("nan")
+                at = (dtp + dtn) / (abs(dtp) + abs(dtn)) if (abs(dtp) + abs(dtn)) > 0 else float("nan")
+                print("%6s %7.1f %6d | %+11.3f %+11.3f %+9.3f | %+13.4e %+13.4e %+9.3f"
+                      % (brown, eps, sd, dop, don, ao, dtp, dtn, at))
 
     # ---------------------------------------------------------------- 4. per-skew summary vs floor
     print("\n\n### 4. PER-SKEW SUMMARY AND THE FLOOR TEST\n")

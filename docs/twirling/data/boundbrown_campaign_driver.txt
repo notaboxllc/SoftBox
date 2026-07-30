@@ -1,0 +1,19 @@
+=== ARM GROUP e1  2026-07-29T10:53:03-07:00 ===
+  records: 0 reused, 4 newly run, 4 expected
+=== attempt 1 exit=0  records: 0 -> 4 ===
+=== CAMPAIGN COMPLETE after 1 attempt(s), 4 records ===
+=== ARM GROUP e1 exit=0  2026-07-29T13:31:29-07:00 ===
+=== ARM GROUP e2  2026-07-29T13:31:29-07:00 ===
+  records: 0 reused, 4 newly run, 4 expected
+=== attempt 1 exit=0  records: 4 -> 8 ===
+=== CAMPAIGN COMPLETE after 1 attempt(s), 8 records ===
+=== ARM GROUP e2 exit=0  2026-07-29T16:08:05-07:00 ===
+=== ARM GROUP e15  2026-07-29T16:08:05-07:00 ===
+  records: 0 reused, 4 newly run, 4 expected
+=== attempt 1 exit=0  records: 8 -> 12 ===
+=== CAMPAIGN COMPLETE after 1 attempt(s), 12 records ===
+=== ARM GROUP e15 exit=0  2026-07-29T18:46:25-07:00 ===
+=== ARM GROUP e0  2026-07-29T18:46:25-07:00 ===
+=== attempt 1 exit=0  records: 12 -> 14 ===
+=== CAMPAIGN COMPLETE after 1 attempt(s), 14 records ===
+=== ARM GROUP e0 exit=0  2026-07-29T20:04:19-07:00 ===
