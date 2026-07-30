@@ -365,6 +365,21 @@ public final class VilfanCompleteSystem {
         /* ---- roll Brownian (Stage 7) ---- */
         public boolean rollBrownian;
         public double  DThetaRad2PerS, sdThetaConstrainedRad, tauThetaMedS2;
+        /* ---- low-occupancy: occupancy, gap and phase-memory summary ---- */
+        public double[] occProb = new double[0];      // P(N_b = n), n = 0..5, tail
+        public double  occMean, occVar, pZero;
+        public int     occMedian;
+        public long    nZeroIntervals, nOneIntervals, nGaps;
+        public double  zeroTimeFrac, meanGapS, maxGapS;
+        public double  cThetaMem, sThetaMem, cXMem, cJointMem;
+        public double  meanGapDXnm, meanGapDThRad;
+        public long    nFirstPostGap, nFirstPostGapBefore, nTethered, nTetheredBefore;
+        public double  meanFirstPostGapXa, meanTetheredXa;
+        public long[]  occTrans = new long[6];        // 0->1,1->0,1->2,2->1,up,down
+        public double[] travelByOcc = new double[0], rollByOcc = new double[0];
+        public long[]  zeroDurHist = new long[0];
+        public long[]  gapNbyDur = new long[0];
+        public double[] gapCosThByDur = new double[0], gapCosXByDur = new double[0];
         public long    nRollCross, nRollSubdiv, nFreeRollSteps, nRollCapFail;
         public double  maxMissProb, meanMissProb, windingRad;
         public long[]  rollFwd = new long[0], rollBwd = new long[0];
@@ -1053,10 +1068,10 @@ public final class VilfanCompleteSystem {
 
             double X0 = X, T0 = Theta;
             long addr = anchorIdx++;
-            double Xn = relaxX(Xeq, X0, tauX, dt);
+            double Xn = axialAdvance(Xeq, X0, tauX, nb, dt, addr);
             double Tn = rollStep(Teq, T0, tauT, nb, dt, addr, noiseSign);
             double Tm = rollBridgeMid(Teq, T0, Tn, tauT, nb, dt, addr, noiseSign);
-            double Xm = relaxX(Xeq, X0, tauX, 0.5 * dt);
+            double Xm = axialMid(Xeq, X0, Xn, tauX, nb, dt, addr);
 
             // Intra-substep boundary-TRANSIT probability. This is now a DIAGNOSTIC, not a correctness
             // bound: net crossings are registered exactly by the re-wrap (below). It reports how often
@@ -1098,7 +1113,13 @@ public final class VilfanCompleteSystem {
             }
 
             if (Hs >= Hrem) {
+                double xPre = X, tPre = Theta;
                 double t = locateRoll(Xeq, Teq, X0, T0, Xn, Tn, tauX, tauT, nb, dt, Hrem, addr);
+                // Accumulate the TERMINAL partial substep. Omitting it under-counts occupancy time by
+                // a fraction ~1/(substeps per interval), which is negligible at low kD but dominant at
+                // high kD where an interval may be only one or two substeps long -- exactly the
+                // duty-lowered regime this study depends on.
+                if (occDiag != null) occDiag.substep(nb, t, X - xPre, Theta - tPre, tAbs + tAcc + t, X, Theta);
                 return tAcc + t;
             }
             Hrem -= Hs; tAcc += dt;
@@ -1110,6 +1131,34 @@ public final class VilfanCompleteSystem {
             updateRecrossing();
         }
         return -1;
+    }
+
+
+    /**
+     * Axial propagation inside the combined path. When {@code axialBrownian} is off this is the
+     * deterministic relaxation the roll-only study used; when it is on, X is an exact OU process (or
+     * FREE diffusion when no head is bound), driven by its OWN noise stream.
+     * <p>
+     * This matters critically at low occupancy. With no bound head {@code tauX = infinity}, so
+     * {@code relaxX} returns X unchanged — the filament would sit FROZEN through every zero-bound
+     * gap, and axial phase memory would be trivially perfect ({@code C_X == 1}). That is exactly the
+     * artefact this method removes: the axial and roll noise flags must act independently, never
+     * silently coupled.
+     */
+    private double axialAdvance(double Xeq, double x0, double tauX, int nb, double dt, long addr) {
+        if (!c.axialBrownian) return relaxX(Xeq, x0, tauX, dt);
+        double z = VilfanAxialBrownian.gauss(c.seed, VilfanAxialBrownian.STREAM_AXIAL, addr);
+        if (nb > 0 && K > 0) return VilfanAxialBrownian.ouStep(Xeq, x0, tauX, varInfX(nb), dt, z);
+        nFreeDiffSteps++;
+        return VilfanAxialBrownian.freeStep(x0, DX, dt, z);
+    }
+
+    /** exact axial bridge midpoint inside the combined path. */
+    private double axialMid(double Xeq, double xa, double xb, double tauX, int nb, double T, long addr) {
+        if (!c.axialBrownian) return relaxX(Xeq, xa, tauX, 0.5 * T);
+        double z = VilfanAxialBrownian.gauss(c.seed, VilfanAxialBrownian.STREAM_BRIDGE, addr);
+        if (nb > 0 && K > 0) return VilfanAxialBrownian.ouBridgeMid(Xeq, xa, xb, tauX, varInfX(nb), T, z);
+        return VilfanAxialBrownian.freeBridgeMid(xa, xb, DX, T, z);
     }
 
     /** RMS roll increment over dt: OU-stationary when held, free diffusion when not. */
@@ -1124,7 +1173,7 @@ public final class VilfanCompleteSystem {
     private double refineHRoll(double Xeq, double Teq, double xa, double tha, double xb, double thb,
                                double tauX, double tauT, int nb, double T, long addr, int depth) {
         double thm = rollBridgeMid(Teq, tha, thb, tauT, nb, T, addr, noiseSign);
-        double xm = relaxX(Xeq, xa, tauX, 0.5 * T);
+        double xm = axialMid(Xeq, xa, xb, tauX, nb, T, addr);
         if (depth <= 0) return T / 6.0 * (kTotalAt(xa, tha) + 4 * kTotalAt(xm, thm) + kTotalAt(xb, thb));
         return refineHRoll(Xeq, Teq, xa, tha, xm, thm, tauX, tauT, nb, 0.5 * T, addr * 2 + 1, depth - 1)
              + refineHRoll(Xeq, Teq, xm, thm, xb, thb, tauX, tauT, nb, 0.5 * T, addr * 2 + 2, depth - 1);
@@ -1138,7 +1187,7 @@ public final class VilfanCompleteSystem {
             double half = 0.5 * len;
             a = VilfanAxialBrownian.hash(a, 0x9E3779B9L, lvl);
             double thm = rollBridgeMid(Teq, th0, thb, tauT, nb, len, a, noiseSign);
-            double xm = relaxX(Xeq, x0, tauX, half);
+            double xm = axialMid(Xeq, x0, xb, tauX, nb, len, a);
             double kq = kTotalAt(relaxX(Xeq, x0, tauX, 0.25 * len),
                                  rollBridgeMid(Teq, th0, thm, tauT, nb, half, a ^ 0x5DEECE66DL, noiseSign));
             double HL = half / 6.0 * (kTotalAt(x0, th0) + 4 * kq + kTotalAt(xm, thm));
@@ -1544,6 +1593,25 @@ public final class VilfanCompleteSystem {
         R.rollBrownian = c.rollBrownian; R.DThetaRad2PerS = DTheta;
         R.nRollCross = nRollCross; R.nRollSubdiv = nRollSubdiv; R.nFreeRollSteps = nFreeRollSteps;
         R.nRollCapFail = nRollCapFail;
+        if (occDiag != null) {
+            VilfanOccupancy o = occDiag;
+            R.occProb = new double[7];
+            for (int i = 0; i < 7; i++) R.occProb[i] = (o.totalTime > 0) ? o.occTime[i] / o.totalTime : 0;
+            R.occMean = o.meanNb(); R.occVar = o.varNb(); R.pZero = o.pZero(); R.occMedian = o.medianNb();
+            R.nZeroIntervals = o.nZeroIntervals; R.nOneIntervals = o.nOneIntervals; R.nGaps = o.nGaps;
+            R.zeroTimeFrac = o.pZero(); R.meanGapS = o.meanGapS(); R.maxGapS = o.zeroTimeMax;
+            R.cThetaMem = o.cTheta(); R.sThetaMem = o.sTheta(); R.cXMem = o.cX(); R.cJointMem = o.cJoint();
+            R.meanGapDXnm = (o.nGaps > 0) ? o.sumGapDX / o.nGaps : 0;
+            R.meanGapDThRad = (o.nGaps > 0) ? o.sumGapDTh / o.nGaps : 0;
+            R.nFirstPostGap = o.nFirstPostGap; R.nFirstPostGapBefore = o.nFirstPostGapBefore;
+            R.nTethered = o.nTethered; R.nTetheredBefore = o.nTetheredBefore;
+            R.meanFirstPostGapXa = (o.nFirstPostGap > 0) ? o.sumFirstPostGapXa / o.nFirstPostGap : 0;
+            R.meanTetheredXa = (o.nTethered > 0) ? o.sumTetheredXa / o.nTethered : 0;
+            R.occTrans = new long[]{o.t01, o.t10, o.t12, o.t21, o.tUp, o.tDown};
+            R.travelByOcc = o.travelAt.clone(); R.rollByOcc = o.rollAt.clone();
+            R.zeroDurHist = o.zeroDurHist.clone(); R.gapNbyDur = o.gapN.clone();
+            R.gapCosThByDur = o.gapCosTh.clone(); R.gapCosXByDur = o.gapCosX.clone();
+        }
         R.maxMissProb = maxMissProb; R.meanMissProb = (nSubsteps > 0) ? sumMissProb / nSubsteps : 0;
         R.windingRad = windingRad; R.rollBands = c.rollBands;
         if (rollBands != null) { R.rollFwd = rollBands.fwd; R.rollBwd = rollBands.bwd; }

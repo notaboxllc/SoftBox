@@ -231,6 +231,25 @@ public final class VilfanCompleteHarness {
         kv(b, "circResultant", R.circResultant); kv(b, "circMeanRad", R.circMeanRad);
         kv(b, "rollBrownian", R.rollBrownian); kv(b, "DThetaRad2PerS", R.DThetaRad2PerS);
         kv(b, "sdThetaConstrainedRad", R.sdThetaConstrainedRad); kv(b, "tauThetaMedS", R.tauThetaMedS2);
+        kv(b, "nRollCapFail", R.nRollCapFail);
+        kv(b, "occMean", R.occMean); kv(b, "occVar", R.occVar); kv(b, "occMedianBinned", R.occMedian);   // capped at the >=6 tail bin; use medianNb for the true median
+        kv(b, "pZero", R.pZero); kv(b, "nZeroIntervals", R.nZeroIntervals);
+        kv(b, "nOneIntervals", R.nOneIntervals); kv(b, "nGaps", R.nGaps);
+        kv(b, "meanGapS", R.meanGapS); kv(b, "maxGapS", R.maxGapS);
+        kv(b, "cThetaMem", R.cThetaMem); kv(b, "sThetaMem", R.sThetaMem);
+        kv(b, "cXMem", R.cXMem); kv(b, "cJointMem", R.cJointMem);
+        kv(b, "meanGapDXnm", R.meanGapDXnm); kv(b, "meanGapDThRad", R.meanGapDThRad);
+        kv(b, "nFirstPostGap", R.nFirstPostGap); kv(b, "nFirstPostGapBefore", R.nFirstPostGapBefore);
+        kv(b, "nTethered", R.nTethered); kv(b, "nTetheredBefore", R.nTetheredBefore);
+        kv(b, "meanFirstPostGapXa", R.meanFirstPostGapXa); kv(b, "meanTetheredXa", R.meanTetheredXa);
+        b.append("  \"occProb\": ").append(java.util.Arrays.toString(R.occProb)).append(",\n");
+        b.append("  \"occTrans\": ").append(java.util.Arrays.toString(R.occTrans)).append(",\n");
+        b.append("  \"travelByOcc\": ").append(java.util.Arrays.toString(R.travelByOcc)).append(",\n");
+        b.append("  \"rollByOcc\": ").append(java.util.Arrays.toString(R.rollByOcc)).append(",\n");
+        b.append("  \"zeroDurHist\": ").append(java.util.Arrays.toString(R.zeroDurHist)).append(",\n");
+        b.append("  \"gapNbyDur\": ").append(java.util.Arrays.toString(R.gapNbyDur)).append(",\n");
+        b.append("  \"gapCosThByDur\": ").append(java.util.Arrays.toString(R.gapCosThByDur)).append(",\n");
+        b.append("  \"gapCosXByDur\": ").append(java.util.Arrays.toString(R.gapCosXByDur)).append(",\n");
         kv(b, "nRollCross", R.nRollCross); kv(b, "nRollSubdiv", R.nRollSubdiv);
         kv(b, "nFreeRollSteps", R.nFreeRollSteps); kv(b, "maxMissProb", R.maxMissProb);
         kv(b, "meanMissProb", R.meanMissProb); kv(b, "windingRad", R.windingRad);
