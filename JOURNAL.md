@@ -1,5 +1,72 @@
 # Soft Box Project Journal
 
+### 2026-07-29 — BOUND-BROWNIAN-OFF SMALL-SKEW PILOT: the premise is REFUTED, and the noise turns out to be part of the signal
+
+**What was done.** Built a `DETACHED_SEARCH_ONLY` mechanical-Brownian mode — filament translational +
+rotational Brownian OFF, and the S2 beam-node / converter-φ / lever-ψ / head-roll Brownian of **bound** motors
+OFF, while **unbound** motors keep all four (the binding search) and chemistry stays fully stochastic — then
+ran the 14-arm 5 µM skew pilot in it (ε = 0 ×2 seeds; ε = ±1, ±2, ±15 ×2 seeds, 200 ms, GPU device-resident,
+9 h 11 m, 0 invalid / 0 solver / 0 rate-cap / 0 rupture on every arm, no retries).
+
+**The question was whether mechanical noise was HIDING an intrinsic small-skew mean. It was not.**
+- At **ε = 1°** the ±ε arms are the *same run* as their own achiral null: ΔΩ = +0.03 / −0.19 rad/s,
+  Δτ = ±8×10⁻²⁶ (0.2 % of the null's τ), Δglide = 0.0000. A 1° skew barely perturbs the trajectory.
+- A **floor-free discriminator** settles it. A chiral response moves +ε and −ε in *opposite* directions from
+  the null they share; a common-mode effect moves them the same way. With `A = (Δ⁺+Δ⁻)/(|Δ⁺|+|Δ⁻|)`:
+  **15° → A_Ω = −0.090 / +0.140** (chiral, and *sharper* than canonical's −0.287 / +0.039);
+  **2° → A = +1.000 / +1.000 in both channels** (fully common-mode — whatever moves those arms is not
+  chirality); **1° → A_τ = +0.010 / −0.032** (correct chiral *structure*) but the magnitude differs **135×**
+  between seeds. Both small skews are wrongly signed relative to their own 15° control.
+
+**What was learned — the consequential part. Bound-state thermal forcing GENERATES much of the chiral torque
+and the translation; it does not obscure them.** At the one resolved condition (15°): τ_odd falls **3.9×**,
+Σ|τ⁺| falls **5.2×**, per-head axial torque falls **4.3×** (at every skew including zero), gliding falls
+**1.7×**, avgBound and attachment flux each fall **16 %**. So **≈77 % of the per-head axial torque and ≈41 %
+of the gliding speed were bound-state thermal**. ⇒ **classification C** (the mean mechanism changed), not D
+— D requires "15° mean preserved" and it is not; D's other clauses (noise down, small skew unresolved) hold
+and are recorded inside C.
+
+**This explains the parent pilot's central puzzle.** It found per-head torque ≈5.5×10⁻²¹ N·m at *every* skew
+including zero and could only note that it "is not set by the imposed skew". It was ~77 % thermal — the
+±10⁻¹⁹ N·m cancelling populations whose 0.0004 residual had to be interpreted were largely an artifact of the
+bound heads' own thermal forcing.
+
+**But the suppressed mode is the better DETECTOR where a signal exists.** At 15°, significance rises
+**5.91σ → 11.79σ** (2.0×) because the floor fell 5.4× while the signal fell only 2.7×, with **1.7× tighter
+closure** (1.269 ± 0.031 vs 0.893 ± 0.052). Caveat recorded: the suppressed 15° Ω_odd is **not converged** at
+200 ms (nested −5.2 → −19.2, R² 0.375 → 0.730), so −18.99 rad/s is a lower bound; the class-C verdict rests
+on the window-insensitive per-head and τ_odd means, not on the slope ratio.
+
+**Gates (18/18 PASS).** The strongest is B/D, and it is **independent of whether my source enumeration was
+complete**: re-run a prepared bound state under a *different runSeed* — which re-randomises every stream at
+once — and the filament and every bound motor come out **exactly** identical (0, not "small") for 1 / 12 /
+6-of-12 bound motors, while the canonical control diverges by ~10⁻² µm. Also: the detached search, the
+chemistry trajectory, the binding-gate candidates, the site selection and the motor lawn are all
+**bit-identical** across the mode; motion is the deterministic `F·dt/γ` law to below the float32 coordinate
+floor; per-bond force closure is exactly 0; CPU/GPU decision channels are exact at ε = 0 and +15; and
+`-fixtures` is **byte-identical to the parent build** across 23 gates.
+
+**Two methodological points worth keeping.**
+1. **The parent's noise-floor formula does not transfer.** `σ = 0.5√2·RMS(Ω at ε=0)` assumes the two arms of a
+   ±ε pair *decorrelate*. True with thermal forcing; under suppression the paired arms stay strongly
+   *correlated* and the achiral roll largely cancels in the odd combination, so it is an **upper bound** here.
+   Used anyway (conservative, and comparable across modes), with the same-seed null table as the
+   assumption-free version.
+2. **A closure bug caught before it reached a conclusion.** γ was derived as `min(τ·qΩ/Ω) × NSEG`. That ratio
+   **is** γ, and which γ depends on record vintage. `min()×NSEG` only works when an old-vintage record happens
+   to be the minimum (3 of 32 here). On this pilot's all-new-vintage set it would have inflated γ **12×** and
+   silently corrupted every closure number — a 12× closure still reads as plausible "rotation the torque
+   cannot explain". Fixed; γ_filament = 3.241935×10⁻²⁴ N·m·s and the parent's published 15° closure still
+   reproduces at 0.893 ± 0.052, so no previously published number moves.
+
+**Open / next (NOT executed).** Widen `matc[3]` from 2 to 5 bits to ablate the four bound thermal channels
+*separately* and find which supplies the torque — a data-only change of exactly the kind validated here.
+Prerequisite: extend the 15° suppressed duration to 400–600 ms before quoting its mean. **Not recommended:**
+brute-forcing 1–2°, or an intermediate skew ladder. Default unchanged (`CANONICAL`); `BoA-v1ref` untouched.
+
+Report: `docs/twirling/LOW_ATP_BOUND_BROWNIAN_OFF_SKEW_PILOT.md` (20 sections); derived tables + gate logs
+`docs/twirling/data/boundbrown_*`.
+
 ### 2026-07-28 (later) — n=4 EXTENSION: the low-ATP torque plateau is REAL, and its mechanism is near-total cancellation
 
 **What was done.** Executed the pilot's own recommendation (option 2): added the per-head signed-torque and
