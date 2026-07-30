@@ -362,7 +362,7 @@ public final class VilfanCompleteSystem {
         public double  DThetaRad2PerS, sdThetaConstrainedRad, tauThetaMedS2;
         public long    nRollCross, nRollSubdiv, nFreeRollSteps;
         public double  maxMissProb, meanMissProb, windingRad;
-        public long[]  rollBandCross = new long[0];
+        public long[]  rollFwd = new long[0], rollBwd = new long[0];
         public double[] rollBands = new double[0];
         public long    xcheckN;
         public double  xcheckMaxRel, xcheckMeanRel, xcheckBias, xcheckBiasSem, maxEventJumpX, maxEventJumpTheta;
@@ -551,7 +551,7 @@ public final class VilfanCompleteSystem {
     private double DTheta;                   // kBT/gammaTheta, rad^2/s
     private long   nFreeRollSteps, nRollCross, nRollSubdiv;
     private double maxMissProb, sumMissProb;
-    private long[] rollBandCross; private double[] rollBandRef; private int[] rollBandSide;
+    private VilfanRollBands rollBands;
     private double windingRad;
     private int    noiseSign = +1;
     private long   anchorIdx;                // monotone address for the axial noise stream
@@ -1102,18 +1102,8 @@ public final class VilfanCompleteSystem {
         return t0;
     }
 
-    /** scale-aware angular hysteresis counting, the roll analogue of the axial band ladder. */
-    private void updateRollBands() {
-        if (rollBandSide == null) return;
-        for (int b = 0; b < rollBandSide.length; b++) {
-            double band = c.rollBands[b], d = Theta - rollBandRef[b];
-            if (Math.abs(d) < band * 0.5) continue;
-            int side = d > 0 ? +1 : -1;
-            if (rollBandSide[b] == 0) { rollBandSide[b] = side; rollBandRef[b] = Theta; continue; }
-            if (side != rollBandSide[b]) { rollBandCross[b]++; rollBandSide[b] = side; }
-            rollBandRef[b] = Theta;
-        }
-    }
+    /** Stage-7 angular band counter; see VilfanRollBands for the Schmitt-trigger definition. */
+    private void updateRollBands() { if (rollBands != null) rollBands.update(Theta); }
 
     /** Stage-5 scale-aware zone-centre crossing diagnostics, updated at every accepted substep. */
     private void updateRecrossing() {
@@ -1194,9 +1184,7 @@ public final class VilfanCompleteSystem {
         int nBands = c.recrossBandsNm.length;
         recFwd = new long[nBands]; recBwd = new long[nBands];
         recRef = new double[nBands]; recSide = new int[nBands];
-        rollBandCross = new long[c.rollBands.length];
-        rollBandRef = new double[c.rollBands.length];
-        rollBandSide = new int[c.rollBands.length];
+        rollBands = new VilfanRollBands(c.rollBands);
         Arrays.fill(siteOf, -1);
         occupied = new boolean[nSites];
         hazCache = new double[nM];
@@ -1494,7 +1482,8 @@ public final class VilfanCompleteSystem {
         R.rollBrownian = c.rollBrownian; R.DThetaRad2PerS = DTheta;
         R.nRollCross = nRollCross; R.nRollSubdiv = nRollSubdiv; R.nFreeRollSteps = nFreeRollSteps;
         R.maxMissProb = maxMissProb; R.meanMissProb = (nSubsteps > 0) ? sumMissProb / nSubsteps : 0;
-        R.windingRad = windingRad; R.rollBandCross = rollBandCross; R.rollBands = c.rollBands;
+        R.windingRad = windingRad; R.rollBands = c.rollBands;
+        if (rollBands != null) { R.rollFwd = rollBands.fwd; R.rollBwd = rollBands.bwd; }
         R.xcheckN = xcheckN; R.xcheckMaxRel = xcheckMaxRel;
         R.xcheckMeanRel = (xcheckN > 0) ? xcheckSum / xcheckN : 0.0;
         if (xcheckN > 1) {

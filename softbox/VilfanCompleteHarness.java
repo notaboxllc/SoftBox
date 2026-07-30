@@ -234,7 +234,8 @@ public final class VilfanCompleteHarness {
         kv(b, "nFreeRollSteps", R.nFreeRollSteps); kv(b, "maxMissProb", R.maxMissProb);
         kv(b, "meanMissProb", R.meanMissProb); kv(b, "windingRad", R.windingRad);
         b.append("  \"rollBands\": ").append(java.util.Arrays.toString(R.rollBands)).append(",\n");
-        b.append("  \"rollBandCross\": ").append(java.util.Arrays.toString(R.rollBandCross)).append(",\n");
+        b.append("  \"rollFwd\": ").append(java.util.Arrays.toString(R.rollFwd)).append(",\n");
+        b.append("  \"rollBwd\": ").append(java.util.Arrays.toString(R.rollBwd)).append(",\n");
         kv(b, "xcheckN", R.xcheckN); kv(b, "xcheckMaxRel", R.xcheckMaxRel);
         kv(b, "axialBrownian", R.axialBrownian); kv(b, "DXnm2PerS", R.DXnm2PerS);
         kv(b, "anchorDtS", R.anchorDtS); kv(b, "refineLevel", R.refineLevel);
