@@ -1,0 +1,10 @@
+# Stage-5 observables completing the required list, suppressed (DETACHED_SEARCH_ONLY) arms.
+# accumRoll / axialDisp are over the 150 ms measurement window. pitchExtrap = |pitch| / |axialDisp|,
+# the factor by which a quoted pitch extrapolates beyond the axial travel actually observed.
+eps	seed	v_even	v_odd	tau_even	tau_odd	accumRoll_rad	turns	axialDisp_um	pitch_um	pitchExtrap	lateHalf_over_full_Omega
+15.0	101	-0.0809247	0.00540394	-2.9283e-23	-4.2196e-23	-2.41608	-0.384531	-0.0121387	-0.0315675	2.601	0.4222
+15.0	102	-0.0841495	-0.0180073	1.6744e-23	-5.45248e-23	-3.28029	-0.522075	-0.0126224	-0.0241774	1.915	1.368
+2.0	101	-0.104321	-0.0121216	-3.65802e-23	-4.07615e-24	0.163499	0.0260216	-0.0156482	0.601354	38.43	-7.966
+2.0	102	-0.060868	0.0048557	3.80962e-23	1.14205e-23	0.692029	0.11014	-0.00913019	0.0828963	9.079	2.363
+1.0	101	-0.0921689	1.67659e-05	-4.36678e-23	8.03304e-26	0.016395	0.00260935	-0.0138253	5.29839	383.2	-3.722
+1.0	102	-0.0783138	0.0011354	-6.36823e-24	1.13606e-23	0.344966	0.054903	-0.0117471	0.21396	18.21	2.401

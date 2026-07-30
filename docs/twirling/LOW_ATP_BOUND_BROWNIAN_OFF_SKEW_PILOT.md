@@ -374,6 +374,35 @@ read-only**, as the comparison set. No stored record was copied, moved, rewritte
 **Gliding is untouched by skew, as required**: v_even = −0.0852, −0.0826, −0.0825 µm/s at 1°, 2°, 15°
 (R(2/1) = 0.969). That internal control still holds under suppression.
 
+### 7.3 The remaining Stage-5 observables
+
+| ε | seed | v_even | v_odd | τ_even | τ_odd | accumulated roll (rad) | turns | axial displacement (µm) | late-half / full-window Ω_odd |
+|---|---|---|---|---|---|---|---|---|---|
+| 15° | 101 | −0.0809 | +0.0054 | −2.928e-23 | −4.220e-23 | **−2.416** | **−0.385** | −0.01214 | +0.422 |
+| 15° | 102 | −0.0841 | −0.0180 | +1.674e-23 | −5.452e-23 | **−3.280** | **−0.522** | −0.01262 | +1.368 |
+| 2° | 101 | −0.1043 | −0.0121 | −3.658e-23 | −4.076e-24 | +0.164 | +0.026 | −0.01565 | **−7.966** |
+| 2° | 102 | −0.0609 | +0.0049 | +3.810e-23 | +1.142e-23 | +0.692 | +0.110 | −0.00913 | +2.363 |
+| 1° | 101 | −0.0922 | +0.0000 | −4.367e-23 | +8.033e-26 | **+0.016** | **+0.003** | −0.01383 | **−3.722** |
+| 1° | 102 | −0.0783 | +0.0011 | −6.368e-24 | +1.136e-23 | +0.345 | +0.055 | −0.01175 | +2.401 |
+
+Accumulated roll and axial displacement are over the 150 ms measurement window. Three things follow:
+
+1. **At 15° the filament really does turn**: 0.39–0.52 of a full revolution, over an axial travel of 12–13 nm
+   against a pitch of 24–32 nm. So **the 15° pitch is directly observed** — roughly 0.4–0.5 pitch lengths are
+   traversed — not extrapolated.
+2. **At 1° the entire odd rotation is 0.016 rad ≈ 0.9° over the whole measurement window** (seed 101). That is
+   the most concrete statement of "unresolved" available.
+3. **An honesty point the parent pilot did not surface, and it applies to both modes.** The small-skew *pitch*
+   values are enormous extrapolations: at 1° the fitted pitch is 5.30 µm while only 0.0138 µm of axial travel
+   was observed — a **380× extrapolation** (2° seed 101: 0.60 µm pitch on 0.0157 µm of travel, 38×). Quoting
+   such a pitch against the experimental 0.47 ± 0.20 µm is unsound independently of the resolution argument,
+   and §15's "1° is numerically closest to experiment" coincidence should be discounted on this ground too.
+
+**Late-half versus full-window slope.** At 15° the final-half Ω_odd is within a factor 0.42–1.37 of the
+full-window value (same sign at seed 102, opposite at 101 — consistent with §13's non-convergence). At 1° and
+2° the late-half estimate reaches **−8.0×** and **−3.7×** the full-window value, i.e. large *and sign-flipped*
+— an independent confirmation that the small-skew estimates are not converged.
+
 ---
 
 ## 8. The noise floor, and why the parent's formula is only an upper bound here
@@ -503,6 +532,20 @@ canonical ordering. It carries no usable information at n = 2.
 | canonical | 15° | 19.69 | 18.42 | −5.168e-23 | −8.966e-23 | −2.625e-24 | −4.868e-24 | YES |
 | canonical | 0° | 17.80 | 16.66 | +1.507e-23 | +2.244e-23 | +8.463e-25 | +1.347e-24 | YES (chance) |
 
+| mode | ε | net/Σ τ⁺ | net/\|Σ τ⁻\| | residence pull (s) | residence drag (s) |
+|---|---|---|---|---|---|
+| **suppressed** | 15° | 0.00031 | 0.00031 | 2.279e-02 | 2.079e-02 |
+| **suppressed** | 2° | 0.00004 | 0.00004 | 2.234e-02 | 2.104e-02 |
+| **suppressed** | 1° | 0.00110 | 0.00110 | 2.185e-02 | 2.104e-02 |
+| **suppressed** | 0° | 0.00122 | 0.00122 | 2.106e-02 | 2.336e-02 |
+| canonical | 15° | 0.00136 | 0.00136 | 2.264e-02 | 2.102e-02 |
+| canonical | 0° | 0.00039 | 0.00039 | 2.133e-02 | 2.105e-02 |
+
+Dividing the net by *either* cancelling population gives the same figure to five decimals, because the two
+populations are equal to ~0.1 % — which is the cancellation statement itself. Puller residence exceeds dragger
+residence by ~10 % (suppressed 15°) and ~8 % (canonical 15°), i.e. **the residence asymmetry is unchanged by
+suppression**; only the torque magnitudes move.
+
 The canonical study's same-sign puller/dragger observation at 15° **does not survive suppression**. Since the
 parent already showed the test "passes" at ε = 0 by chance, and it now fails at the one skew that *is*
 resolved, this metric carries no information at this sample size. Reported for completeness; no weight
@@ -561,7 +604,24 @@ reduction factor may shrink with longer runs, so the class-C verdict is rested o
 ratio.
 
 At 1° and 2° the nested estimates flip sign within the same trajectory and R² stays ≤0.33 — not converged in
-any sense.
+any sense. §7.3's late-half comparison says the same thing independently: the final-half Ω_odd reaches −8.0×
+the full-window value at 2° and −3.7× at 1°.
+
+**A stated limitation of the nested readout.** The per-window dump stores `windowS, v, omega, avgBound,
+strokeRate, vHalf, omegaHalf, rollR2` — it does **not** store per-window torque. So of Stage 9's requested
+sub-items, Ω_odd sign stability, roll R², pitch stability and the late/full comparison are available and
+reported above; **τ_odd sign stability, per-window closure and per-window cancellation-residual stability are
+not derivable from the stored records** and would need a re-run with a widened nested dump. This is recorded as
+a limitation rather than passed over — and it does not affect any conclusion, because the whole-window τ_odd
+(§7), closure (§10) and cancellation residual (§11) are all reported and all point the same way.
+
+**Which limitation of the suppressed 1°/2° result is binding?** Stage 9 asks whether the residual limit is
+stochastic chemistry, binding history, motor-lawn variation, cancellation noise or duration. The answer here is
+**stochastic chemistry and binding history**, not duration: with *all* mechanical Brownian off, roll R² at 1° is
+still only 0.05–0.20, so the surviving stochastic channels alone produce roll wander comparable to the entire
+1° signal. Lawn variation is excluded within a pair (matched seeds share the lawn) and cancellation noise is
+excluded as the *dominant* term because the cancellation residual at 1–2° is indistinguishable from ε = 0. Per
+the task, no extension was run.
 
 ---
 
