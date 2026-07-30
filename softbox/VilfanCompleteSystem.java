@@ -366,6 +366,7 @@ public final class VilfanCompleteSystem {
         public double[] rollBands = new double[0];
         public long    xcheckN;
         public double  xcheckMaxRel, xcheckMeanRel, xcheckBias, xcheckBiasSem, maxEventJumpX, maxEventJumpTheta;
+        public double  circResultant, circMeanRad;
         public long    nEventsAnalysed;
         public double  wallClockS;
         public String  note = "";
@@ -1198,6 +1199,7 @@ public final class VilfanCompleteSystem {
         double[] occ = new double[4];
         double boundTime = 0.0;
         double sXa = 0, sXa2 = 0, sXiA = 0, sXiA2 = 0, sThA = 0, sThA2 = 0; long nXa = 0;
+        double sCosTh = 0, sSinTh = 0;      // circular statistics of the attachment angle
         double sTorqT = 0, sForceT = 0, sTorqPer = 0, sForcePer = 0, wT = 0;
         int[] xaHist = new int[40];
         double[] shadowHist = new double[40];
@@ -1380,6 +1382,7 @@ public final class VilfanCompleteSystem {
                 if (analysed) {
                     sXa += xz; sXa2 += xz * xz; sXiA += xiA; sXiA2 += xiA * xiA;
                     sThA += thA; sThA2 += thA * thA; nXa++;
+                    sCosTh += Math.cos(thA); sSinTh += Math.sin(thA);
                     int b = (int) Math.floor((xz / LNm + 0.5) * 40);
                     if (b >= 0 && b < 40) xaHist[b]++;
                 }
@@ -1453,6 +1456,12 @@ public final class VilfanCompleteSystem {
             R.meanXiA= sXiA / nXa; R.sdXiA = sd(sXiA, sXiA2, nXa);
             R.meanThA= sThA / nXa; R.sdThA = sd(sThA, sThA2, nXa);
             R.meanAttachTorque = -kTheta * R.meanThA;      // M_A = -Ktheta * theta_A  (Eq 4)
+            // circular statistics: R = |<exp(i theta_A)>| is the resultant length (concentration),
+            // and atan2 gives the circular mean DIRECTION. These are the correct summaries for an
+            // angular variable and are required once roll noise can broaden the distribution.
+            double cbar = sCosTh / nXa, sbar = sSinTh / nXa;
+            R.circResultant = Math.hypot(cbar, sbar);
+            R.circMeanRad = Math.atan2(sbar, cbar);
         }
         if (wT > 0) {
             R.meanTotalForce = sForceT / wT; R.meanTotalTorque = sTorqT / wT;

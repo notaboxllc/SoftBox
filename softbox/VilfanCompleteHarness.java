@@ -228,6 +228,7 @@ public final class VilfanCompleteHarness {
         kv(b, "branchCrossings", R.branchCrossings); kv(b, "degenerateBranch", R.degenerateBranch);
         kv(b, "transientRootEvents", R.transientRootEvents); kv(b, "nEventsAnalysed", R.nEventsAnalysed);
         kv(b, "maxEventJumpX", R.maxEventJumpX); kv(b, "maxEventJumpTheta", R.maxEventJumpTheta);
+        kv(b, "circResultant", R.circResultant); kv(b, "circMeanRad", R.circMeanRad);
         kv(b, "rollBrownian", R.rollBrownian); kv(b, "DThetaRad2PerS", R.DThetaRad2PerS);
         kv(b, "sdThetaConstrainedRad", R.sdThetaConstrainedRad); kv(b, "tauThetaMedS", R.tauThetaMedS2);
         kv(b, "nRollCross", R.nRollCross); kv(b, "nRollSubdiv", R.nRollSubdiv);
