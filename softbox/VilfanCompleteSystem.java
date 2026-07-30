@@ -143,6 +143,11 @@ public final class VilfanCompleteSystem {
         public int refineLevel = 0;
         /** max bridge halvings when locating the terminal event inside an accepted substep. */
         public int bridgeMaxLevel = 14;
+        /** STAGE-0 REPAIR: absolute cap on the per-substep angular RMS increment, rad. Replaces the
+         *  parent's unsatisfiable relative-to-boundary criterion; always achievable. */
+        public double rollSigCapRad = 0.05;
+        /** enable occupancy / zero-bound-gap / phase-memory instrumentation. */
+        public boolean occDiagnostics = false;
         /** hysteresis bands (nm) for scale-aware zone-centre recrossing counting. */
         public double[] recrossBandsNm = {0.0, 0.5, 1.0, 2.7, 5.0};
 
@@ -360,7 +365,7 @@ public final class VilfanCompleteSystem {
         /* ---- roll Brownian (Stage 7) ---- */
         public boolean rollBrownian;
         public double  DThetaRad2PerS, sdThetaConstrainedRad, tauThetaMedS2;
-        public long    nRollCross, nRollSubdiv, nFreeRollSteps;
+        public long    nRollCross, nRollSubdiv, nFreeRollSteps, nRollCapFail;
         public double  maxMissProb, meanMissProb, windingRad;
         public long[]  rollFwd = new long[0], rollBwd = new long[0];
         public double[] rollBands = new double[0];
@@ -550,9 +555,11 @@ public final class VilfanCompleteSystem {
     private double maxDynResidF, maxDynResidM;
     private double DX;                       // kBT/gammaX, nm^2/s
     private double DTheta;                   // kBT/gammaTheta, rad^2/s
-    private long   nFreeRollSteps, nRollCross, nRollSubdiv;
+    private long   nFreeRollSteps, nRollCross, nRollSubdiv, nRollCapFail;
     private double maxMissProb, sumMissProb;
     private VilfanRollBands rollBands;
+    private VilfanOccupancy occDiag;       // low-occupancy instrumentation (null unless enabled)
+    private double tAbs;               // absolute simulated time, for gap timestamps
     private double windingRad;
     private int    noiseSign = +1;
     private long   anchorIdx;                // monotone address for the axial noise stream
@@ -1021,14 +1028,28 @@ public final class VilfanCompleteSystem {
             // roll is then FREE diffusion, so Theta wanders continuously and some bound head is almost
             // always near a boundary, driving subdivision to the halving limit (~1e6x more substeps)
             // for zero physical content. The alpha = 0 control arms hung on exactly this.
+            // ---- STAGE-0 REPAIR: absolute angular cap replaces the relative-to-boundary criterion ----
+            //
+            // The parent capped the angular RMS increment at a quarter of the distance to the nearest
+            // boundary. That is UNSATISFIABLE as a head approaches +-pi: no finite number of halvings
+            // suffices, the halving limit is hit, and control is lost (parent S18.1).
+            //
+            // The repair rests on an invariant this implementation already has: branch integers are
+            // RE-DERIVED FROM Theta at the top of every substep (setBranch), i.e. exact re-wrapping at
+            // +-pi. A NET crossing therefore CANNOT be missed -- the re-wrap registers it however close
+            // to the boundary it occurs. The only residual error is that the drift within a substep
+            // uses the pre-step branch assignment, and that error is bounded by the SUBSTEP SIZE, not
+            // by boundary proximity. The correct criterion is therefore an ABSOLUTE cap, which is
+            // always satisfiable in ~log2((sig0/cap)^2) halvings. Correctness is established against a
+            // very fine direct wrapPi reference (fixture S0-F7), not by a proximity tolerance.
             double dt = dtBase;
             double sig = rollSigma(tauT, nb, dt);
-            if (kTheta > 0.0) {
-                double dBnd = distToBoundary();
-                int sub = 0;
-                while (sig > 0.25 * dBnd && sub < 20 && dt > 1e-12) { dt *= 0.5; sig = rollSigma(tauT, nb, dt); sub++; }
-                if (sub > 0) nRollSubdiv++;
+            int sub = 0;
+            while (sig > c.rollSigCapRad && sub < 60 && dt > 1e-15) {
+                dt *= 0.5; sig = rollSigma(tauT, nb, dt); sub++;
             }
+            if (sub > 0) nRollSubdiv++;
+            if (sig > c.rollSigCapRad) nRollCapFail++;    // must remain 0; reported, never silent
 
             double X0 = X, T0 = Theta;
             long addr = anchorIdx++;
@@ -1037,24 +1058,32 @@ public final class VilfanCompleteSystem {
             double Tm = rollBridgeMid(Teq, T0, Tn, tauT, nb, dt, addr, noiseSign);
             double Xm = relaxX(Xeq, X0, tauX, 0.5 * dt);
 
-            // Residual missed-crossing probability over this substep (bridge formula, worst boundary).
-            // Skipped when Ktheta == 0 for the same reason: with no angular potential there are no
-            // branches to miss, and the O(Nb) scan per substep would be pure overhead.
+            // Intra-substep boundary-TRANSIT probability. This is now a DIAGNOSTIC, not a correctness
+            // bound: net crossings are registered exactly by the re-wrap (below). It reports how often
+            // the drift slope was momentarily evaluated on the wrong branch. Skipped when Ktheta == 0,
+            // where there is no angular potential and hence no branches.
             if (kTheta > 0.0) {
                 double v = 2.0 * sig * sig;
-                double pMiss = 0.0;
+                double pT = 0.0;
                 for (int j = 0; j < xM.length; j++) {
                     if (state[j] == DETACHED) continue;
                     double off = baseAzim(siteOf[j]) + TWO_PI * branchN[j];
                     for (int sgn = -1; sgn <= 1; sgn += 2) {
-                        double Tc = sgn * Math.PI - off;
-                        double pc = bridgeCrossProb(T0, Tn, Tc, v);
-                        if (pc < 1.0) pMiss = Math.max(pMiss, pc);
-                        else nRollCross++;
+                        double pc = bridgeCrossProb(T0, Tn, sgn * Math.PI - off, v);
+                        if (pc > pT) pT = pc;
                     }
                 }
-                if (pMiss > maxMissProb) maxMissProb = pMiss;
-                sumMissProb += pMiss;
+                if (pT > maxMissProb) maxMissProb = pT;
+                sumMissProb += pT;
+                // NET branch crossings, counted by comparing each bound head's branch integer before
+                // and after re-wrapping to the new Theta. This cannot miss a crossing at any boundary
+                // proximity, which is what makes the absolute-cap criterion sufficient.
+                for (int j = 0; j < xM.length; j++) {
+                    if (state[j] == DETACHED) continue;
+                    double raw = Tn + baseAzim(siteOf[j]);
+                    int nNew = -(int) Math.rint(raw / TWO_PI);
+                    if (nNew != branchN[j]) nRollCross += Math.abs(nNew - branchN[j]);
+                }
             }
 
             double k0 = kTotalAt(X0, T0), km = kTotalAt(Xm, Tm), k1 = kTotalAt(Xn, Tn);
@@ -1075,6 +1104,8 @@ public final class VilfanCompleteSystem {
             Hrem -= Hs; tAcc += dt;
             windingRad += Math.abs(Tn - T0);
             X = Xn; Theta = Tn;
+            // low-occupancy instrumentation: occupancy distribution, zero-bound gaps, phase memory
+            if (occDiag != null) occDiag.substep(nb, dt, Xn - X0, Tn - T0, tAbs + tAcc, X, Theta);
             updateRollBands();
             updateRecrossing();
         }
@@ -1202,6 +1233,9 @@ public final class VilfanCompleteSystem {
         recFwd = new long[nBands]; recBwd = new long[nBands];
         recRef = new double[nBands]; recSide = new int[nBands];
         rollBands = new VilfanRollBands(c.rollBands);
+        // helical coupling m: the effective groove advances pi in azimuth per zone period, so the
+        // joint phase is 2*pi*dX/L + m*dTheta with m = 1 (both terms in units of the same cycle).
+        if (c.occDiagnostics) occDiag = new VilfanOccupancy(LNm, 1.0);
         Arrays.fill(siteOf, -1);
         occupied = new boolean[nSites];
         hazCache = new double[nM];
@@ -1260,6 +1294,7 @@ public final class VilfanCompleteSystem {
                 break;
             }
 
+            tAbs = t;
             // ---------- step 3: waiting time ----------
             double dt;
             double X0i = X, Th0i = Theta;
@@ -1397,6 +1432,7 @@ public final class VilfanCompleteSystem {
                 nAtt++;
                 if (analysed) {
                     sXa += xz; sXa2 += xz * xz; sXiA += xiA; sXiA2 += xiA * xiA;
+                    if (occDiag != null) occDiag.attachment(nb, xz);
                     sThA += thA; sThA2 += thA * thA; nXa++;
                     sCosTh += Math.cos(thA); sSinTh += Math.sin(thA);
                     int b = (int) Math.floor((xz / LNm + 0.5) * 40);
@@ -1404,7 +1440,8 @@ public final class VilfanCompleteSystem {
                 }
             } else if (kind == 1) { state[chosen] = POST_PS; nPS++; }
             else if (kind == 2)   { state[chosen] = RIGOR;   nADP++; }
-            else {                  occupied[siteOf[chosen]] = false; siteOf[chosen] = -1;
+            else {                  if (occDiag != null) occDiag.detachment(nb);
+                                    occupied[siteOf[chosen]] = false; siteOf[chosen] = -1;
                                     state[chosen] = DETACHED; nDet++; }
 
             // Under finite drag X and Theta are CONTINUOUS through the event: the transition changes
@@ -1506,6 +1543,7 @@ public final class VilfanCompleteSystem {
         R.recFwd = recFwd; R.recBwd = recBwd; R.recBands = c.recrossBandsNm;
         R.rollBrownian = c.rollBrownian; R.DThetaRad2PerS = DTheta;
         R.nRollCross = nRollCross; R.nRollSubdiv = nRollSubdiv; R.nFreeRollSteps = nFreeRollSteps;
+        R.nRollCapFail = nRollCapFail;
         R.maxMissProb = maxMissProb; R.meanMissProb = (nSubsteps > 0) ? sumMissProb / nSubsteps : 0;
         R.windingRad = windingRad; R.rollBands = c.rollBands;
         if (rollBands != null) { R.rollFwd = rollBands.fwd; R.rollBwd = rollBands.bwd; }
