@@ -5,9 +5,9 @@
 **Runner** CPU only — no CUDA, no TornadoVM, no `TaskGraph`, no device context. ≤ 3 cores, `nice -n 17`.
 
 > ## STATUS: **COMPLETE — classification A** (S20). Production (4 matched seed pairs + 4 shadow
-> arms) and the `d = 0` control have landed and are decisive; the `alpha = 0` and achiral controls
-> were still running at write-up and are reported as such in S19. One localized numerical caveat is
-> recorded in full at S18.1 — it does not change the classification and the reasoning is given.
+> arms) and **all four mechanism controls** have landed. One localized numerical caveat is recorded
+> in full at S18.1, and a substep-controller defect found via the `alpha = 0` control is recorded at
+> S17.1 together with its fix and a proof that production is unaffected.
 
 ---
 
@@ -502,28 +502,88 @@ band count.
 
 ## S17. Stage F — controls
 
-| control | v (µm/s) | Ω_odd (rad/s) | Ω_even | ⟨x_A⟩ nm | before % | M_A pN·nm |
+All four run under identical roll-Brownian dynamics, on matched fixed simulated time.
+
+| control | v (µm/s) | Ω_odd (rad/s) | Ω_even | ⟨x_A⟩ nm | before % | M_A (pN·nm) |
 |---|---|---|---|---|---|---|
-| full mechanism (n=4) | 0.04153 | −0.5275 ± 0.005 | 0.00224 | 1.573 | 58.67 | −1.735 |
-| **d = 0** | **4.97e−06** | — | — | **0.00526** | **50.47** | **0.0322** |
-| α = 0 | *running* | | | | | |
-| achiral lattice | *running* | | | | | |
-| Brownian OFF | see `DRAG_RECORDS` (left column above) | | | | | |
+| full mechanism (n = 4) | 0.04153 | **−0.5275 ± 0.005** | 0.00224 | **1.573** | **58.67** | **−1.735** |
+| **α = 0** | 0.04032 | −0.8497 (see below) | −0.719 | **−0.0267** | **49.89** | **0 exactly** |
+| **d = 0** | **4.97e−06** | −7.7e−05 | −4.1e−04 | **0.00526** | **50.47** | 0.0322 |
+| **achiral lattice** | 0.0402 | **+6.4e−04** | −4.4e−04 | (degenerate) | (degenerate) | 0.0053 |
+| Brownian OFF | see `DRAG_RECORDS` — the left-hand column throughout S12 | | | | | |
 
-- **`d = 0`** (landed, decisive): `v = 5.0e-06 um/s` — zero within the estimator — `<x_A> = 0.0053 nm`,
-  before-centre **50.47 %**, `M_A = 0.032 pN.nm`. Roll diffusion continues (winding 1.3e6 rad) but with
-  no directional target-zone passage there is no depletion bias, no angular bias and no twirl. Run on
-  matched fixed simulated time, since a diffusing filament has no travel target.
-- **`alpha = 0` and achiral lattice**: still running at write-up (S19). Both remove the mechanism at
-  its first link by construction — with `Ktheta = 0` there is no angular term in the attachment
-  energy, so no target zones exist; with `theta0 = 0` there is no chirality. Both parent studies
-  measured `Omega_odd = 0` exactly for these controls.
-- **Brownian OFF**: the committed deterministic finite-drag records serve as the reference throughout
-  (`DRAG_RECORDS`, left-hand column of S12). A Brownian-OFF arm through this study's own fixed-time
-  window is queued; the axial study established that the fixed-time and travel-threshold windows agree
-  to well within seed scatter.
+**`d = 0`** removes the power stroke: `v = 5.0e−06 µm/s` (zero within the estimator),
+`Ω_odd = −7.7e−05`, `⟨x_A⟩ = 0.0053 nm`, before-centre **50.47 %**. Roll diffusion continues
+(1.3e6 rad of sampled winding) but with no directional target-zone passage there is no depletion
+bias, no angular bias and no twirl.
 
----
+**`achiral lattice` (ϑ₀ = 0)** gives `Ω_odd = +6.4e−04 rad/s`, i.e. zero: no chirality, no mirror-odd
+rotation, while axial gliding continues at 0.0402 µm/s. *Diagnostic caveat:* with `ϑ₀ = 0` the
+effective groove slope vanishes, so the target-zone period is undefined and the reported
+`⟨x_A⟩ = 0` / before-centre `= 100 %` are artefacts of a coordinate that does not exist in this
+control, **not** measurements. The meaningful output is `Ω_odd ≈ 0`.
+
+**`α = 0` — and why its `Ω` is large without contradicting anything.** With `K_ϑ = 0` the mechanism is
+removed at its first link: there is no angular term in the attachment energy, so no target zones
+exist. The measured `⟨x_A⟩ = −0.0267 nm`, before-centre **49.89 %** (symmetric) and
+`M_A = 0 exactly` confirm that. But `Ω_odd = −0.85` and `Ω_even = −0.72` are **not** small, and the
+reason is that with `K_ϑ = 0` there is **no angular confinement at all** — roll becomes *free*
+diffusion at `D_Θ = 489 rad²/s`. The endpoint-slope estimator over a 120 s window then has a
+diffusive standard deviation of
+
+```
+sd(Omega_fit) = sqrt(2 D_Theta / T) = sqrt(2 x 489 / 120) = 2.855 rad/s
+```
+
+so `−0.85` is **0.30 σ** from zero and `−0.72` is **0.25 σ**. Both are consistent with zero, exactly
+as the brief anticipates ("do not expect raw fitted Omega from one finite arm to equal zero; require
+the ensemble odd mean and mean torque to be consistent with zero"). The decisive quantity is the mean
+torque, which is **identically zero** because `K_ϑ = 0` makes a torque impossible. The contrast with
+the achiral control is instructive and internally consistent: achiral keeps `K_ϑ > 0`, so roll stays
+OU-confined and its fitted `Ω` is tiny (6e−04); `α = 0` removes the confinement, so its fitted `Ω`
+inherits the full free-diffusion scatter.
+
+### S17.1 A substep-controller defect found by the `α = 0` control, and its fix
+
+The `α = 0` arms initially **would not finish**: two of them accumulated 58 and 50 minutes of CPU
+without completing, against ~27 minutes for a normal arm.
+
+**Cause.** `advanceRollStochastic` shrinks the substep until the angular RMS increment is at most a
+quarter of the distance to the nearest `±π` boundary. That constraint exists only because the summed
+torque is *piecewise*-linear in `Θ`, its slope changing at each boundary. **When `K_ϑ = 0` there is no
+angular potential at all** — the torque is identically zero, there are no branches, and crossing a
+"boundary" changes nothing. Applying the criterion there is not merely wasteful but effectively
+unsatisfiable: roll is then free diffusion, so `Θ` wanders continuously, some bound head is almost
+always near a boundary, and subdivision is driven to the 20-halving limit — roughly 10⁶× more
+substeps for zero physical content.
+
+**Fix.** Guard both the boundary-driven subdivision and the missed-crossing scan on `K_ϑ > 0`.
+
+**Effect.** The `α = 0` arms now complete in **285–314 s** with **zero subdivisions**, versus 3.72 M
+subdivisions and no completion before. The achiral arms likewise run in 350–382 s.
+
+**Proof that production is unaffected.** The guard is the exact condition under which the guarded
+block was already meaningful, so it is a no-op for `K_ϑ > 0` — but that is a claim worth testing
+rather than asserting. A committed production record was moved aside and its arm re-run under the
+patched binary:
+
+```
+PRODUCTION IDENTITY: EXACT
+  velUmPerS     0.04144475572  vs  0.04144475572
+  omegaRadPerS  -0.5112439685  vs  -0.5112439685
+  meanXaNm       1.495421398   vs   1.495421398
+  meanThARad     0.1004289247  vs   0.1004289247
+  nEvents          215468      vs      215468
+  thetaEndRad   -74.46957777   vs  -74.46957777
+  xEndNm        6016.797617    vs  6016.797617
+```
+
+All seven quantities are **bit-identical**, so nothing in S12–S16 or the classification changes.
+
+**Together these controls exclude the alternative that roll noise created an unrelated rotational
+mode**: the rotation vanishes when the angular stiffness is removed (to within free-diffusion
+scatter, with the torque identically zero), vanishes when the stroke is removed, and vanishes when the
+lattice chirality is removed — while axial gliding survives all three.
 
 ## S18. Numerical and regression health
 
@@ -570,22 +630,19 @@ degeneracy argument plus the empirical insensitivity, **not** by the substep con
 
 ---
 
-## S19. What is still running
+## S19. What remains
 
 | item | status |
 |---|---|
-| production seed pairs 105-108 (+ shadows) | queued; n = 4 already clears every threshold (S12) |
-| `alpha = 0` control | running |
-| achiral-lattice control | running |
-| Brownian-OFF through this study's fixed-time window | queued |
-| paper-lattice check (Stage G, optional) | queued |
+| production seed pairs 101–104 (+ 4 shadow arms) | **DONE** — n = 4 clears every threshold (S12) |
+| `α = 0`, `d = 0`, achiral controls | **DONE** (S17) |
+| production seed pairs 105–108 (+ shadows) | queued; would tighten SEMs only |
+| Brownian-OFF through this study's own fixed-time window | queued; `DRAG_RECORDS` serves as the reference meanwhile |
+| paper-lattice check (Stage G, optional) | queued; conditional on the native result, which is now classified |
 | full-length regression vs committed records | queued |
 
-None of these can overturn the classification: the depletion chain is resolved at 67.5 sigma, every
-amplitude is within 4.4 %, and the two pending controls remove the mechanism by construction rather
-than by measurement. They should be run to completion and the tables refreshed.
-
----
+None of the queued items can overturn the classification: the depletion chain is resolved at 67.5 σ,
+every amplitude is within 4.4 %, and all four mechanism controls behave as required.
 
 ## S20. Classification
 
@@ -597,7 +654,8 @@ than by measurement. They should be run to completion and the tables refreshed.
 | `<x_A>`, `<theta_A>`, torque, `Omega_odd` retain expected signs | **yes** — +1.573 nm, +0.1048 rad, -1.735 pN.nm, -0.5275 rad/s |
 | primary amplitudes within 25 % of deterministic drag | **yes, with >5x margin** — 0.956 / 0.988 / 0.988 / 1.016 |
 | `Omega_even` consistent with zero | **yes** — 0.0022 +- 0.011 rad/s |
-| branch-crossing numerics validated | **yes for 3/4 arms outright**; for the fourth by energetic degeneracy at the boundary plus empirical insensitivity — see the caveat at S18.1 |
+| branch-crossing numerics validated | **yes for 3/4 arms outright**; for the fourth by energetic degeneracy at the boundary plus empirical insensitivity — see S18.1 |
+| controls remove the mechanism | **yes** — `α = 0` (torque identically 0, `⟨x_A⟩ = −0.027`, before-centre 49.89 %), `d = 0` (v = 5e−06, before-centre 50.47 %), achiral (`Ω_odd = 6e−04`); axial gliding survives all three (S17) |
 
 Not B (nothing is attenuated by more than 4.4 %); not C (`Omega_odd` is resolved at ~105 sigma and
 stationary to 0.5 %); not D (real and shadow distributions are 67.5 sigma apart); not E (no

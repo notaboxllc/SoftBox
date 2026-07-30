@@ -1011,12 +1011,24 @@ public final class VilfanCompleteSystem {
             double tauX = (nb > 0 && K > 0) ? gammaX / (nb * K) : Double.POSITIVE_INFINITY;
             double tauT = (nb > 0 && kTheta > 0) ? gammaTheta / (nb * kTheta) : Double.POSITIVE_INFINITY;
 
-            // shrink the substep until the angular RMS increment is small against the nearest boundary
-            double dt = dtBase, dBnd = distToBoundary();
+            // Shrink the substep until the angular RMS increment is small against the nearest wrapPi
+            // boundary, bounding the probability of an undetected same-side bridge crossing.
+            //
+            // Needed ONLY because the summed torque is piecewise-linear in Theta, its slope changing
+            // at each boundary. When Ktheta == 0 there is no angular potential at all: the torque is
+            // identically zero, there are no branches, and crossing a "boundary" changes nothing.
+            // Applying the criterion there is not merely wasteful but effectively unsatisfiable --
+            // roll is then FREE diffusion, so Theta wanders continuously and some bound head is almost
+            // always near a boundary, driving subdivision to the halving limit (~1e6x more substeps)
+            // for zero physical content. The alpha = 0 control arms hung on exactly this.
+            double dt = dtBase;
             double sig = rollSigma(tauT, nb, dt);
-            int sub = 0;
-            while (sig > 0.25 * dBnd && sub < 20 && dt > 1e-12) { dt *= 0.5; sig = rollSigma(tauT, nb, dt); sub++; }
-            if (sub > 0) nRollSubdiv++;
+            if (kTheta > 0.0) {
+                double dBnd = distToBoundary();
+                int sub = 0;
+                while (sig > 0.25 * dBnd && sub < 20 && dt > 1e-12) { dt *= 0.5; sig = rollSigma(tauT, nb, dt); sub++; }
+                if (sub > 0) nRollSubdiv++;
+            }
 
             double X0 = X, T0 = Theta;
             long addr = anchorIdx++;
@@ -1025,21 +1037,25 @@ public final class VilfanCompleteSystem {
             double Tm = rollBridgeMid(Teq, T0, Tn, tauT, nb, dt, addr, noiseSign);
             double Xm = relaxX(Xeq, X0, tauX, 0.5 * dt);
 
-            // residual missed-crossing probability over this substep (bridge formula, worst boundary)
-            double v = 2.0 * sig * sig;
-            double pMiss = 0.0;
-            for (int j = 0; j < xM.length; j++) {
-                if (state[j] == DETACHED) continue;
-                double off = baseAzim(siteOf[j]) + TWO_PI * branchN[j];
-                for (int sgn = -1; sgn <= 1; sgn += 2) {
-                    double Tc = sgn * Math.PI - off;
-                    double pc = bridgeCrossProb(T0, Tn, Tc, v);
-                    if (pc < 1.0) pMiss = Math.max(pMiss, pc);
-                    else nRollCross++;
+            // Residual missed-crossing probability over this substep (bridge formula, worst boundary).
+            // Skipped when Ktheta == 0 for the same reason: with no angular potential there are no
+            // branches to miss, and the O(Nb) scan per substep would be pure overhead.
+            if (kTheta > 0.0) {
+                double v = 2.0 * sig * sig;
+                double pMiss = 0.0;
+                for (int j = 0; j < xM.length; j++) {
+                    if (state[j] == DETACHED) continue;
+                    double off = baseAzim(siteOf[j]) + TWO_PI * branchN[j];
+                    for (int sgn = -1; sgn <= 1; sgn += 2) {
+                        double Tc = sgn * Math.PI - off;
+                        double pc = bridgeCrossProb(T0, Tn, Tc, v);
+                        if (pc < 1.0) pMiss = Math.max(pMiss, pc);
+                        else nRollCross++;
+                    }
                 }
+                if (pMiss > maxMissProb) maxMissProb = pMiss;
+                sumMissProb += pMiss;
             }
-            if (pMiss > maxMissProb) maxMissProb = pMiss;
-            sumMissProb += pMiss;
 
             double k0 = kTotalAt(X0, T0), km = kTotalAt(Xm, Tm), k1 = kTotalAt(Xn, Tn);
             if (!(k0 > 0) && !(km > 0) && !(k1 > 0)) return -1;
