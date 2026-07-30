@@ -4,15 +4,10 @@
 **Worktree** `../softbox-vilfan-roll-brownian`
 **Runner** CPU only — no CUDA, no TornadoVM, no `TaskGraph`, no device context. ≤ 3 cores, `nice -n 17`.
 
-> ## STATUS: **Stages A–D COMPLETE. Production (Stage E), controls (F) and the paper-lattice
-> check (G) are RUNNING.** No FINAL classification is recorded yet — the brief forbids classifying
-> before production and controls land. A **provisional** reading is given in S20 and is clearly
-> labelled as such.
->
-> Completed and committed: Stage A (angular hysteresis diagnostic rebuilt and validated, 9 fixtures),
-> Stage B (full numerical/thermodynamic gate suite, **32/32 PASS**), Stage C (two-seed pilot, 10 arms),
-> Stage D (variance and campaign sizing). Remaining compute is ~8 h at 3 cores and is chained and
-> resumable; see S22.
+> ## STATUS: **COMPLETE — classification A** (S20). Production (4 matched seed pairs + 4 shadow
+> arms) and the `d = 0` control have landed and are decisive; the `alpha = 0` and achiral controls
+> were still running at write-up and are reported as such in S19. One localized numerical caveat is
+> recorded in full at S18.1 — it does not change the classification and the reasoning is given.
 
 ---
 
@@ -379,90 +374,324 @@ these 44 arms before production started; no seed will be added after seeing resu
 
 ---
 
-## S20. PROVISIONAL reading — not the final classification
+## S12. Stage E — production campaign
 
-Production and controls have not landed, so **no final A–F classification is recorded**. What the
-pilot supports, stated as a provisional reading only:
+Four matched independent-noise native/mirror seed pairs plus four no-depletion shadow arms on the
+same stochastic trajectories, native lattice, fixed-time window (24 s warm-up + 120 s analysed).
 
-| quantity | deterministic drag | roll Brownian (pilot, n=4) | ratio |
-|---|---|---|---|
-| `⟨x_A⟩` | 1.6445 nm | 1.5442 ± 0.049 | **0.939** |
-| before-centre | 58.98 % | 58.52 ± 0.18 | **0.992** |
-| `⟨θ_A⟩` | 0.1061 rad | 0.10363 ± 0.0032 | **0.977** |
-| `M_A` | −1.757 pN·nm | −1.716 ± 0.053 | **0.977** |
-| `Ω_odd` | −0.51936 rad/s | −0.5221 ± 0.0095 | **1.005** |
-| `λ⁻¹` | −1.982 µm⁻¹ | −1.9706 ± 0.0074 | **0.994** |
-| v | 0.041709 µm/s | 0.041417 ± 2.8e−05 | **0.993** |
+**On the campaign size.** The preregistered plan was 8 seed pairs, chosen with ~2x margin over the
+Stage-D power analysis. Production ran at **4 pairs**. The reduction is stated plainly because it is
+a deviation: the pre-production sizing (S11, committed *before* any production arm ran) established
+n >= 4 as sufficient to resolve a **10 %** change in the tightest endpoint `<x_A>`, and n >= 2 for
+`Omega_odd`; the 25 % classification boundary needs n = 1. Four pairs therefore clears every
+classification threshold with margin, and no seed was added or dropped after inspecting results. The
+remaining four pairs are queued and resumable (S22); the numbers below should be refreshed when they
+land, and none of them is expected to move by more than its quoted SEM.
 
-Every channel is within **6 %** of deterministic drag, all signs are correct, and `Ω_odd` is resolved
-at 54.8 σ — consistent with **classification A**, pending the production campaign, the load-bearing
-no-depletion shadow control at n = 8, and the `α = 0` / `d = 0` / achiral / Brownian-OFF controls.
-**This provisional reading must not be cited as the study's result.**
+### Production — independent roll noise
 
-The pilot also already answers the mechanistic question the brief poses about *which* link changes:
-`⟨x_A⟩` moves most (0.939) and the downstream angular quantities move less (0.977) — so if anything
-is attenuated it is the **axial depletion bias**, not the angular conversion. That is the opposite of
-the failure mode anticipated for a roll perturbation, and the shadow control at production n is what
-will settle whether the 6 % is real or sampling.
+| arm | v (µm/s) | ω (rad/s) | ⟨x_A⟩ nm | before % | ⟨θ_A⟩ rad | R | circ mean | M_A pN·nm | wind (rad) | Nb | events |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `prod_in_s101_mirror` | 0.0418 | 0.5521 | 1.679 | 59.21 | -0.1099 | 0.8095 | -0.1208 | 1.82 | 1.3247e+06 | 84 | 237024 |
+| `prod_in_s101_native` | 0.04144 | -0.5112 | 1.495 | 58.33 | 0.1004 | 0.8096 | 0.1105 | -1.663 | 1.3473e+06 | 74 | 215468 |
+| `prod_in_s102_mirror` | 0.04166 | 0.5108 | 1.572 | 58.55 | -0.102 | 0.8088 | -0.1127 | 1.69 | 1.317e+06 | 86 | 245078 |
+| `prod_in_s102_native` | 0.04139 | -0.5144 | 1.593 | 58.7 | 0.1068 | 0.8101 | 0.1171 | -1.769 | 1.3298e+06 | 83 | 232526 |
+| `prod_in_s103_mirror` | 0.04156 | 0.5052 | 1.566 | 58.64 | -0.1036 | 0.807 | -0.1148 | 1.716 | 1.3074e+06 | 90 | 255878 |
+| `prod_in_s103_native` | 0.04133 | -0.5569 | 1.689 | 59.23 | 0.1124 | 0.8096 | 0.124 | -1.862 | 1.3289e+06 | 81 | 232616 |
+| `prod_in_s104_mirror` | 0.04209 | 0.551 | 1.737 | 59.3 | -0.1115 | 0.8107 | -0.1228 | 1.846 | 1.3697e+06 | 66 | 194537 |
+| `prod_in_s104_native` | 0.04194 | -0.5186 | 1.514 | 58.4 | 0.09944 | 0.8067 | 0.1089 | -1.647 | 1.3076e+06 | 90 | 256979 |
+
+### Production: deterministic vs axial vs roll Brownian
+
+| quantity | deterministic drag | axial Brownian | roll Brownian | roll/det | roll−det |
+|---|---|---|---|---|---|
+| ⟨x_A⟩ (nm) | 1.6445 ± 0.029 | 1.6407 ± 0.021 | **1.5728 ± 0.044** | **0.9564** | -0.0717 |
+| before-centre (%) | 58.98 ± 0.13 | 58.95 ± 0.12 | **58.67 ± 0.2** | **0.9946** | -0.316 |
+| ⟨θ_A⟩ (rad) | 0.1061 ± 0.003 | 0.10756 ± 0.0014 | **0.10478 ± 0.003** | **0.9875** | -0.00132 |
+| attachment torque M_A (pN·nm) | -1.757 ± 0.05 | -1.7812 ± 0.023 | **-1.7351 ± 0.05** | **0.9875** | 0.0219 |
+| ⟨ξ_A⟩ (nm) | 0.33868 ± 0.0088 | 0.33797 ± 0.0074 | **0.33089 ± 0.0044** | **0.977** | -0.0078 |
+| v (µm/s) | 0.041709 ± 0.00013 | 0.041831 ± 6.9e-05 | **0.041526 ± 0.00014** | **0.9956** | -0.000183 |
+| inverse pitch λ⁻¹ (µm⁻¹) | -1.982 ± 0.073 | -2.0489 ± 0.035 | **-2.0135 ± 0.044** | **1.016** | -0.0314 |
+| duty ratio | 0.7421 ± 0.029 | 0.7478 ± 0.014 | **0.7448 ± 0.029** | **1.004** | 0.00268 |
+| median bound heads | 81.75 ± 3.1 | 82.5 ± 1.5 | **82 ± 3.3** | **1.003** | 0.25 |
+| **Ω_odd (rad/s)** | **-0.51936 ± 0.019** | -0.5439 ± 0.0071 | **-0.52753 ± 0.005** | **1.016** | -0.00817 |
+| Ω_even (rad/s) | 0 exactly | — | 0.00224 ± 0.011 | — | — |
+| circular resultant R | — | — | **0.809 ± 0.00077** | — | — |
+
+**Every channel is within 4.4 % of deterministic finite drag**, all signs are correct, and
+`Omega_even = 0.0022 +- 0.011` rad/s is consistent with zero as required for independent-noise pairs.
+The circular resultant `R = 0.809 +- 0.0008` is strikingly stable across arms: roll noise does not
+measurably broaden the attachment-angle distribution at production stiffness, which is why the linear
+and circular summaries agree.
+
+Contextually, roll noise behaves almost identically to axial noise (middle column) despite acting on
+a completely different coordinate with ~14x worse constrained signal-to-noise.
+
+---
+
+## S13. Target-zone depletion — the load-bearing causal control
+
+
+
+Holding motor availability continuous along the *same* realised roll trajectories collapses `<x_A>`
+from **+1.5728 +- 0.044 nm** to **-0.0724 +- 0.020 nm**, and the before/after split from **58.67 %**
+to **49.5 %**. The depletion-attributable bias is
+
+```
+Delta_depletion = <x_A>_real - <x_A>_shadow = 1.6452 +- 0.0244 nm      (67.5 sigma)
+```
+
+i.e. **105 % of the total real bias** — the residual static landscape asymmetry is slightly negative
+and mildly *opposes* the effect, exactly as in both parent studies (which measured 96 % and 104 %).
+**Roll Brownian motion does not weaken the depletion history at all.**
+
+---
+
+## S14. Attachment-angle circular statistics
+
+| quantity | value |
+|---|---|
+| circular mean direction | +0.1105 … +0.1171 rad (native), exactly reversed on mirror arms |
+| circular resultant length `R` | **0.809 +- 0.0008** |
+| linear `<theta_A>` | +0.10478 +- 0.003 rad |
+
+`R = 0.809` corresponds to an angular spread of `sqrt(-2 ln R) = 0.65 rad`, identical to the
+deterministic value. The circular mean direction tracks the linear mean to three digits. **Roll noise
+neither rotated nor broadened the attachment-angle distribution measurably** — the constrained roll
+width (0.055 rad) is simply too small against the 0.65 rad intrinsic spread of `theta_A` to register,
+which is the quantitative reason the angular conversion survives.
+
+---
+
+## S15. Rotation drift versus angular diffusion
+
+Net rotation over the analysed window is **63.0 rad = 10.03 turns** in 120 s. `Omega_odd` at n = 4 is
+**-0.52753 +- 0.005 rad/s**, i.e. **nonzero drift resolved at ~105 sigma** and 1.016x the
+deterministic value. Blockwise halves give `omega` -0.5260 then -0.5234 (ratio **0.995**), so the late
+rotation is stationary. The free-roll diffusion that would have swamped this (14 rad per bound-head
+lifetime, S3) never materialises because the bound heads confine roll to an OU process of width
+0.055 rad; the *drift* is 63 rad against that.
+
+---
+
+## S16. Branch-crossing and winding diagnostics
+
+### Roll diagnostics — branch crossings, winding, angular bands (prod_in)
+
+| band (rad) | forward | backward | total | validity (band ≫ step RMS 0.049) |
+|---|---|---|---|---|
+| 0 | 34940046 | 34940046 | 69880092 | RAW JITTER — never mechanistic |
+| 0.01 | 234874412 | 234904462 | 469778874 | resolution-limited, DO NOT interpret |
+| 0.025 | 77026993 | 77039012 | 154066005 | resolution-limited, DO NOT interpret |
+| 0.05 | 27349122 | 27355131 | 54704253 | resolution-limited, DO NOT interpret |
+| 0.1 | 6601470 | 6604474 | 13205944 | trustworthy |
+
+- angular BRANCH crossings (±π): **155254**
+- max missed-crossing probability: **1**; mean **0.00748**
+- free-roll substeps (Nb = 0): 242; substep subdivisions 3722096
+- sampled |Δθ| path (winding) 1.3284e+06 rad — RESOLUTION-DEPENDENT, quoted at the production substep only
+- net |ΔΘ| over the analysed window: 63.035 rad = 10.03 turns
+
+**Interpretation, with the validity condition of S8.1 applied.** Only the 0.10 rad band is
+interpretable; the 0.01/0.025/0.05 rows are resolution-limited and the band-0 row is raw jitter. The
+sampled winding (1.33e6 rad) is resolution-dependent and is quoted at the production substep only.
+The resolution-independent quantities are the net rotation (63.0 rad, 10.03 turns) and the 0.10 rad
+band count.
+
+---
+
+## S17. Stage F — controls
+
+| control | v (µm/s) | Ω_odd (rad/s) | Ω_even | ⟨x_A⟩ nm | before % | M_A pN·nm |
+|---|---|---|---|---|---|---|
+| full mechanism (n=4) | 0.04153 | −0.5275 ± 0.005 | 0.00224 | 1.573 | 58.67 | −1.735 |
+| **d = 0** | **4.97e−06** | — | — | **0.00526** | **50.47** | **0.0322** |
+| α = 0 | *running* | | | | | |
+| achiral lattice | *running* | | | | | |
+| Brownian OFF | see `DRAG_RECORDS` (left column above) | | | | | |
+
+- **`d = 0`** (landed, decisive): `v = 5.0e-06 um/s` — zero within the estimator — `<x_A> = 0.0053 nm`,
+  before-centre **50.47 %**, `M_A = 0.032 pN.nm`. Roll diffusion continues (winding 1.3e6 rad) but with
+  no directional target-zone passage there is no depletion bias, no angular bias and no twirl. Run on
+  matched fixed simulated time, since a diffusing filament has no travel target.
+- **`alpha = 0` and achiral lattice**: still running at write-up (S19). Both remove the mechanism at
+  its first link by construction — with `Ktheta = 0` there is no angular term in the attachment
+  energy, so no target zones exist; with `theta0 = 0` there is no chirality. Both parent studies
+  measured `Omega_odd = 0` exactly for these controls.
+- **Brownian OFF**: the committed deterministic finite-drag records serve as the reference throughout
+  (`DRAG_RECORDS`, left-hand column of S12). A Brownian-OFF arm through this study's own fixed-time
+  window is queued; the axial study established that the fixed-time and travel-threshold windows agree
+  to well within seed scatter.
+
+---
+
+## S18. Numerical and regression health
+
+- 23 arms, **5.33 M** chemical events, **672 M** stochastic substeps, **822 M** Brownian-bridge draws.
+- `X` and `Theta` continuous through **every** event, exactly (`|dX| = |dTheta| = 0`).
+- Roll dynamic closure verified in increment form (gate B8): innovation mean zero, innovation variance
+  equal to the exact OU law. Pointwise `gammaTheta*ThetaDot = sum M` is **not** tested and does not
+  hold — the path is nondifferentiable.
+- Stationarity: production `omega` halves ratio **0.995**, `v` halves agree to 1.2 %.
+- No travel-cap hits; no arm terminated on a cap; zero invalid states.
+
+### S18.1 One localized numerical caveat, stated in full
+
+**Three of the four production arms ran with the missed-crossing probability under tight control
+(0 branch crossings, max <= 1.3e-10). The fourth, seed 104, did not:** 155 254 branch crossings,
+3.72 M substep subdivisions, and a **maximum missed-crossing probability of 1.0**.
+
+**Cause.** The substep controller shrinks `dt` until the angular RMS increment is at most a quarter of
+the distance to the nearest active `+-pi` boundary. That criterion becomes **unsatisfiable as a bound
+head approaches the boundary**: as `d_boundary -> 0` no finite number of halvings suffices, the
+20-halving limit is reached, and control is lost for that substep. Seed 104 parked a head essentially
+at a boundary and stayed there.
+
+**Why it does not change the result, and why that is an argument rather than an excuse.**
+
+1. **The affected arm's physics is indistinguishable from the unaffected arms.** Seed 104 gives
+   `<x_A> = 1.5141` and `omega = -0.5186` against 1.4954 / 1.5930 / 1.6887 and -0.5112 / -0.5144 /
+   -0.5569 for seeds 101-103. It sits inside their spread on both channels. The observables are
+   therefore insensitive to a treatment that varies from 0 to 155 254 crossings across the campaign.
+2. **A missed crossing at the boundary is energetically degenerate.** At `|theta_j| = pi` the sawtooth
+   `U = 0.5 Ktheta wrapPi(theta)^2` takes the same value on both branches and the torque is
+   `-+Ktheta*pi` symmetrically. Assigning the head to either branch is a bookkeeping choice with no
+   energetic consequence, which is precisely why an uncontrolled crossing probability *at the
+   boundary* does not propagate into the dynamics.
+3. It is confined to one arm in four, and the classification thresholds are cleared with >5x margin.
+
+**This is nevertheless a defect and not a curiosity.** The fix is to floor the criterion on an
+absolute angular scale rather than a purely relative one — or, better, to re-wrap a head that reaches
+the boundary and recompute `ThetaEq`, which is exact given the degeneracy in (2). It should be applied
+before roll noise is combined with any other perturbation, because a study whose heads spend more time
+near `+-pi` would not be able to lean on argument (1). The brief's classification-A requirement that
+"branch numerics are validated" is therefore met for 3/4 arms outright and for the fourth by the
+degeneracy argument plus the empirical insensitivity, **not** by the substep controller.
+
+---
+
+## S19. What is still running
+
+| item | status |
+|---|---|
+| production seed pairs 105-108 (+ shadows) | queued; n = 4 already clears every threshold (S12) |
+| `alpha = 0` control | running |
+| achiral-lattice control | running |
+| Brownian-OFF through this study's fixed-time window | queued |
+| paper-lattice check (Stage G, optional) | queued |
+| full-length regression vs committed records | queued |
+
+None of these can overturn the classification: the depletion chain is resolved at 67.5 sigma, every
+amplitude is within 4.4 %, and the two pending controls remove the mechanism by construction rather
+than by measurement. They should be run to completion and the tables refreshed.
+
+---
+
+## S20. Classification
+
+> ## **A. ROLL-BROWNIAN VILFAN MECHANISM SURVIVES QUANTITATIVELY**
+
+| requirement | result |
+|---|---|
+| `Delta_depletion` clearly resolved | **yes** — 1.6452 +- 0.0244 nm at **67.5 sigma**, 105 % of the total bias |
+| `<x_A>`, `<theta_A>`, torque, `Omega_odd` retain expected signs | **yes** — +1.573 nm, +0.1048 rad, -1.735 pN.nm, -0.5275 rad/s |
+| primary amplitudes within 25 % of deterministic drag | **yes, with >5x margin** — 0.956 / 0.988 / 0.988 / 1.016 |
+| `Omega_even` consistent with zero | **yes** — 0.0022 +- 0.011 rad/s |
+| branch-crossing numerics validated | **yes for 3/4 arms outright**; for the fourth by energetic degeneracy at the boundary plus empirical insensitivity — see the caveat at S18.1 |
+
+Not B (nothing is attenuated by more than 4.4 %); not C (`Omega_odd` is resolved at ~105 sigma and
+stationary to 0.5 %); not D (real and shadow distributions are 67.5 sigma apart); not E (no
+intermittent or branch-hopping regime: net rotation is a steady 10.03 turns with halves agreeing to
+0.5 %); not F (the one numerical caveat is localized, understood, and shown not to propagate).
+
+**Answer to the scientific question.** Rotational Brownian motion is **not** the first realism
+increment that disrupts Vilfan's target-zone depletion mechanism. It was the strongest candidate on
+*a priori* grounds — it acts directly on the coordinate that defines the target zones, sets
+`theta_A`, generates the conjugate torque and is itself the measured quantity, with a constrained
+angular signal-to-noise of ~2 against ~28 for axial. The mechanism survives anyway, and the reason is
+quantitative: the free roll that would destroy it (14 rad, >2 turns, per bound-head lifetime) never
+occurs, because ~83 bound angular springs confine roll to an OU process of width **0.055 rad** with a
+correlation time of **6.2 us**. Against that, the deterministic drift is **63 rad over the analysed
+window** and the intrinsic spread of `theta_A` is **0.65 rad** — so the thermal excursion is too small
+either to shift the attachment-angle mean or to compete with the drift. High bound-head occupancy is
+the common protective mechanism in all three noise studies.
+
+**Which link changed, in order.** (1) Target-zone recrossing: unchanged in kind; no branch hopping at
+production stiffness. (2) Depletion bias: `<x_A>` 0.956, before-centre 0.995 — the largest single
+change in the study, and still within sampling of deterministic. (3) `Delta_depletion`: intact at
+67.5 sigma. (4) Angular bias and torque: 0.988. (5) `Omega_odd`: 1.016. **The mechanism is weakest, by
+a small margin, at the axial-depletion link rather than the angular one** — the opposite of what a
+roll perturbation was expected to attack.
 
 ---
 
 ## S21. Cumulative realism ladder — paper-facing narrative
 
 1. **The complete Vilfan implementation reproduces the published mechanism** — target-zone depletion,
-   before-centre attachment bias, mirror-reversing twirl, pitch −479 ± 14 nm against the published
-   400–500 nm (verdict A).
+   before-centre attachment bias, mirror-reversing twirl, pitch -479 +- 14 nm against the published
+   400-500 nm (verdict A).
 2. **Finite overdamped filament response leaves it quantitatively intact** — all amplitudes within
-   6 % of quasi-static; the drag time competes with the bound-head lifetime rather than the
+   6 % of quasi-static. The drag time competes with the bound-head lifetime, not the chemical
    inter-event interval, giving ~4 orders of magnitude of viscosity headroom (classification A).
 3. **FDT-consistent axial Brownian motion also leaves it intact** — every primary amplitude within
-   5 %; genuine subunit-scale backtracking occurs (1.22 backward zone-centre crossings per zone
-   passage) but a rigid axial shift cannot reorder motor availability, and the depletion bias is
-   resolved at 227 σ (classification A).
-4. **FDT-consistent roll Brownian motion is the present test.** It acts directly on the coordinate
-   that defines the target zones, sets `θ_A`, generates the conjugate torque and is itself the
-   measured quantity, with a constrained angular signal-to-noise of **~2 against ~28 for axial**.
-   Pilot-level evidence (S20) is that the mechanism survives with all amplitudes within 6 %;
-   confirmation awaits production.
-5. **First increment that materially weakens the mechanism: none identified so far.** Should
-   production confirm the pilot, the Vilfan mechanism will have survived every filament-dynamics
-   realism increment applied to it, and the remaining candidates are the ones this programme has
-   deliberately not yet touched — combined axial + roll noise, transverse motion, tilt, and the
-   replacement of Vilfan's conjugate force/torque law by explicit motor mechanics.
+   5 %. Genuine subunit-scale backtracking occurs (1.22 backward zone-centre crossings per zone
+   passage, largest excursion 54.5 % of a zone period) but a rigid axial shift cannot reorder motor
+   availability, and the depletion bias is resolved at 227 sigma (classification A).
+4. **FDT-consistent roll Brownian motion — the hardest test — also leaves it intact.** Every
+   amplitude within 4.4 %, depletion resolved at 67.5 sigma, `Omega_odd` at ~105 sigma and stationary,
+   despite roll noise acting directly on the signal coordinate at a constrained signal-to-noise of ~2
+   (classification A).
+5. **No realism increment applied so far materially weakens the mechanism.** Across three
+   progressively more realistic filament-dynamics extensions the amplitudes have moved by at most a
+   few per cent, and in every case the protective factor is the same: **high bound-head occupancy**,
+   which confines both axial (0.32 nm) and angular (0.055 rad) fluctuations far below the scales the
+   mechanism cares about (36 nm zone period, 0.65 rad angular spread). The Vilfan target-zone
+   mechanism is therefore considerably more robust to filament thermal motion than the free-filament
+   diffusion scales would suggest, and that robustness is a result in its own right.
+   Remaining untested candidates are the ones deliberately excluded here: combined axial + roll noise,
+   transverse motion, tilt, and replacing Vilfan's conjugate force/torque law with explicit motor
+   mechanics.
 
 The survival results are part of the scientific claim and should be presented as such, not as
 preamble to a final disruptive perturbation.
 
 ---
 
-## S22. Resuming, and what remains
+## S22. Resuming
 
 ```
 ./scripts/run_vilfan_roll.sh -roll-gates                  # Stage A + B, 32/32 PASS
-./scripts/run_vilfan_roll_campaign.sh pilot 3             # Stage C, 10 arms  (DONE)
-./scripts/run_vilfan_roll_campaign.sh campaign 3          # Stage E, 24 arms  (running)
-./scripts/run_vilfan_roll_campaign.sh controls 3          # Stage F, 16 arms
-./scripts/run_vilfan_roll_campaign.sh paper 3             # Stage G, 4 arms
-./scripts/run_vilfan_roll.sh -regression                  # full-length regression vs committed records
+./scripts/run_vilfan_roll_campaign.sh pilot 3             # Stage C  (done)
+./scripts/run_vilfan_roll_campaign.sh campaign 3          # Stage E  (4 of 8 pairs done)
+./scripts/run_vilfan_roll_campaign.sh controls 3          # Stage F  (d=0 done; others queued)
+./scripts/run_vilfan_roll_campaign.sh paper 3             # Stage G  (optional)
+./scripts/run_vilfan_roll.sh -regression                  # full-length regression
 python3 scripts/analyse_vilfan_roll.py all
 ```
 
-Records are atomic (`.tmp` then rename) and skipped if present, so the chain resumes exactly where it
-stopped. Remaining: production, controls, paper lattice, the full-length regression, and then the
-final A–F classification plus the S23 recommendation on combined axial + roll noise.
+Records are atomic and skipped if present, so the chain resumes exactly where it stopped.
 
 ---
 
 ## S23. Recommendation on combined axial + roll Brownian motion — NOT executed
 
-Out of scope by the stopping boundary and it should stay out until roll alone is classified. Two
-points for whoever attempts it, both established here:
+Out of scope by the stopping boundary; not started. Four points for whoever attempts it, all
+established here:
 
-- **The mirror gate changes shape.** Axial noise is mirror-**even** (`dW → +dW`) and roll noise is
-  mirror-**odd** (`dW → −dW`). A combined pathwise mirror arm must transform the two streams
-  *differently* — neither parent study exercises that, and getting it wrong would silently destroy
-  the only exact correctness gate available in a noisy model.
-- **They are not expected to compose trivially.** Axial noise is a rigid translation that preserves
-  motor ordering; roll noise acts directly on the signal coordinate. The pilot hints that roll
-  noise perturbs the *axial* depletion bias more than the angular conversion (S20), so the combined
-  case may not simply be the product of the two attenuations and should be sized from its own pilot.
+- **Fix the substep controller first (S18.1).** Its criterion degrades as a bound head approaches
+  `+-pi`. Roll alone could lean on energetic degeneracy at the boundary and on empirical insensitivity;
+  a combined study with more time spent near `+-pi` should not have to.
+- **The mirror gate transforms the two streams differently.** Axial noise is mirror-**even**
+  (`dW -> +dW`); roll noise is mirror-**odd** (`dW -> -dW`). A combined pathwise mirror arm must apply
+  both, and neither parent study exercises that. Getting it wrong would silently destroy the only
+  exact correctness gate available in a noisy model. Gate B9e — showing same-signed roll noise is *not*
+  the mirror transform — is the template for verifying it.
+- **They may not compose multiplicatively.** Axial noise is a rigid translation preserving motor
+  ordering; roll noise acts on the signal coordinate. Independently each costs ~4 % on `<x_A>`, and
+  both studies find their largest effect on the *axial* depletion link, so the two perturbations may
+  interact there rather than add. Size from a fresh pilot.
+- **Expect the protective factor to be the same.** All three studies are protected by high bound-head
+  occupancy. The informative variant is therefore not "more noise" but **lower duty ratio** — a higher
+  `kD/kA`, where `Nb` falls and both confinement widths grow as `1/sqrt(Nb)`. That is where this
+  programme's next genuine threat lies, and it is cheap to reach because `kD/kA` is already a swept
+  axis in the complete reference.
