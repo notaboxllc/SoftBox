@@ -138,14 +138,52 @@ uncontended, so **all Stage-5 wall-clock is contended and is not a throughput me
 
 ---
 
+## 7b. Noise-decomposed rotation (added 2026-07-31, commit `c8921da`)
+
+`softbox/RigidRollDecomposition.java` + `-rot-decomp` / `-rot-decomp-validate`. **Source committed but
+deliberately NOT built**, so the running Stage-5 binary is untouched; it compiles cleanly (verified against a
+scratch output directory).
+
+Separates, along the **actual fully thermalized trajectory**, the motor-driven angular increment from the
+independently sampled Brownian one. No forcing removed, no replay with noise deleted.
+
+The split is **exact at the body-frame angular-velocity level**, because the integrator itself forms
+`bwx = (torqueSum·û + randTorque_x)/γ_roll`:
+
+```
+dPhiDrive = dt·(torqueSum·û)/γ_roll        dPhiBrown = dt·randTorque_x/γ_roll
+```
+
+read from the *same arrays the integrator consumes* and the *same pre-update material frame* (`torqueSum` is a
+lab-frame vector, so the pre-step axis is required — a subtle but load-bearing detail).
+
+**A scalar additive identity on the realized roll would be false.** The orientation update composes all three
+body-frame components at once and renormalises, and finite rotations do not commute. The genuine O(dt²)
+remainder is recorded explicitly as `dPhiGeom`, and the closure gate validates the relation that *is* exact.
+
+Gates in `-rot-decomp-validate`: trajectory inertness (hard stop if any pre-existing observable moves),
+body-frame update closure, torque-drift closure `Ω_drive = M_roll·⟨τ_det⟩`, and the deterministic
+torque-component sum. Only graph change is a gated read-back of `torqueSum`/`randTorque` — no kernel, no task,
+no ordering, no RNG draw.
+
+Terminology fixed: **Ω_total** (realized), **Ω_drive** (motor-driven), **Ω_Brown**, **Ω_geom**. `Ω_drive` is
+*resolved motor-driven twirling drift*, never "measured twirling" unqualified.
+
 ## 8. Next actions, in order
 
-1. **Stage 5 completes** (~19 h contended, faster once the ratchet job ends). Watch the τ_odd gate and the
-   thermal-OFF halves gate; the Ω bound is expected to come back INCONCLUSIVE by design.
+1. **Stage 5 completes** (~28 h contended, faster once the ratchet job ends). It runs to completion on the
+   binary it was launched with — the decomposition is committed as source only and deliberately NOT built.
+   Watch the τ_odd gate and the thermal-OFF halves gate; the Ω bound is expected INCONCLUSIVE by design.
+1b. **On exit:** build → `-rot-decomp-validate` (inertness is a HARD STOP) → short passive decomposition
+   confirmation only (τ_odd null, Ω_drive_odd null, zero-mean Brownian, closure) — **the full Stage 5 is NOT
+   rerun**, since no force, mobility, RNG, orientation-update or passive-control code changed.
 2. **If Stage 5 passes** → run Stage 6 (`-rigid-compat`, ~1 h). Occupancy shift > 30 % is *flagged*, not
    failed, and no binding gate is to be tuned.
-3. **If both pass** → Tier-1 production: 10 µM, 400 heads/µm², ±5°, seeds 101/102, 1.0 s per arm, four arms,
-   device-resident and monitored. Then matched-pair estimators, nested final windows, non-overlapping blocks,
+3. **If both pass** → Tier-1 production, launched automatically: 10 µM, 400 heads/µm², ±5°, seeds 101/102,
+   1.0 s per arm, four arms, device-resident and monitored, with the decomposition ON. Evidentiary hierarchy:
+   τ_odd, then Ω_drive_odd, then torque components, then nested-window stability, with Ω_total_odd as a
+   lower-powered corroborator. R3 does **not** require Ω_total_odd to resolve. Then a conditional rigid ±15°
+   anchor if 5° reaches R3/R4 and the 36 GPU-h / 8-arm cap allows. Then matched-pair estimators, nested final windows, non-overlapping blocks,
    θ_odd(t) drift fit, closure, R1–R5 classification, cross-model descriptive comparison with the legacy 0°,
    1°, 2° and 15° results, and a rigid-15° anchor recommendation.
 4. **If Stage 5 fails** — any passive chiral arm sustaining directed rotation — production does not run, and
