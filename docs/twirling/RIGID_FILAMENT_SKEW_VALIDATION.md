@@ -3,7 +3,7 @@
 **Branch** `feature/rigid-filament-skew-twirling`, worktree `../softbox-rigid-filament-skew-twirling`,
 baseline `3119000`. Started 2026-07-31.
 
-**Status: Stages 0–4 COMPLETE and PASSING (9/0 + inertness). Stages 5–6 NOT YET RUN. No production arm has
+**Status: Stages 0–4 COMPLETE and PASSING (9/0 + inertness). Stage 5 IMPLEMENTED and RUNNING; Stage 6 implemented, not run. No production arm has
 been launched.**
 
 The rigid-filament assay isolates motor-generated chiral torque in a single-temperature, FDT-consistent
@@ -245,16 +245,92 @@ Stage 4 exists to catch, and because the same sign enters every ε-odd torque st
 
 ---
 
-## 6. Stages 5–6 — NOT YET RUN
+## 6. A load-bearing consequence of fixing the thermostat
 
-- **Stage 5, passive nulls** (no motors; passive achiral; passive chiral ±15° with no persistent equilibrium
-  rotation; thermal off), 300–600 ms. This is a **stop gate**: if any passive chiral arm sustains directed
-  rotation, driven production does not run.
-- **Stage 6, binding/gliding compatibility** at 10 µM, 400 heads/µm², 0° skew, compared descriptively with
-  the legacy flexible assay. Occupancy shifts > 30 % trigger a geometry/surface-height investigation; binding
-  gates are **not** to be tuned to reproduce the old occupancy.
+**Correcting the thermostat RAISES the rotational noise floor.** This was computed before running Stage 5, and
+it reshapes what the rigid programme can and cannot measure.
+
+The flexible model gave interior segments *zero* rotational Brownian torque and the two ends only `0.5×`
+amplitude — roughly 4 % of a full kT rotational reservoir. That is precisely why its rotational floor looked
+small (σ ≈ 8.74 rad/s on Ω_odd at 150 ms). The FDT-correct rigid body carries the **full** kT reservoir on
+axial roll, with `D_roll = kT/γ_roll = 1.270×10³ rad²/s`.
+
+Achievable 3σ bound on a passive Ω_odd, n = 4 matched pairs:
+
+| window per arm | σ(Ω) per arm | 3σ bound on Ω_odd | vs the ~50 rad/s driven reference |
+|---|---|---|---|
+| 100 ms | 159 rad/s | **169 rad/s** | 3.4× too weak |
+| 300 ms | 92 rad/s | **98 rad/s** | 2.0× too weak |
+| 1000 ms | 50 rad/s | **53 rad/s** | still ≈ 1.1× too weak |
+
+**No feasible duration makes the rotational null informative.** A σ-gate on Ω would therefore have passed
+because the measurement is insensitive, not because the null holds — the third vacuous-pass construction found
+in this stage (see §8). The passive chiral null is consequently **gated on τ_odd**, a direct time-average of a
+bounded quantity that resolves well, and the rotation is **reported as an explicit bound** carrying an
+INCONCLUSIVE verdict whenever the bound exceeds the reference scale.
+
+**Consequence for production:** rotation is diffusion-limited in the rigid model and torque is the observable
+that carries the physics. **R3 (rigid torque resolved, rotation diffusion-limited) is the a-priori likely
+classification**, and that expectation is recorded here *before* the production arms run.
+
+This is not an argument that the flexible model was better. Its smaller rotational floor was an artefact of
+missing noise on a coordinate that carried full drag — the defect itself. The rigid model trades an
+artificially quiet, thermodynamically wrong observable for a noisy, correct one.
+
+## 7. Stages 5–6 — IN PROGRESS
+
+**Stage 5, passive nulls — implemented and RUNNING** (`-rigid-passive`, log `RUN_LOGS/rigid/stage5_passive.txt`).
+
+The passive step is `stepGlidingCPU` / the production TaskGraph with **exactly two things removed and nothing
+else**: binding, and the nucleotide cycle. The bound set and nucleotide states are frozen, so `matCock` returns
+a constant rest coordinate and every cross-bridge is a passive spring. What remains is springs plus thermal
+noise in a fixed topology — an equilibrium system, in which detailed balance forbids a sustained rotational
+current however chiral the geometry. `PASSIVE_MODE` defaults false ⇒ the production graph is byte-unchanged.
+
+| arm | construction | seeds |
+|---|---|---|
+| A no motors | every bond stripped | 1 (Stage 2 carries the quantitative free-body null) |
+| B passive achiral | bound, ε = 0 | 4 |
+| C± passive chiral | bound, ε = ±15°, matched seeds | 4 |
+| D thermal off | bound, ε = +15°, Brownian off | 1 (deterministic) |
+
+Each arm: 20 000 driven warm-up steps at the production condition → freeze → 2 000 relax → 400 000 measured
+(100 ms). Gate D is written on the measurement **halves**, because a deterministic non-zero mean is either a
+decaying mechanical transient or a sustained non-conservative current and the mean alone cannot distinguish
+them. Gate C is written on **τ_odd** for the reason in §6.
+
+**Stage 6, binding/gliding compatibility — implemented, not yet run** (`-rigid-compat`): rigid vs legacy
+flexible at 10 µM, 400 heads/µm², 0° skew, same seeds. Descriptive by construction — equality is not required
+and **no binding gate is tuned**. Gates are usability only (attachment viable, occupancy stable across seeds,
+gliding directed, zero invalid/solver). An occupancy change > 30 % is **flagged** for geometry/surface-height
+investigation, not failed.
 
 No Tier-1 production arm may be launched until both pass.
+
+## 8. Failures and corrections
+
+Recorded because all four were caught by construction rather than by luck, and three of them would have
+produced a **false pass on a gate**.
+
+| # | defect | how it surfaced | resolution |
+|---|---|---|---|
+| 1 | Stage 4 gate 9's preregistered axial sign was `−F·R` | fixture disagreed on sign only, magnitude exact | the **expectation** was wrong (`ŷ × ẑ = +û`); code unchanged |
+| 2 | `passiveArm` never called `cfg()`, so the discrete-site / head-roll / surface machinery stayed off | N_b = 1 of 1200 and **every observable identically 0.0000** — all four gates "passed" | configure the scene exactly as `runTwirlArm` does |
+| 3 | with one seed the SEM is 0, so every σ evaluated to 0.00 | all gates passed regardless of data | the stage now **refuses to run** below two seeds; gate A rewritten to test what a single arm can establish |
+| 4 | a σ-gate on passive Ω passes because the rotational measurement is insensitive | sensitivity computed **before** the run (§6) | chiral null re-gated on τ_odd; Ω reported as a bound with an INCONCLUSIVE verdict |
+
+A fifth, not a false pass but a monitoring gap: the first Stage-5 launch called `plan.execute()` directly, so
+the crash heartbeat reported `state=STARTING` for the whole run and a fault could not have been localised.
+CLAUDE.md requires `TornadoCrashDiagnostic` tracing on any new GPU entry point; the run was stopped after ~3
+minutes and relaunched through a traced helper rather than running blind.
+
+## 9. GPU health and contention
+
+External crash recorder running throughout (pid 1988, session `20260728T071146Z`, `journal_ok=yes`,
+`nvidia_smi_ok=yes`). No Xid or NVRM fault observed. **Stage 5 shares the GPU with an unrelated
+torsional-ratchet campaign** in `../softbox-rigid-filament-torsional-ratchet`, launched outside the monitored
+wrapper by the repository owner. Measured throughput under contention is ≈24–76 steps/s against ≈277 steps/s
+uncontended, so **all Stage-5 wall-clock figures are contended and are not a throughput measurement.**
 
 ---
 
