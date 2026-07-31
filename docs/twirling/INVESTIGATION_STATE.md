@@ -49,7 +49,7 @@ or deleted. `BoA-v1ref` untouched. The torsional-ratchet branch and its records 
 | 2 · free rigid-body FDT | **PASS** | all four DOF within **0.4 %** of the exact discrete law `D = kT/γ`, three timesteps; signed increments zero-mean (roll 0.18σ) and Gaussian; roll dt-spread 0.0010 over 4× |
 | 3 · rigidity | **PASS** | contour change exactly 0; frame norm 2.2e−7, orthogonality 8.5e−10 under motor load |
 | 4 · force/torque closure | **PASS** | 1e−6 on four wrench fixtures; `r × F` exact, origin-shift invariance exactly 0, mirror sign exactly −1 |
-| 5 · passive nulls (**stop gate**) | **RUNNING** | launched 21:00, ~19 h projected under GPU contention |
+| 5 · passive nulls (**stop gate**) | **RUNNING** | relaunched on the fixed binary; 100 ms x 4 seeds, 100 steps/s, ~16 h |
 | 6 · binding/gliding compatibility | implemented, **not run** | blocked behind Stage 5 |
 | Tier-1 production (4 arms) | **NOT LAUNCHED** | blocked until 5 and 6 pass |
 
@@ -127,6 +127,39 @@ Plus a monitoring gap: the first Stage-5 launch called `plan.execute()` directly
 traced helper rather than running ~19 h blind.
 
 ---
+
+## 6b. Two defects found from OUTSIDE my own gates (2026-07-31)
+
+Both produce runs that complete and look plausible, so no gate of mine would have caught either.
+
+**1. `-filament-segments` silently discarded by the ATP production path** (relayed from the ratchet branch,
+`9d6da60`; confirmed present here, fixed at `9bd31aa`). Two independent overrides hardcoded the flexible
+segment count: `runAtpMap` opened by assigning `G4_NSEG` to `FIL_SEGS`, and `atpArm` built its `TArm` with
+`G4_NSEG`, which `runTwirlArm` then assigns back into `FIL_SEGS`. **My Tier-1 production runs through exactly
+this path.** Worse here than on the ratchet branch: `atpId` selects the rigid namespace on `FIL_SEGS == 1`, so
+the four 5° arms would have run the 12-segment FLEXIBLE chain *and* been written into the flexible `atp_`
+namespace — a flexible run labelled as the rigid pilot, on the very thermostat defect this programme exists to
+remove. Both sites now use `FIL_SEGS` (which defaults to `G4_NSEG`, so flexible runs are byte-unaffected), plus
+a **structural guard**: `atpArm` throws if the realized scene's `nSeg` differs from the requested `FIL_SEGS`.
+
+*Stage 5 was NOT affected*: `runRigidPassive` sets `FIL_SEGS = 1` and `passiveArm` calls `build(seed)` directly,
+never touching `runAtpMap`/`atpArm`/`TArm`. Positive evidence the body is genuinely rigid — the Stage 2–4 log
+reports contour L = 2.106 µm / 779 monomers (a flexible segment is 64 monomers / 0.176 µm) and
+γ_roll = 3.241935e−24 at full length.
+
+**2. GPU utilisation ~5%** (user observation). Stage 5 is **host-latency-bound, not device-bound**. Per-step
+`clearProfiles()` in the traced execute helper was one contributor (fixed at `f382505`, now on a 1024-step
+cadence). *I mis-attributed this number twice* — first to contention from a concurrent campaign (wrong: the
+rate was identical before and after that job paused), then predicting a 4.6× recovery from the profile fix
+(wrong in magnitude). Settled rate after the fix is **100 steps/s against 58 before**. The residual bottleneck
+is the per-step launch + host-readback pattern (~50 kernels and ~14 `EVERY_EXECUTION` transfers per step)
+against the ~8000 launches/s ceiling CLAUDE.md documents for this codebase — **plausible but not proven, and
+recorded as such.** Low GPU utilisation is expected for this graph; what was anomalous was only the extra cost.
+
+**CPU runtime:** bounded at **< 68 steps/s**, so Stage 5 on CPU is **> 24 h and likely several days**. The
+probe was stopped before completing an arm because it competes for the host CPU that is the actual bottleneck.
+Any CPU/GPU ratio in the final report must be re-derived against the corrected GPU baseline.
+
 
 ## 7. GPU health and contention
 
