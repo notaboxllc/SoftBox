@@ -158,7 +158,7 @@ public final class ChiralSiteHarness {
         TornadoCrashDiagnostic.init("chiral-actin-sites", args);
         boolean fixtures = false, equiv = false, campaign = false, lattice = false, mechanism = false, all = false; String jsDir = null;
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
-        boolean etaAudit = false, etaControls = false, rigidValidate = false, rigidPassive = false, rigidCompat = false, etaMap = false, etaReport = false, etaMirrorRep = false;
+        boolean etaAudit = false, etaControls = false, rigidValidate = false, rigidPassive = false, rigidCompat = false, rotDecompVal = false, etaMap = false, etaReport = false, etaMirrorRep = false;
         boolean atpFix = false, atpPilot = false, atpMap = false, atpReport = false, atpMirrorRep = false, atpNull = false;
         boolean atpDensRep = false;
         boolean atpEquiv = false;
@@ -263,6 +263,8 @@ public final class ChiralSiteHarness {
                 case "-rigid-validate" -> rigidValidate = true;
                 case "-rigid-passive" -> rigidPassive = true;
                 case "-rigid-compat" -> rigidCompat = true;
+                case "-rot-decomp" -> ROT_DECOMP = true;
+                case "-rot-decomp-validate" -> rotDecompVal = true;
                 case "-compat-ms" -> COMPAT_MS = Double.parseDouble(args[++i]);
                 case "-compat-seeds" -> COMPAT_SEEDS = Integer.parseInt(args[++i]);
                 case "-passive-meas" -> PASSIVE_MEAS = Integer.parseInt(args[++i]);
@@ -333,6 +335,7 @@ public final class ChiralSiteHarness {
         else if (rigidValidate) ok = runRigidValidate();
         else if (rigidPassive) ok = runRigidPassive();
         else if (rigidCompat) ok = runRigidCompat();
+        else if (rotDecompVal) ok = runRotDecompValidate();
         else if (etaMap)     runEtaMap();
         else if (etaReport)  reportEtaMap();
         else if (etaMirrorRep) reportEtaMirror();
@@ -722,6 +725,8 @@ public final class ChiralSiteHarness {
         }
     }
     static int RIGID_FDT_SEEDS = 12, RIGID_FDT_STEPS = 20000;
+    /** Noise-decomposed rigid-body axial rotation. Default OFF ⇒ read-only, RNG-inert, trajectory-inert. */
+    static boolean ROT_DECOMP = false;
 
     // ---------------------------------------------------------------- STAGE 5: passive nulls
     /**
@@ -927,6 +932,111 @@ public final class ChiralSiteHarness {
     }
     static double COMPAT_ATP_UM = 10.0, COMPAT_MS = 20.0;
     static int COMPAT_SEEDS = 4;
+
+
+    // ================================================ NOISE-DECOMPOSED ROTATION — closure + inertness gates
+    /**
+     * Validates the rigid roll decomposition before it is used for any science: the body-frame additive
+     * identity, the torque-drift closure, the deterministic torque component sum, and INERTNESS (diagnostics
+     * off vs on, identical seeds, must be bit-identical on every pre-existing observable).
+     */
+    static boolean runRotDecompValidate() {
+        passN = failN = 0;
+        int savedSegs = FIL_SEGS; boolean savedTh = TwoBodyConverterMotor.FIL_THERMOSTAT_FDT;
+        boolean savedRd = ROT_DECOMP, savedTr = ExplicitCompleteMatHarness.ROT_DECOMP_TRANSFER;
+        double savedAtp = ATP_UM; int savedSteps = STEPS;
+        FIL_SEGS = 1; TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        try {
+            System.out.printf(Locale.US, "%n=== NOISE-DECOMPOSED RIGID ROTATION — CLOSURE AND INERTNESS ===%n");
+            note("the additive split is exact at the BODY-FRAME angular-velocity level, where the integrator");
+            note("forms bwx = (torqueSum.u + randTorque_x)/gamma_roll. The REALIZED material roll differs by a");
+            note("genuine O(dt^2) noncommutativity + renormalisation term, recorded as dPhiGeom rather than");
+            note("absorbed into a tolerance: a scalar additive identity on the realized roll would be FALSE.");
+
+            double durS = DECOMP_MS * 1e-3;
+            atpSetDuration(durS); ATP_UM = DECOMP_ATP_UM;
+
+            // ---- run OFF then ON, identical seed ----
+            TRes off, on;
+            ROT_DECOMP = false; ExplicitCompleteMatHarness.ROT_DECOMP_TRANSFER = false;
+            cfg(2, true, 0.0, 0.0, 0.0, false, 1.0, true);
+            off = runTwirlArm(new TArm("decompOff", 0.0, false, 1.0, true, 1).conv(DECOMP_EPS), SEED, STEPS);
+            ROT_DECOMP = true;  ExplicitCompleteMatHarness.ROT_DECOMP_TRANSFER = true;
+            cfg(2, true, 0.0, 0.0, 0.0, false, 1.0, true);
+            on  = runTwirlArm(new TArm("decompOn",  0.0, false, 1.0, true, 1).conv(DECOMP_EPS), SEED, STEPS);
+
+            // ---- INERTNESS ----
+            System.out.println("\n  ---- instrumentation inertness (identical seed, diagnostics OFF vs ON) ----");
+            String[] nmv = { "glide", "omega", "omegaFit", "avgBound", "tau", "turns", "rollR2", "strokeRatePerS" };
+            double[] a = { off.glide, off.omega, off.omegaFit, off.avgBound, off.tau, off.turns, off.rollR2, off.strokeRatePerS };
+            double[] b = { on.glide,  on.omega,  on.omegaFit,  on.avgBound,  on.tau,  on.turns,  on.rollR2,  on.strokeRatePerS };
+            boolean inert = true;
+            for (int i = 0; i < a.length; i++) {
+                boolean eq = (a[i] == b[i]) || (Double.isNaN(a[i]) && Double.isNaN(b[i]));
+                inert &= eq;
+                System.out.printf(Locale.US, "    %-16s OFF %-16.9e ON %-16.9e %s%n", nmv[i], a[i], b[i], eq ? "identical" : "*** DIFFERS ***");
+            }
+            inert &= (off.invalid == on.invalid) && (off.solverFail == on.solverFail);
+            ck(1, "diagnostics are TRAJECTORY-INERT: every pre-existing observable bit-identical OFF vs ON", inert);
+            if (!inert) {
+                System.out.println("\n*** HARD STOP: the diagnostics changed the trajectory. ***");
+                return false;
+            }
+
+            RigidRollDecomposition d = on.rd;
+            if (d == null || d.nSteps == 0) { ck(2, "decomposition accumulated", false); return false; }
+
+            // ---- BODY-FRAME UPDATE CLOSURE ----
+            System.out.println("\n  ---- raw-update closure (the relation that is mathematically exact) ----");
+            System.out.printf(Locale.US, "    steps                                  %d%n", d.nSteps);
+            System.out.printf(Locale.US, "    max |step residual|                    %.3e rad%n", d.maxBodyResid);
+            System.out.printf(Locale.US, "    RMS step residual                      %.3e rad%n", d.rmsBodyResid());
+            System.out.printf(Locale.US, "    accumulated residual                   %.3e rad%n", d.accBodyResid);
+            System.out.printf(Locale.US, "    accumulated / total |angular update|   %.3e%n", d.relBodyResid());
+            ck(2, "body-frame axial split is exact to float32 (relative accumulated residual < 1e-6)",
+                    d.relBodyResid() < 1e-6);
+
+            // ---- TORQUE-DRIFT CLOSURE ----
+            System.out.println("\n  ---- torque-drift closure: Omega_drive vs M_roll * mean(tau_det) ----");
+            double od = d.omegaDrive(), om = d.omegaFromMeanTorque();
+            double rel = Math.abs(om) > 0 ? Math.abs(od - om)/Math.abs(om) : Math.abs(od - om);
+            System.out.printf(Locale.US, "    M_roll                                 %.6e rad/(s.N.m)%n", d.mRoll());
+            System.out.printf(Locale.US, "    mean tau_det                           %+.6e N.m%n", d.meanTauDet());
+            System.out.printf(Locale.US, "    Omega_drive = Phi_drive/T              %+.6e rad/s%n", od);
+            System.out.printf(Locale.US, "    M_roll * mean(tau_det)                 %+.6e rad/s%n", om);
+            System.out.printf(Locale.US, "    relative difference                    %.3e%n", rel);
+            ck(3, "Omega_drive equals M_roll * mean(tau_det) (constant axial mobility)", rel < 1e-9);
+
+            // ---- COMPONENT SUM ----
+            System.out.println("\n  ---- deterministic axial torque components ----");
+            double relC = Math.abs(d.meanTauDet()) > 0
+                    ? Math.abs(d.meanTauOther())/Math.abs(d.meanTauDet()) : Math.abs(d.meanTauOther());
+            System.out.printf(Locale.US, "    bond-force moment (per-head sum)       %+.6e N.m%n", d.meanTauBond());
+            System.out.printf(Locale.US, "    residual (any other deterministic)     %+.6e N.m%n", d.meanTauOther());
+            System.out.printf(Locale.US, "    total tau_det into the integrator      %+.6e N.m%n", d.meanTauDet());
+            note("at n = 1 there is no chain torsion, and z-confinement enters forceSum only, so the bond-force");
+            note("moment is expected to BE the whole deterministic axial torque; the residual is the check.");
+            ck(4, String.format(Locale.US, "torque components sum to tau_det (residual/total = %.3e)", relC), relC < 1e-5);
+
+            // ---- the decomposition itself ----
+            System.out.println("\n  ---- decomposition over this arm ----");
+            System.out.printf(Locale.US, "    Phi_drive %+.6e   Phi_Brown %+.6e   Phi_geom %+.6e   Phi_total %+.6e rad%n",
+                    d.phiDrive, d.phiBrown, d.phiGeom, d.phiTotal);
+            System.out.printf(Locale.US, "    Om_drive  %+.4f   Om_Brown  %+.4f   Om_geom  %+.4f   Om_total  %+.4f rad/s%n",
+                    d.omegaDrive(), d.omegaBrown(), d.omegaGeom(), d.omegaTotal());
+            System.out.printf(Locale.US, "    |Om_Brown| / |Om_drive| = %.1f  (why the raw angle hides the drive)%n",
+                    d.omegaDrive() != 0 ? Math.abs(d.omegaBrown()/d.omegaDrive()) : Double.NaN);
+
+            System.out.printf(Locale.US, "%n=== DECOMPOSITION GATES: %d PASS, %d FAIL ===%n", passN, failN);
+            return failN == 0;
+        } finally {
+            FIL_SEGS = savedSegs; TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = savedTh;
+            ROT_DECOMP = savedRd; ExplicitCompleteMatHarness.ROT_DECOMP_TRANSFER = savedTr;
+            ATP_UM = savedAtp; STEPS = savedSteps; CONV_RAMP_ARM = null; EPS_CONV_ARM = 0; cfgOff();
+        }
+    }
+    static double DECOMP_MS = 5.0, DECOMP_ATP_UM = 10.0, DECOMP_EPS = 15.0;
 
     static int PASSIVE_RELAX = 2000;
     static double PASSIVE_ATP_UM = 10.0;   // warm-up drives at the production condition so occupancy is representative
@@ -2359,6 +2469,7 @@ public final class ChiralSiteHarness {
     }
     /** One seed's measurement-window statistics (equilibration discarded). */
     static final class TRes {
+        RigidRollDecomposition rd;   // noise-decomposed rigid roll (null unless -rot-decomp)
         double gammaRoll;        // body-fixed axial (roll) rotational drag actually used by the integrator, N·m·s
         double tau, omega, omegaPred, qOmega;   // mean axial torque (N·m), mean angular velocity (rad/s), τ/γ, ratio
         double turns, glide, avgBound, cancel, tauPerHead, ft, fax, misAbs, coherence, rollR2;
@@ -2578,6 +2689,11 @@ public final class ChiralSiteHarness {
             int blk = Math.max(1, meas / NBLK), traceEvery = Math.max(1, meas / NTRACE);
             double[] prevRoll = new double[nSeg], cum = new double[nSeg], cumLegacy = new double[nSeg];
             double[][] prevY = new double[nSeg][3];
+            // NOISE-DECOMPOSED ROTATION: rigid single body only (the split is defined for ONE rigid body; a
+            // chain has no single axial mobility). Default-off ⇒ rd stays null and nothing is read or written.
+            RigidRollDecomposition rd = (ROT_DECOMP && nSeg == 1)
+                    ? new RigidRollDecomposition(f.bRotGam.get(0), DTR) : null;
+            double[] prevUax = { f.uVec.get(0), f.uVec.get(nSeg), f.uVec.get(2*nSeg) };
             for (int s = 0; s < nSeg; s++) { prevRoll[s] = ExplicitTwirlGlidingHarness.rollAngle(f, s, bhat);
                                             seedPrevY(f, s, prevY[s]); }
             int[] prevBs = new int[N], prevNu = new int[N], age = new int[N], strokeLag = new int[N];
@@ -2627,11 +2743,23 @@ public final class ChiralSiteHarness {
                     try { plan.execute(); } catch (Throwable ex) { TornadoCrashDiagnostic.executeThrew(ex); throw new RuntimeException(ex); }
                     TornadoCrashDiagnostic.afterExecute(t);
                 } else ExplicitCompleteMatHarness.stepGlidingCPU(e, t, seed);
+                // NOISE DECOMPOSITION (default-off, read-only): capture the PRE-update axis before
+                // rollIncrementTransported advances the reference, because torqueSum is a LAB-frame vector and
+                // the integrator projected it with the frame as it stood BEFORE this step's update.
+                double pUx = 0, pUy = 0, pUz = 0;
+                if (rd != null) { pUx = prevUax[0]; pUy = prevUax[1]; pUz = prevUax[2]; }
                 for (int s = 0; s < nSeg; s++) {
                     dRoll[s] = rollIncrementTransported(f, s, prevY[s]);
                     cum[s] += dRoll[s];                                                       // PRIMARY: body-fixed spin
                     double rr = ExplicitTwirlGlidingHarness.rollAngle(f, s, bhat);            // DIAGNOSTIC: legacy lab ref
                     cumLegacy[s] += ExplicitTwirlGlidingHarness.wrapPi(rr - prevRoll[s]); prevRoll[s] = rr; }
+                if (rd != null && t >= equil) {
+                    double tauBond = 0;
+                    for (int m = 0; m < N; m++) if (G.mot.boundSeg.get(m) >= 0)
+                        tauBond += ChiralSiteSystem.axialTorque(G.bondData, f.uVec, G.mot.boundSeg, m, nSeg);
+                    rd.accumulate(f.torqueSum, f.randTorque, pUx, pUy, pUz, dRoll[0], tauBond);
+                }
+                if (rd != null) { prevUax[0] = f.uVec.get(0); prevUax[1] = f.uVec.get(nSeg); prevUax[2] = f.uVec.get(2*nSeg); }
                 double meanRoll = 0; for (double v : cum) meanRoll += v; meanRoll /= nSeg;
                 double gl = ExplicitTwirlGlidingHarness.centroidDot(f, bhat);
                 if (t == equil - 1) {
@@ -2792,6 +2920,7 @@ public final class ChiralSiteHarness {
             r.omegaPred = gammaRollFil > 0 ? r.tau/gammaRollFil : 0;
             r.qOmega = Math.abs(r.omegaPred) > 1e-30 ? r.omega/r.omegaPred : 0;
             r.coherence = sdRoll > 1e-12 ? Math.abs(meanRollEnd - rollAtEquil)/sdRoll : (nSeg == 1 ? Double.POSITIVE_INFINITY : 0);
+            r.rd = rd;
             r.blkTau = new double[blocks.size()]; r.blkOmega = new double[blocks.size()];
             r.blkGlide = new double[blocks.size()]; r.blkBound = new double[blocks.size()];
             for (int i = 0; i < blocks.size(); i++) { r.blkTau[i] = blocks.get(i)[0]; r.blkOmega[i] = blocks.get(i)[1];

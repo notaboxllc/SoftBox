@@ -373,6 +373,8 @@ public final class ExplicitCompleteMatHarness {
 
     /** Stage-5 passive nulls: drop the bind and chemistry tasks from the graph. Default false ⇒ byte-unchanged. */
     static boolean PASSIVE_MODE = false;
+    /** Read back torqueSum/randTorque for the rigid roll decomposition. Default false ⇒ graph unchanged. */
+    static boolean ROT_DECOMP_TRANSFER = false;
     static boolean BR_FIL_AXIAL = true;      // -filament-brownian-axial on|off
     static boolean BR_FIL_TRANS = true;      // -filament-brownian-transverse on|off
     static boolean BR_FIL_ROLL  = true;      // -filament-brownian-roll on|off
@@ -879,6 +881,11 @@ public final class ExplicitCompleteMatHarness {
                                             f.uVec, f.yVec, f.coord, G.bondData, mot.bindArc);
             if (chiralOn()) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.bindSite, e.headOmega, e.headTau,
                                             e.headMis, e.siteStats, mot.bindAzim, f.uVec, f.yVec, f.coord, G.bondData, mot.bindArc);
+            // NOISE-DECOMPOSED ROTATION (default-off): the decomposition reads the EXACT arrays the integrator
+            // consumed — the lab-frame deterministic torque accumulator and the body-frame Brownian torque.
+            // Adding a read-back is a pure copy: no kernel, no task, no ordering and no RNG draw changes, so
+            // the trajectory is bit-identical with the flag on or off (proven by the inertness gate).
+            if (ROT_DECOMP_TRANSFER) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, f.torqueSum, f.randTorque);
             // RIGOR RUPTURE: read the per-motor rupture/cap accumulators + the realized load each step (cause count + force-at-rupture).
             if (RIGOR_ON) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, mot.ruptureStats, mot.forceDotFil);
             if (ADP_RUP_ON) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, mot.adpRuptureStats);
