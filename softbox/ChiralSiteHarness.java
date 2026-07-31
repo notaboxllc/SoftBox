@@ -801,7 +801,7 @@ public final class ChiralSiteHarness {
             // --- warm-up under the REAL driven dynamics (device-resident under -gpu) ---
             if (GPU) {
                 var wplan = ExplicitCompleteMatHarness.buildGlidingGraph(e, true);
-                for (int t = 0; t < warm; t++) { passiveCounts(e, G, t, seed); wplan.execute(); wplan.clearProfiles(); }
+                for (int t = 0; t < warm; t++) { passiveCounts(e, G, t, seed); execTraced(wplan, t); }
                 try { wplan.close(); } catch (Exception ignored) { }
             } else for (int t = 0; t < warm; t++) ExplicitCompleteMatHarness.stepGlidingCPU(e, t, seed);
 
@@ -821,13 +821,13 @@ public final class ChiralSiteHarness {
                 var pplan = GPU ? ExplicitCompleteMatHarness.buildGlidingGraph(e, true) : null;
                 for (int t = 0; t < PASSIVE_RELAX; t++) {
                     int tt = warm + t;
-                    if (GPU) { passiveCounts(e, G, tt, seed); pplan.execute(); pplan.clearProfiles(); }
+                    if (GPU) { passiveCounts(e, G, tt, seed); execTraced(pplan, tt); }
                     else stepPassiveCPU(e, tt, seed);
                 }
                 double[] prevY = { f.yVec.get(0), f.yVec.get(1), f.yVec.get(2) };
                 for (int t = 0; t < meas; t++) {
                     int tt = warm + PASSIVE_RELAX + t;
-                    if (GPU) { passiveCounts(e, G, tt, seed); pplan.execute(); pplan.clearProfiles(); }
+                    if (GPU) { passiveCounts(e, G, tt, seed); execTraced(pplan, tt); }
                     else stepPassiveCPU(e, tt, seed);
                     double dr = rollIncrementTransported(f, 0, prevY);
                     roll += dr;
@@ -934,6 +934,19 @@ public final class ChiralSiteHarness {
     static void passiveCounts(ExplicitCompleteMatHarness.ExMat e, Glide2D G, int t, int seed) {
         e.matc.set(0, t); e.matc.set(1, seed); G.mot.setCounts(t, seed, G.nSeg);
         G.fil.counts.set(1, t); G.fil.counts.set(2, seed);
+    }
+    /**
+     * One TRACED device execution. CLAUDE.md requires TornadoCrashDiagnostic lifecycle tracing on any new GPU
+     * entry point: the external recorder alone cannot localise a fault to plan.execute(), result handling,
+     * plan.close() or the JVM-shutdown window. Without it the heartbeat reports state=STARTING for the entire
+     * campaign — which is exactly what the first Stage-5 launch did, so it was stopped and relaunched traced.
+     */
+    static void execTraced(TornadoExecutionPlan plan, int t) {
+        TornadoCrashDiagnostic.beforeExecute(t);
+        try { plan.execute(); }
+        catch (Throwable ex) { TornadoCrashDiagnostic.executeThrew(ex); throw new RuntimeException(ex); }
+        TornadoCrashDiagnostic.afterExecute(t);
+        plan.clearProfiles();
     }
 
     /**
