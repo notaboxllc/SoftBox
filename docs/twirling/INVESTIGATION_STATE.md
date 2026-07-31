@@ -238,3 +238,32 @@ bending, segment material roll, persistence-length calibration, end-only rotatio
 effective temperature and internal rotational energy transport **by construction, not by test**. The legacy
 flexible results are historical **cross-model descriptive comparisons** and are not corrected or retracted by
 this programme.
+
+---
+
+## 10. Decomposition validation result (2026-07-31, `RUN_LOGS/rigid/decomp_validate.txt`)
+
+Rigid scene through `runTwirlArm` — the production path — GPU device-resident. **3 PASS, 1 FAIL.**
+
+| gate | result |
+|---|---|
+| 1 · **inertness** | **PASS** — glide, omega, omegaFit, avgBound, tau, turns, rollR2, strokeRatePerS all **bit-identical** with diagnostics OFF vs ON at the same seed |
+| 2 · **body-frame closure** | **PASS** — max step residual 2.8e−17 rad, RMS 2.8e−18, accumulated 1.8e−16. The additive split is exact, as derived |
+| 3 · **torque-drift closure** | **PASS** — `Ω_drive = M_roll·⟨τ_det⟩` to 5.6e−15 relative (M_roll = 3.0846e23, ⟨τ_det⟩ = −8.19e−22 N·m, Ω_drive = −252.57 rad/s) |
+| 4 · **component sum** | **FAIL** — bond moment vs total τ_det differs by **1.9 %** (−1.56e−23 N·m) |
+
+**Gate 4 is left failing and unfixed, not tuned.** Diagnosis: an ordering defect in *my estimator*, not the
+physics. `stepGlidingCPU` runs `bondForces → segGather` (which fills `forceSum`/`torqueSum`) `→ integrate →
+matS2SolveStep`, and the S2 solve **rewrites `bondData` at the end of the step**. My per-step `tauBond` reads
+`bondData` from the host *after* the step, so it compares `torqueSum` (built from pre-solve `bondData`) against
+a post-solve snapshot. The component check must be taken before the solve, or re-specified. **Production must
+not run until this is resolved**, since the torque-component decomposition is item 3 in the evidentiary
+hierarchy.
+
+**Confirms the decomposition's rationale:** `|Ω_Brown| / |Ω_drive| = 2.3` even at 15° skew — the raw angle is
+Brownian-dominated exactly as predicted in §4.2.
+
+**Production throughput still unmeasured** on a full-length rigid arm. At the Stage-5 rate (~70 steps/s) four
+1.0 s arms would cost ~63 GPU-h, well past the 36 h cap; the historical 264 steps/s is a *flexible*-scene
+figure. This must be measured before launching production, and if it does not fit, the design change is the
+user's call — not a silent resize.
