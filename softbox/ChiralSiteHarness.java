@@ -158,7 +158,7 @@ public final class ChiralSiteHarness {
         TornadoCrashDiagnostic.init("chiral-actin-sites", args);
         boolean fixtures = false, equiv = false, campaign = false, lattice = false, mechanism = false, all = false; String jsDir = null;
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
-        boolean etaAudit = false, etaControls = false, rigidValidate = false, etaMap = false, etaReport = false, etaMirrorRep = false;
+        boolean etaAudit = false, etaControls = false, rigidValidate = false, rigidPassive = false, etaMap = false, etaReport = false, etaMirrorRep = false;
         boolean atpFix = false, atpPilot = false, atpMap = false, atpReport = false, atpMirrorRep = false, atpNull = false;
         boolean atpDensRep = false;
         boolean atpEquiv = false;
@@ -261,6 +261,9 @@ public final class ChiralSiteHarness {
                 case "-eta-audit" -> etaAudit = true;
                 case "-eta-controls" -> etaControls = true;
                 case "-rigid-validate" -> rigidValidate = true;
+                case "-rigid-passive" -> rigidPassive = true;
+                case "-passive-meas" -> PASSIVE_MEAS = Integer.parseInt(args[++i]);
+                case "-passive-seeds" -> PASSIVE_SEEDS = Integer.parseInt(args[++i]);
                 case "-eta-map" -> etaMap = true;
                 case "-eta-report" -> etaReport = true;
                 case "-eta-mirror" -> { ETA_MIRROR = -1.0; etaMap = true; }
@@ -325,6 +328,7 @@ public final class ChiralSiteHarness {
         else if (etaAudit)   ok = runEtaAudit();
         else if (etaControls) ok = runEtaControls();
         else if (rigidValidate) ok = runRigidValidate();
+        else if (rigidPassive) ok = runRigidPassive();
         else if (etaMap)     runEtaMap();
         else if (etaReport)  reportEtaMap();
         else if (etaMirrorRep) reportEtaMirror();
@@ -714,6 +718,262 @@ public final class ChiralSiteHarness {
         }
     }
     static int RIGID_FDT_SEEDS = 12, RIGID_FDT_STEPS = 20000;
+
+    // ---------------------------------------------------------------- STAGE 5: passive nulls
+    /**
+     * ONE passive step: {@link ExplicitCompleteMatHarness#stepGlidingCPU} with the DRIVE removed and nothing
+     * else changed. Two calls are omitted and no other line differs:
+     * <ul>
+     *   <li><b>binding</b> ({@code matBindExplicit} and the occupancy/target-zone/site-snap selectors) — the
+     *       bound set is frozen, so no bond is created or destroyed;</li>
+     *   <li><b>the nucleotide cycle</b> ({@code cycleLymnTaylor}) — the state array is frozen, so
+     *       {@code matCock} returns a CONSTANT rest coordinate and every cross-bridge is a passive spring.</li>
+     * </ul>
+     * What remains is springs plus thermal noise in a fixed topology: an EQUILIBRIUM system. Detailed balance
+     * forbids a sustained rotational current in such a system no matter how chiral its geometry, so a non-zero
+     * mean roll here would indicate either a non-conservative force law or a thermostat defect — which is
+     * exactly what this stage exists to exclude before any driven production runs.
+     */
+    static void stepPassiveCPU(ExplicitCompleteMatHarness.ExMat e, int t, int seed) {
+        Glide2D G = e.G; FilamentStore f = G.fil; MotorStore mot = G.mot; RigidRodBody b = mot.body; int N = e.N;
+        e.matc.set(0, t); e.matc.set(1, seed); mot.setCounts(t, seed, e.nSeg);
+        f.counts.set(1, t); f.counts.set(2, seed);
+        for (int m = 0; m < N; m++) e.active.set(m, 1);
+        if (ExplicitCompleteMatHarness.convSkewOn())
+            ChiralSiteSystem.convFrameStep(mot.boundSeg, f.uVec, f.yVec, mot.bindAzim, e.frame, e.params, e.q,
+                    e.convF, e.chiP, e.exCounts);
+        TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
+        // (binding omitted — frozen bound set)
+        // (nucleotide cycle omitted — frozen chemistry)
+        MatSoaSlice.matCock(mot.nucleotideState, e.q, e.cockP, e.exCounts);
+        TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit(e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec);
+        CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam,
+                f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams);
+        if (ExplicitCompleteMatHarness.chiralOn())
+            ChiralSiteSystem.headRollStep(mot.boundSeg, e.outGeom, f.uVec, f.yVec, b.bRotGam, mot.bindAzim,
+                    e.headRef, e.headOmega, e.headTau, e.headMis, G.bondData, e.chiP, e.matc, e.exCounts);
+        ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+        CrossBridgeSystem.csrChunkZero(e.csrChunkParams, mot.counts, e.csrMatrix);
+        CrossBridgeSystem.csrChunkHistogram(mot.boundSeg, mot.counts, e.csrChunkParams, e.csrMatrix);
+        CrossBridgeSystem.csrChunkReduce(mot.counts, e.csrChunkParams, e.csrMatrix, G.segCount);
+        CrossBridgeSystem.csrScan(mot.counts, G.segCount, G.segOff);
+        CrossBridgeSystem.csrChunkScatter(mot.boundSeg, mot.counts, e.csrChunkParams, G.segOff, G.segMyo, e.csrMatrix);
+        CrossBridgeSystem.segGather(G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts);
+        MatSoaSlice.matZConfine(f.coord, f.forceSum, e.zP, e.exCounts);
+        BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam,
+                f.brownTransScale, f.brownRotScale, f.params, f.counts);
+        RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum,
+                f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+        DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        TwoBodyBeamAnalyticGpu.matS2SolveStep(e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys,
+                e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts, e.convF);
+    }
+
+    /**
+     * One passive arm. Warms up under the REAL driven dynamics to reach a representative bound population, then
+     * FREEZES the bound set and the nucleotide states and measures the passive equilibrium response.
+     * Returns {Omega (rad/s), mean axial torque (N.m), mean bound count, |net axial force| (N)}.
+     *
+     * @param eps       converter skew in degrees (0 = achiral)
+     * @param thermal   filament Brownian on/off (off ⇒ control D, deterministic drift check)
+     * @param unbindAll strip every bond before measuring (⇒ control A, no motors)
+     */
+    static double[] passiveArm(double eps, boolean thermal, boolean unbindAll, int seed, int warm, int meas) {
+        double savedEps = EPS_CONV_ARM, savedAtp = ATP_UM;
+        boolean savedBrown = FIL_BROWN, savedSci = ExplicitCompleteMatHarness.PROD_SCI;
+        EPS_CONV_ARM = eps; FIL_BROWN = true; ATP_UM = PASSIVE_ATP_UM;
+        ExplicitCompleteMatHarness.PROD_SCI = true;
+        try {
+            // Configure the scene EXACTLY as a production low-[ATP] arm does (see runTwirlArm). Without this the
+            // discrete-site / head-roll / surface machinery stays off, almost nothing binds, and the device graph
+            // does not transfer the material frame back — which is precisely how the FIRST run of this gate
+            // produced N_b = 1 and identically-zero observables: a vacuous pass, not a null result.
+            cfg(2, true, 0.0, 0.0, 0.0, false, 1.0, true);
+            Glide2D G = build(seed);
+            FilamentStore f = G.fil; MotorStore mot = G.mot;
+            ExplicitCompleteMatHarness.ExMat e = ExplicitCompleteMatHarness.packExMat(G, 1);
+
+            // --- warm-up under the REAL driven dynamics (device-resident under -gpu) ---
+            if (GPU) {
+                var wplan = ExplicitCompleteMatHarness.buildGlidingGraph(e, true);
+                for (int t = 0; t < warm; t++) { passiveCounts(e, G, t, seed); wplan.execute(); wplan.clearProfiles(); }
+                try { wplan.close(); } catch (Exception ignored) { }
+            } else for (int t = 0; t < warm; t++) ExplicitCompleteMatHarness.stepGlidingCPU(e, t, seed);
+
+            if (unbindAll) {
+                for (int m = 0; m < G.N; m++) mot.boundSeg.set(m, -1);
+                for (int i = 0; i < G.bondData.getSize(); i++) G.bondData.set(i, 0f);
+            }
+            // freeze the thermostat if this is the deterministic control
+            f.brownTransScale.set(0, thermal ? 1f : 0f);
+            f.brownRotScale.set(0, thermal ? 1f : 0f);
+
+            // --- passive phase: the SAME mechanics with binding and chemistry removed ---
+            boolean savedPassive = ExplicitCompleteMatHarness.PASSIVE_MODE;
+            ExplicitCompleteMatHarness.PASSIVE_MODE = true;
+            double roll = 0, tauAcc = 0, nbAcc = 0, faxAcc = 0, rollH1 = 0, rollH2 = 0;
+            try {
+                var pplan = GPU ? ExplicitCompleteMatHarness.buildGlidingGraph(e, true) : null;
+                for (int t = 0; t < PASSIVE_RELAX; t++) {
+                    int tt = warm + t;
+                    if (GPU) { passiveCounts(e, G, tt, seed); pplan.execute(); pplan.clearProfiles(); }
+                    else stepPassiveCPU(e, tt, seed);
+                }
+                double[] prevY = { f.yVec.get(0), f.yVec.get(1), f.yVec.get(2) };
+                for (int t = 0; t < meas; t++) {
+                    int tt = warm + PASSIVE_RELAX + t;
+                    if (GPU) { passiveCounts(e, G, tt, seed); pplan.execute(); pplan.clearProfiles(); }
+                    else stepPassiveCPU(e, tt, seed);
+                    double dr = rollIncrementTransported(f, 0, prevY);
+                    roll += dr;
+                    if (t < meas/2) rollH1 += dr; else rollH2 += dr;
+                    int nb = 0; double sn = 0;
+                    for (int m = 0; m < G.N; m++) if (mot.boundSeg.get(m) >= 0) {
+                        nb++; sn += ChiralSiteSystem.axialTorque(G.bondData, f.uVec, mot.boundSeg, m, G.nSeg);
+                    }
+                    tauAcc += sn; nbAcc += nb; faxAcc += f.forceSum.get(0)*f.uVec.get(0)
+                            + f.forceSum.get(1)*f.uVec.get(1) + f.forceSum.get(2)*f.uVec.get(2);
+                }
+                if (GPU) try { pplan.close(); } catch (Exception ignored) { }
+            } finally { ExplicitCompleteMatHarness.PASSIVE_MODE = savedPassive; }
+            double T = meas * DTR, Th = (meas/2) * DTR;
+            // halves are reported so a DECAYING transient (incomplete mechanical relaxation) can be told apart
+            // from a SUSTAINED current (a genuine non-conservative defect) — they look identical in the mean.
+            return new double[]{ roll / T, tauAcc / meas, nbAcc / meas, Math.abs(faxAcc / meas),
+                                 rollH1 / Th, rollH2 / Th };
+        } finally { EPS_CONV_ARM = savedEps; ATP_UM = savedAtp; FIL_BROWN = savedBrown;
+                    ExplicitCompleteMatHarness.PROD_SCI = savedSci; }
+    }
+    static int PASSIVE_RELAX = 2000;
+    static double PASSIVE_ATP_UM = 10.0;   // warm-up drives at the production condition so occupancy is representative
+    /** Per-step counter bookkeeping the device path needs (the CPU steppers do this inline). */
+    static void passiveCounts(ExplicitCompleteMatHarness.ExMat e, Glide2D G, int t, int seed) {
+        e.matc.set(0, t); e.matc.set(1, seed); G.mot.setCounts(t, seed, G.nSeg);
+        G.fil.counts.set(1, t); G.fil.counts.set(2, seed);
+    }
+
+    /**
+     * STAGE 5 — the passive nulls, and the STOP GATE for the rigid programme. If any passive chiral arm sustains
+     * directed rotation, driven production does not run.
+     */
+    static boolean runRigidPassive() {
+        passN = failN = 0;
+        int savedSegs = FIL_SEGS; boolean savedTh = TwoBodyConverterMotor.FIL_THERMOSTAT_FDT;
+        FIL_SEGS = 1; TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        int warm = PASSIVE_WARM, meas = PASSIVE_MEAS, nSeed = PASSIVE_SEEDS;
+        try {
+            System.out.printf(Locale.US, "%n=== RIGID VALIDATION — STAGE 5: PASSIVE NULLS (STOP GATE) ===%n");
+            System.out.printf(Locale.US, "  rigid single-segment filament, FDT thermostat, eta = %.4g Pa.s, dt = %.4e s%n", ETA, DTR);
+            System.out.printf(Locale.US, "  per arm: %d driven warm-up steps -> freeze bound set + chemistry -> %d relax -> %d measured%n",
+                    warm, PASSIVE_RELAX, meas);
+            System.out.printf(Locale.US, "  measured window = %.1f ms physical; %d seeds per arm%n", meas*DTR*1e3, nSeed);
+            note("passive = the SAME mechanics with binding and the nucleotide cycle removed: springs plus thermal");
+            note("noise in a fixed topology. Detailed balance forbids a sustained rotational current in such a");
+            note("system however chiral its geometry, so a resolved mean roll here is a defect, not a result.");
+
+            double G0roll = build(SEED).fil.bRotGam.get(0);
+            String[] nm = { "A no motors", "B passive achiral", "C+ passive chiral +15", "C- passive chiral -15", "D thermal OFF" };
+            double[] epsArm = { 0, 0, +15, -15, +15 };
+            boolean[] therm = { true, true, true, true, false };
+            boolean[] strip = { true, false, false, false, false };
+            if (nSeed < 2) {
+                System.out.println("\n*** REFUSING TO RUN: the sigma gates need at least 2 seeds. With one seed the SEM is");
+                System.out.println("    zero, every sigma evaluates to 0.00, and all four gates pass VACUOUSLY. ***");
+                return false;
+            }
+            double[][] om = new double[5][nSeed], tq = new double[5][nSeed], nbv = new double[5][nSeed], fax = new double[5][nSeed];
+            double[][] h1 = new double[5][nSeed], h2 = new double[5][nSeed];
+            System.out.printf(Locale.US, "%n  %-22s %-7s %-13s %-8s %-13s %-12s %-11s %-11s%n",
+                    "arm", "seed", "Omega (rad/s)", "N_b", "tau_ax (N.m)", "|F_ax| (N)", "Om 1st-half", "Om 2nd-half");
+            for (int a = 0; a < 5; a++) {
+                // A is the free-body null, which Stage 2 already validated to 0.3 % on 12 seeds x 20 000 steps,
+                // so it runs as a single smoke arm here; D is deterministic, so extra seeds add nothing. The
+                // seeds go where the statistics are actually needed: the achiral and chiral bound arms.
+                int ns = (a == 0 || a == 4) ? 1 : nSeed;
+                for (int s = 0; s < ns; s++) {
+                    double[] r = passiveArm(epsArm[a], therm[a], strip[a], SEED + s, warm, meas);
+                    om[a][s] = r[0]; tq[a][s] = r[1]; nbv[a][s] = r[2]; fax[a][s] = r[3];
+                    h1[a][s] = r[4]; h2[a][s] = r[5];
+                    System.out.printf(Locale.US, "  %-22s %-7d %-13.4f %-8.2f %-13.4e %-12.4e %-11.4f %-11.4f%n",
+                            nm[a], SEED + s, r[0], r[2], r[1], r[3], r[4], r[5]);
+                }
+                for (int s = ns; s < nSeed; s++) {   // deterministic arm: pad so the reducers stay uniform
+                    om[a][s] = om[a][0]; tq[a][s] = tq[a][0]; nbv[a][s] = nbv[a][0];
+                    fax[a][s] = fax[a][0]; h1[a][s] = h1[a][0]; h2[a][s] = h2[a][0];
+                }
+            }
+
+            System.out.printf(Locale.US, "%n  %-22s %-24s %-24s %-8s%n", "arm", "Omega mean +/- SEM", "tau_ax mean +/- SEM", "sigma");
+            double[] omM = new double[5], omS = new double[5], tqM = new double[5], tqS = new double[5];
+            for (int a = 0; a < 5; a++) {
+                omM[a] = mean(om[a]); omS[a] = sem(om[a]); tqM[a] = mean(tq[a]); tqS[a] = sem(tq[a]);
+                double sg = omS[a] > 0 ? Math.abs(omM[a]) / omS[a] : 0;
+                System.out.printf(Locale.US, "  %-22s %+10.4f +/- %-9.4f %+11.4e +/- %-9.3e %-8.2f%n",
+                        nm[a], omM[a], omS[a], tqM[a], tqS[a], sg);
+            }
+            // A is a single smoke arm, so it is gated on what a single arm CAN establish — that stripping every
+            // bond leaves exactly zero motor force and a roll consistent with free diffusion — not on a SEM.
+            // The quantitative free-body null is Stage 2's (12 seeds, all four DOF, 0.3 %).
+            double freeSigma = Math.sqrt(2.0 * Constants.kT / G0roll / (meas * DTR)) / (meas * DTR);
+            boolean aOk = fax[0][0] == 0.0 && nbv[0][0] == 0.0 && Math.abs(omM[0]) < 3.0 * freeSigma;
+            System.out.printf(Locale.US, "%n  free-body roll noise for this window: sigma(Omega) = %.1f rad/s; "
+                    + "arm A |Omega| = %.1f rad/s (%.2f sigma)%n", freeSigma, Math.abs(omM[0]),
+                    freeSigma > 0 ? Math.abs(omM[0])/freeSigma : 0);
+            ck(1, "A: no motors ⇒ exactly zero motor force, zero bound heads, roll within free diffusion", aOk);
+            double sigB = omS[1] > 0 ? Math.abs(omM[1])/omS[1] : 0;
+            double sigBt = tqS[1] > 0 ? Math.abs(tqM[1])/tqS[1] : 0;
+            ck(2, String.format(Locale.US, "B: bound passive ACHIRAL ⇒ mean axial torque (%.2f sigma) and rotation (%.2f sigma) zero",
+                    sigBt, sigB), sigB < 3.0 && sigBt < 3.0);
+            // C: the eps-ODD and eps-EVEN passive responses must BOTH be consistent with zero
+            double[] odd = new double[nSeed], even = new double[nSeed], oddT = new double[nSeed];
+            for (int s = 0; s < nSeed; s++) {
+                odd[s]  = 0.5 * (om[2][s] - om[3][s]);
+                even[s] = 0.5 * (om[2][s] + om[3][s]);
+                oddT[s] = 0.5 * (tq[2][s] - tq[3][s]);
+            }
+            double oM = mean(odd), oS = sem(odd), eM = mean(even), eS = sem(even), otM = mean(oddT), otS = sem(oddT);
+            double sigOdd = oS > 0 ? Math.abs(oM)/oS : 0, sigEven = eS > 0 ? Math.abs(eM)/eS : 0;
+            double sigOddT = otS > 0 ? Math.abs(otM)/otS : 0;
+            System.out.printf(Locale.US, "%n  passive matched-pair response at |eps| = 15 deg:%n");
+            System.out.printf(Locale.US, "    Omega_odd  %+10.4f +/- %-9.4f rad/s  (%.2f sigma)%n", oM, oS, sigOdd);
+            System.out.printf(Locale.US, "    Omega_even %+10.4f +/- %-9.4f rad/s  (%.2f sigma)%n", eM, eS, sigEven);
+            System.out.printf(Locale.US, "    tau_odd    %+10.4e +/- %-9.3e N.m    (%.2f sigma)%n", otM, otS, sigOddT);
+            ck(3, String.format(Locale.US, "C: passive CHIRAL +/-15 deg sustains NO equilibrium rotation "
+                    + "(Omega_odd %.2f sigma, Omega_even %.2f sigma)", sigOdd, sigEven),
+                    sigOdd < 3.0 && sigEven < 3.0);
+            // D is DETERMINISTIC, so a non-zero mean is not automatically a defect: it is either a decaying
+            // mechanical transient (the frozen configuration still relaxing) or a sustained non-conservative
+            // current. Only the halves distinguish them, so the gate is written on the halves, not the mean.
+            double d1 = Math.abs(h1[4][0]), d2 = Math.abs(h2[4][0]);
+            double decay = d1 > 0 ? d2 / d1 : 0;
+            System.out.printf(Locale.US, "%n  thermal-OFF control D: |Omega| 1st half %.4g, 2nd half %.4g rad/s, ratio %.3f%n",
+                    d1, d2, decay);
+            boolean dDecays = d2 < 0.5 * d1 || d2 < 1.0;
+            ck(4, String.format(Locale.US, "D: thermal OFF ⇒ the frozen bound configuration shows a DECAYING "
+                    + "transient, not a sustained current (2nd/1st half = %.3f, |Omega|_2nd = %.4g rad/s)",
+                    decay, d2), dDecays);
+            if (!dDecays)
+                note("a non-decaying deterministic rotation would indicate a NON-CONSERVATIVE force law — the one "
+                   + "defect this stage cannot let through.");
+
+            System.out.printf(Locale.US, "%n=== STAGE 5 PASSIVE NULLS: %d PASS, %d FAIL ===%n", passN, failN);
+            if (failN > 0)
+                System.out.println("*** STOP GATE FAILED — driven production must NOT run. ***");
+            return failN == 0;
+        } finally {
+            FIL_SEGS = savedSegs; TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = savedTh;
+            CONV_RAMP_ARM = null; EPS_CONV_ARM = 0; cfgOff();
+        }
+    }
+    static int PASSIVE_WARM = 20000, PASSIVE_MEAS = 400000, PASSIVE_SEEDS = 4;
+    static double mean(double[] x) { double s = 0; for (double v : x) s += v; return s / x.length; }
+    static double sem(double[] x) {
+        if (x.length < 2) return 0;
+        double m = mean(x), s = 0; for (double v : x) s += (v-m)*(v-m);
+        return Math.sqrt(s / (x.length - 1) / x.length);
+    }
 
     /**
      * Free rigid body, no motors, no surface, no applied wrench: accumulate ONE-STEP body-frame increments over

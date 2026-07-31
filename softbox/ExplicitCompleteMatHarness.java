@@ -371,6 +371,8 @@ public final class ExplicitCompleteMatHarness {
             RAND_BASE_AZ ? "ON" : "OFF", SURFACE_ON ? "ON" : "OFF");
     }
 
+    /** Stage-5 passive nulls: drop the bind and chemistry tasks from the graph. Default false ⇒ byte-unchanged. */
+    static boolean PASSIVE_MODE = false;
     static boolean BR_FIL_AXIAL = true;      // -filament-brownian-axial on|off
     static boolean BR_FIL_TRANS = true;      // -filament-brownian-transverse on|off
     static boolean BR_FIL_ROLL  = true;      // -filament-brownian-roll on|off
@@ -800,6 +802,12 @@ public final class ExplicitCompleteMatHarness {
             tg.task("convFrame", ChiralSiteSystem::convFrameStep, mot.boundSeg, f.uVec, f.yVec, mot.bindAzim,
                     e.frame, e.params, e.q, e.convF, e.chiP, e.exCounts);
         tg.task("beamGeom", TwoBodyBeamAnalyticGpu::matBeamGeom, e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
+        // PASSIVE MODE (Stage 5 stop gate): omit binding and the nucleotide cycle, and NOTHING else. The bound
+        // set and the nucleotide states are frozen, so matCock returns a constant rest coordinate and every
+        // cross-bridge is a passive spring — springs plus thermal noise in a fixed topology, i.e. an equilibrium
+        // system in which detailed balance forbids a sustained rotational current. This mirrors
+        // stepPassiveCPU exactly; default false ⇒ the production graph is byte-unchanged.
+        if (!PASSIVE_MODE) {
         if (occOn()) {   // continuous local actin co-occupancy exclusion: parallel gate-only → single-thread serial resolve
             tg.task("gateOnly", TwoBodyBeamAnalyticGpu::matBindGateOnly, e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, e.candInt, e.candArc, e.exCounts)
               .task("occResolve", TwoBodyBeamAnalyticGpu::matOccupancyResolve, e.candInt, e.candArc, mot.boundSeg, mot.bindArc, e.segCumArc, e.segFilId, e.occP, e.occStats, e.exCounts);
@@ -818,6 +826,7 @@ public final class ExplicitCompleteMatHarness {
         if (ADP_RUP_ON) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRuptureAll, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats, mot.adpRuptureParams, mot.adpRuptureStats);
         else if (RIGOR_ON) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRigor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
         else          tg.task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
+        }   // end !PASSIVE_MODE
         if (strokeSkewOn())   // askew EFFECTIVE STROKE: local-frame rest-coordinate change at ADP·Pi→ADP
             tg.task("strokeSkew", ChiralSiteSystem::strokeSkew, mot.boundSeg, mot.nucleotideState, e.prevNuc, mot.bindAzim, e.chiP, e.exCounts);
         tg
