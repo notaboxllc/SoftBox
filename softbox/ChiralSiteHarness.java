@@ -4490,6 +4490,13 @@ public final class ChiralSiteHarness {
                     TArm T = new TArm(id, 0.0, false, +1, true, TwoBodyConverterMotor.G4_NSEG).conv(sgn*eps);
                     long t0 = System.currentTimeMillis();
                     TRes r = runTwirlArm(T, seed, STEPS);
+            // STRUCTURAL GUARD against the silent-discard class above: the scene that actually ran must be the
+            // model the record claims. A mismatch means a flag was swallowed somewhere on the path, so fail
+            // loudly rather than persist a mislabelled record.
+            if (r.nSeg != FIL_SEGS)
+                throw new IllegalStateException("requested filament model FIL_SEGS=" + FIL_SEGS
+                        + " but the realized scene had nSeg=" + r.nSeg + " for record " + id
+                        + " — a flag was silently discarded; refusing to write a mislabelled record");
                     try { powWrite(id, powValues(r), prov + " lawn=" + A.tag()); }
                     catch (java.io.IOException e) { throw new RuntimeException("record write failed: " + id, e); }
                     ran++;
@@ -5194,7 +5201,9 @@ public final class ChiralSiteHarness {
         if (atpRead(id) != null) { tally[0]++; return false; }
         double savedAtp = ATP_UM; ATP_UM = uM;
         try {
-            TArm T = new TArm(id, 0.0, false, ATP_MIRROR, true, TwoBodyConverterMotor.G4_NSEG)
+            // the SECOND override: runTwirlArm assigns a.segs back into FIL_SEGS, so hardcoding G4_NSEG here
+            // re-clobbered the requested model per arm even if the CLI value had survived runAtpMap.
+            TArm T = new TArm(id, 0.0, false, ATP_MIRROR, true, FIL_SEGS)
                     .conv(sgn * ATP_EPS_DEG);
             long t0 = System.currentTimeMillis();
             TRes r = runTwirlArm(T, seed, STEPS);
@@ -5469,7 +5478,12 @@ public final class ChiralSiteHarness {
 
     // ------------------------------------------------------------------ STAGE 3: the production ATP ladder
     static void runAtpMap(double durMs) {
-        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; BUDGET = true;
+        // FIL_SEGS is NOT reset here. It DEFAULTS to G4_NSEG, so every existing flexible run is byte-unaffected,
+        // but assigning G4_NSEG unconditionally silently discarded `-filament-segments` and would have run the
+        // 12-segment FLEXIBLE chain for a campaign asking for the rigid single body — writing it, in this tree,
+        // into the FLEXIBLE atp_ namespace because atpId selects the rigid namespace on FIL_SEGS == 1.
+        // (Independently found and fixed on the ratchet branch at 9d6da60.)
+        FIL_BROWN = true; BUDGET = true;
         // Production keeps the nested prefix readout ON: it is analysis-only, costs nothing measurable, and
         // makes the COMMON-WINDOW comparison across conditions of different duration available WITHOUT a rerun.
         NESTED_ON = ATP_MAP_NESTED;
