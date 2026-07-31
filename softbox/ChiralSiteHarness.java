@@ -1036,9 +1036,30 @@ public final class ChiralSiteHarness {
             System.out.printf(Locale.US, "    Omega_odd  %+10.4f +/- %-9.4f rad/s  (%.2f sigma)%n", oM, oS, sigOdd);
             System.out.printf(Locale.US, "    Omega_even %+10.4f +/- %-9.4f rad/s  (%.2f sigma)%n", eM, eS, sigEven);
             System.out.printf(Locale.US, "    tau_odd    %+10.4e +/- %-9.3e N.m    (%.2f sigma)%n", otM, otS, sigOddT);
-            ck(3, String.format(Locale.US, "C: passive CHIRAL +/-15 deg sustains NO equilibrium rotation "
-                    + "(Omega_odd %.2f sigma, Omega_even %.2f sigma)", sigOdd, sigEven),
-                    sigOdd < 3.0 && sigEven < 3.0);
+            // THE PRIMARY CHIRAL NULL IS THE TORQUE, NOT THE ROTATION. With a correct FDT thermostat the rigid
+            // body's axial roll carries the full kT reservoir, so D_roll = kT/gamma_roll is large and the
+            // rotational noise floor swamps anything a feasible window can resolve (sensitivity printed below).
+            // tau is a direct time-average of a bounded quantity and resolves far better, so the chiral null is
+            // GATED on tau_odd and the rotation is REPORTED AS A BOUND. A sigma-gate on Omega would pass here
+            // because the measurement is insensitive — a vacuous pass, not a null result.
+            ck(3, String.format(Locale.US, "C: passive CHIRAL +/-15 deg generates NO equilibrium axial TORQUE "
+                    + "(tau_odd %.2f sigma)", sigOddT), sigOddT < 3.0);
+            double omBound = 3 * oS, refDriven = 50.0;   // flexible 15 deg driven Omega_odd = the scale to beat
+            System.out.printf(Locale.US, "%n  ROTATIONAL SENSITIVITY (reported, deliberately not gated):%n");
+            System.out.printf(Locale.US, "    D_roll = kT/gamma_roll = %.4g rad^2/s, window %.0f ms%n",
+                    Constants.kT / G0roll, meas * DTR * 1e3);
+            System.out.printf(Locale.US, "    3-sigma bound on passive Omega_odd = %.1f rad/s "
+                    + "(Omega_odd %.2f sigma, Omega_even %.2f sigma)%n", omBound, sigOdd, sigEven);
+            System.out.printf(Locale.US, "    reference driven scale (flexible 15 deg) = %.0f rad/s%n", refDriven);
+            if (omBound > refDriven) {
+                System.out.printf(Locale.US, "    ⇒ INCONCLUSIVE: the bound is %.1fx the signal it would have to "
+                        + "constrain.%n", omBound / refDriven);
+                System.out.println("      This is a property of the CORRECTED thermostat, not a defect. The flexible");
+                System.out.println("      model was under-thermostatted in roll — interior segments received ZERO");
+                System.out.println("      rotational noise — which is precisely why its rotational floor looked small.");
+                System.out.println("      Rotation is diffusion-limited here, so TORQUE is the load-bearing observable.");
+            } else
+                System.out.printf(Locale.US, "    ⇒ informative: the bound sits below the reference driven scale.%n");
             // D is DETERMINISTIC, so a non-zero mean is not automatically a defect: it is either a decaying
             // mechanical transient (the frozen configuration still relaxing) or a sustained non-conservative
             // current. Only the halves distinguish them, so the gate is written on the halves, not the mean.
