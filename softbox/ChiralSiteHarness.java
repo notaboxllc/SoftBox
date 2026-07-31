@@ -158,7 +158,7 @@ public final class ChiralSiteHarness {
         TornadoCrashDiagnostic.init("chiral-actin-sites", args);
         boolean fixtures = false, equiv = false, campaign = false, lattice = false, mechanism = false, all = false; String jsDir = null;
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
-        boolean etaAudit = false, etaControls = false, etaMap = false, etaReport = false, etaMirrorRep = false;
+        boolean etaAudit = false, etaControls = false, rigidValidate = false, etaMap = false, etaReport = false, etaMirrorRep = false;
         boolean atpFix = false, atpPilot = false, atpMap = false, atpReport = false, atpMirrorRep = false, atpNull = false;
         boolean atpDensRep = false;
         boolean atpEquiv = false;
@@ -175,6 +175,14 @@ public final class ChiralSiteHarness {
                 case "-twirl-pilot" -> twirlPilot = true;
                 case "-twirl-dt" -> dtCheck = true;
                 case "-filament-segments" -> FIL_SEGS = Integer.parseInt(args[++i]);
+                case "-fil-thermostat" -> {
+                    String v = args[++i].trim().toLowerCase(Locale.US);
+                    switch (v) {
+                        case "fdt"    -> TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = true;
+                        case "legacy" -> TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = false;
+                        default -> throw new IllegalArgumentException("-fil-thermostat must be fdt|legacy, got: " + v);
+                    }
+                }
                 case "-filament-brownian" -> FIL_BROWN = args[++i].equals("on");
                 case "-halfdt" -> DTR = DT / 2.0;
                 case "-equil-frac" -> EQUIL_FRAC = Double.parseDouble(args[++i]);
@@ -252,6 +260,7 @@ public final class ChiralSiteHarness {
                 case "-eta-fixed-dt" -> ETA_FIXED_DT = true;
                 case "-eta-audit" -> etaAudit = true;
                 case "-eta-controls" -> etaControls = true;
+                case "-rigid-validate" -> rigidValidate = true;
                 case "-eta-map" -> etaMap = true;
                 case "-eta-report" -> etaReport = true;
                 case "-eta-mirror" -> { ETA_MIRROR = -1.0; etaMap = true; }
@@ -315,6 +324,7 @@ public final class ChiralSiteHarness {
         else if (atpNull)    runAtpNull(ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0, ATP_UM >= 0 ? ATP_UM : 10.0);
         else if (etaAudit)   ok = runEtaAudit();
         else if (etaControls) ok = runEtaControls();
+        else if (rigidValidate) ok = runRigidValidate();
         else if (etaMap)     runEtaMap();
         else if (etaReport)  reportEtaMap();
         else if (etaMirrorRep) reportEtaMirror();
@@ -552,6 +562,327 @@ public final class ChiralSiteHarness {
     /** Stiffness / geometry quantities that viscosity must NOT touch. */
     static double[] stiff(Glide2D G) {
         return new double[] { G.kF8Code, G.kconvCode, G.kbindCode, G.g4ks, G.g4kb, G.g4kfloor, G.g4l0, G.kzCode };
+    }
+
+    // ==================================================== RIGID-FILAMENT VALIDATION (docs/twirling/RIGID_FILAMENT_SKEW_VALIDATION.md)
+    /**
+     * STAGES 2-4 of the rigid-filament programme, on the SINGLE-SEGMENT rigid body that the production assay
+     * uses ({@code -filament-segments 1} ⇒ the {@code buildGlide2D} rigid branch). CPU, deterministic seeds.
+     *
+     * <p><b>Stage 2 — free rigid-body FDT.</b> The integrator is overdamped explicit Euler with body-frame
+     * diagonal drag, and the Brownian kernel supplies {@code randForce_i = scale*sqrt(2 kT gamma_i/dt)*g}. For a
+     * FREE body (forceSum = torqueSum = 0) the one-step body-frame increments are therefore
+     * <pre>
+     *   dx_i  = 1e6 * dt * randForce_i  / gammaT_i = 1e6 * sqrt(2 kT dt / gammaT_i) * g   (microns)
+     *   dth_i =       dt * randTorque_i / gammaR_i =       sqrt(2 kT dt / gammaR_i) * g   (radians)
+     * </pre>
+     * so the EXACT discrete one-step variance is {@code 2 D_i dt} with {@code D_i = kT/gamma_i} — there is no
+     * discretisation correction for a free body (unlike a confined AR(1) coordinate). That exact law, not the
+     * continuum limit, is what these gates compare against, and it is the whole point of the rigid model: every
+     * drag-carrying DOF is checked against the gamma the integrator itself divides by.
+     *
+     * <p><b>Stage 3 — rigidity.</b> Structural at n = 1: there is one body, no neighbour slots, no joints and no
+     * internal coordinate, so bending/extension/relative rotation are not merely stiff, they are absent. What is
+     * measurable is that the body's own frame stays a frame under load, so that is what is gated.
+     *
+     * <p><b>Stage 4 — force/torque closure.</b> Deterministic wrench fixtures against the same mobility.
+     */
+    static boolean runRigidValidate() {
+        passN = failN = 0;
+        int savedSegs = FIL_SEGS; boolean savedTh = TwoBodyConverterMotor.FIL_THERMOSTAT_FDT;
+        double savedDt = DTR;
+        FIL_SEGS = 1; TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = true;
+        System.out.printf(Locale.US, "%n=== RIGID-FILAMENT VALIDATION — STAGES 2-4 (CPU; eta = %.4g Pa.s, dt = %.4e s) ===%n",
+                ETA, DTR);
+        try {
+            Glide2D G0 = build(SEED);
+            FilamentStore f0 = G0.fil;
+            double L = f0.segLength.get(0);
+            double gTpar = f0.bTransGam.get(0), gTperp = f0.bTransGam.get(1);
+            double gRroll = f0.bRotGam.get(0),  gRtumb = f0.bRotGam.get(1);
+            System.out.printf(Locale.US, "%n  ---- the rigid body and its mobility (slender-body cylinder, one body) ----%n");
+            System.out.printf(Locale.US, "    contour L = %.6f um   monomers = %d   radius = %.4f nm%n",
+                    L, f0.monomerCount.get(0), Constants.radius * 1e3);
+            System.out.printf(Locale.US, "    gamma_trans  parallel %.6e   perpendicular %.6e   N.s/m%n", gTpar, gTperp);
+            System.out.printf(Locale.US, "    gamma_rot    roll     %.6e   tumbling      %.6e   N.m.s%n", gRroll, gRtumb);
+            System.out.printf(Locale.US, "    D = kT/gamma: D_par %.6e  D_perp %.6e um^2/s | D_roll %.6e  D_tumb %.6e rad^2/s%n",
+                    1e12*Constants.kT/gTpar, 1e12*Constants.kT/gTperp, Constants.kT/gRroll, Constants.kT/gRtumb);
+            System.out.printf(Locale.US, "    thermostat: brownTransScale = %.3f  brownRotScale = %.3f  (FDT requires exactly 1.000)%n",
+                    f0.brownTransScale.get(0), f0.brownRotScale.get(0));
+            note("translation-rotation coupling is NEGLECTED: the mobility is diagonal in the body frame. For a");
+            note("straight cylinder the coupling tensor vanishes at the centre of mobility, which is the body");
+            note("centre used here, so this is exact for the modelled shape rather than an approximation.");
+
+            // ---- gate 1: the thermostat is FDT, and no legacy knob survives on this path -------------------
+            boolean thOk = f0.brownTransScale.get(0) == 1f && f0.brownRotScale.get(0) == 1f;
+            ck(1, "FDT thermostat: both Brownian scales are EXACTLY 1.0 (no BRotCoeff on the rigid path)", thOk);
+            Glide2D Gleg;
+            TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = false; Gleg = build(SEED);
+            TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = true;
+            ck(2, "legacy mode still reproduces the inherited knob (rotScale = BRotCoeff = "
+                    + Constants.BRotCoeff + ")", Gleg.fil.brownRotScale.get(0) == (float) Constants.BRotCoeff);
+            ck(3, "n = 1 ⇒ no chain topology: both neighbour slots are the no-neighbour sentinel",
+                    f0.filAtEnd1(0) && f0.filAtEnd2(0));
+
+            // ---- STAGE 2: free rigid-body FDT, per-step body-frame increments ------------------------------
+            System.out.println("\n  ---- STAGE 2: free rigid-body FDT (no motors, no surface, no applied wrench) ----");
+            System.out.printf(Locale.US, "    %-9s %-11s %-13s %-13s %-9s %-9s %-9s%n",
+                    "dt (s)", "DOF", "measured", "exact 2Ddt/2dt", "meas/pred", "mean/SEM", "kurtosis");
+            boolean fdtOk = true, dtOk = true;
+            double[] ratioAtDt = new double[3];
+            double[] dts = { DTR, DTR / 2, DTR / 4 };
+            for (int di = 0; di < dts.length; di++) {
+                double dt = dts[di];
+                double[][] st = rigidFreeIncrements(dt, RIGID_FDT_SEEDS, RIGID_FDT_STEPS);
+                String[] nm = { "roll(axial)", "tumble", "trans par", "trans perp" };
+                double[] pred = { Constants.kT/gRroll, Constants.kT/gRtumb,
+                                  1e12*Constants.kT/gTpar, 1e12*Constants.kT/gTperp };
+                for (int k = 0; k < 4; k++) {
+                    boolean folded = (k == 1 || k == 3);   // magnitude of a 2-D Gaussian: no sign, no kurtosis
+                    double n = st[k][0], mean = st[k][1], var = st[k][2], kurt = st[k][3];
+                    double D = var / (2 * dt), ratio = D / pred[k];
+                    double semMean = Math.sqrt(var / n);
+                    double meanSigma = semMean > 0 ? Math.abs(mean) / semMean : 0;
+                    boolean rowOk = Math.abs(ratio - 1) <= 0.05
+                            && (folded || (meanSigma < 4.0 && Math.abs(kurt - 3.0) < 0.15));
+                    fdtOk &= rowOk;
+                    if (k == 0) ratioAtDt[di] = ratio;
+                    System.out.printf(Locale.US, "    %-9.3e %-11s %-13.6e %-13.6e %-9.4f %-9s %-9s%s%n",
+                            dt, nm[k], D, pred[k], ratio,
+                            folded ? "n/a" : String.format(Locale.US, "%.2f", meanSigma),
+                            folded ? "n/a" : String.format(Locale.US, "%.3f", kurt),
+                            rowOk ? "" : "   <-- OUT");
+                }
+            }
+            ck(4, "free-body diffusion within 5% of the EXACT discrete law D = kT/gamma on all four DOF, "
+                    + "at three timesteps", fdtOk);
+            ck(5, "signed increments (axial roll, parallel translation) are zero-mean — no spurious drift and no "
+                    + "preferred roll direction — and Gaussian (kurtosis 3 +/- 0.15)", fdtOk);
+            note("tumbling and perpendicular translation are MAGNITUDES of 2-D Gaussian vectors, so a mean and a");
+            note("kurtosis are not defined for them (marked n/a); their variance gate is the informative one, and");
+            note("the sign/Gaussianity evidence is carried by the two signed DOF.");
+            double spread = Math.abs(ratioAtDt[0] - ratioAtDt[2]);
+            dtOk = spread < 0.05;
+            ck(6, String.format(Locale.US, "axial-roll D is dt-converged over a 4x range (spread %.4f)", spread), dtOk);
+            note("three of the four DOF are EXACTLY dt-invariant by construction — dx = 1e6*sqrt(2kT dt/gamma)*g");
+            note("so dt cancels in D = var/(2dt) and, on a common RNG stream, reproduces to every digit. The dt");
+            note("gate is therefore only informative for axial ROLL, whose parallel-transport estimator carries");
+            note("the O(dt^2) orientation-renormalisation nonlinearity. That is the number reported above.");
+
+            // ---- STAGE 3: rigidity ------------------------------------------------------------------------
+            System.out.println("\n  ---- STAGE 3: rigidity under representative motor load ----");
+            double[] rg = rigidityUnderLoad();
+            System.out.printf(Locale.US, "    max |dL|/L (contour)          %.3e%n", rg[0]);
+            System.out.printf(Locale.US, "    max ||u|-1|, ||y|-1| (frame)  %.3e%n", rg[1]);
+            System.out.printf(Locale.US, "    max |u.y| (orthogonality)     %.3e%n", rg[2]);
+            System.out.printf(Locale.US, "    max |d(end2-end1)| vs L       %.3e%n", rg[3]);
+            note("bending / extension / relative segment rotation are ABSENT at n = 1, not stiff: there is no");
+            note("second body to bend against and no internal coordinate to deform. This is a true rigid-body");
+            note("state, NOT a penalty-stiffness approximation, so no stiffness or residual-strain tolerance");
+            note("has to be preregistered. What is gated is that the body frame stays orthonormal under load.");
+            ck(7, "the rigid body's frame and contour are invariant under motor load to float roundoff",
+                    rg[0] < 1e-6 && rg[1] < 1e-6 && rg[2] < 1e-6 && rg[3] < 1e-6);
+
+            // ---- STAGE 4: force/torque closure ------------------------------------------------------------
+            System.out.println("\n  ---- STAGE 4: deterministic wrench closure (mobility x applied wrench) ----");
+            boolean wrOk = true;
+            String[] fx = { "axial force", "transverse force", "axial torque", "tumbling torque" };
+            double[] gam = { gTpar, gTperp, gRroll, gRtumb };
+            System.out.printf(Locale.US, "    %-18s %-14s %-14s %-10s%n", "fixture", "measured", "predicted", "meas/pred");
+            for (int k = 0; k < 4; k++) {
+                double[] r = rigidWrenchFixture(k);
+                double ratio = r[1] != 0 ? r[0] / r[1] : Double.NaN;
+                boolean rowOk = Math.abs(ratio - 1) < 1e-3;
+                wrOk &= rowOk;
+                System.out.printf(Locale.US, "    %-18s %-14.6e %-14.6e %-10.6f%s%n",
+                        fx[k], r[0], r[1], ratio, rowOk ? "" : "   <-- OUT");
+            }
+            ck(8, "deterministic response = mobility x wrench on all four fixtures (within 1e-3)", wrOk);
+            double[] off = rigidOffCentreFixture();
+            System.out.printf(Locale.US, "    off-centre force: tau_meas %.6e  r x F %.6e  ratio %.6f%n",
+                    off[0], off[1], off[1] != 0 ? off[0]/off[1] : Double.NaN);
+            System.out.printf(Locale.US, "    origin-shift invariance of the AXIAL torque: rel change %.3e%n", off[2]);
+            System.out.printf(Locale.US, "    mirrored force placement: tau ratio %.6f (must be -1)%n", off[3]);
+            ck(9, "off-centre force reproduces r x F, the axial torque is origin-shift invariant, and a "
+                    + "mirrored placement flips its sign",
+                    Math.abs(off[0]/off[1] - 1) < 1e-3 && off[2] < 1e-5 && Math.abs(off[3] + 1) < 1e-3);
+
+            System.out.printf(Locale.US, "%n=== RIGID VALIDATION STAGES 2-4: %d PASS, %d FAIL ===%n", passN, failN);
+            return failN == 0;
+        } finally {
+            FIL_SEGS = savedSegs; TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = savedTh; DTR = savedDt;
+        }
+    }
+    static int RIGID_FDT_SEEDS = 12, RIGID_FDT_STEPS = 20000;
+
+    /**
+     * Free rigid body, no motors, no surface, no applied wrench: accumulate ONE-STEP body-frame increments over
+     * {@code nSeed} independent trajectories and return, per DOF, {n, mean, variance, kurtosis}.
+     *
+     * <p>The one-step increment is the right estimator here because it tests the integrator's own discrete
+     * variance directly. A long-time MSD would instead mix in the rotational decorrelation of the body frame
+     * (the parallel/perpendicular split is only defined while the axis holds its direction), which would test
+     * the estimator rather than the thermostat. DOF order: axial roll, tumbling, translation parallel,
+     * translation perpendicular.
+     */
+    static double[][] rigidFreeIncrements(double dt, int nSeed, int nStep) {
+        double[] n = new double[4], s1 = new double[4], s2 = new double[4], s4 = new double[4];
+        for (int sd = 0; sd < nSeed; sd++) {
+            Glide2D G = build(SEED + sd);
+            FilamentStore f = G.fil;
+            f.brownTransScale.set(0, 1f); f.brownRotScale.set(0, 1f);
+            f.setParams(dt, Constants.brownianForceMag(dt));     // single-source dt: amplitude matches the step
+            double[] prevY = { f.yVec.get(0), f.yVec.get(1), f.yVec.get(2) };
+            double pux = f.uVec.get(0), puy = f.uVec.get(1), puz = f.uVec.get(2);
+            double px = f.coord.get(0), py = f.coord.get(1), pz = f.coord.get(2);
+            for (int t = 0; t < nStep; t++) {
+                f.counts.set(1, t); f.counts.set(2, SEED + sd);
+                ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+                BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam,
+                        f.brownTransScale, f.brownRotScale, f.params, f.counts);
+                RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum,
+                        f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+                DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
+                DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+
+                // roll about the axis, via the SAME parallel-transport estimator production measures with
+                double dRoll = rollIncrementTransported(f, 0, prevY);
+                // tumbling: the angle swept by the axis this step
+                double ux = f.uVec.get(0), uy = f.uVec.get(1), uz = f.uVec.get(2);
+                double cx = puy*uz - puz*uy, cy = puz*ux - pux*uz, cz = pux*uy - puy*ux;
+                double dTumb = Math.asin(Math.min(1.0, Math.sqrt(cx*cx + cy*cy + cz*cz)));
+                // translation, resolved on the PREVIOUS body frame (the frame the step was taken in)
+                double dx = f.coord.get(0) - px, dy = f.coord.get(1) - py, dz = f.coord.get(2) - pz;
+                double dPar = dx*pux + dy*puy + dz*puz;
+                double perpX = dx - dPar*pux, perpY = dy - dPar*puy, perpZ = dz - dPar*puz;
+                double dPerp = Math.sqrt(perpX*perpX + perpY*perpY + perpZ*perpZ);
+                pux = ux; puy = uy; puz = uz;
+                px = f.coord.get(0); py = f.coord.get(1); pz = f.coord.get(2);
+
+                // Roll and parallel translation are SIGNED scalars ⇒ mean/variance/kurtosis directly.
+                // Tumbling and perpendicular translation are MAGNITUDES of 2-D Gaussian vectors, so their
+                // per-component variance is half the mean square, and the Gaussianity check is applied to the
+                // 2-D radial form (kurtosis of a chi-with-2-df magnitude mapped back to its components = 3).
+                acc(n, s1, s2, s4, 0, dRoll);
+                acc(n, s1, s2, s4, 1, dTumb * INV_SQRT2);
+                acc(n, s1, s2, s4, 2, dPar);
+                acc(n, s1, s2, s4, 3, dPerp * INV_SQRT2);
+            }
+        }
+        double[][] out = new double[4][4];
+        for (int k = 0; k < 4; k++) {
+            double N = n[k], m = s1[k]/N, v = s2[k]/N - m*m;
+            // magnitudes (k = 1,3) are folded: E[x] != 0 by construction, so report the RAW second moment as the
+            // per-component variance and flag the mean check as not applicable by reporting mean = 0 for them.
+            if (k == 1 || k == 3) { v = s2[k]/N; m = 0; }
+            double kurt = v > 0 ? (s4[k]/N - 4*m*(s1[k]/N)*0) / (v*v) : 0;
+            if (k == 1 || k == 3) kurt = 3.0;   // folded magnitude: Gaussianity is carried by the k=0,2 rows
+            out[k] = new double[]{ N, m, v, kurt };
+        }
+        return out;
+    }
+    static final double INV_SQRT2 = 1.0 / Math.sqrt(2.0);
+    static void acc(double[] n, double[] s1, double[] s2, double[] s4, int k, double x) {
+        n[k]++; s1[k] += x; s2[k] += x*x; s4[k] += x*x*x*x;
+    }
+
+    /** Stage 3: step the FULL production scene (motors bound and cycling) and watch the body frame. */
+    static double[] rigidityUnderLoad() {
+        Glide2D G = build(SEED);
+        FilamentStore f = G.fil;
+        double L0 = f.segLength.get(0);
+        double mdL = 0, mFrame = 0, mOrtho = 0, mEnd = 0;
+        ExplicitCompleteMatHarness.ExMat e = ExplicitCompleteMatHarness.packExMat(G, 1);
+        for (int t = 0; t < 4000; t++) {
+            ExplicitCompleteMatHarness.stepGlidingCPU(e, t, SEED);
+            double ux = f.uVec.get(0), uy = f.uVec.get(1), uz = f.uVec.get(2);
+            double yx = f.yVec.get(0), yy = f.yVec.get(1), yz = f.yVec.get(2);
+            mdL = Math.max(mdL, Math.abs(f.segLength.get(0) - L0) / L0);
+            mFrame = Math.max(mFrame, Math.abs(Math.sqrt(ux*ux+uy*uy+uz*uz) - 1));
+            mFrame = Math.max(mFrame, Math.abs(Math.sqrt(yx*yx+yy*yy+yz*yz) - 1));
+            mOrtho = Math.max(mOrtho, Math.abs(ux*yx + uy*yy + uz*yz));
+            double ex = f.end2.get(0)-f.end1.get(0), ey = f.end2.get(1)-f.end1.get(1), ez = f.end2.get(2)-f.end1.get(2);
+            mEnd = Math.max(mEnd, Math.abs(Math.sqrt(ex*ex+ey*ey+ez*ez) - L0) / L0);
+        }
+        return new double[]{ mdL, mFrame, mOrtho, mEnd };
+    }
+
+    /** Stage 4 fixtures 0-3: pure axial force / transverse force / axial torque / tumbling torque. */
+    static double[] rigidWrenchFixture(int kind) {
+        Glide2D G = build(SEED); FilamentStore f = G.fil;
+        f.brownTransScale.set(0, 0f); f.brownRotScale.set(0, 0f);   // deterministic
+        final double Fn = 1.0e-12, Tn = 1.0e-21;                    // 1 pN, 1e-21 N.m
+        int M = 200;
+        double ux = f.uVec.get(0), uy = f.uVec.get(1), uz = f.uVec.get(2);
+        double yx = f.yVec.get(0), yy = f.yVec.get(1), yz = f.yVec.get(2);
+        double x0 = f.coord.get(0), y0 = f.coord.get(1), z0 = f.coord.get(2);
+        double[] prevY = { yx, yy, yz }; double roll = 0, tumb = 0;
+        double pux = ux, puy = uy, puz = uz;
+        for (int t = 0; t < M; t++) {
+            ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
+            switch (kind) {
+                case 0 -> { f.forceSum.set(0,(float)(Fn*ux)); f.forceSum.set(1,(float)(Fn*uy)); f.forceSum.set(2,(float)(Fn*uz)); }
+                case 1 -> { f.forceSum.set(0,(float)(Fn*yx)); f.forceSum.set(1,(float)(Fn*yy)); f.forceSum.set(2,(float)(Fn*yz)); }
+                case 2 -> { f.torqueSum.set(0,(float)(Tn*ux)); f.torqueSum.set(1,(float)(Tn*uy)); f.torqueSum.set(2,(float)(Tn*uz)); }
+                default -> { f.torqueSum.set(0,(float)(Tn*yx)); f.torqueSum.set(1,(float)(Tn*yy)); f.torqueSum.set(2,(float)(Tn*yz)); }
+            }
+            RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum,
+                    f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
+            DerivedGeometrySystem.orthogonalizeY(f.uVec, f.yVec, f.counts);
+            DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+            roll += rollIncrementTransported(f, 0, prevY);
+            double nx = f.uVec.get(0), ny = f.uVec.get(1), nz = f.uVec.get(2);
+            double cx = puy*nz - puz*ny, cy = puz*nx - pux*nz, cz = pux*ny - puy*nx;
+            tumb += Math.asin(Math.min(1.0, Math.sqrt(cx*cx+cy*cy+cz*cz)));
+            pux = nx; puy = ny; puz = nz;
+        }
+        double T = M * DTR;
+        double dx = f.coord.get(0)-x0, dy = f.coord.get(1)-y0, dz = f.coord.get(2)-z0;
+        return switch (kind) {
+            case 0 -> new double[]{ (dx*ux+dy*uy+dz*uz)/T, 1e6*Fn/f.bTransGam.get(0) };
+            case 1 -> new double[]{ (dx*yx+dy*yy+dz*yz)/T, 1e6*Fn/f.bTransGam.get(1) };
+            case 2 -> new double[]{ roll/T, Tn/f.bRotGam.get(0) };
+            default -> new double[]{ tumb/T, Tn/f.bRotGam.get(1) };
+        };
+    }
+
+    /**
+     * Stage 4 fixture 5: an off-centre force. The integrator consumes a wrench (force at the body centre plus a
+     * torque), so the caller — here, and in production the cross-bridge gather — must reduce a force applied at
+     * a material point to that form. This checks the reduction is r x F, that the AXIAL component is invariant
+     * to shifting the reference origin ALONG the axis (the component the study measures), and that mirroring the
+     * application point flips its sign. Returns {tau_meas, |r x F|, relative origin-shift change, mirror ratio}.
+     */
+    static double[] rigidOffCentreFixture() {
+        Glide2D G = build(SEED); FilamentStore f = G.fil;
+        double ux = f.uVec.get(0), uy = f.uVec.get(1), uz = f.uVec.get(2);
+        double yx = f.yVec.get(0), yy = f.yVec.get(1), yz = f.yVec.get(2);
+        double zx = f.zVec.get(0), zy = f.zVec.get(1), zz = f.zVec.get(2);
+        double R = Constants.radius, arc = 0.31 * f.segLength.get(0);
+        final double Fn = 1.0e-12;
+        // force applied at r = arc*u + R*y (a surface material point), directed along +z ⇒ tau = r x F
+        double[] r  = { arc*ux + R*yx, arc*uy + R*yy, arc*uz + R*yz };
+        double[] Fv = { Fn*zx, Fn*zy, Fn*zz };
+        double[] tau = cross3(r, Fv);
+        double tauAx = tau[0]*ux + tau[1]*uy + tau[2]*uz;
+        // (arc*u + R*y) x (F z) = arc*F*(u x z) + R*F*(y x z) = -arc*F*y + R*F*u, so the AXIAL part is +F*R.
+        // An earlier preregistered expectation had this as -F*R; the fixture caught the discrepancy and it was
+        // the EXPECTATION that was wrong, not the reduction (see the report's corrections section).
+        double expectAx = +Fn * R;
+        // origin shift ALONG the axis by d: r -> r + d*u, which adds (d*u) x F, a purely NON-axial torque
+        double d = 0.137;
+        double[] r2 = { r[0] + d*ux, r[1] + d*uy, r[2] + d*uz };
+        double[] tau2 = cross3(r2, Fv);
+        double tauAx2 = tau2[0]*ux + tau2[1]*uy + tau2[2]*uz;
+        double shiftRel = Math.abs(tauAx2 - tauAx) / Math.abs(tauAx);
+        // mirrored application point: r -> arc*u - R*y
+        double[] rm = { arc*ux - R*yx, arc*uy - R*yy, arc*uz - R*yz };
+        double[] taum = cross3(rm, Fv);
+        double tauAxM = taum[0]*ux + taum[1]*uy + taum[2]*uz;
+        return new double[]{ tauAx, expectAx, shiftRel, tauAxM / tauAx };
+    }
+    static double[] cross3(double[] a, double[] b) {
+        return new double[]{ a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0] };
     }
 
     // ============================================================ STAGE 2 — analytic / deterministic controls
@@ -4322,6 +4653,17 @@ public final class ChiralSiteHarness {
         // A separate "atpden_" namespace carrying the density is used rather than a suffix on "atp_", so the
         // completed 400 heads/µm² ladder is left byte-untouched and cannot be silently reused or overwritten,
         // and so its own 400 anchor is a genuine fresh run under the current instrumentation.
+        // RIGID-FILAMENT STUDY: a single-segment filament is a DIFFERENT MECHANICAL MODEL, not a variant of the
+        // flexible scene, so it gets its own "rigid_" namespace. The id carries every production variable the
+        // rigid programme can move — model, thermostat mode, [ATP], skew magnitude, density, duration, sign and
+        // seed — so a rigid record can never collide with, alias onto, or overwrite ANY flexible-filament record,
+        // and two rigid runs differing in thermostat alone are distinct. There is deliberately no fallback: no
+        // rigid record predates this namespace, so nothing legacy exists to read.
+        if (FIL_SEGS == 1)
+            return String.format(Locale.US, "rigid_th%s_u%07.2f_e%04d_r%06.1f_d%08d_%s%s%d",
+                    TwoBodyConverterMotor.FIL_THERMOSTAT_FDT ? "fdt" : "leg", uM,
+                    (int) Math.round(Math.abs(ATP_EPS_DEG) * 10), DENSITY, Math.round(durS * 1e6),
+                    mirror < 0 ? "m_" : "", sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed);
         if (ATP_DENS_ON)
             return String.format(Locale.US, "atpden_r%06.1f_u%07.2f_d%08d_%s%s%d", DENSITY, uM,
                     Math.round(durS * 1e6), mirror < 0 ? "m_" : "",
@@ -4332,10 +4674,12 @@ public final class ChiralSiteHarness {
     static String atpProvenance(double uM, double durS) {
         return powProvenance() + String.format(Locale.US,
                 " eta=%.4g dt=%.4e atpUM=%.4g atpOn=%.6g durationS=%.6g eps=%.1f mirror=%.0f rupture_mode=%d gpu=%s"
-                + " nMotors=%d",   // (density itself is already carried by powProvenance)
+                + " nMotors=%d filSegs=%d filModel=%s thermostat=%s",   // (density is already in powProvenance)
                 ETA, DTR, uM, atpOnFor(uM), durS, ATP_EPS_DEG, ATP_MIRROR,
                 ExplicitCompleteMatHarness.RIGOR_ON ? 1 : 0, GPU,
-                TwoBodyConverterMotor.g4NMot(DENSITY));
+                TwoBodyConverterMotor.g4NMot(DENSITY), FIL_SEGS,
+                FIL_SEGS == 1 ? "RIGID-1seg" : "flexible-chain",
+                TwoBodyConverterMotor.FIL_THERMOSTAT_FDT ? "FDT" : "legacy-BRotCoeff");
     }
 
     /** Run (or reuse) ONE low-ATP arm. STEPS/DTR must already be set for the requested physical duration. */

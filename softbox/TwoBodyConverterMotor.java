@@ -4415,6 +4415,11 @@ public final class TwoBodyConverterMotor {
     static final int    G4_MONO=64;                  // monomers/segment (canonical MONOMER_CT) ⇒ segLen ≈ 0.176 µm
     static final int    G4_NSEG=12;                  // ~2.1 µm contour (semiflexible; canonical bending, Lp≈17 µm)
     static int          G4_NSEG_RUN=G4_NSEG;         // runtime filament-length override for the canonical length sweep (default = G4_NSEG ⇒ existing paths unchanged)
+    /** Rigid-branch filament thermostat: false ⇒ LEGACY (brownRotScale = BRotCoeff = 0.5, a 0.25 kT rotational
+     *  reservoir); true ⇒ FDT (both Brownian scales exactly 1.0, one reservoir at kT on every drag-carrying
+     *  rigid-body DOF). Default false ⇒ every existing path is byte-unchanged. Set via `-fil-thermostat fdt`.
+     *  Affects ONLY the {@code rigid} branch of {@link #buildGlide2D}; the flexible chain is untouched. */
+    static boolean      FIL_THERMOSTAT_FDT=false;
     static final double G4_KZ=2.0;                   // z-only surface confinement (pN/nm) — the coverslip normal
     static final double G4_MARGIN=0.03;              // active-set margin around the filament bbox (µm)
     // 4D-ii — derived per-segment CANDIDATE-QUERY radius (µm): shortest site→segment distance below which a motor
@@ -4464,7 +4469,20 @@ public final class TwoBodyConverterMotor {
             G.nSeg=1; int mc=Math.max(1,(int)Math.round(G4_NSEG*segLen/Constants.actinMonoRadius)-1);   // one rod, same end-to-end
             FilamentStore f=new FilamentStore(1); f.monomerCount.set(0,mc);
             f.setUVec(0,1f,0f,0f); f.setYVec(0,0f,1f,0f); f.setCoord(0,0f,0f,0f);
-            f.brownTransScale.set(0,(float)Constants.BTransCoeff); f.brownRotScale.set(0,(float)Constants.BRotCoeff);
+            // FILAMENT THERMOSTAT MODE (rigid branch only; default LEGACY ⇒ byte-identical to every prior run).
+            //
+            // LEGACY reproduces the inherited scene: brownRotScale = BRotCoeff = 0.5. The Brownian kernel builds
+            // sqrt(2kT*gamma/dt) from the SAME gamma the integrator uses, so a rotational amplitude scaled by 0.5
+            // puts the rotational reservoir at 0.25 kT while translation sits at kT — two temperatures in one
+            // body. BRotCoeff is a v1 persistence-length tuning knob (Constants.java:54-58), not an FDT quantity,
+            // and a rigid body has no persistence length for it to tune.
+            //
+            // FDT sets both scales to exactly 1.0, so EVERY drag-carrying rigid-body degree of freedom —
+            // translation parallel and perpendicular, axial roll, and both tumbling axes — receives precisely
+            // the noise its own gamma demands: ONE reservoir, ONE temperature. There is no per-segment scale
+            // here by construction (n = 1), and no BRotCoeff on this path.
+            f.brownTransScale.set(0,(float)(FIL_THERMOSTAT_FDT ? 1.0 : Constants.BTransCoeff));
+            f.brownRotScale.set(0,(float)(FIL_THERMOSTAT_FDT ? 1.0 : Constants.BRotCoeff));
             DragTensorSystem.run(f); f.setParams(dt,Constants.brownianForceMag(dt)); f.setCounts(0,seed);
             DerivedGeometrySystem.derive(f.coord,f.uVec,f.yVec,f.zVec,f.end1,f.end2,f.segLength,f.counts);
             G.fil=f;
