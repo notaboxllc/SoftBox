@@ -158,7 +158,7 @@ public final class ChiralSiteHarness {
         TornadoCrashDiagnostic.init("chiral-actin-sites", args);
         boolean fixtures = false, equiv = false, campaign = false, lattice = false, mechanism = false, all = false; String jsDir = null;
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
-        boolean etaAudit = false, etaControls = false, rigidValidate = false, rigidPassive = false, etaMap = false, etaReport = false, etaMirrorRep = false;
+        boolean etaAudit = false, etaControls = false, rigidValidate = false, rigidPassive = false, rigidCompat = false, etaMap = false, etaReport = false, etaMirrorRep = false;
         boolean atpFix = false, atpPilot = false, atpMap = false, atpReport = false, atpMirrorRep = false, atpNull = false;
         boolean atpDensRep = false;
         boolean atpEquiv = false;
@@ -262,6 +262,9 @@ public final class ChiralSiteHarness {
                 case "-eta-controls" -> etaControls = true;
                 case "-rigid-validate" -> rigidValidate = true;
                 case "-rigid-passive" -> rigidPassive = true;
+                case "-rigid-compat" -> rigidCompat = true;
+                case "-compat-ms" -> COMPAT_MS = Double.parseDouble(args[++i]);
+                case "-compat-seeds" -> COMPAT_SEEDS = Integer.parseInt(args[++i]);
                 case "-passive-meas" -> PASSIVE_MEAS = Integer.parseInt(args[++i]);
                 case "-passive-seeds" -> PASSIVE_SEEDS = Integer.parseInt(args[++i]);
                 case "-eta-map" -> etaMap = true;
@@ -329,6 +332,7 @@ public final class ChiralSiteHarness {
         else if (etaControls) ok = runEtaControls();
         else if (rigidValidate) ok = runRigidValidate();
         else if (rigidPassive) ok = runRigidPassive();
+        else if (rigidCompat) ok = runRigidCompat();
         else if (etaMap)     runEtaMap();
         else if (etaReport)  reportEtaMap();
         else if (etaMirrorRep) reportEtaMirror();
@@ -845,6 +849,85 @@ public final class ChiralSiteHarness {
         } finally { EPS_CONV_ARM = savedEps; ATP_UM = savedAtp; FIL_BROWN = savedBrown;
                     ExplicitCompleteMatHarness.PROD_SCI = savedSci; }
     }
+    /**
+     * STAGE 6 — binding and gliding compatibility. Runs the rigid assay at the production condition with ZERO
+     * skew and compares it DESCRIPTIVELY with the legacy flexible assay at the same condition and seeds.
+     *
+     * <p>Equality is explicitly NOT required and no binding gate is tuned: rigidifying the filament changes the
+     * local geometry a motor sees (no bending compliance, one rigid contour), so occupancy is EXPECTED to move.
+     * The question is only whether the assay stays USABLE — attachment viable, occupancy stable across seeds,
+     * gliding directed, chemistry healthy.
+     */
+    static boolean runRigidCompat() {
+        passN = failN = 0;
+        int savedSegs = FIL_SEGS; boolean savedTh = TwoBodyConverterMotor.FIL_THERMOSTAT_FDT;
+        double savedAtp = ATP_UM;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        try {
+            System.out.printf(Locale.US, "%n=== RIGID VALIDATION — STAGE 6: BINDING / GLIDING COMPATIBILITY ===%n");
+            System.out.printf(Locale.US, "  [ATP] = %.4g uM, density = %.0f heads/um^2, skew = 0 deg, eta = %.4g Pa.s%n",
+                    COMPAT_ATP_UM, DENSITY, ETA);
+            System.out.printf(Locale.US, "  %.1f ms per arm, %d seeds; rigid (FDT) vs legacy flexible, SAME seeds%n",
+                    COMPAT_MS, COMPAT_SEEDS);
+            note("equality is NOT required and no binding gate is tuned here — rigidification changes the local");
+            note("geometry a motor sees, so occupancy is EXPECTED to move. The gate is usability, not agreement.");
+
+            double durS = COMPAT_MS * 1e-3;
+            atpSetDuration(durS);
+            String[] lab = { "rigid (1 seg, FDT)", "flexible (12 seg, legacy)" };
+            double[][] nb = new double[2][COMPAT_SEEDS], gl = new double[2][COMPAT_SEEDS];
+            double[][] bps = new double[2][COMPAT_SEEDS], str = new double[2][COMPAT_SEEDS];
+            long inv = 0, sol = 0;
+            System.out.printf(Locale.US, "%n  %-26s %-7s %-9s %-11s %-12s %-11s %-6s%n",
+                    "model", "seed", "N_b", "v (um/s)", "binds/step", "strokes/s", "inv");
+            for (int k = 0; k < 2; k++) {
+                FIL_SEGS = (k == 0) ? 1 : TwoBodyConverterMotor.G4_NSEG;
+                TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = (k == 0);
+                for (int s = 0; s < COMPAT_SEEDS; s++) {
+                    ATP_UM = COMPAT_ATP_UM;
+                    cfg(2, true, 0.0, 0.0, 0.0, false, 1.0, true);
+                    TArm T = new TArm("compat", 0.0, false, 1.0, true, FIL_SEGS).conv(0.0);
+                    TRes r = runTwirlArm(T, SEED + s, STEPS);
+                    nb[k][s] = r.avgBound; gl[k][s] = r.glide;
+                    bps[k][s] = r.bindsPerStep; str[k][s] = r.strokeRatePerS;
+                    inv += r.invalid; sol += r.solverFail;
+                    System.out.printf(Locale.US, "  %-26s %-7d %-9.2f %-11.4f %-12.4g %-11.4g %-6d%n",
+                            lab[k], SEED + s, r.avgBound, r.glide, r.bindsPerStep, r.strokeRatePerS, r.invalid);
+                }
+            }
+            double nbR = mean(nb[0]), nbF = mean(nb[1]), glR = mean(gl[0]), glF = mean(gl[1]);
+            double dNb = nbF != 0 ? (nbR - nbF) / Math.abs(nbF) : Double.NaN;
+            System.out.printf(Locale.US, "%n  %-26s %-12s %-12s %-12s%n", "quantity", "rigid", "flexible", "rigid/flex");
+            System.out.printf(Locale.US, "  %-26s %-12.3f %-12.3f %-12.3f%n", "mean bound occupancy", nbR, nbF, nbF != 0 ? nbR/nbF : Double.NaN);
+            System.out.printf(Locale.US, "  %-26s %-12.4f %-12.4f %-12.3f%n", "gliding velocity (um/s)", glR, glF, glF != 0 ? glR/glF : Double.NaN);
+            System.out.printf(Locale.US, "  %-26s %-12.4g %-12.4g %-12.3f%n", "binds per step", mean(bps[0]), mean(bps[1]),
+                    mean(bps[1]) != 0 ? mean(bps[0])/mean(bps[1]) : Double.NaN);
+            System.out.printf(Locale.US, "  %-26s %-12.4g %-12.4g %-12.3f%n", "stroke rate (/s)", mean(str[0]), mean(str[1]),
+                    mean(str[1]) != 0 ? mean(str[0])/mean(str[1]) : Double.NaN);
+
+            ck(1, String.format(Locale.US, "attachment remains viable in rigid mode (N_b = %.2f)", nbR), nbR > 1.0);
+            double nbSd = sem(nb[0]) * Math.sqrt(COMPAT_SEEDS);
+            ck(2, String.format(Locale.US, "occupancy stable across seeds (SD/mean = %.3f)", nbR != 0 ? nbSd/nbR : 9),
+                    nbR != 0 && nbSd / nbR < 0.5);
+            int fwd = 0; for (double v : gl[0]) if (v < 0) fwd++;
+            ck(3, String.format(Locale.US, "gliding is DIRECTED in rigid mode (%d/%d seeds negative, mean %.4f um/s)",
+                    fwd, COMPAT_SEEDS, glR), fwd >= (COMPAT_SEEDS+1)/2 && glR < 0);
+            ck(4, String.format(Locale.US, "chemistry healthy: %d invalid states, %d solver failures", inv, sol),
+                    inv == 0 && sol == 0);
+            System.out.printf(Locale.US, "%n  occupancy change vs flexible: %+.1f %%%n", 100*dNb);
+            if (Math.abs(dNb) > 0.30)
+                System.out.println("  >30 % — flagged for geometry / surface-height investigation before production,\n"
+                        + "  per the brief. This is NOT a failure, and no binding gate is to be tuned to close it.");
+            System.out.printf(Locale.US, "%n=== STAGE 6 COMPATIBILITY: %d PASS, %d FAIL ===%n", passN, failN);
+            return failN == 0;
+        } finally {
+            FIL_SEGS = savedSegs; TwoBodyConverterMotor.FIL_THERMOSTAT_FDT = savedTh; ATP_UM = savedAtp;
+            CONV_RAMP_ARM = null; EPS_CONV_ARM = 0; cfgOff();
+        }
+    }
+    static double COMPAT_ATP_UM = 10.0, COMPAT_MS = 20.0;
+    static int COMPAT_SEEDS = 4;
+
     static int PASSIVE_RELAX = 2000;
     static double PASSIVE_ATP_UM = 10.0;   // warm-up drives at the production condition so occupancy is representative
     /** Per-step counter bookkeeping the device path needs (the CPU steppers do this inline). */
