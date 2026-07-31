@@ -35,7 +35,8 @@ fi
 LOG="$1"; shift 2
 mkdir -p "$(dirname "$LOG")" "$REC_DIR"
 
-count_records() { find "$REC_DIR" -maxdepth 1 -name '*.tsv' ! -name '*.nested.tsv' ! -name '*.trace.tsv' | wc -l; }
+count_records() { find "$REC_DIR" -maxdepth 1 -name '*.tsv' \
+                    ! -name '*.nested.tsv' ! -name '*.trace.tsv' ! -name '*.nbhist.tsv' | wc -l; }
 
 stall=0
 prev="$(count_records)"

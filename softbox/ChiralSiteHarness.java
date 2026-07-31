@@ -114,6 +114,23 @@ public final class ChiralSiteHarness {
     static double[] NESTED_MS = { 20, 50, 100, 200, 500 };
     static double  ATP_DUR_MS = -1.0;         // -atp-duration-ms <ms> (production/pilot physical duration)
     static boolean ATP_MAP_NESTED = true;     // -atp-no-nested: drop the production nested-prefix readout
+    /** Bins of the simultaneous bound-head occupancy histogram P(N_b). Index = N_b; the LAST bin is the
+     *  "this many or more" overflow. 256 comfortably covers the 1200-motor lawn (measured mean N_b ≈ 29). */
+    static final int NB_BINS = 257;
+    // ---- DENSITY LADDER (-atp-density-map): occupancy versus motor-head surface density at ONE [ATP] --------
+    // The ONLY production variable is DENSITY. Everything else — model, chemistry, viscosity, timestep, filament,
+    // binding geometry, ε — is inherited verbatim from the low-[ATP] ladder. Records live in their own
+    // "atpden_" namespace (see atpId) so the completed 400 heads/µm² ladder is neither reused nor disturbed.
+    static boolean  ATP_DENS_ON = false;                        // -atp-density-map
+    static double[] ATP_DENS_POINTS = { 400.0, 200.0, 100.0, 50.0 };   // -density-points (anchor FIRST)
+    static double   ATP_DENS_UM = 10.0;                         // the load-bearing twirling-assay condition
+    /**
+     * -density-signs plus|minus|both. The occupancy/gliding screen needs only the ε-EVEN phenotype, so it runs
+     * a SINGLE +ε sign (default `plus`, which keeps that screen's arms byte-identical). Asking whether the
+     * skewed-converter CHIRAL mechanism survives at low occupancy needs the ε-ODD component, and that is
+     * defined only on a MATCHED ±ε pair at the same seed — hence `both`.
+     */
+    static String   ATP_DENS_SIGNS = "plus";
     static double  EQUIL_FRAC = 0.25;                           // -equil-frac: startup transient discarded
     static int     NBLK      = 5;                               // measurement blocks for the block-SEM
     static int     NTRACE    = 60;                              // stationarity trace samples in the measure window
@@ -143,6 +160,7 @@ public final class ChiralSiteHarness {
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
         boolean etaAudit = false, etaControls = false, etaMap = false, etaReport = false, etaMirrorRep = false;
         boolean atpFix = false, atpPilot = false, atpMap = false, atpReport = false, atpMirrorRep = false, atpNull = false;
+        boolean atpDensRep = false;
         boolean atpEquiv = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
@@ -259,6 +277,11 @@ public final class ChiralSiteHarness {
                                         for (int k = 0; k < p.length; k++) NESTED_MS[k] = Double.parseDouble(p[k].trim()); }
                 case "-atp-no-nested" -> ATP_MAP_NESTED = false;
                 case "-atp-eps-deg" -> ATP_EPS_DEG = Double.parseDouble(args[++i]);
+                case "-atp-density-map" -> ATP_DENS_ON = true;
+                case "-atp-density-report" -> { ATP_DENS_ON = true; atpDensRep = true; }
+                case "-density-points" -> { String[] p = args[++i].split(","); ATP_DENS_POINTS = new double[p.length];
+                                        for (int k = 0; k < p.length; k++) ATP_DENS_POINTS[k] = Double.parseDouble(p[k].trim()); }
+                case "-density-signs" -> ATP_DENS_SIGNS = args[++i].trim().toLowerCase(Locale.US);
                 default -> { }
             }
         }
@@ -284,6 +307,8 @@ public final class ChiralSiteHarness {
         if (atpFix)          ok = runAtpFixtures();
         else if (atpEquiv)   ok = runAtpEquiv();
         else if (atpPilot)   runAtpPilot(ATP_DUR_MS > 0 ? ATP_DUR_MS : 200.0);
+        else if (atpDensRep) { double d = (ATP_DUR_MS > 0 ? ATP_DUR_MS : 200.0)*1e-3; atpSetDuration(d); reportAtpDensity(d); }
+        else if (ATP_DENS_ON) runAtpDensityMap(ATP_DUR_MS > 0 ? ATP_DUR_MS : 200.0);
         else if (atpMap)     runAtpMap(ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0);
         else if (atpReport)  { atpSetDuration((ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0)*1e-3); reportAtpMap((ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0)*1e-3); }
         else if (atpMirrorRep) { double d = (ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0)*1e-3; atpSetDuration(d); reportAtpMirror(d); }
@@ -1679,6 +1704,13 @@ public final class ChiralSiteHarness {
         double tauPull, tauDrag, nPull, nDrag, fAxPull, fAxDrag;
         double residPull, residDrag; long nDetPull, nDetDrag;            // residence by terminal class
         double vFilMean;
+        // ---- SIMULTANEOUS BOUND-HEAD OCCUPANCY DISTRIBUTION P(N_b) (density study, 2026-07-30) ---------------
+        // One count per MEASUREMENT step, binned on the instantaneous number of bound heads nb — the exact
+        // quantity r.avgBound is the mean of. Analysis-only in the strictest sense: nb is already computed by
+        // the loop, nothing is read back into the simulation, and no RNG stream is touched. Needed because the
+        // mean alone cannot answer "how much of the time is the filament attached by 0, 1 or 2 heads", which is
+        // the load-bearing question when occupancy is pushed toward the Vilfan depletion threshold.
+        long[] nbHist = new long[NB_BINS];      // index = nb, clamped into the last bin (= "NB_BINS-1 or more")
         // Nested-window prefix readout (populated only when NESTED_ON): one entry per NESTED_MS window that fits.
         // nesVhalf/nesOmHalf are the SAME window's FINAL HALF [W/2, W] — the preregistered "final half vs full
         // post-equilibration window" stability check. nesRaw is the retained dense prefix trace.
@@ -1986,7 +2018,9 @@ public final class ChiralSiteHarness {
                         clsBound[c]++; clsFprop[c] += fax; clsFabs[c] += Math.abs(fax); clsTau[c] += tau; }
                     misAcc += Math.abs(e.headMis.get(m)); nBoundSamp++;
                 }
-                tauAcc += sn; tauAbsAcc += sa; boundAcc += nb; measSteps++; prevNb = nb;
+                tauAcc += sn; tauAbsAcc += sa; boundAcc += nb; measSteps++;
+                r.nbHist[Math.min(nb, NB_BINS - 1)]++;   // P(N_b): the distribution boundAcc/measSteps is the mean of
+                prevNb = nb;
                 blkTauAcc += sn; blkBoundAcc += nb; blkSteps++;
                 if (blkSteps == blk && blocks.size() < NBLK) {
                     double dtSpan = blkSteps * DTR;
@@ -4196,6 +4230,10 @@ public final class ChiralSiteHarness {
             "tauPre", "tauPost", "nPre", "nPost",
             "tauPull", "tauDrag", "nPull", "nDrag", "fAxPull", "fAxDrag",
             "residPullS", "residDragS", "nDetPull", "nDetDrag", "vFilMean",
+            // §DENSITY STUDY (added 2026-07-30): the motor-head surface density this arm was built at, and the
+            // scalar summaries of the P(N_b) occupancy histogram. Absent in earlier records ⇒ they read back as
+            // NaN, which is the established convention for mixed-vintage record sets (see the STEP5/6 note).
+            "density", "nMotors", "nbSD", "nbMedian", "nbP0", "nbP1", "nbLe2",
         };
         String[] base = ChiralSiteHarness.POW_KEYS;
         String[] all = new String[base.length + extra.length];
@@ -4233,7 +4271,23 @@ public final class ChiralSiteHarness {
         v[i++] = r.fAxPull; v[i++] = r.fAxDrag;
         v[i++] = r.residPull; v[i++] = r.residDrag; v[i++] = r.nDetPull; v[i++] = r.nDetDrag;
         v[i++] = r.vFilMean;
+        double[] h = nbStats(r.nbHist);
+        v[i++] = DENSITY; v[i++] = TwoBodyConverterMotor.g4NMot(DENSITY);
+        v[i++] = h[0]; v[i++] = h[1]; v[i++] = h[2]; v[i++] = h[3]; v[i++] = h[4];
         return v;
+    }
+    /** {SD, median, P(N_b=0), P(N_b=1), P(N_b<=2)} of an occupancy histogram; all NaN if it is empty. */
+    static double[] nbStats(long[] hist) {
+        if (hist == null) return new double[]{ Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN };
+        long n = 0; double s1 = 0, s2 = 0;
+        for (int k = 0; k < hist.length; k++) { n += hist[k]; s1 += (double) k * hist[k]; s2 += (double) k * k * hist[k]; }
+        if (n == 0) return new double[]{ Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN };
+        double mean = s1 / n, var = Math.max(0, s2 / n - mean * mean);
+        long half = n / 2, cum = 0; int med = 0;
+        for (int k = 0; k < hist.length; k++) { cum += hist[k]; if (cum > half) { med = k; break; } }
+        double p0 = (double) hist[0] / n, p1 = (double) hist[1] / n;
+        double le2 = (double) (hist[0] + hist[1] + hist[2]) / n;
+        return new double[]{ Math.sqrt(var), med, p0, p1, le2 };
     }
     static void atpWrite(String id, double[] v, String provenance) throws java.io.IOException {
         java.io.File dir = new java.io.File(ATP_DIR); dir.mkdirs();
@@ -4264,14 +4318,24 @@ public final class ChiralSiteHarness {
     /** Record id. The PHYSICAL duration (µs) and the ε magnitude are tagged in, so runs of different duration or
      *  skew can never silently reuse one another's records (the eta-map "s%d" precedent). */
     static String atpId(double uM, int sgn, int seed, double durS, double mirror) {
+        // DENSITY STUDY: the ladder varies the motor-head surface density, which the original id did NOT tag.
+        // A separate "atpden_" namespace carrying the density is used rather than a suffix on "atp_", so the
+        // completed 400 heads/µm² ladder is left byte-untouched and cannot be silently reused or overwritten,
+        // and so its own 400 anchor is a genuine fresh run under the current instrumentation.
+        if (ATP_DENS_ON)
+            return String.format(Locale.US, "atpden_r%06.1f_u%07.2f_d%08d_%s%s%d", DENSITY, uM,
+                    Math.round(durS * 1e6), mirror < 0 ? "m_" : "",
+                    sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed);
         return String.format(Locale.US, "atp_u%07.2f_d%08d_%s%s%d", uM, Math.round(durS * 1e6),
                 mirror < 0 ? "m_" : "", sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed);
     }
     static String atpProvenance(double uM, double durS) {
         return powProvenance() + String.format(Locale.US,
-                " eta=%.4g dt=%.4e atpUM=%.4g atpOn=%.6g durationS=%.6g eps=%.1f mirror=%.0f rupture_mode=%d gpu=%s",
+                " eta=%.4g dt=%.4e atpUM=%.4g atpOn=%.6g durationS=%.6g eps=%.1f mirror=%.0f rupture_mode=%d gpu=%s"
+                + " nMotors=%d",   // (density itself is already carried by powProvenance)
                 ETA, DTR, uM, atpOnFor(uM), durS, ATP_EPS_DEG, ATP_MIRROR,
-                ExplicitCompleteMatHarness.RIGOR_ON ? 1 : 0, GPU);
+                ExplicitCompleteMatHarness.RIGOR_ON ? 1 : 0, GPU,
+                TwoBodyConverterMotor.g4NMot(DENSITY));
     }
 
     /** Run (or reuse) ONE low-ATP arm. STEPS/DTR must already be set for the requested physical duration. */
@@ -4286,6 +4350,7 @@ public final class ChiralSiteHarness {
             TRes r = runTwirlArm(T, seed, STEPS);
             try { atpWrite(id, atpValues(r, uM, sgn, seed, durS), atpProvenance(uM, durS)); }
             catch (java.io.IOException ex) { throw new RuntimeException("record write failed: " + id, ex); }
+            atpNbHistDump(id, r);
             tally[1]++;
             long dAll = r.detachAtp + r.detachRigor + r.detachOther;
             System.out.printf(Locale.US,
@@ -4305,6 +4370,29 @@ public final class ChiralSiteHarness {
             return true;
         } finally { ATP_UM = savedAtp; }
     }
+    /**
+     * Persist the FULL simultaneous bound-head occupancy histogram beside the record, so any binning of
+     * P(N_b) — including the coarse P(0)/P(1)/P(2)/P(3-5)/P(6-10)/P(11-20)/P(>20) reporting bins — can be
+     * derived offline without a rerun. Trailing empty bins are trimmed; the file is written only when the
+     * histogram actually contains samples, so a mode that never measures leaves no stray file.
+     */
+    static void atpNbHistDump(String id, TRes r) {
+        try {
+            long n = 0; int top = -1;
+            for (int k = 0; k < r.nbHist.length; k++) if (r.nbHist[k] > 0) { n += r.nbHist[k]; top = k; }
+            if (n == 0) return;
+            java.io.File dir = new java.io.File(ATP_DIR); dir.mkdirs();
+            try (java.io.PrintWriter w = new java.io.PrintWriter(new java.io.File(dir, id + ".nbhist.tsv"))) {
+                w.println("# measurement-window steps binned on the instantaneous bound-head count N_b");
+                w.printf(Locale.US, "# steps=%d  density=%.1f  nMotors=%d  overflowBin=%d%n",
+                        n, DENSITY, TwoBodyConverterMotor.g4NMot(DENSITY), NB_BINS - 1);
+                w.println("nb\tsteps\tfraction");
+                for (int k = 0; k <= top; k++)
+                    w.printf(Locale.US, "%d\t%d\t%.9g%n", k, r.nbHist[k], (double) r.nbHist[k] / n);
+            }
+        } catch (Exception ignored) { }
+    }
+
     /** Persist the nested-window prefix readout beside the record (pilot analysis input). */
     static void atpNestedDump(String id, TRes r) {
         try {
@@ -4551,6 +4639,112 @@ public final class ChiralSiteHarness {
         ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem; cfgOff(); EPS_CONV_ARM = 0;
         reportAtpMap(durS);
         if (ATP_MIRROR < 0) reportAtpMirror(durS);
+    }
+
+    // ---------------------------------------------------- DENSITY LADDER: occupancy vs motor density at one [ATP]
+    /**
+     * ONE gliding assay across MOTOR-HEAD SURFACE DENSITY at a single [ATP] — the exploratory screen that places
+     * the low-[ATP] assay on the occupancy axis. The scene, chemistry, viscosity, timestep, filament, binding
+     * geometry and ε are inherited verbatim from the low-[ATP] ladder; DENSITY is the only production variable.
+     * A SINGLE ε sign is run per point: occupancy and translation are the ε-EVEN observables of this study, and
+     * the ε-ODD (twirling) half is deliberately out of scope, so the ± pair would double the cost for nothing.
+     */
+    static void runAtpDensityMap(double durMs) {
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; BUDGET = true;
+        NESTED_ON = ATP_MAP_NESTED;
+        boolean savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        double durS = durMs * 1e-3, savedDensity = DENSITY;
+        atpSetDuration(durS);
+        System.out.printf(Locale.US, "%n--- DENSITY LADDER: OCCUPANCY vs MOTOR DENSITY at [ATP] = %.4g µM%n"
+                + "    (canonical scene: %d-segment filament, filament Brownian ON, homogeneous S2 = 40 nm,%n"
+                + "    eta = %.4g Pa·s, dt = %.4e s, %.1f ms physical duration, equil = %.0f%% ⇒ %.1f ms analysed,%n"
+                + "    eps = +%.0f° (single sign), %d seed(s), lattice = %s; runner: %s) ---%n",
+                ATP_DENS_UM, TwoBodyConverterMotor.G4_NSEG, ETA, DTR, durS*1e3, 100*EQUIL_FRAC,
+                durS*1e3*(1-EQUIL_FRAC), ATP_EPS_DEG, SEEDS, ATP_MIRROR < 0 ? "MIRRORED" : "native",
+                GPU ? "GPU device-resident" : "CPU sequential");
+        System.out.printf(Locale.US, "  mat footprint %.1f × %.1f µm = %.1f µm²; density ladder (heads/µm²): %s%n",
+                TwoBodyConverterMotor.G4_MX, TwoBodyConverterMotor.G4_MY,
+                TwoBodyConverterMotor.G4_MX*TwoBodyConverterMotor.G4_MY,
+                java.util.Arrays.toString(ATP_DENS_POINTS));
+        System.out.print("  ⇒ motors on the mat: ");
+        for (double d : ATP_DENS_POINTS) System.out.printf(Locale.US, "%.0f→%d  ", d, TwoBodyConverterMotor.g4NMot(d));
+        System.out.printf(Locale.US, "%n  atpOn (NONE→ATP) = %.4g /s   rigor rupture: %s%n",
+                atpOnFor(ATP_DENS_UM), ExplicitCompleteMatHarness.RIGOR_ON ? "ON" : "OFF");
+        System.out.println("  provenance: " + atpProvenance(ATP_DENS_UM, durS));
+        int[] signs = atpDensSigns();
+        int[] tally = new int[2];
+        try {
+            for (double d : ATP_DENS_POINTS) {
+                DENSITY = d;
+                System.out.printf(Locale.US, "%n  ---- density = %.0f heads/µm²  (%d motors) ----%n",
+                        d, TwoBodyConverterMotor.g4NMot(d));
+                for (int sgn : signs)
+                    for (int i = 0; i < SEEDS; i++) atpArm(ATP_DENS_UM, sgn, SEED + i, durS, tally);
+            }
+        } finally { DENSITY = savedDensity; }
+        System.out.printf("%n  records: %d reused, %d newly run, %d expected%n",
+                tally[0], tally[1], signs.length*ATP_DENS_POINTS.length*SEEDS);
+        NESTED_ON = false; CONV_RAMP_ARM = null; BUDGET = false;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem; cfgOff(); EPS_CONV_ARM = 0;
+        // Every arm is already persisted as an atomic record, so a fault in the READ-BACK report must not fail
+        // the campaign (an unattended overnight run would otherwise burn its retry budget re-reporting).
+        try { reportAtpDensity(durS); }
+        catch (RuntimeException ex) { System.out.println("  (report failed, records are intact: " + ex + ")"); }
+    }
+
+    /** The ε signs this density run covers. `plus` (default) keeps the occupancy screen's arms unchanged. */
+    static int[] atpDensSigns() {
+        return switch (ATP_DENS_SIGNS) {
+            case "both" -> new int[]{ +1, -1 };
+            case "minus" -> new int[]{ -1 };
+            case "plus" -> new int[]{ +1 };
+            default -> throw new IllegalArgumentException(
+                    "-density-signs must be plus|minus|both, got: " + ATP_DENS_SIGNS);
+        };
+    }
+
+    /** Read back the density ladder: occupancy, its distribution, and the gliding it supports. */
+    static void reportAtpDensity(double durS) {
+        System.out.println("\n  ================ DENSITY LADDER — OCCUPANCY AND GLIDING ================");
+        System.out.printf(Locale.US, "  [ATP] = %.4g µM   analysed window = %.1f ms per arm%n",
+                ATP_DENS_UM, durS*1e3*(1-EQUIL_FRAC));
+        System.out.printf("  %8s %7s %6s %9s %8s %8s %8s %8s %8s %9s %9s %8s %8s%n",
+                "rho", "nMot", "seed", "meanNb", "medNb", "sdNb", "P(0)", "P(1)", "P(<=2)",
+                "v µm/s", "resid ms", "att/s", "det/s");
+        double savedDensity = DENSITY;
+        try {
+            for (double d : ATP_DENS_POINTS) {
+                DENSITY = d;
+                for (int i = 0; i < SEEDS; i++) {
+                    double[] v = atpRead(atpId(ATP_DENS_UM, +1, SEED + i, durS, ATP_MIRROR));
+                    if (v == null) { System.out.printf(Locale.US, "  %8.0f %7d %6d   (no record)%n",
+                            d, TwoBodyConverterMotor.g4NMot(d), SEED + i); continue; }
+                    System.out.printf(Locale.US, "  %8.0f %7.0f %6.0f %9.3f %8.0f %8.2f %8.4f %8.4f %8.4f "
+                            + "%+9.4f %9.4f %8.0f %8.0f%n",
+                            d, v[ATPK("nMotors")], v[ATPK("seedNo")], v[ATPK("avgBound")], v[ATPK("nbMedian")],
+                            v[ATPK("nbSD")], v[ATPK("nbP0")], v[ATPK("nbP1")], v[ATPK("nbLe2")],
+                            v[ATPK("glide")], v[ATPK("residenceS")]*1e3, v[ATPK("bindsPerS")], v[ATPK("detachPerS")]);
+                }
+            }
+        } finally { DENSITY = savedDensity; }
+        System.out.println("\n  LINEARITY CHECK — N_b(rho) vs the proportional expectation N_b(anchor)·rho/anchor:");
+        double anchor = ATP_DENS_POINTS[0], nbAnchor = Double.NaN;
+        double sd0 = DENSITY;
+        try {
+            DENSITY = anchor;
+            double[] a = atpRead(atpId(ATP_DENS_UM, +1, SEED, durS, ATP_MIRROR));
+            if (a != null) nbAnchor = a[ATPK("avgBound")];
+            for (double d : ATP_DENS_POINTS) {
+                DENSITY = d;
+                double[] v = atpRead(atpId(ATP_DENS_UM, +1, SEED, durS, ATP_MIRROR));
+                if (v == null || Double.isNaN(nbAnchor)) continue;
+                double pred = nbAnchor * d / anchor;
+                System.out.printf(Locale.US, "    rho=%6.0f  measured %7.3f   proportional %7.3f   ratio %6.3f%n",
+                        d, v[ATPK("avgBound")], pred, v[ATPK("avgBound")]/pred);
+            }
+        } finally { DENSITY = sd0; }
     }
 
     // ------------------------------------------------------------------ STAGE 5A: the eps = 0 achiral null
