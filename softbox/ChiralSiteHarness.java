@@ -1056,7 +1056,12 @@ public final class ChiralSiteHarness {
         try { plan.execute(); }
         catch (Throwable ex) { TornadoCrashDiagnostic.executeThrew(ex); throw new RuntimeException(ex); }
         TornadoCrashDiagnostic.afterExecute(t);
-        plan.clearProfiles();
+        // clearProfiles is a per-execute retention guard (CLAUDE.md: ProfilerMode.SILENT retains a result per
+        // execute -> OOM on long runs). No profiler is attached to these plans, so calling it EVERY step bought
+        // nothing and cost host time on the critical path: Stage 5 ran at 58 steps/s against 264 for the
+        // production loop, which never calls it, with the GPU measured at ~5% utilisation -- host-latency-bound,
+        // not device-bound. Kept at a cadence so the OOM guard survives without the per-step cost.
+        if ((t & 1023) == 0) plan.clearProfiles();
     }
 
     /**
