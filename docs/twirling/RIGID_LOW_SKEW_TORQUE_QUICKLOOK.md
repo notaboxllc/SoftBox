@@ -1,5 +1,37 @@
 # Rigid-Filament Low-Skew Torque — Quick Look at 5°
 
+> ## SUPERSEDED — 2026-08-01
+>
+> **This report's central verdict is overturned.** It concluded **Q3, "no discernible 5° torque"** from
+> **two** matched seeds. The high-seed campaign it itself recommended (§11.1: *"more seeds, not longer
+> arms"*) was run: **12 matched seeds give τ_odd = −1.037e−22 ± 3.503e−23 N·m (2.96σ, 10/12 seeds, 95 % CI
+> excluding zero) — classification L5-PRESENT.** See **`RIGID_5DEG_HIGH_SEED_TORQUE.md`**, gated on the
+> ±15° power anchor in **`RIGID_15DEG_TORQUE_REVALIDATION.md`** (A15 PASS).
+>
+> Two specific corrections to what is written below:
+>
+> 1. **§8's claim that "the block one is the honest one" is wrong.** Quarter-blocks are *not* independent
+>    replicates: measured block-vs-seed variance ratios are 0.69 at 5° (anti-correlated ⇒ pooled-block SEM
+>    biased **conservative**) and 1.29 at 15° (positively correlated ⇒ biased **anti**-conservative). The
+>    1.01σ block figure was therefore not the warning it was read as. The matched seed is the unit of
+>    independence at both skews.
+> 2. **§8b/§9's reading of the 200 ms collapse as the signal failing to survive is not supported.** Window-
+>    resolved analysis of the stored traces shows the later windows do not *reverse*; they are
+>    sign-inconsistent and 3–5× larger in magnitude, so the collapse is a **variance** effect.
+>
+> **What survives, and matters.** The bound (|τ_odd| ≲ 1.3e−22 N·m) was correct and *contains* the value
+> since measured. The diagnosis of the obstacle — a near-cancelling tug-of-war whose imbalance drifts on the
+> window timescale, so **seeds not duration** are the lever — was correct and is what made the high-seed
+> campaign work. The §2/§2.4 estimator repairs (the one-step-stale projection axis; the production-path flag
+> combination that silently zeroed the decomposition) stand unchanged.
+>
+> **One caution the high-seed result inherits rather than removes:** at 5° the odd torque **decays across
+> the measured window** (Q1 −3.09e−22 → Q4 +4.36e−23; trend 2.04σ). The resolved quantity is a decaying, not
+> a steady-state, chiral torque — which is the most likely reason this report's 200 ms stage saw nothing.
+>
+> Retained intact below as the record of the two-seed stage. Do not cite its numbers without this note.
+
+
 **Question.** At a converter skew of 5°, does the fully thermalized rigid-filament model produce a
 discernible chirality-odd axial motor torque capable of driving filament twirling — and roughly how large
 are `tau_odd` and `Omega_drive_odd = tau_odd / gamma_roll`?
