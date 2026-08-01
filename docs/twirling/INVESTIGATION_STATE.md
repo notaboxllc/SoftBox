@@ -1,8 +1,99 @@
 # Skew-Twirling Investigation — State of Play
 
 **As of 2026-08-01.** Single-page status across both branches of this investigation. The detailed reports are
-`RIGID_LOW_SKEW_TORQUE_QUICKLOOK.md` (the 5° answer), `RIGID_FILAMENT_SKEW_VALIDATION.md` (the validation
-programme) and `FIVE_DEGREE_SKEW_DURATION_PILOT.md` (aborted predecessor, on its own branch).
+`RIGID_15DEG_TORQUE_REVALIDATION.md` (the power anchor), `RIGID_5DEG_HIGH_SEED_TORQUE.md` (the high-seed 5°
+measurement, **in progress**), `RIGID_LOW_SKEW_TORQUE_QUICKLOOK.md` (the superseded 2-seed 5° answer),
+`RIGID_FILAMENT_SKEW_VALIDATION.md` (the validation programme) and `FIVE_DEGREE_SKEW_DURATION_PILOT.md`
+(aborted predecessor, on its own branch).
+
+---
+
+## 0. CURRENT CAMPAIGN — rigid ±15° anchor + high-seed ±5° (2026-08-01, commit `100d30e`)
+
+**Phase 1 — ±15° power anchor: DONE, A15 PASS.** 4 matched seeds, 8 arms, 0 invalid / 0 solver failures.
+
+```
+tau_odd      = -4.558e-22 +- 1.963e-22 N.m   |m|/SEM 2.32   seed-sign 3 of 4
+Om_drive_odd = -140.59 +- 60.57 rad/s        = -22.4 turns/s ; -63.5 turns/um ; pitch 16 nm
+Om_Brown_odd = 0 exactly   mobility closure 2.35e-11   component closure 3.25e-11
+```
+
+All eight A15 conditions plus the preferred |m|/SEM ≥ 2 criterion met, so the borderline seed extension
+(105–108) did **not** trigger. At df = 3 the 95 % t interval contains zero — this is a **power anchor, not a
+significance claim**, exactly as the gate specifies. The estimator demonstrably resolves a chiral torque it is
+known to contain, which is what licensed the 5° stage.
+
+**Phase 2 — high-seed ±5°: IN PROGRESS.** n = 8 of 12 matched seeds evaluated; batches 4–5 (seeds 109–112)
+running.
+
+```
+n=8:  tau_odd = -5.756e-23 +- 3.516e-23 N.m   |m|/SEM 1.64   seed-sign 6 of 8
+      Om_drive_odd = -17.76 +- 10.85 rad/s    95% CI [-1.407e-22, +2.560e-23]  (contains zero)
+```
+
+**Early-success rule NOT met** at n = 8 — fails three criteria: the 95 % interval contains zero,
+|m|/SEM 1.64 < 2.5, and the first-half/second-half seed split is 99.9 % against a 25 % tolerance. It passes
+sign agreement (6/8 = 75 %), leave-one-out stability (8/8 retain the native sign), outlier dominance (30.3 %
+< 35 %) and all health gates. **Continuing automatically to n = 12**, as designed.
+
+The running estimate — 2.43 → 3.73 → **5.30** → 1.92 → 2.14 → 1.13 → 1.64 σ — shows the n = 4 peak was a
+small-n excursion. **No claim should ever have been made at n < 8**, which is why the design forbids it.
+
+### 0.1 Three results that stand independently of the final 5° verdict
+
+1. **Quarter-blocks are NOT valid replicates, and fail independence in opposite directions.** If blocks were
+   independent, arm-mean SD would be σ_block/2. Measured against the observed between-seed SD:
+   **5° ratio 0.31** (blocks *anti*-correlated, ρ̄ ≈ −0.30 ⇒ pooled-block SEM too **large**) and
+   **15° ratio 1.29** (blocks positively correlated ⇒ pooled-block SEM too **small**). So neither pooled-block
+   figure is a valid uncertainty. **This corrects `RIGID_LOW_SKEW_TORQUE_QUICKLOOK.md` §8**, which asserted
+   "the block one is the honest one" — it is not; at 5° it is biased conservative. This corrects the
+   *reasoning*, not the Q3 *conclusion*, which rested on the 200 ms re-run. (n = 4 per skew, 3 df — direction
+   indicative, not established; n = 12 re-tests it.)
+2. **The 200 ms "collapse" is a variance effect, not a decaying or reversing signal.** Window-resolved odd
+   rotation reconstructed from stored `meanRoll` traces at **zero GPU cost** (legitimate because matched ±ε
+   arms share a bit-identical state-independent Brownian stream, so Φ_Brown cancels exactly; validated —
+   the 200 ms arm's 25–100 ms window returns −12.6966 rad/s vs the 100 ms record's −12.6965). Later windows do
+   not reverse; they are **sign-inconsistent and 3–5× larger** (25 ms slices span −116.9 to +128.9 rad/s).
+   Two seeds cannot prove the early window is stationary — that limitation is recorded, not resolved.
+3. **The chiral effect on each torque population is well resolved; only the net is marginal.** At 5°, ε shifts
+   the positive-torque population by −2.166e−21 N·m (3.64σ) and the negative-torque population by +2.109e−21
+   (3.59σ); these sum to −5.7e−23 = τ_odd. **The measured chiral torque is a 2.7 % residue of a near-perfect
+   cancellation between two individually well-resolved population shifts.** That is the quantitative mechanism
+   behind the variance.
+
+### 0.2 Live caveat to settle at n = 12
+
+At 5° the **occupancy is asymmetric between +ε and −ε**: odd N_b = **−0.744 ± 0.227 (3.27σ)**, where at 15° it
+was unresolved (+0.218 ± 0.865, 0.25σ). A systematic engagement difference is a potential confound for reading
+τ_odd as pure chiral torque. The occupancy-normalised quantity — τ per bound head, odd — is
+**−2.310e−24 ± 1.170e−24 (1.97σ)**, i.e. the per-head chiral torque survives normalisation at essentially the
+raw strength, so the asymmetry does not appear to *manufacture* the signal. Treated as open until n = 12.
+
+### 0.3 Scheduling, cost and GPU health
+
+**Two-process concurrency trialled and REJECTED** (`RUN_LOGS/rigid/CONCURRENCY_TRIAL.md`). A second skew
+process raised skew-aggregate throughput +40.6 % but total device throughput only +5.6 % — ~73 % of the gain
+was taken from the repository owner's unrelated concurrent campaign (−29.7 %). Serial fits the budget, so the
+campaign runs **one skew arm at a time**. GPU utilisation is flat at 53 % either way and is *not* diagnostic
+here: this graph is kernel-launch-bound, so `nvidia-smi` utilisation pins at partial regardless; the steps/s
+ledger is what decides it.
+
+| | arms | GPU wall |
+|---|---|---|
+| 15° sanity (10 ms) + anchor (100 ms) | 10 | 3.53 h |
+| 5° new arms so far (seeds 103–108) | 12 | 4.47 h |
+| 5° remaining (seeds 109–112) | 8 | ≈ 3.0 h projected |
+| **total projected** | **30** | **≈ 11 h** against a 20 h cap |
+
+Health across **all** campaign arms: `invalid = 0`, `solverFail = 0`, `rateCapWarns = 0`, `ruptureEvents = 0`;
+no Xid, no NVRM, recorder healthy throughout. One `hs_err` file (`hs_err_pid3350710.log`) is from my own
+deliberate `SIGTERM` when concurrency was reverted — the documented §5b mid-`execute()` teardown signature
+(shutdown hook reached `SHUTDOWN_HOOK_COMPLETED`), **not** a device fault. `atpWrite` is temp-file + atomic
+rename, so that interrupted arm left no partial record and was simply re-run.
+
+**Arm ledger:** `RUN_LOGS/rigid/ARM_LEDGER.md`. **Analysis tooling:** `scratch_rigid_odd.py` (matched-seed
+statistics; validated by reproducing the published 5° record set exactly), `scratch_rigid_window.py`
+(window-resolved odd rotation), `scratch_gpu_rate.sh` (per-process throughput from the crash heartbeat).
 
 ---
 
@@ -233,7 +324,12 @@ the viscosity-scaled `DTR`.
 
 ---
 
-## 5c. The driven 5° result (2026-08-01) — **Q3, NO DISCERNIBLE TORQUE**
+## 5c. The driven 5° result (2026-08-01) — **Q3 at n = 2; SUPERSEDED, see §0**
+
+> **SUPERSEDED.** This section records the two-seed stage. Its seed statistics are superseded by the
+> high-seed campaign in §0 (`RIGID_5DEG_HIGH_SEED_TORQUE.md`), and its §8 claim that the pooled-block SEM is
+> "the honest one" is **corrected** by the block-correlation measurement in §0.1. Retained intact as the
+> record of the first stage; do not cite its numbers without §0.
 
 Full report: `docs/twirling/RIGID_LOW_SKEW_TORQUE_QUICKLOOK.md`. Commit `30e8891`; GPU device-resident, single
 `glide` TaskGraph, monitored; 10 µM, 400 heads/µm², ±5°, seeds 101/102, η = 0.01 Pa·s, rigor rupture off,
@@ -273,8 +369,8 @@ duration; that needs a larger ε lever arm, not more time.
 
 ## 8. Next actions, in order
 
-**The driven 5° question is answered (§5c) and needs nothing further.** Work stopped there per the Q3 rule.
-Nothing below is authorized or started; it is the recommended ordering if the investigation continues.
+**Items 1 and 2 below have since been AUTHORIZED AND EXECUTED — see §0.** Item 1 (the rigid 15° anchor) is
+DONE and passed; item 2 (more seeds at 5°) is in progress at n = 8 of 12. Items 3 and 4 remain unstarted.
 
 1. **A rigid ±15° anchor under the identical rigid pipeline.** This is now the highest-value next run, and it
    is a *power calibration*, not a new question: 15° carries a signal ≈ 3× the 5° one, so it establishes
