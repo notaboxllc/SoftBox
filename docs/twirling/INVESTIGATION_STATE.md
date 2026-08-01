@@ -99,6 +99,11 @@ statistics; validated by reproducing the published 5° record set exactly), `scr
 
 ## 1. One-paragraph summary
 
+> **Superseded in its 5° verdict by §0.** The paragraph below describes the state *before* the
+> ±15° anchor and the high-seed 5° campaign. Its "answered directly: NO discernible torque (Q3)" is a
+> **two-seed** result; §0 supersedes it. Everything it says about the thermostat defect, the rigid
+> replacement and the validation stages still stands.
+
 The flexible-filament 5° duration pilot was **aborted before it ran** — no arms, no records, no GPU time —
 because the inherited filament rotational thermostat is not FDT-consistent. It was replaced by a
 **rigid-filament programme**: one rigid body spanning the whole filament, with a single thermal reservoir at
