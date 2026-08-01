@@ -6,7 +6,11 @@ are `tau_odd` and `Omega_drive_odd = tau_odd / gamma_roll`?
 
 This is an exploratory first estimate, not a validation programme.
 
-**Status: IN PROGRESS — production arms running.**
+**Answer: NO — not at this design. Classification Q3.** At 5° the chirality-odd deterministic motor torque is
+**not discernible** with 2 matched seeds at either 100 ms or 200 ms per arm. The 100 ms stage looked suggestive
+(Q2); doubling the window collapsed it to 0.05σ with the two seeds disagreeing in sign. Bound:
+**|τ_odd| ≲ 1.3e−22 N·m**, i.e. **|Ω_drive_odd| ≲ 40 rad/s** (1 SEM). Stopped, per the Q3 rule; no
+multi-second campaign, no 2°/1° checks.
 
 ---
 
@@ -274,7 +278,93 @@ four arms. The instability is in the torque estimator, not in the scene.
 
 ---
 
-## 9. Classification — **Q2, SUGGESTIVE BUT NOT RESOLVED**
+## 8b. The 200 ms extension — the signal does not survive
+
+Log `RUN_LOGS/rigid/prod_5deg_200ms.txt`; records `d00200000`. All four arms completed, exit 0, ≈ 2890 s each
+(**3 h 13 m** total), `invalid = 0`, `solverFail = 0`, occupancy 22.8–27.0, gliding directed and negative in
+every arm.
+
+```
+tau_odd       = -7.065e-24 ± 1.314e-22 N.m   |m|/SEM 0.05   seed-sign 50%   [+1.243e-22, -1.384e-22]
+Om_drive_odd  = -2.18 ± 40.52 rad/s          |m|/SEM 0.05   seed-sign 50%
+tau_even      = +1.604e-22 ± 1.655e-22 N.m   |m|/SEM 0.97   seed-sign 50%
+```
+
+Side by side:
+
+| | 100 ms (measured 25–100 ms) | 200 ms (measured 50–200 ms) |
+|---|---|---|
+| τ_odd | −6.986e−23 | **−7.065e−24** |
+| seed SEM / σ / sign | 2.869e−23 / **2.43** / 2 of 2 | 1.314e−22 / **0.05** / **1 of 2** |
+| 8-block SEM / σ / sign | 6.924e−23 / **1.01** / 5 of 8 | 7.722e−23 / **0.09** / **4 of 8** |
+| Ω_drive_odd | −21.5 ± 8.9 rad/s | −2.2 ± 40.5 rad/s |
+| per-arm τ_det (p101, p102, n101, n102) | −9.00e−22, +8.02e−24, −8.18e−22, +2.05e−22 | +1.19e−22, +1.88e−22, −1.29e−22, +4.64e−22 |
+
+**The seed SEM grew 4.6× when the window doubled.** For an average of independent samples it should have
+shrunk by √2. That is the diagnostic: the deterministic axial torque has a correlation time comparable to or
+longer than these windows, so each 75–150 ms arm supplies roughly **one** effective sample and time-averaging
+does not reduce the variance. The 100 ms seed agreement (2 of 2, 2.43σ) was a small-n coincidence, exactly as
+the 8-block estimate (1.01σ) warned at the time.
+
+**The two stages are not independent replicates — verified, not assumed.** The counter-based RNG is keyed by
+(body/motor, step, seed) and never by the total step count, and the scene is built from the seed alone, so the
+200 ms arm reproduces the 100 ms arm's trajectory exactly for its first 100 ms. Compared directly on the dense
+prefix traces at all 2000 shared sample times over 0–0.09995 s: **max |difference| in (meanRoll, glideProj) =
+0.000e+00**. The measured windows are 25–100 ms and 50–200 ms, overlapping in 50–100 ms. So the disagreement
+between the stages is genuine within-trajectory drift of one system, not two independent draws — which
+strengthens rather than weakens the long-correlation-time reading.
+
+---
+
+## 9. Classification — **Q3, NO DISCERNIBLE 5° TORQUE**
+
+The 100 ms stage alone was **Q2** (mean carrying the expected native sign at 2 of 2 seeds, but only 1.01σ on
+disjoint blocks with 3 of 8 blocks and the whole second half disagreeing). Per the Q2 branch the same four arms
+were extended to 200 ms and re-adjudicated. Against the Q3 rule:
+
+| criterion | status |
+|---|---|
+| signs are inconsistent | **yes** — seeds split 1/2, blocks 4/8 at 200 ms |
+| estimate remains near the zero-skew / numerical floor | **yes** — −7.06e−24, i.e. 1/18 of its own SEM and consistent with zero |
+| extension to 200 ms does not improve stability | **yes** — it degraded: 2.43σ → 0.05σ (seed), 1.01σ → 0.09σ (block) |
+
+**Stop.** No multi-second campaign is launched.
+
+Not Q4: the assay is healthy on every structural axis — the filament is rigid (n = 1, `filSegs=1`,
+`filModel=RIGID-1seg`), the FDT thermostat is active, all four decomposition gates pass, the diagnostics are
+trajectory-inert, the bond moment accounts for the whole deterministic axial torque to ~1e−8, binding and
+occupancy are stable and usable, gliding is directed, and there were zero invalid states and zero solver
+failures across all eight production arms. **The measurement is sound; the quantity is simply not resolved.**
+
+### 9.1 Bound, and why the variance is what it is
+
+The defensible statement is a bound, not a value:
+
+```
+|tau_odd|      <~ 1.3e-22 N.m       (1 SEM, n = 2 matched seeds, 200 ms arms)
+|Om_drive_odd| <~ 40 rad/s
+```
+
+For scale, the cross-model expectation from the standing chiral-site campaign at ε = 15° (τ_odd ≈ −2.7e−22 N·m,
+Ω_odd ≈ −91 rad/s, mirror-reversed) scales linearly to ≈ −9e−23 N·m and ≈ −30 rad/s at 5° — **inside this
+bound**. So the result does not contradict a real 5° chiral torque of that size; it says this design cannot
+see one.
+
+The variance has a clear physical source, visible in §7: the signed head populations are
+**+7.1e−20 and −7.1e−20 N·m against a net of +1.6e−22** — the net axial torque is a ~0.2 % residue of a
+near-cancelling tug-of-war between heads rolling the filament in opposite senses. A ~7e−23 chiral bias is
+therefore a part in ~10³ of the gross opposing torques, and it must be extracted from an ensemble whose
+imbalance wanders slowly and by two orders of magnitude between arms.
+
+---
+
+## 9c. Superseded reading — do not re-trust
+
+The 100 ms numbers in §6 (τ_odd = −6.99e−23 ± 2.87e−23, "2.43σ, both seeds negative") are **retained as the
+record of the first stage and are NOT a result.** They did not survive the authorized extension. Any future
+citation must carry the 200 ms adjudication with them. In particular, the n = 2 seed SEM should not be quoted
+for this estimator at all — the disjoint-block SEM is the honest one, and it disagreed with the seed SEM at
+100 ms in exactly the direction the 200 ms stage then confirmed.
 
 Against the decision rule:
 
@@ -300,31 +390,59 @@ failures.
 
 ## 10. Extension and small-angle decisions
 
-**200 ms extension: REQUIRED and RUN**, per the Q2 branch.
+**200 ms extension: required by Q2, and RUN.** Result in §8b.
 
-*Exact continuation is not supported* — this harness has no checkpoint/restart for a device-resident arm, and
-records are duration-tagged. The extension is therefore a re-run of the same four arms at 200 ms, not a
-resumption. Records land in the `d00200000` namespace; the 100 ms records are preserved untouched.
+*Exact continuation is not supported* — this harness has no checkpoint or restart for a device-resident arm
+(no serialization on this path), and records are duration-tagged. The extension is therefore a re-run of the
+same four arms at 200 ms, not a resumption; because the RNG is counter-based and step-count-independent, the
+re-run reproduces the original trajectory exactly and then continues it (§8b). Records land in the
+`d00200000` namespace; the 100 ms records are preserved untouched.
 
-Cost note for the record: because continuation was unavailable, the 100 ms stage (400 ms simulated) and the
-200 ms stage (800 ms simulated) do not overlap, so cumulative simulated production is 1200 ms even though the
-**final authorized design — 4 arms × 200 ms = 800 ms — is exactly saturated and not exceeded**. No arm exceeds
-200 ms and no fifth arm was run.
+Cost note: cumulative simulated production is 1200 ms (400 ms at the 100 ms stage + 800 ms at the 200 ms
+stage) because continuation was unavailable. The **final authorized design — 4 arms × 200 ms = 800 ms — is
+exactly saturated and not exceeded**; no arm exceeds 200 ms and no fifth arm was run.
 
-**2° and 1°: NOT justified from the 100 ms result, and not run.** The optional small-angle check is gated on
-5° reaching Q1 with the estimator "comfortably resolved". It is not. Extrapolating the observed variance: with
-τ_odd(5°) ≈ −7e−23 at 1.0σ on disjoint blocks, linear scaling puts τ_odd(2°) ≈ −2.8e−23 and
-τ_odd(1°) ≈ −1.4e−23, i.e. ≈ 0.4σ and ≈ 0.2σ at the same 100 ms design — indistinguishable from zero. Sine-like
-scaling gives the same answer to within 0.2 % over this range (sin 5° / 5° = 0.9987), so the two candidate
-scalings are **not separable** by this measurement either. Even if the 200 ms extension reaches Q1 at 5°, a
-1.4× variance improvement would leave 2° at ≈ 0.6σ. The decision will be re-made on the 200 ms result, but on
-present evidence the small-angle checks are below the estimator's practical resolution floor.
+**2° and 1°: NOT justified, and NOT run.** The optional small-angle check is gated on 5° reaching Q1 with the
+estimator comfortably resolved. 5° reached **Q3**. Quantitatively, at 200 ms the 5° estimator has
+SEM ≈ 1.3e−22 N·m against an expected linear-scaled signal of ≈ 9e−23 at 5°, ≈ 3.6e−23 at 2° and ≈ 1.8e−23 at
+1° — i.e. ≈ 0.7σ, ≈ 0.3σ and ≈ 0.14σ. Both smaller angles sit far below the floor.
+
+Worth recording for whoever designs the next attempt: **linear and sine-like scaling are not separable here
+under any circumstances.** Over 1–5°, `sin(ε)/ε` ranges from 0.99995 to 0.99873 — a 0.13 % difference between
+the two candidate laws, against an estimator whose 1σ uncertainty exceeds 100 % of the signal. Distinguishing
+them is not a duration problem; it needs a much larger ε lever arm.
 
 ---
 
 ## 11. Conclusion
 
-*(pending the 200 ms adjudication)*
+At 5° converter skew, the fully thermalized rigid-filament model does **not** produce a chirality-odd axial
+motor torque that this design can discern. Four matched arms at 100 ms gave τ_odd = −6.99e−23 ± 2.87e−23 N·m
+with both seeds on the native negative sign — suggestive (Q2) on the seed statistic but only 1.01σ on disjoint
+blocks — and the authorized extension of the same four arms to 200 ms collapsed it to
+−7.06e−24 ± 1.31e−22 N·m (0.05σ) with the seeds disagreeing in sign. The seed SEM *grew* 4.6× when the window
+doubled, which identifies the obstacle: the deterministic axial torque is a ~0.2 % residue of a near-cancelling
+tug-of-war between oppositely-rolling heads, and its imbalance drifts on a timescale comparable to the whole
+measurement window, so each arm contributes about one effective sample and longer averaging buys almost
+nothing. The defensible result is a bound, **|τ_odd| ≲ 1.3e−22 N·m ⇒ |Ω_drive_odd| ≲ 40 rad/s**, which
+comfortably contains the ≈ 9e−23 N·m that linear scaling from the campaign's 15° measurement would predict —
+so this is a statement about the measurement's power, not evidence against a 5° chiral torque. The assay
+itself is sound throughout: rigid single body, FDT thermostat, four decomposition gates passing, the bond
+moment accounting for the entire deterministic axial torque to ~1e−8, stable occupancy, directed gliding, and
+zero invalid or solver failures across all eight arms. Per the Q3 rule, work stops here; no multi-second
+campaign and no 2°/1° arms were launched. Two by-products are worth carrying forward independently of the null:
+the torque-component gate's recorded diagnosis was wrong and the real defect was a one-step-stale **projection
+axis** (§2), and a production-path flag combination silently made the whole decomposition read zero (§2.4) —
+found by a sanity check, not by any gate.
+
+### 11.1 If this is pursued further
+
+Not authorized here, and not started. Recorded so the next attempt is not designed against the wrong obstacle:
+**more seeds, not longer arms.** The variance is between-arm and slowly-drifting, so n is the lever and
+duration is not — 8–12 matched seeds at 100 ms would cost about what these 8 arms already cost and would give
+a genuine df, whereas doubling duration demonstrably did not help. A rigid 15° anchor under the identical
+rigid pipeline would also establish the estimator's power on a signal known to be ~4× larger before any
+further small-angle work is attempted.
 
 ---
 

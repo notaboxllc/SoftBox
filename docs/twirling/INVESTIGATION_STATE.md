@@ -1,8 +1,8 @@
 # Skew-Twirling Investigation — State of Play
 
-**As of 2026-07-31, 21:15 local.** Single-page status across both branches of this investigation. The detailed
-reports are `RIGID_FILAMENT_SKEW_VALIDATION.md` (active programme) and `FIVE_DEGREE_SKEW_DURATION_PILOT.md`
-(aborted predecessor, on its own branch).
+**As of 2026-08-01.** Single-page status across both branches of this investigation. The detailed reports are
+`RIGID_LOW_SKEW_TORQUE_QUICKLOOK.md` (the 5° answer), `RIGID_FILAMENT_SKEW_VALIDATION.md` (the validation
+programme) and `FIVE_DEGREE_SKEW_DURATION_PILOT.md` (aborted predecessor, on its own branch).
 
 ---
 
@@ -11,11 +11,14 @@ reports are `RIGID_FILAMENT_SKEW_VALIDATION.md` (active programme) and `FIVE_DEG
 The flexible-filament 5° duration pilot was **aborted before it ran** — no arms, no records, no GPU time —
 because the inherited filament rotational thermostat is not FDT-consistent. It was replaced by a
 **rigid-filament programme**: one rigid body spanning the whole filament, with a single thermal reservoir at
-kT on every drag-carrying degree of freedom. **Validation Stages 0–4 are complete and passing (9 gates, 0
-failures, plus default inertness). Stage 5 — the passive-null stop gate — is running now. Stage 6 is
-implemented but not run. No production arm has been launched.** The most consequential result so far is not a
-gate but a calculation: fixing the thermostat *raises* the rotational noise floor enough that rotation cannot
-be the load-bearing observable, so torque is.
+kT on every drag-carrying degree of freedom. Validation Stages 0–4 passed (9 gates), the noise decomposition
+now passes all four of its gates, and the **driven 5° question has been answered directly: NO discernible
+chirality-odd motor torque at this design (Q3)** — 4 arms at 100 ms looked suggestive (2.43σ on seeds, 1.01σ on
+disjoint blocks) and the authorized extension of the same arms to 200 ms collapsed it to 0.05σ with the seeds
+disagreeing in sign. Bound: **|τ_odd| ≲ 1.3e−22 N·m ⇒ |Ω_drive_odd| ≲ 40 rad/s**. The obstacle is identified:
+the net axial torque is a ~0.2 % residue of a near-cancelling tug-of-war whose imbalance drifts on the
+timescale of the whole window, so **more seeds, not longer arms**, is the lever. **Stage 5 (passive nulls) is
+INCOMPLETE — DEFERRED**, and was not required for this answer.
 
 ---
 
@@ -49,9 +52,14 @@ or deleted. `BoA-v1ref` untouched. The torsional-ratchet branch and its records 
 | 2 · free rigid-body FDT | **PASS** | all four DOF within **0.4 %** of the exact discrete law `D = kT/γ`, three timesteps; signed increments zero-mean (roll 0.18σ) and Gaussian; roll dt-spread 0.0010 over 4× |
 | 3 · rigidity | **PASS** | contour change exactly 0; frame norm 2.2e−7, orthogonality 8.5e−10 under motor load |
 | 4 · force/torque closure | **PASS** | 1e−6 on four wrench fixtures; `r × F` exact, origin-shift invariance exactly 0, mirror sign exactly −1 |
-| 5 · passive nulls (**stop gate**) | **RUNNING** | relaunched on the fixed binary; 100 ms x 4 seeds, 100 steps/s, ~16 h |
-| 6 · binding/gliding compatibility | implemented, **not run** | blocked behind Stage 5 |
-| Tier-1 production (4 arms) | **NOT LAUNCHED** | blocked until 5 and 6 pass |
+| 4b · noise-decomposition gates | **4 PASS / 0 FAIL** | inertness bit-identical; body-frame closure 6e−19; `Ω_drive = M_roll·⟨τ_det⟩` 5.6e−15; **component sum now 3.0e−08** (was 1.9e−02) |
+| 5 · passive nulls | **INCOMPLETE — DEFERRED** | outside the quick 5° torque scope; **zero arms, zero records**; see §5b |
+| 6 · binding/gliding compatibility | implemented, **not run** | not required for the driven 5° question |
+| **driven 5° production** | **DONE — Q3** | 8 arms (4 × 100 ms + 4 × 200 ms), 0 invalid, 0 solver failures; no discernible τ_odd |
+
+**Stage 5 was NOT a prerequisite for the driven 5° measurement and is no longer claimed as one.** It is a
+passive-null control for the *passive* claim; the driven question is answered by the ±ε matched-pair odd
+estimator, whose gates (4b) all pass.
 
 ---
 
@@ -202,29 +210,88 @@ no ordering, no RNG draw.
 Terminology fixed: **Ω_total** (realized), **Ω_drive** (motor-driven), **Ω_Brown**, **Ω_geom**. `Ω_drive` is
 *resolved motor-driven twirling drift*, never "measured twirling" unqualified.
 
+## 5b. Stage 5 disposition — INCOMPLETE — DEFERRED AS OUTSIDE QUICK 5° TORQUE SCOPE
+
+Stopped; nothing running. Launched 2026-07-31 22:26:48Z (`-rigid-passive -gpu -eta 0.01 -passive-meas 400000
+-passive-seeds 4`, commit `f382505`), ran **4190.3 s**, reached `executeIndex` 248 228 of the **first** arm's
+422 000 steps = **58.8 % of one arm**, i.e. **62.06 ms simulated** of that arm's 105.5 ms. **Zero arms
+completed; zero records written** — the arm table header printed and no arm row was ever emitted, so there is
+no partial replicate and nothing to preserve beyond the three console logs in `RUN_LOGS/rigid/`.
+
+**Correction to the log filenames.** `stage5_passive_KILLED_for_batching.txt` and
+`..._ABANDONED_slowbuild.txt` describe deliberate stops. In fact every one of these processes died with
+**SIGSEGV in `libcuda.so.1+0x345d6f`, core dumped, exit 134**, after a cascade of CUDA 709
+(`CONTEXT_IS_DESTROYED`) / 400 errors; five `hs_err_pid*.log` files from 2026-07-31 carry the same frame at
+1 m 25 s, 3 m 02 s, 10 m 00 s, 1 h 09 m 50 s and 1 h 12 m 18 s. Most likely reading: the **teardown signature
+of killing a JVM blocked mid-`execute()`** — the shutdown hook ran inside an unmatched `EXECUTE_CALL_BEGIN`,
+and `NORMAL_MAIN_RETURN` is absent. **No Xid, no NVRM fault**, no freeze, no reboot, and every run since (two
+decomposition validations, one sanity pair, eight production arms) completed cleanly on the same device.
+`collect_gpu_crash_case.sh` not invoked — CLAUDE.md scopes it to "after any hard freeze and reboot".
+
+Also note the crash-trace `simulationTime` field is **10× high** on this path: it is stamped with `DT`, not
+the viscosity-scaled `DTR`.
+
+---
+
+## 5c. The driven 5° result (2026-08-01) — **Q3, NO DISCERNIBLE TORQUE**
+
+Full report: `docs/twirling/RIGID_LOW_SKEW_TORQUE_QUICKLOOK.md`. Commit `30e8891`; GPU device-resident, single
+`glide` TaskGraph, monitored; 10 µM, 400 heads/µm², ±5°, seeds 101/102, η = 0.01 Pa·s, rigor rupture off,
+`filSegs=1`, FDT thermostat, decomposition on.
+
+| stage | τ_odd (N·m) | seed σ / sign | 8-block σ / sign | Ω_drive_odd (rad/s) |
+|---|---|---|---|---|
+| 4 arms × 100 ms | −6.986e−23 ± 2.869e−23 | 2.43 / 2 of 2 | 1.01 / 5 of 8 | −21.5 ± 8.9 |
+| 4 arms × 200 ms | **−7.065e−24 ± 1.314e−22** | **0.05 / 1 of 2** | **0.09 / 4 of 8** | **−2.2 ± 40.5** |
+
+**Bound: |τ_odd| ≲ 1.3e−22 N·m ⇒ |Ω_drive_odd| ≲ 40 rad/s.** This *contains* the ≈ 9e−23 N·m that linear
+scaling from the campaign's 15° measurement predicts, so it is a statement about measurement power, not
+evidence against a 5° chiral torque.
+
+Three findings that outlive the null:
+
+1. **The seed SEM grew 4.6× when the window doubled** (should shrink by √2 if averaging independent samples).
+   The deterministic axial torque is a ~0.2 % residue of a near-cancelling tug-of-war (+7.1e−20 vs −7.1e−20
+   against a +1.6e−22 net) whose imbalance drifts on the window timescale ⇒ each arm ≈ one effective sample.
+   **The lever is more seeds, not longer arms.** The n = 2 seed SEM should not be quoted for this estimator;
+   the disjoint-block SEM is the honest one and it flagged the 100 ms result correctly at the time.
+2. **The 200 ms arms are not independent replicates of the 100 ms arms** — verified, not assumed. The RNG is
+   counter-based and step-count-independent, so the 200 ms arm reproduces the 100 ms trajectory exactly:
+   max |difference| in (meanRoll, glideProj) over all 2000 shared sample times = **0.000e+00**. Measured
+   windows 25–100 ms and 50–200 ms overlap in 50–100 ms.
+3. **`Om_Brown_odd` is exactly 0 by construction.** Matched ±ε arms at one seed draw a bit-identical
+   Brownian sequence (state-independent counter hash), so the odd estimator cancels the rigid-body Brownian
+   roll identically and `Ω_total_odd = Ω_drive_odd + Ω_geom_odd`. **This bounds where §4.2 applies:** the
+   169 rad/s rotational floor governs a *single arm's absolute* Ω and the passive null, **not** the
+   matched-pair odd estimator. §4.2 is not retracted; its scope is narrowed.
+
+2° and 1° were **not run** — gated on 5° reaching Q1, which it did not. Recorded for the next designer: over
+1–5°, `sin(ε)/ε` varies by 0.13 %, so linear vs sine-like scaling is **not separable** by this assay at any
+duration; that needs a larger ε lever arm, not more time.
+
+---
+
 ## 8. Next actions, in order
 
-1. **Stage 5 completes** (~28 h contended, faster once the ratchet job ends). It runs to completion on the
-   binary it was launched with — the decomposition is committed as source only and deliberately NOT built.
-   Watch the τ_odd gate and the thermal-OFF halves gate; the Ω bound is expected INCONCLUSIVE by design.
-1b. **On exit:** build → `-rot-decomp-validate` (inertness is a HARD STOP) → short passive decomposition
-   confirmation only (τ_odd null, Ω_drive_odd null, zero-mean Brownian, closure) — **the full Stage 5 is NOT
-   rerun**, since no force, mobility, RNG, orientation-update or passive-control code changed.
-2. **If Stage 5 passes** → run Stage 6 (`-rigid-compat`, ~1 h). Occupancy shift > 30 % is *flagged*, not
-   failed, and no binding gate is to be tuned.
-3. **If both pass** → Tier-1 production, launched automatically: 10 µM, 400 heads/µm², ±5°, seeds 101/102,
-   1.0 s per arm, four arms, device-resident and monitored, with the decomposition ON. Evidentiary hierarchy:
-   τ_odd, then Ω_drive_odd, then torque components, then nested-window stability, with Ω_total_odd as a
-   lower-powered corroborator. R3 does **not** require Ω_total_odd to resolve. Then a conditional rigid ±15°
-   anchor if 5° reaches R3/R4 and the 36 GPU-h / 8-arm cap allows. Then matched-pair estimators, nested final windows, non-overlapping blocks,
-   θ_odd(t) drift fit, closure, R1–R5 classification, cross-model descriptive comparison with the legacy 0°,
-   1°, 2° and 15° results, and a rigid-15° anchor recommendation.
-4. **If Stage 5 fails** — any passive chiral arm sustaining directed rotation — production does not run, and
-   the finding is the result.
+**The driven 5° question is answered (§5c) and needs nothing further.** Work stopped there per the Q3 rule.
+Nothing below is authorized or started; it is the recommended ordering if the investigation continues.
 
-**Open question worth flagging now:** given §4.2, a rigid 15° anchor may be needed *before* the 5° result can
-be interpreted at all, since the 5° rotational signal is very likely to sit under the noise floor while its
-torque does not. That decision is deliberately deferred to the production report rather than pre-empted.
+1. **A rigid ±15° anchor under the identical rigid pipeline.** This is now the highest-value next run, and it
+   is a *power calibration*, not a new question: 15° carries a signal ≈ 3× the 5° one, so it establishes
+   whether this estimator can resolve a chiral torque it is known to contain, before any further low-skew
+   work. §5c's open question — whether the 15° anchor is needed to interpret 5° — is **resolved: yes**, and
+   for the torque, not only the rotation.
+2. **More seeds at 5°, not longer arms** (§5c finding 1). 8–12 matched seeds at 100 ms costs roughly what the
+   eight arms already run cost, and gives a genuine df; doubling duration demonstrably did not help.
+3. **Stage 5 (passive nulls)** if and when a *passive* claim is to be made. It is not a prerequisite for
+   driven measurements. If rerun, note it crashed twice on ~1 h arms (§5b) and should be batched so a stop
+   costs one arm, not the campaign.
+4. **Stage 6 (`-rigid-compat`, ~1 h)** — descriptive only; occupancy shift > 30 % is *flagged*, not failed,
+   and no binding gate is to be tuned.
+
+**Superseded — do not re-trust:** the earlier plan's "Tier-1 production at 1.0 s per arm, blocked until
+Stages 5 and 6 pass". Stage 5 never gated the driven measurement; and 1.0 s arms are the wrong prescription —
+§5c shows duration is not the lever for this estimator.
 
 ---
 
@@ -252,18 +319,36 @@ Rigid scene through `runTwirlArm` — the production path — GPU device-residen
 | 3 · **torque-drift closure** | **PASS** — `Ω_drive = M_roll·⟨τ_det⟩` to 5.6e−15 relative (M_roll = 3.0846e23, ⟨τ_det⟩ = −8.19e−22 N·m, Ω_drive = −252.57 rad/s) |
 | 4 · **component sum** | **FAIL** — bond moment vs total τ_det differs by **1.9 %** (−1.56e−23 N·m) |
 
-**Gate 4 is left failing and unfixed, not tuned.** Diagnosis: an ordering defect in *my estimator*, not the
-physics. `stepGlidingCPU` runs `bondForces → segGather` (which fills `forceSum`/`torqueSum`) `→ integrate →
-matS2SolveStep`, and the S2 solve **rewrites `bondData` at the end of the step**. My per-step `tauBond` reads
-`bondData` from the host *after* the step, so it compares `torqueSum` (built from pre-solve `bondData`) against
-a post-solve snapshot. The component check must be taken before the solve, or re-specified. **Production must
-not run until this is resolved**, since the torque-component decomposition is item 3 in the evidentiary
-hierarchy.
+**RESOLVED 2026-08-01 at commit `8ea521c` — and the diagnosis recorded here was WRONG.** Re-run:
+`RUN_LOGS/rigid/decomp_validate_fixed.txt`, **4 PASS / 0 FAIL**, gate 4 residual **3.000e−08**.
+
+The original diagnosis — "the S2 solve rewrites `bondData` at the end of the step, so the host compares a
+pre-solve `torqueSum` against a post-solve snapshot" — **is refuted by the code. `matS2SolveStep` never writes
+`bondData`;** it reads it, at indices 0..2 and 12. No kernel between `segGather` and the end of the step writes
+it either, so the post-step host copy holds exactly the values the gather consumed.
+
+The real defect was the **projection axis**. `segGather` sums `bondData[9..11]` into `torqueSum`, and the
+integrator forms `torqueSum·û` with the material frame **as it stood before the orientation update** — which is
+why `accumulate` already takes a pre-update axis. The component reconstruction called `axialTorque`, which
+reads the **current** `uVec`. Two projections of the same vector one step apart ⇒ a systematic
+`O(dt·|T_perp|)` residual. Fixed by projecting the bond moments on that same pre-update axis
+(`axialTorqueOnAxis`): no graph, kernel, task, snapshot, transfer, ordering, RNG, mobility or binding change,
+and every pre-existing observable stayed bit-identical, so the repair is itself trajectory-inert. **No missing
+torque contribution exists** — at n = 1 the bond moment *is* the whole deterministic axial torque, as
+preregistered. Nothing was tuned to force closure.
+
+**A second defect, found by the pre-production sanity check rather than by any gate** (fixed at `30e8891`):
+`-rot-decomp` set `ROT_DECOMP` but not `ROT_DECOMP_TRANSFER`, while `runRotDecompValidate` set both. So all
+four gates passed while the **production** path silently measured nothing — on the GPU the `torqueSum` /
+`randTorque` host buffers were never written, `τ_det` and the Brownian increment read as exactly 0.0, and the
+whole realized roll landed in `dPhiGeom`. The run completed, wrote records and reported 100 % seed-sign
+agreement. `-rot-decomp` now sets both and `runTwirlArm` throws on the mismatch. The four zero-decomposition
+records were deleted, not reused.
 
 **Confirms the decomposition's rationale:** `|Ω_Brown| / |Ω_drive| = 2.3` even at 15° skew — the raw angle is
-Brownian-dominated exactly as predicted in §4.2.
+Brownian-dominated as predicted in §4.2. But see §5c finding 3: in the **matched-pair odd** estimator the
+Brownian roll cancels identically, so that dominance does not carry over to `Ω_odd`.
 
-**Production throughput still unmeasured** on a full-length rigid arm. At the Stage-5 rate (~70 steps/s) four
-1.0 s arms would cost ~63 GPU-h, well past the 36 h cap; the historical 264 steps/s is a *flexible*-scene
-figure. This must be measured before launching production, and if it does not fit, the design change is the
-user's call — not a silent resize.
+**Production throughput now measured** on full-length rigid arms: **≈ 275 steps/s** device-resident under
+contention ⇒ ≈ 24 min per 100 ms arm and ≈ 48 min per 200 ms arm. The eight production arms cost **≈ 4 h 51 m**
+total. The 1.0 s-per-arm design in the earlier plan is superseded — §5c shows duration is not the lever.

@@ -3,8 +3,12 @@
 **Branch** `feature/rigid-filament-skew-twirling`, worktree `../softbox-rigid-filament-skew-twirling`,
 baseline `3119000`. Started 2026-07-31.
 
-**Status: Stages 0–4 COMPLETE and PASSING (9/0 + inertness). Stage 5 IMPLEMENTED and RUNNING; Stage 6 implemented, not run. No production arm has
-been launched.**
+**Status (updated 2026-08-01): Stages 0–4 COMPLETE and PASSING (9/0 + inertness). The noise-decomposition gates
+now pass 4/0 (the gate-4 failure recorded in §10 of `INVESTIGATION_STATE.md` is resolved — and its recorded
+diagnosis was wrong; the defect was a one-step-stale projection axis, not `bondData`). Stage 5 is
+INCOMPLETE — DEFERRED (zero arms, zero records); Stage 6 implemented, not run. Neither gates a driven
+measurement. The driven 5° production ran: 8 arms, classification Q3 — no discernible chirality-odd motor
+torque at that design. See `RIGID_LOW_SKEW_TORQUE_QUICKLOOK.md`.**
 
 The rigid-filament assay isolates motor-generated chiral torque in a single-temperature, FDT-consistent
 rigid-body rotational system. It is a **new thermodynamically controlled model variant**, not a correction of
@@ -262,6 +266,15 @@ Achievable 3σ bound on a passive Ω_odd, n = 4 matched pairs:
 | 100 ms | 159 rad/s | **169 rad/s** | 3.4× too weak |
 | 300 ms | 92 rad/s | **98 rad/s** | 2.0× too weak |
 | 1000 ms | 50 rad/s | **53 rad/s** | still ≈ 1.1× too weak |
+
+> **SCOPE NARROWED 2026-08-01 (not retracted).** This calculation is correct for a **single arm's absolute Ω**
+> and for the passive null, which is what it was written for. It does **not** apply to the **matched-pair ±ε
+> odd** estimator: the rigid body's Brownian torque comes from a counter-based hash keyed by (body, step, seed)
+> and is state-independent, so +ε and −ε arms at the same seed draw a **bit-identical** Brownian sequence and
+> `Ω_Brown_odd` cancels to **exactly 0.0** (measured, all production arms), leaving
+> `Ω_total_odd = Ω_drive_odd + Ω_geom_odd`. The limiting uncertainty on `Ω_odd` is between-arm motor-ensemble
+> scatter, not filament rotational diffusion. See `RIGID_LOW_SKEW_TORQUE_QUICKLOOK.md` §4.1 and
+> `INVESTIGATION_STATE.md` §5c finding 3.
 
 **No feasible duration makes the rotational null informative.** A σ-gate on Ω would therefore have passed
 because the measurement is insensitive, not because the null holds — the third vacuous-pass construction found
