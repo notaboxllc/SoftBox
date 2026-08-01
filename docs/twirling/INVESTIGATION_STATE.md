@@ -8,7 +8,7 @@ measurement, **in progress**), `RIGID_LOW_SKEW_TORQUE_QUICKLOOK.md` (the superse
 
 ---
 
-## 0. CURRENT CAMPAIGN — rigid ±15° anchor + high-seed ±5° (2026-08-01, commit `100d30e`)
+## 0. CAMPAIGN COMPLETE — rigid ±15° anchor + high-seed ±5° (2026-08-01, commit `fc39db2`)
 
 **Phase 1 — ±15° power anchor: DONE, A15 PASS.** 4 matched seeds, 8 arms, 0 invalid / 0 solver failures.
 
@@ -23,51 +23,90 @@ All eight A15 conditions plus the preferred |m|/SEM ≥ 2 criterion met, so the 
 significance claim**, exactly as the gate specifies. The estimator demonstrably resolves a chiral torque it is
 known to contain, which is what licensed the 5° stage.
 
-**Phase 2 — high-seed ±5°: IN PROGRESS.** n = 8 of 12 matched seeds evaluated; batches 4–5 (seeds 109–112)
-running.
+**Phase 2 — high-seed ±5°: DONE, L5-PRESENT.** 12 matched seeds, 24 arms, 0 invalid / 0 solver failures.
 
 ```
-n=8:  tau_odd = -5.756e-23 +- 3.516e-23 N.m   |m|/SEM 1.64   seed-sign 6 of 8
-      Om_drive_odd = -17.76 +- 10.85 rad/s    95% CI [-1.407e-22, +2.560e-23]  (contains zero)
+tau_odd      = -1.037e-22 +- 3.503e-23 N.m   |m|/SEM 2.96   seed-sign 10 of 12
+                                             95% t CI [-1.808e-22, -2.664e-23]  EXCLUDES ZERO
+Om_drive_odd = -32.00 +- 10.80 rad/s = -5.09 turns/s ; -15.0 turns/um ; signed pitch 66.6 nm
+tau per bound head (odd) = -3.790e-24 +- 1.124e-24 N.m   (3.37 sigma)
 ```
 
-**Early-success rule NOT met** at n = 8 — fails three criteria: the 95 % interval contains zero,
-|m|/SEM 1.64 < 2.5, and the first-half/second-half seed split is 99.9 % against a 25 % tolerance. It passes
-sign agreement (6/8 = 75 %), leave-one-out stability (8/8 retain the native sign), outlier dominance (30.3 %
-< 35 %) and all health gates. **Continuing automatically to n = 12**, as designed.
+Every L5-PRESENT criterion met, so the optional seeds 113–116 extension was **not justified and not run**.
+**This overturns the predecessor's Q3 "no discernible torque"**, exactly along the route that report itself
+identified (*more seeds, not longer arms*).
 
-The running estimate — 2.43 → 3.73 → **5.30** → 1.92 → 2.14 → 1.13 → 1.64 σ — shows the n = 4 peak was a
-small-n excursion. **No claim should ever have been made at n < 8**, which is why the design forbids it.
+**The qualification is load-bearing and must travel with the number: the signal is NOT stationary.** At 5°
+the odd torque decays across the measured window (Q1 −3.086e−22 → Q4 **+4.357e−23**; paired Q1−Q4 2.18σ,
+per-seed trend 2.04σ, 8 of 12 seeds decaying), while at 15° it is flat (0.01σ, 2 of 4). Both 5° trend
+statistics sit just under t₁₁ = 2.201 ⇒ **suggestive, not established** — but they are corroborated by the
+100–200 ms windows carrying no resolved signal (§0.1 item 2). **The resolved quantity is a decaying chiral
+torque and must not be quoted as a steady-state twirling torque.** Most economical account: the standing 25 %
+equilibration convention is insufficient at 5°. Testing that needs longer arms at high seed count — outside
+authorized scope, and the top follow-up.
 
-### 0.1 Three results that stand independently of the final 5° verdict
+### 0.1 Sequential convergence — the strongest methodological result here
 
-1. **Quarter-blocks are NOT valid replicates, and fail independence in opposite directions.** If blocks were
-   independent, arm-mean SD would be σ_block/2. Measured against the observed between-seed SD:
-   **5° ratio 0.31** (blocks *anti*-correlated, ρ̄ ≈ −0.30 ⇒ pooled-block SEM too **large**) and
-   **15° ratio 1.29** (blocks positively correlated ⇒ pooled-block SEM too **small**). So neither pooled-block
-   figure is a valid uncertainty. **This corrects `RIGID_LOW_SKEW_TORQUE_QUICKLOOK.md` §8**, which asserted
-   "the block one is the honest one" — it is not; at 5° it is biased conservative. This corrects the
-   *reasoning*, not the Q3 *conclusion*, which rested on the 200 ms re-run. (n = 4 per skew, 3 df — direction
-   indicative, not established; n = 12 re-tests it.)
+Fixed seed order, chosen before any result was seen:
+
+| n | 2 | 3 | **4** | 5 | 6 | **7** | 8 | 9 | 10 | 11 | **12** |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| \|m\|/SEM | 2.43 | 3.73 | **5.30** | 1.92 | 2.14 | **1.13** | 1.64 | 2.09 | 2.38 | 2.81 | **2.96** |
+
+The estimator passed through **5.30σ at n = 4** and **1.13σ at n = 7** en route to 2.96σ at n = 12. Either
+point quoted alone would have been badly wrong — one claiming a result 3× too strong, the other declaring a
+null. The n ≥ 8 evaluation floor and the fixed seed order prevented both. The early-success rule was
+evaluated at n = 8 and n = 10 and **correctly never fired**.
+
+### 0.2 Results that stand independently of the 5° verdict
+
+1. **Quarter-blocks are NOT valid replicates, and fail independence in opposite directions.** Measured
+   block-vs-seed variance ratios: **5° 0.69** (anti-correlated, ρ̄ ≈ −0.18 ⇒ pooled-block SEM biased
+   **conservative**) and **15° 1.29** (positively correlated ⇒ biased **anti**-conservative). Neither pooled
+   figure is a valid uncertainty. **This corrects `RIGID_LOW_SKEW_TORQUE_QUICKLOOK.md` §8** ("the block one
+   is the honest one" — it is not).
 2. **The 200 ms "collapse" is a variance effect, not a decaying or reversing signal.** Window-resolved odd
-   rotation reconstructed from stored `meanRoll` traces at **zero GPU cost** (legitimate because matched ±ε
-   arms share a bit-identical state-independent Brownian stream, so Φ_Brown cancels exactly; validated —
-   the 200 ms arm's 25–100 ms window returns −12.6966 rad/s vs the 100 ms record's −12.6965). Later windows do
-   not reverse; they are **sign-inconsistent and 3–5× larger** (25 ms slices span −116.9 to +128.9 rad/s).
-   Two seeds cannot prove the early window is stationary — that limitation is recorded, not resolved.
-3. **The chiral effect on each torque population is well resolved; only the net is marginal.** At 5°, ε shifts
-   the positive-torque population by −2.166e−21 N·m (3.64σ) and the negative-torque population by +2.109e−21
-   (3.59σ); these sum to −5.7e−23 = τ_odd. **The measured chiral torque is a 2.7 % residue of a near-perfect
-   cancellation between two individually well-resolved population shifts.** That is the quantitative mechanism
-   behind the variance.
+   rotation from stored `meanRoll` traces at **zero GPU cost** (valid because matched ±ε arms share a
+   bit-identical state-independent Brownian stream ⇒ Φ_Brown cancels exactly; validated to 5 significant
+   figures against an independent record). Later windows are **sign-inconsistent and 3–5× larger**, not
+   reversed.
+3. **The estimator's power is calibrated.** The 15° anchor establishes that this pipeline resolves a chiral
+   torque it is known to contain, which is what licensed reading the 5° result at all.
 
-### 0.2 Live caveat to settle at n = 12
+### 0.2a Interim claims RETRACTED — recorded, not overwritten
 
-At 5° the **occupancy is asymmetric between +ε and −ε**: odd N_b = **−0.744 ± 0.227 (3.27σ)**, where at 15° it
-was unresolved (+0.218 ± 0.865, 0.25σ). A systematic engagement difference is a potential confound for reading
-τ_odd as pure chiral torque. The occupancy-normalised quantity — τ per bound head, odd — is
-**−2.310e−24 ± 1.170e−24 (1.97σ)**, i.e. the per-head chiral torque survives normalisation at essentially the
-raw strength, so the asymmetry does not appear to *manufacture* the signal. Treated as open until n = 12.
+Three things asserted from partial data did not survive to n = 12:
+
+| interim claim | at n = 8 | at n = 12 | status |
+|---|---|---|---|
+| occupancy asymmetry between ±ε | −0.744 ± 0.229 (**3.27σ**) | −0.359 ± 0.229 (**1.57σ**) | **dissolved** |
+| ε-odd torque-population shifts | 3.64σ / 3.59σ | 1.44σ / 1.25σ | **retracted** — the "2.7 % residue of two *resolved* shifts" framing was an n = 8 artifact |
+| 5° block variance ratio | 0.31 (n = 4) | 0.69 (n = 12) | direction held, **magnitude did not** |
+
+The occupancy confound is nonetheless **answered**, and more strongly than by its own dissolution: the
+occupancy-**normalised** signal (τ per bound head, odd) is **3.37σ**, stronger than the raw 2.96σ. The chiral
+torque is not an artifact of one ε sign engaging more heads.
+
+What survives of the near-cancellation picture is only the uncontroversial part: the net axial torque *is* a
+small residue of opposed head populations (net/gross 0.71 %), but those population shifts are not separately
+resolved.
+
+### 0.2b 5° / 15° ratio
+
+`R_tau = 0.2276 ± 0.1246`, against 0.3333 (linear) and 0.3367 (sine) — **0.85σ / 0.88σ**, i.e. consistent
+with proportional small-angle scaling. Linear vs sine remain **unseparable** (1 % apart against 55 %
+uncertainty); no scaling-law claim is made.
+
+Rotationally: pitch **66.6 nm at 5°** vs **15.7 nm at 15°**, both far tighter than the ~0.47 µm myosin-II
+comparator (~7× and ~30×). Post-hoc, cross-model, descriptive — not a target and not addressed here.
+
+### 0.2d A prediction of mine that was wrong, recorded
+
+From the 15° anchor I projected that if the 5° between-seed SD resembled the 15° one (3.93e−22), 12 seeds
+would reach only ~1.3σ and might not resolve. **That was wrong**: the 5° between-seed SD is **1.213e−22**,
+3.2× smaller, and 12 seeds reached 2.96σ. The noise is *not* ε-independent — it scales down with the signal,
+so the coefficient of variation at 5° (1.17) is close to that at 15° (0.86) rather than blowing up. I flagged
+the projection as spanning both outcomes at the time, which is why it did not change the design.
 
 ### 0.3 Scheduling, cost and GPU health
 
@@ -81,9 +120,8 @@ ledger is what decides it.
 | | arms | GPU wall |
 |---|---|---|
 | 15° sanity (10 ms) + anchor (100 ms) | 10 | 3.53 h |
-| 5° new arms so far (seeds 103–108) | 12 | 4.47 h |
-| 5° remaining (seeds 109–112) | 8 | ≈ 3.0 h projected |
-| **total projected** | **30** | **≈ 11 h** against a 20 h cap |
+| 5° high-seed (seeds 103–112, 20 arms + 4 reused) | 20 | 7.81 h |
+| **total** | **30 newly run** (hard max 44) | **11.33 h** against a 20 h cap |
 
 Health across **all** campaign arms: `invalid = 0`, `solverFail = 0`, `rateCapWarns = 0`, `ruptureEvents = 0`;
 no Xid, no NVRM, recorder healthy throughout. One `hs_err` file (`hs_err_pid3350710.log`) is from my own
