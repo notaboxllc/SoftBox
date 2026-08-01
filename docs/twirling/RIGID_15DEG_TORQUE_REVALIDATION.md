@@ -113,7 +113,7 @@ Omega_Brown_odd_s= 0.5 * [ Omega_Brown(+eps,s) - Omega_Brown(-eps,s) ]   (identi
 
 ## 4. Scheduling and GPU health
 
-**Two-process concurrency was trialled and REJECTED.** Full record: `RUN_LOGS/rigid/CONCURRENCY_TRIAL.md`.
+**Two-process concurrency was trialled and REJECTED.** Full record: `docs/twirling/RIGID_CAMPAIGN_CONCURRENCY_TRIAL.md`.
 
 Measured on the production arms: a second skew process raises skew-aggregate throughput 272.0 → 382.5 steps/s
 (**+40.6 %**) with each arm slowed 29.7 %, ample memory (797 MiB of 12227), no throttling, no Xid, no NVRM —
@@ -134,7 +134,7 @@ Throughput used for planning: **≈ 272–277 steps/s** solo device-resident ⇒
 
 ## 5. Arm ledger
 
-`RUN_LOGS/rigid/ARM_LEDGER.md` carries the authoritative per-arm state.
+`docs/twirling/RIGID_CAMPAIGN_ARM_LEDGER.md` carries the authoritative per-arm state.
 
 | block | planned | complete | failed | rerun | reused |
 |---|---|---|---|---|---|

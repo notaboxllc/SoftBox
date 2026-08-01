@@ -110,7 +110,7 @@ the projection as spanning both outcomes at the time, which is why it did not ch
 
 ### 0.3 Scheduling, cost and GPU health
 
-**Two-process concurrency trialled and REJECTED** (`RUN_LOGS/rigid/CONCURRENCY_TRIAL.md`). A second skew
+**Two-process concurrency trialled and REJECTED** (`docs/twirling/RIGID_CAMPAIGN_CONCURRENCY_TRIAL.md`). A second skew
 process raised skew-aggregate throughput +40.6 % but total device throughput only +5.6 % — ~73 % of the gain
 was taken from the repository owner's unrelated concurrent campaign (−29.7 %). Serial fits the budget, so the
 campaign runs **one skew arm at a time**. GPU utilisation is flat at 53 % either way and is *not* diagnostic
@@ -129,7 +129,7 @@ deliberate `SIGTERM` when concurrency was reverted — the documented §5b mid-`
 (shutdown hook reached `SHUTDOWN_HOOK_COMPLETED`), **not** a device fault. `atpWrite` is temp-file + atomic
 rename, so that interrupted arm left no partial record and was simply re-run.
 
-**Arm ledger:** `RUN_LOGS/rigid/ARM_LEDGER.md`. **Analysis tooling:** `scratch_rigid_odd.py` (matched-seed
+**Arm ledger:** `docs/twirling/RIGID_CAMPAIGN_ARM_LEDGER.md`. **Analysis tooling:** `scratch_rigid_odd.py` (matched-seed
 statistics; validated by reproducing the published 5° record set exactly), `scratch_rigid_window.py`
 (window-resolved odd rotation), `scratch_gpu_rate.sh` (per-process throughput from the crash heartbeat).
 
