@@ -263,7 +263,13 @@ public final class ChiralSiteHarness {
                 case "-rigid-validate" -> rigidValidate = true;
                 case "-rigid-passive" -> rigidPassive = true;
                 case "-rigid-compat" -> rigidCompat = true;
-                case "-rot-decomp" -> ROT_DECOMP = true;
+                // BOTH switches, always together. ROT_DECOMP allocates the accumulator; ROT_DECOMP_TRANSFER adds
+                // the device→host read-back of torqueSum/randTorque the accumulator consumes. Setting only the
+                // first leaves those two host buffers untouched on the GPU path, so tau_det and the Brownian
+                // increment read as exactly 0.0 and the whole realized roll lands in dPhiGeom — a run that
+                // completes and looks plausible while measuring nothing. A structural guard in runTwirlArm makes
+                // the mismatched combination impossible rather than merely unlikely.
+                case "-rot-decomp" -> { ROT_DECOMP = true; ExplicitCompleteMatHarness.ROT_DECOMP_TRANSFER = true; }
                 case "-rot-decomp-validate" -> rotDecompVal = true;
                 case "-rigid-torque-report" -> rigidTorqueRep = true;
                 case "-compat-ms" -> COMPAT_MS = Double.parseDouble(args[++i]);
@@ -2704,6 +2710,11 @@ public final class ChiralSiteHarness {
             // stationarity and block scatter are reported on genuinely independent sub-samples, never on
             // nested prefixes. Set before the first accumulate.
             if (rd != null) rd.setBlockSteps(Math.max(1, (steps - equil) / 4));
+            // STRUCTURAL GUARD: without the read-back, torqueSum/randTorque stay at their host values on the
+            // device path and the decomposition silently measures zero. Fail loudly instead.
+            if (rd != null && GPU && !ExplicitCompleteMatHarness.ROT_DECOMP_TRANSFER)
+                throw new IllegalStateException("ROT_DECOMP is on but ROT_DECOMP_TRANSFER is off: torqueSum/"
+                        + "randTorque are never read back, so the decomposition would measure exactly zero");
             double[] prevUax = { f.uVec.get(0), f.uVec.get(nSeg), f.uVec.get(2*nSeg) };
             for (int s = 0; s < nSeg; s++) { prevRoll[s] = ExplicitTwirlGlidingHarness.rollAngle(f, s, bhat);
                                             seedPrevY(f, s, prevY[s]); }
