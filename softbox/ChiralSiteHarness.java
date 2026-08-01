@@ -158,7 +158,7 @@ public final class ChiralSiteHarness {
         TornadoCrashDiagnostic.init("chiral-actin-sites", args);
         boolean fixtures = false, equiv = false, campaign = false, lattice = false, mechanism = false, all = false; String jsDir = null;
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
-        boolean etaAudit = false, etaControls = false, rigidValidate = false, rigidPassive = false, rigidCompat = false, rotDecompVal = false, etaMap = false, etaReport = false, etaMirrorRep = false;
+        boolean etaAudit = false, etaControls = false, rigidValidate = false, rigidPassive = false, rigidCompat = false, rotDecompVal = false, rigidTorqueRep = false, etaMap = false, etaReport = false, etaMirrorRep = false;
         boolean atpFix = false, atpPilot = false, atpMap = false, atpReport = false, atpMirrorRep = false, atpNull = false;
         boolean atpDensRep = false;
         boolean atpEquiv = false;
@@ -265,6 +265,7 @@ public final class ChiralSiteHarness {
                 case "-rigid-compat" -> rigidCompat = true;
                 case "-rot-decomp" -> ROT_DECOMP = true;
                 case "-rot-decomp-validate" -> rotDecompVal = true;
+                case "-rigid-torque-report" -> rigidTorqueRep = true;
                 case "-compat-ms" -> COMPAT_MS = Double.parseDouble(args[++i]);
                 case "-compat-seeds" -> COMPAT_SEEDS = Integer.parseInt(args[++i]);
                 case "-passive-meas" -> PASSIVE_MEAS = Integer.parseInt(args[++i]);
@@ -336,6 +337,7 @@ public final class ChiralSiteHarness {
         else if (rigidPassive) ok = runRigidPassive();
         else if (rigidCompat) ok = runRigidCompat();
         else if (rotDecompVal) ok = runRotDecompValidate();
+        else if (rigidTorqueRep) { double d = (ATP_DUR_MS > 0 ? ATP_DUR_MS : 100.0)*1e-3; atpSetDuration(d); reportRigidTorque(d); }
         else if (etaMap)     runEtaMap();
         else if (etaReport)  reportEtaMap();
         else if (etaMirrorRep) reportEtaMirror();
@@ -2698,6 +2700,10 @@ public final class ChiralSiteHarness {
             // chain has no single axial mobility). Default-off ⇒ rd stays null and nothing is read or written.
             RigidRollDecomposition rd = (ROT_DECOMP && nSeg == 1)
                     ? new RigidRollDecomposition(f.bRotGam.get(0), DTR) : null;
+            // four NON-OVERLAPPING equal blocks over the measured window (25 ms each at a 100 ms arm), so
+            // stationarity and block scatter are reported on genuinely independent sub-samples, never on
+            // nested prefixes. Set before the first accumulate.
+            if (rd != null) rd.setBlockSteps(Math.max(1, (steps - equil) / 4));
             double[] prevUax = { f.uVec.get(0), f.uVec.get(nSeg), f.uVec.get(2*nSeg) };
             for (int s = 0; s < nSeg; s++) { prevRoll[s] = ExplicitTwirlGlidingHarness.rollAngle(f, s, bhat);
                                             seedPrevY(f, s, prevY[s]); }
@@ -2759,10 +2765,20 @@ public final class ChiralSiteHarness {
                     double rr = ExplicitTwirlGlidingHarness.rollAngle(f, s, bhat);            // DIAGNOSTIC: legacy lab ref
                     cumLegacy[s] += ExplicitTwirlGlidingHarness.wrapPi(rr - prevRoll[s]); prevRoll[s] = rr; }
                 if (rd != null && t >= equil) {
-                    double tauBond = 0;
-                    for (int m = 0; m < N; m++) if (G.mot.boundSeg.get(m) >= 0)
-                        tauBond += ChiralSiteSystem.axialTorque(G.bondData, f.uVec, G.mot.boundSeg, m, nSeg);
+                    // COMPONENT CHECK — projected on the PRE-update axis, the same one tau_det uses.
+                    // segGather sums bondData[9..11] into torqueSum and the integrator then forms
+                    // torqueSum·u with the frame as it stood BEFORE this step's update. bondData itself is
+                    // NOT rewritten after the gather (matS2SolveStep only READS indices 0..2 and 12), so the
+                    // post-step host copy holds exactly the values the gather consumed; the only stale
+                    // quantity was the projection axis. Projecting the bond moments on the post-update uVec
+                    // left a systematic ~2% residual that is an estimator artefact, not a missing torque.
+                    double tauBond = 0, tauPosB = 0, tauNegB = 0;
+                    for (int m = 0; m < N; m++) if (G.mot.boundSeg.get(m) >= 0) {
+                        double tm = ChiralSiteSystem.axialTorqueOnAxis(G.bondData, G.mot.boundSeg, m, pUx, pUy, pUz);
+                        tauBond += tm; if (tm > 0) tauPosB += tm; else tauNegB += tm;
+                    }
                     rd.accumulate(f.torqueSum, f.randTorque, pUx, pUy, pUz, dRoll[0], tauBond);
+                    rd.tauPosSum += tauPosB; rd.tauNegSum += tauNegB;
                 }
                 if (rd != null) { prevUax[0] = f.uVec.get(0); prevUax[1] = f.uVec.get(nSeg); prevUax[2] = f.uVec.get(2*nSeg); }
                 double meanRoll = 0; for (double v : cum) meanRoll += v; meanRoll /= nSeg;
@@ -2860,6 +2876,7 @@ public final class ChiralSiteHarness {
                     misAcc += Math.abs(e.headMis.get(m)); nBoundSamp++;
                 }
                 tauAcc += sn; tauAbsAcc += sa; boundAcc += nb; measSteps++;
+                if (rd != null) rd.addBound(nb);   // occupancy over exactly the decomposed window
                 r.nbHist[Math.min(nb, NB_BINS - 1)]++;   // P(N_b): the distribution boundAcc/measSteps is the mean of
                 prevNb = nb;
                 blkTauAcc += sn; blkBoundAcc += nb; blkSteps++;
@@ -5083,6 +5100,15 @@ public final class ChiralSiteHarness {
             // scalar summaries of the P(N_b) occupancy histogram. Absent in earlier records ⇒ they read back as
             // NaN, which is the established convention for mixed-vintage record sets (see the STEP5/6 note).
             "density", "nMotors", "nbSD", "nbMedian", "nbP0", "nbP1", "nbLe2",
+            // §RIGID ROLL DECOMPOSITION (added 2026-07-31): written only when -rot-decomp is on AND the scene is
+            // the rigid single body; NaN otherwise, which is the same mixed-vintage convention as above. These are
+            // the load-bearing production observables: tauDet is the deterministic motor torque on the roll axis,
+            // omDrive the motor-driven angular drift it implies through the integrator's own axial mobility.
+            "rdSteps", "rdBlockSteps", "gammaRoll", "mRoll",
+            "tauDet", "tauBondMean", "tauOtherMean", "tauDetPerBound", "rdTauPos", "rdTauNeg", "rdBound",
+            "omDrive", "omBrown", "omGeom", "omTotalDecomp",
+            "phiDrive", "phiBrown", "phiGeom", "phiTotal",
+            "tauB0", "tauB1", "tauB2", "tauB3", "omB0", "omB1", "omB2", "omB3",
         };
         String[] base = ChiralSiteHarness.POW_KEYS;
         String[] all = new String[base.length + extra.length];
@@ -5123,6 +5149,17 @@ public final class ChiralSiteHarness {
         double[] h = nbStats(r.nbHist);
         v[i++] = DENSITY; v[i++] = TwoBodyConverterMotor.g4NMot(DENSITY);
         v[i++] = h[0]; v[i++] = h[1]; v[i++] = h[2]; v[i++] = h[3]; v[i++] = h[4];
+        // ---- rigid roll decomposition (NaN unless -rot-decomp on a rigid single-body scene) ----
+        RigidRollDecomposition d = r.rd;
+        if (d == null || d.nSteps == 0) { while (i < v.length) v[i++] = Double.NaN; return v; }
+        v[i++] = d.nSteps; v[i++] = d.blocks.isEmpty() ? Double.NaN : d.blocks.get(0)[0];
+        v[i++] = 1.0 / d.mRoll(); v[i++] = d.mRoll();
+        v[i++] = d.meanTauDet(); v[i++] = d.meanTauBond(); v[i++] = d.meanTauOther(); v[i++] = d.tauPerBound();
+        v[i++] = d.meanTauPos(); v[i++] = d.meanTauNeg(); v[i++] = d.meanBound();
+        v[i++] = d.omegaDrive(); v[i++] = d.omegaBrown(); v[i++] = d.omegaGeom(); v[i++] = d.omegaTotal();
+        v[i++] = d.phiDrive; v[i++] = d.phiBrown; v[i++] = d.phiGeom; v[i++] = d.phiTotal;
+        for (int k = 0; k < 4; k++) v[i++] = k < d.blocks.size() ? d.blockTau(k)   : Double.NaN;
+        for (int k = 0; k < 4; k++) v[i++] = k < d.blocks.size() ? d.blockOmega(k) : Double.NaN;
         return v;
     }
     /** {SD, median, P(N_b=0), P(N_b=1), P(N_b<=2)} of an occupancy histogram; all NaN if it is empty. */
@@ -5508,6 +5545,7 @@ public final class ChiralSiteHarness {
         ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem; cfgOff(); EPS_CONV_ARM = 0;
         reportAtpMap(durS);
         if (ATP_MIRROR < 0) reportAtpMirror(durS);
+        if (FIL_SEGS == 1 && ROT_DECOMP) reportRigidTorque(durS);
     }
 
     // ---------------------------------------------------- DENSITY LADDER: occupancy vs motor density at one [ATP]
@@ -5680,6 +5718,98 @@ public final class ChiralSiteHarness {
             t[i] = (Double.isFinite(ve[i]) && ve[i] != 0) ? oo[i]/(2*Math.PI*Math.abs(ve[i])) : Double.NaN;
         return t;
     }
+    // ============================================ RIGID QUICK-LOOK: chirality-odd deterministic motor torque
+    /**
+     * The rigid-filament low-skew torque read-out. Everything here is a MATCHED-PAIR estimator over the same
+     * seed at +eps and -eps, built from the persisted decomposition columns:
+     * <pre>
+     *   tau_odd  = 0.5*(tau_det(+eps) - tau_det(-eps))      the chirality-odd deterministic motor torque
+     *   tau_even = 0.5*(tau_det(+eps) + tau_det(-eps))      the achiral remainder (must not carry the signal)
+     *   Om_drive_odd = 0.5*(Om_drive(+eps) - Om_drive(-eps))
+     * </pre>
+     * Blocks are the four NON-OVERLAPPING quarters of each arm's measured window; the halves are sums of
+     * disjoint block pairs. Nested prefixes are deliberately NOT used as replicates.
+     */
+    static void reportRigidTorque(double durS) {
+        double uM = ATP_MAP[0], mir = ATP_MIRROR;
+        System.out.println("\n  ============ RIGID LOW-SKEW TORQUE QUICK-LOOK ============");
+        System.out.printf(Locale.US, "  [ATP] = %.4g µM   density = %.0f heads/µm²   eps = ±%.1f°   eta = %.4g Pa·s%n",
+                uM, DENSITY, ATP_EPS_DEG, ETA);
+        System.out.printf(Locale.US, "  duration = %.1f ms/arm   dt = %.4e s   equil = %.0f%% ⇒ %.1f ms measured   n = %d matched seeds%n",
+                durS*1e3, DTR, 100*EQUIL_FRAC, durS*1e3*(1-EQUIL_FRAC), SEEDS);
+        double[] gr = atpEven(uM, "gammaRoll", durS, mir);
+        System.out.printf(Locale.US, "  gamma_roll = %.6e N.m.s   M_roll = %.6e rad/(s.N.m)%n",
+                gr[0], gr[0] != 0 ? 1.0/gr[0] : Double.NaN);
+
+        System.out.println("\n  ---- PRIMARY: chirality-odd deterministic motor torque ----");
+        rigidRow("tau_odd  (N.m)",        atpOdd (uM, "tauDet",  durS, mir));
+        rigidRow("tau_even (N.m)",        atpEven(uM, "tauDet",  durS, mir));
+        System.out.println("\n  ---- SECONDARY (derived): motor-driven angular drift ----");
+        rigidRow("Om_drive_odd (rad/s)",  atpOdd (uM, "omDrive", durS, mir));
+        rigidRow("Om_drive_even (rad/s)", atpEven(uM, "omDrive", durS, mir));
+        System.out.println("\n  ---- CORROBORATING ONLY (Brownian-dominated; not required to resolve) ----");
+        rigidRow("Om_total_odd (rad/s)",  atpOdd (uM, "omTotalDecomp", durS, mir));
+        rigidRow("Om_Brown_odd (rad/s)",  atpOdd (uM, "omBrown", durS, mir));
+        rigidRow("Om_geom_odd  (rad/s)",  atpOdd (uM, "omGeom",  durS, mir));
+
+        System.out.println("\n  ---- torque components and populations (per arm; even = both signs) ----");
+        for (String[] kv : new String[][]{
+                { "tauBondMean",    "bond-force moment  (N.m)" },
+                { "tauOtherMean",   "any other determ.  (N.m)" },
+                { "tauDetPerBound", "tau per bound head (N.m)" },
+                { "rdTauPos",       "positive-torque population (N.m)" },
+                { "rdTauNeg",       "negative-torque population (N.m)" },
+                { "rdBound",        "mean occupancy N_b" },
+                { "glide",          "gliding velocity (µm/s)" } }) {
+            double[] ev = ConvBudget.msn(atpEven(uM, kv[0], durS, mir));
+            double[] od = ConvBudget.msn(atpOdd (uM, kv[0], durS, mir));
+            System.out.printf(Locale.US, "    %-34s even %+13.6e   odd %+13.6e%n", kv[1], ev[0], od[0]);
+        }
+        System.out.println("\n  ---- accumulated angle over the measured window (rad, even) ----");
+        System.out.printf(Locale.US, "    Phi_drive %+.6e  Phi_Brown %+.6e  Phi_geom %+.6e  Phi_total %+.6e%n",
+                ConvBudget.msn(atpEven(uM,"phiDrive",durS,mir))[0], ConvBudget.msn(atpEven(uM,"phiBrown",durS,mir))[0],
+                ConvBudget.msn(atpEven(uM,"phiGeom", durS,mir))[0], ConvBudget.msn(atpEven(uM,"phiTotal",durS,mir))[0]);
+
+        System.out.println("\n  ---- STATIONARITY: non-overlapping blocks (quarters of each arm's measured window) ----");
+        System.out.printf(Locale.US, "    %-22s %14s %14s %14s %14s%n", "", "Q1", "Q2", "Q3", "Q4");
+        double[][] tq = new double[4][], oq = new double[4][];
+        for (int k = 0; k < 4; k++) { tq[k] = atpOdd(uM, "tauB"+k, durS, mir); oq[k] = atpOdd(uM, "omB"+k, durS, mir); }
+        System.out.printf(Locale.US, "    %-22s %+14.6e %+14.6e %+14.6e %+14.6e%n", "tau_odd per block",
+                ConvBudget.msn(tq[0])[0], ConvBudget.msn(tq[1])[0], ConvBudget.msn(tq[2])[0], ConvBudget.msn(tq[3])[0]);
+        System.out.printf(Locale.US, "    %-22s %+14.4f %+14.4f %+14.4f %+14.4f%n", "Om_drive_odd per block",
+                ConvBudget.msn(oq[0])[0], ConvBudget.msn(oq[1])[0], ConvBudget.msn(oq[2])[0], ConvBudget.msn(oq[3])[0]);
+        // halves = disjoint block pairs (never nested prefixes)
+        double[] h1 = new double[SEEDS], h2 = new double[SEEDS], ho1 = new double[SEEDS], ho2 = new double[SEEDS];
+        for (int i = 0; i < SEEDS; i++) {
+            h1[i]  = 0.5*(tq[0][i] + tq[1][i]); h2[i]  = 0.5*(tq[2][i] + tq[3][i]);
+            ho1[i] = 0.5*(oq[0][i] + oq[1][i]); ho2[i] = 0.5*(oq[2][i] + oq[3][i]);
+        }
+        rigidRow("tau_odd  first half",  h1);
+        rigidRow("tau_odd  second half", h2);
+        rigidRow("Om_drive_odd 1st half", ho1);
+        rigidRow("Om_drive_odd 2nd half", ho2);
+
+        System.out.println("\n  ---- per-seed detail (matched pairs; signs must agree for a Q1 verdict) ----");
+        System.out.printf(Locale.US, "    %6s %16s %16s %14s %14s%n", "seed", "tau_det(+eps)", "tau_det(-eps)", "tau_odd", "Om_drive_odd");
+        for (int i = 0; i < SEEDS; i++) {
+            double[] p = atpRead(atpId(uM, +1, SEED+i, durS, mir)), m = atpRead(atpId(uM, -1, SEED+i, durS, mir));
+            if (p == null || m == null) { System.out.printf("    %6d   (missing)%n", SEED+i); continue; }
+            int kt = ATPK("tauDet"), ko = ATPK("omDrive");
+            System.out.printf(Locale.US, "    %6d %+16.6e %+16.6e %+14.6e %+14.4f%n", SEED+i,
+                    p[kt], m[kt], 0.5*(p[kt]-m[kt]), 0.5*(p[ko]-m[ko]));
+        }
+        System.out.println("\n  NOTE: tau_odd/Om_drive_odd are the DETERMINISTIC motor channel. The sampled rigid-body");
+        System.out.println("        Brownian roll increment is reported separately (Om_Brown) and is NOT a motor torque.");
+    }
+    /** One matched-pair estimator row: seed mean, SEM, |mean|/SEM, and the seed sign-agreement fraction. */
+    static void rigidRow(String name, double[] v) {
+        double[] ms = ConvBudget.msn(v);
+        System.out.printf(Locale.US, "    %-24s %+14.6e ± %12.6e   |m|/SEM %6.2f   seed-sign %3.0f%%   [",
+                name, ms[0], ms[1], ConvBudget.sigma(ms), 100*ConvBudget.signFrac(v));
+        for (int i = 0; i < v.length; i++) System.out.printf(Locale.US, "%s%+.4e", i > 0 ? ", " : "", v[i]);
+        System.out.println("]");
+    }
+
     static void reportAtpMap(double durS) { reportAtpMap(durS, ATP_MIRROR); }
     static void reportAtpMap(double durS, double mirror) {
         System.out.println("\n  ================= LOW-[ATP] LADDER — ONE GLIDING ASSAY =================");

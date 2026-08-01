@@ -611,6 +611,22 @@ public final class ChiralSiteSystem {
              + bondData.get(d + 11) * filUVec.get(2 * nSeg + s);
     }
     /**
+     * Axial component of the bond's segment-side torque projected onto a CALLER-SUPPLIED axis (N·m).
+     *
+     * <p>Identical arithmetic to {@link #axialTorque}, except that the projection axis is passed in rather than
+     * read from the filament's CURRENT {@code uVec}. That distinction is load-bearing for the rigid-roll
+     * torque-component check: the integrator projects {@code torqueSum} with the material frame as it stood
+     * BEFORE the step's orientation update, so a component reconstruction that reads the post-update axis is
+     * comparing two different projections and leaves a systematic O(dt·|T_perp|) residual. Bond moments and
+     * {@code torqueSum} must be projected on the SAME axis or the sum does not close.
+     */
+    static double axialTorqueOnAxis(FloatArray bondData, IntArray boundSeg, int m,
+                                    double ax, double ay, double az) {
+        if (boundSeg.get(m) < 0) return 0.0;
+        int d = m * STRIDE;
+        return bondData.get(d + 9) * ax + bondData.get(d + 10) * ay + bondData.get(d + 11) * az;
+    }
+    /**
      * Tangential (circumferential) component of the bond's segment-side FORCE, expressed in the local material
      * frame AT THE ATTACHMENT azimuth (N). This is the frame in which the axial torque identity
      * {@code tau_axial = Ractin * F_tangential} is exact, because {@code Ractin*nHat} at that azimuth IS the

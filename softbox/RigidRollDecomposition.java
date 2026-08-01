@@ -58,6 +58,19 @@ public final class RigidRollDecomposition {
     public double tauDetSum;
     /** Component decomposition of the deterministic axial torque (N.m, summed over steps). */
     public double tauBondSum, tauOtherSum;
+    /** Signed per-head axial-torque populations (N.m, summed over steps): heads driving +roll and -roll. */
+    public double tauPosSum, tauNegSum;
+    /** Bound-head count summed over steps (divide by nSteps for mean occupancy over the decomposed window). */
+    public double boundSum;
+
+    // ---- non-overlapping block statistics (for stationarity / independent-replicate reporting) ----
+    /** One entry per completed block: {nSteps, tauDetSum, phiDrive, phiBrown, phiTotal, boundSum}. */
+    public final java.util.List<double[]> blocks = new java.util.ArrayList<>();
+    private int blockSteps = 0;                  // 0 ⇒ blocking disabled
+    private long blkN; private double blkTau, blkDrive, blkBrown, blkTotal, blkBound;
+
+    /** Enable non-overlapping blocks of {@code n} steps each. Must be set before the first accumulate. */
+    public void setBlockSteps(int n) { blockSteps = Math.max(0, n); }
     /** Body-frame closure diagnostics: dPhiBody vs dPhiDrive + dPhiBrown. */
     public double maxBodyResid, sumSqBodyResid, accBodyResid, sumAbsUpdate;
     public long nSteps;
@@ -104,8 +117,29 @@ public final class RigidRollDecomposition {
         tauDetSum += tauDet;
         if (!Double.isNaN(tauBond)) { tauBondSum += tauBond; tauOtherSum += tauDet - tauBond; }
         nSteps++;
+
+        if (blockSteps > 0) {
+            blkN++; blkTau += tauDet; blkDrive += dDrive; blkBrown += dBrown; blkTotal += dPhiTotal;
+            if (blkN >= blockSteps) {
+                blocks.add(new double[]{ blkN, blkTau, blkDrive, blkBrown, blkTotal, blkBound });
+                blkN = 0; blkTau = blkDrive = blkBrown = blkTotal = blkBound = 0;
+            }
+        }
     }
 
+    /** Record this step's bound-head count (occupancy), for window and per-block means. */
+    public void addBound(int nBound) { boundSum += nBound; if (blockSteps > 0) blkBound += nBound; }
+
+    /** Mean bound-head occupancy over the decomposed window. */
+    public double meanBound()   { return nSteps > 0 ? boundSum   / nSteps : 0; }
+    /** Mean deterministic axial torque PER BOUND HEAD (N.m), the intensive form of tau_det. */
+    public double tauPerBound() { return boundSum > 0 ? tauDetSum / boundSum : Double.NaN; }
+    public double meanTauPos()  { return nSteps > 0 ? tauPosSum  / nSteps : 0; }
+    public double meanTauNeg()  { return nSteps > 0 ? tauNegSum  / nSteps : 0; }
+    /** Mean deterministic axial torque over block {@code i} (N.m). */
+    public double blockTau(int i)   { double[] b = blocks.get(i); return b[1] / b[0]; }
+    /** Motor-driven angular drift over block {@code i} (rad/s). */
+    public double blockOmega(int i) { double[] b = blocks.get(i); return b[2] / (b[0] * dt); }
     public double meanTauDet()  { return nSteps > 0 ? tauDetSum  / nSteps : 0; }
     public double meanTauBond() { return nSteps > 0 ? tauBondSum / nSteps : 0; }
     public double meanTauOther(){ return nSteps > 0 ? tauOtherSum/ nSteps : 0; }
