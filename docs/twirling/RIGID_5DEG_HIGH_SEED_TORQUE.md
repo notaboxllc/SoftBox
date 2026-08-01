@@ -346,3 +346,46 @@ Both skews give a pitch far tighter than the ~0.47 µm myosin-II comparator — 
 That gap narrows in the direction of lower skew, but 5° is still an order of magnitude off. This is a
 **post-hoc descriptive comparison, not a target**, and it is a cross-model statement besides; it is recorded
 because it is the obvious next question, not because this campaign addressed it.
+
+---
+
+## 8. Completion statement
+
+**The full authorized decision tree was completed.** Terminal state **C**: the ±15° anchor passed (A15), the
+±5° stage reached 12 matched seeds and received a final classification (**L5-PRESENT**), the optional
+13–16-seed extension was not justified and was not run, and all reports are complete.
+
+No stage was skipped and no stopping condition was invoked. Specifically: the 15° borderline extension
+(seeds 105–108) did not fire because |m|/SEM = 2.32 ≥ 2 with all four leave-one-out means stable; the 5°
+early-success rule was evaluated at n = 8 and n = 10 and failed on both occasions; the campaign therefore ran
+to the designed n = 12.
+
+**Budget.** 30 arms newly run against a hard maximum of 44; **11.33 h** GPU wall against a 20 h cap; arm
+duration never silently changed (every production arm is 100 ms). **Health:** `invalid = solverFail =
+rateCapWarns = ruptureEvents = 0` across all 32 production arms at both skews; no Xid and no NVRM message in
+the kernel log for the entire campaign; external crash recorder healthy throughout (pid 1988, session
+`20260728T071146Z`); every arm launched through `run_gpu_monitored.sh` as the outermost wrapper.
+
+The single `hs_err_pid3350710.log` is from a deliberate `SIGTERM` when two-process concurrency was reverted —
+the documented §5b teardown signature of killing a JVM blocked mid-`execute()` (shutdown hook reached
+`SHUTDOWN_HOOK_COMPLETED`), **not** a device fault. That arm left no partial record and was re-run.
+
+**Nothing outside this worktree was modified.** No flexible-filament record was created, changed, moved or
+deleted; `BoA-v1ref` untouched; the torsional-ratchet branch and its records untouched; no motor physics,
+chemistry, binding, mobility, thermostat or skew geometry was changed at any point. The only code change in
+the entire campaign is `atpCsv` — derived-artifact naming and atomic rename, which no simulation arm executes.
+
+### 8.1 Recorded for whoever continues
+
+1. **Test the stationarity finding (§6.2).** The decay of τ_odd across the measured window at 5°, absent at
+   15°, is the single highest-value open question — it decides whether the resolved torque is a steady-state
+   property or a relaxation transient, and it bears directly on the standing 25 % equilibration convention.
+   It needs *longer arms at high seed count*, i.e. both levers at once, which no stage of this campaign was
+   authorized to run.
+2. **Do not quote a pitch from raw Ω.** Raw per-arm roll is Brownian-dominated (D_roll = 1278 rad²/s ⇒ ±185
+   rad/s of pure thermal wander over a 75 ms window). Only the matched-pair odd projection is meaningful.
+3. **Do not evaluate this estimator below n = 8.** The convergence trace (§5) passed through 5.30σ and 1.13σ
+   on its way to 2.96σ.
+4. **A mirror control at 5° has not been run.** The native sign is inherited from the standing campaign's
+   15° mirror control. A rigid-model mirror control at 5° would close the chirality argument directly rather
+   than by inheritance.
