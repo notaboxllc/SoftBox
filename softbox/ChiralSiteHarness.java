@@ -5968,13 +5968,28 @@ public final class ChiralSiteHarness {
         }
     }
 
-    /** Tidy per-record CSV for the analysis/plot layer. */
+    /** Tidy per-record CSV for the analysis/plot layer.
+     *  DERIVED ARTIFACT ONLY — regenerable from the .tsv records, never a scientific record itself.
+     *  Two hygiene properties, both required once matched-seed arms are scheduled CONCURRENTLY (one process per
+     *  seed) and once two skew magnitudes share a duration:
+     *    (a) the rigid namespace tags thermostat / |eps| / density exactly as atpId() does, so a 15 deg CSV
+     *        cannot alias onto a 5 deg one. The flexible path keeps its historical name byte-for-byte.
+     *    (b) write-to-temp + atomic rename, so a concurrent reader/writer can never observe a torn file.
+     *  Concurrent writers still race last-writer-wins on the same path, so the campaign regenerates the
+     *  authoritative CSV with one final full-ensemble reuse pass. */
     static void atpCsv(double durS, double mirror) {
         try {
             java.io.File dir = new java.io.File(ATP_DIR); dir.mkdirs();
-            java.io.File out = new java.io.File(dir, String.format(Locale.US, "records_d%08d_%s.csv",
-                    Math.round(durS*1e6), mirror < 0 ? "mirror" : "native"));
-            try (java.io.PrintWriter w = new java.io.PrintWriter(out)) {
+            String base = FIL_SEGS == 1
+                    ? String.format(Locale.US, "records_rigid_th%s_e%04d_r%06.1f_d%08d_%s",
+                            TwoBodyConverterMotor.FIL_THERMOSTAT_FDT ? "fdt" : "leg",
+                            (int) Math.round(Math.abs(ATP_EPS_DEG) * 10), DENSITY,
+                            Math.round(durS * 1e6), mirror < 0 ? "mirror" : "native")
+                    : String.format(Locale.US, "records_d%08d_%s",
+                            Math.round(durS * 1e6), mirror < 0 ? "mirror" : "native");
+            java.io.File out = new java.io.File(dir, base + ".csv");
+            java.io.File tmp = new java.io.File(dir, base + ".csv.tmp");
+            try (java.io.PrintWriter w = new java.io.PrintWriter(tmp)) {
                 w.print("atpUM,epsSign,seed,mirror");
                 for (String k : atpKeys()) w.print("," + k);
                 w.println();
@@ -5988,6 +6003,7 @@ public final class ChiralSiteHarness {
                             w.println();
                         }
             }
+            if (!tmp.renameTo(out)) throw new java.io.IOException("could not finalise " + out);
             System.out.println("\n  tidy CSV written: " + out.getPath());
         } catch (Exception e) { System.out.println("  (CSV write failed: " + e + ")"); }
     }
