@@ -87,10 +87,34 @@ public final class ChiralSiteSystem {
     //  [13] mirrorSign   +1 | −1 (diagnostic: reverses the site tangential direction ⇒ site chirality)
     //  [14] captureUm    3D site-capture radius (µm); a fresh bind with no site inside it is released
     //  [15] searchHalf   site-search half width (number of sites either side of the perpendicular foot)
+    //  [25] phaseGlobal  1 ⇒ FILAMENT-GLOBAL site azimuth (see the SITE AZIMUTH CONVENTION note below)
+    // ---------------------------------------------------------------------------------------------------
+    //
+    // SITE AZIMUTH CONVENTION (two, explicitly selectable; report:
+    // docs/attachment/SPARSE_LONG_PITCH_ACTIN_SITE_LATTICE.md §4).
+    //
+    //   SEGMENT-RELATIVE (phaseGlobal = 0, the LEGACY convention, every campaign through 2026-08-11):
+    //       phi(k) = twistRate * (localArc - halfSegLength)
+    //   The helical phase is referenced to each SEGMENT'S OWN CENTRE. Since the twist accumulated over one
+    //   segment (65 monomers x -166.5 deg = -10822.5 deg = -22.5 deg mod 360) is NOT a whole turn, this
+    //   inserts a CONSTANT +22.5 deg azimuth DISCONTINUITY at every segment boundary: the lattice is one
+    //   continuous sparse sequence in axial position and site INDEX, but its azimuth restarts each segment.
+    //
+    //   FILAMENT-GLOBAL (phaseGlobal = 1, the corrected convention):
+    //       phi(k) = k * (twistRate * rise)       wrapped to (-2pi, 2pi)
+    //   The phase is a function of the FILAMENT-GLOBAL site index alone, so successive sites advance by
+    //   exactly the native twist evaluated `rise/monomerRise` monomers later and the helix runs unbroken
+    //   through every segment boundary. For `every4` this is 4 x (-166.5 deg) = -666 deg = +54 deg per site.
+    //   The wrap keeps the stored `bindAzim` (a float) in a small range; cos/sin are unaffected by it.
+    //
+    // Both branches are exact for a single-segment (rigid) filament up to one global constant, which is why
+    // the rigid twirl diagnostics are insensitive to the choice. The flexible 12-segment campaign is not.
     // ---------------------------------------------------------------------------------------------------
 
     /** Stable acos, PTX-safe (reuses the validated device form). */
     static double cacos(double x) { return TwoBodyBeamAnalyticGpu.dacos(x); }
+    /** reinterpret-free |x| (Math.abs uses doubleToRawLongBits, which does not lower on PTX). */
+    static double dabs(double x) { return x < 0 ? -x : x; }
 
     // ===================================================================================================
     // §25 — PROGRESS-RAMPED CONVERTER SKEW: the calibrated theta normalization (ONE source of truth)
@@ -191,6 +215,7 @@ public final class ChiralSiteSystem {
         double rise = chiP.get(1), twistRate = chiP.get(2), stairPhase = chiP.get(3), Ract = chiP.get(4);
         double epsBind = chiP.get(5), mirror = chiP.get(13), capture = chiP.get(14);
         int halfSearch = (int) chiP.get(15);
+        double phaseGlobal = chiP.get(25), stepPhase = (stairPhase != 0.0) ? stairPhase : (twistRate * rise);
         for (@Parallel int m = 0; m < N; m++) {
             int bs = boundSeg.get(m), pb = prevBound.get(m);
             int jb = 0;
@@ -214,7 +239,9 @@ public final class ChiralSiteSystem {
                     if (k < 0) continue;
                     double la = k * rise - cum;
                     if (la < 0.0 || la > 2.0 * halfLen) continue;                 // site not on THIS segment
-                    double ph = (stairPhase != 0.0) ? (k * stairPhase) : (twistRate * (la - halfLen));
+                    double ph;
+                    if (phaseGlobal != 0.0) { double tw = k * stepPhase; ph = tw - 6.283185307179586 * (double) ((long) (tw / 6.283185307179586)); }
+                    else ph = (stairPhase != 0.0) ? (k * stairPhase) : (twistRate * (la - halfLen));
                     double cph = Math.cos(ph), sph = Math.sin(ph);
                     double nx = cph * yx + sph * zx, ny = cph * yy + sph * zy, nz = cph * yz + sph * zz;
                     double aOff = la - halfLen;
@@ -601,8 +628,224 @@ public final class ChiralSiteSystem {
     }
 
     // ===================================================================================================
+    // SITE-AWARE CAPTURE (noncanonical, flag-gated, DEFAULT-OFF).
+    // Report: docs/attachment/SPARSE_LONG_PITCH_ACTIN_SITE_LATTICE.md
+    //
+    // REPLACES the legacy two-step Path-B capture
+    //     matBindExplicit (8 gates vs the CLAMPED CENTRELINE point)  ->  siteSnap (snap to the nearest site)
+    // with a single site-first decision
+    //     enumerate real discrete helical SURFACE sites  ->  gate each against the ACTUAL site  ->  bind one.
+    //
+    // WHY THIS MATTERS (the measured motivation, not a guess). In the legacy gate the F8 preload term is
+    //     preload_pN = kF8Code * conDist * 1e12 = conDist_nm     (kF8 = 1 pN/nm)
+    // and it is tested against preloadPn = 2 pN, where conDist is the distance from the head's F8 point to the
+    // filament AXIS. The gate therefore required the head to reach within 2 nm of the CENTRELINE of a filament
+    // whose radius is 3.5 nm — i.e. INTO the actin interior, where every azimuth is equidistant. That is why
+    // legacy attachment events were azimuthally uniform. Measuring the same quantity against the real site
+    // makes both distance gates mean what their names say: the head-to-actin-SURFACE separation and the F8
+    // bond extension at capture.
+    //
+    // Split into TWO kernels purely to respect TornadoVM's 15-argument task() cap:
+    //   siteGateA   — actin-side: nearest segment, site enumeration, accessibility, g0/g4/g6/g7 -> candidate
+    //   siteCommitB — motor-side: g1/g2/g3/g5 on the motor pose, then commit + bind bookkeeping
+    // Both are ordinary @Parallel kernels over motors and run on BOTH runners from the same source.
+    //
+    // sbP layout (DoubleArray, 24): [0..12] the legacy bindP verbatim, [13..15] eup,
+    //   [16] rise [17] twistRate [18] stairPhase [19] Ractin [20] epsBind [21] mirror [22] searchHalf [23] accTol
+    //   [24] kF8Code — the F8 stiffness. It is SCENE-UNIFORM in this model (build3core assigns the same
+    //   kF8pN to every motor); packExMat ASSERTS that before packing, so the scalar can never silently
+    //   diverge from the per-motor params[5N+m] the mechanics use.
+    // ===================================================================================================
+
+    /**
+     * SITE-AWARE CAPTURE, actin-side pass. For every eligible detached head: pick the nearest segment by the
+     * EXISTING clamped-closest-point ownership rule, enumerate the {@code searchHalf} discrete lattice sites
+     * either side of the head's perpendicular foot, and keep the NEAREST site (3-D, to the head's F8 anchor)
+     * that passes the actin-side gates. The winner criterion is {@code siteSnap}'s own — nearest real site —
+     * so no new selection law is introduced; it is simply applied BEFORE acceptance instead of after.
+     *
+     * <p>Enumeration order is ascending global site index {@code k}; ties are resolved by strict-less, i.e.
+     * the lowest {@code k} wins — deterministic and identical on both runners.
+     *
+     * <p>Gates evaluated here, all against the ACTUAL site:
+     * <ul>
+     *   <li><b>g8 ACCESSIBILITY (new)</b>: {@code nSite·(xF8 − xSite) > −accTol}. The head must approach the
+     *       site from OUTSIDE the filament rather than through its interior. Sign verified against the built
+     *       scene (a head on the axis returns exactly {@code −Ractin}). {@code accTol} is machine-scale
+     *       (1e-9 µm = 1e-3 nm) and exists only so a head lying exactly on the site is not rejected.</li>
+     *   <li><b>g0 distance</b>: {@code |xF8 − xSite| < dBindNm} — the legacy threshold (3 nm) unchanged, now
+     *       measured to the real site instead of to an idealized cylinder surface.</li>
+     *   <li><b>g4 preload</b>: {@code kF8·|xF8 − xSite| < preloadPn} — the legacy threshold (2 pN) unchanged,
+     *       now the real F8 bond extension at capture instead of the distance to the axis.</li>
+     *   <li><b>g6 head side</b>: unchanged, verbatim from the legacy gate.</li>
+     *   <li><b>g7 in-segment arc</b>: unchanged in form, evaluated at the SITE's axial coordinate.</li>
+     * </ul>
+     * Writes {@code candInt[m]} = segment (−1 none), {@code candInt[N+m]} = global site index,
+     * {@code candArc[m]} = the site's local arc, {@code candAzim[m]} = the site azimuth (+ mirror·epsBind).
+     */
+    public static void siteGateA(IntArray active, IntArray noBind, IntArray boundSeg, IntArray nuc,
+            DoubleArray outGeom, FloatArray filCoord, FloatArray filUVec, FloatArray filYVec,
+            FloatArray filSegLength, FloatArray segCumArc, DoubleArray sbP,
+            IntArray candInt, DoubleArray candArc, DoubleArray candAzim, IntArray counts) {
+        int N = counts.get(0), nSeg = counts.get(3);
+        double dBindNm = sbP.get(0), preloadPn = sbP.get(4), aSemiZ = sbP.get(8), margin = sbP.get(10);
+        double eupx = sbP.get(13), eupy = sbP.get(14), eupz = sbP.get(15);
+        double rise = sbP.get(16), twistRate = sbP.get(17), stairPhase = sbP.get(18), Ract = sbP.get(19);
+        double epsBind = sbP.get(20), mirror = sbP.get(21);
+        int halfSearch = (int) sbP.get(22);
+        double accTol = sbP.get(23);
+        double phaseGlobal = sbP.get(25), stepPhase = (stairPhase != 0.0) ? stairPhase : (twistRate * rise);
+        double segTol = sbP.get(26);
+        for (@Parallel int m = 0; m < N; m++) {
+            candInt.set(m, -1); candInt.set(N + m, -1);
+            if (active.get(m) != 1 || noBind.get(m) == 1 || boundSeg.get(m) != -1 || nuc.get(m) != 2) continue;
+            double fx = outGeom.get(6 * N + m), fy = outGeom.get(7 * N + m), fz = outGeom.get(8 * N + m);   // xF8
+            double hx = outGeom.get(3 * N + m), hy = outGeom.get(4 * N + m), hz = outGeom.get(5 * N + m);   // xH
+            // --- nearest segment: the EXISTING clamped-closest-point ownership rule, unchanged ---
+            int best = -1; double bd = 1e9;
+            for (int s = 0; s < nSeg; s++) {
+                double half = 0.5 * filSegLength.get(s);
+                double cx = filCoord.get(s), cy = filCoord.get(nSeg + s), cz = filCoord.get(2 * nSeg + s);
+                double ux = filUVec.get(s), uy = filUVec.get(nSeg + s), uz = filUVec.get(2 * nSeg + s);
+                double dx = fx - cx, dy = fy - cy, dz = fz - cz;
+                double foot = dx * ux + dy * uy + dz * uz;
+                double footC = foot < -half ? -half : (foot > half ? half : foot);
+                double qx = dx - footC * ux, qy = dy - footC * uy, qz = dz - footC * uz;
+                double d2 = qx * qx + qy * qy + qz * qz;
+                if (d2 < bd) { bd = d2; best = s; }
+            }
+            if (best < 0) continue;
+            int s = best;
+            double half = 0.5 * filSegLength.get(s);
+            double cx = filCoord.get(s), cy = filCoord.get(nSeg + s), cz = filCoord.get(2 * nSeg + s);
+            double ux = filUVec.get(s), uy = filUVec.get(nSeg + s), uz = filUVec.get(2 * nSeg + s);
+            double yx = filYVec.get(s), yy = filYVec.get(nSeg + s), yz = filYVec.get(2 * nSeg + s);
+            double zx = uy * yz - uz * yy, zy = uz * yx - ux * yz, zz = ux * yy - uy * yx;
+            double zl = zx * zx + zy * zy + zz * zz;
+            if (zl > 1e-30) { double iz = 1.0 / Math.sqrt(zl); zx *= iz; zy *= iz; zz *= iz; }
+            // head-side gate g6 (verbatim from the legacy gate; actin enters only through the segment centre)
+            double headSide = ((hx - cx) * eupx + (hy - cy) * eupy + (hz - cz) * eupz) * 1e3;
+            if (!(headSide < aSemiZ * 1e3)) continue;
+            double dxx = fx - cx, dyy = fy - cy, dzz = fz - cz;
+            double foot = dxx * ux + dyy * uy + dzz * uz;
+            double footC = foot < -half ? -half : (foot > half ? half : foot);
+            double cum = segCumArc.get(s);
+            int k0 = (int) ((cum + footC + half) / rise + 0.5);
+            int bestK = -1; double bestD2 = 1e9, bestArc = 0, bestPhi = 0;
+            for (int j = -halfSearch; j <= halfSearch; j++) {
+                int k = k0 + j;
+                if (k < 0) continue;
+                double laRaw = k * rise - cum;                    // site arc from this segment's end1
+                double segL = 2.0 * half;
+                // SEGMENT MEMBERSHIP, float32-robust. `cum` and `segLength` are float32, so a site whose global
+                // arc lands EXACTLY on a segment junction (for the canonical 12x65-monomer filament that is every
+                // 65th site: 65 x 10.8 nm = 702.0 nm = 4 x 175.5 nm) rounds OUTSIDE both neighbours and the site
+                // VANISHES from the lattice. segTol (1e-5 µm = 0.01 nm, ~40x the float32 resolution at this
+                // filament length and 1e-3 of the site spacing) admits it, and the clamp places it exactly at the
+                // junction. Both neighbours may then offer the same k — which is harmless, because site IDENTITY
+                // is the filament-global index and the two reconstructions agree to float32.
+                if (laRaw < -segTol || laRaw > segL + segTol) continue;
+                double la = laRaw < 0.0 ? 0.0 : (laRaw > segL ? segL : laRaw);
+                // g7 in-segment arc. The canonical margin is machine-epsilon, whose ownership role (half-open
+                // arc ownership) is already served here by the global site index; it is applied only when a
+                // LARGER legacy margin is configured.
+                if (margin > segTol && !(la > margin && la < segL - margin)) continue;
+                double ph;
+                if (phaseGlobal != 0.0) { double tw = k * stepPhase; ph = tw - 6.283185307179586 * (double) ((long) (tw / 6.283185307179586)); }
+                else ph = (stairPhase != 0.0) ? (k * stairPhase) : (twistRate * (la - half));
+                double cph = Math.cos(ph), sph = Math.sin(ph);
+                double nx = cph * yx + sph * zx, ny = cph * yy + sph * zy, nz = cph * yz + sph * zz;
+                double aOff = la - half;
+                double px = cx + aOff * ux + Ract * nx, py = cy + aOff * uy + Ract * ny, pz = cz + aOff * uz + Ract * nz;
+                double vx = fx - px, vy = fy - py, vz = fz - pz;
+                double aApp = vx * nx + vy * ny + vz * nz;        // g8 ACCESSIBILITY: outside-approach only
+                if (!(aApp > -accTol)) continue;
+                double d2 = vx * vx + vy * vy + vz * vz;
+                double d = Math.sqrt(d2);
+                if (!(d * 1e3 < dBindNm)) continue;               // g0, to the ACTUAL site
+                if (!(sbP.get(24) * d * 1e12 < preloadPn)) continue;   // g4, real F8 bond extension
+                if (d2 < bestD2) { bestD2 = d2; bestK = k; bestArc = la; bestPhi = ph; }
+            }
+            if (bestK < 0) continue;
+            candInt.set(m, s); candInt.set(N + m, bestK);
+            candArc.set(m, bestArc);
+            candAzim.set(m, bestPhi + mirror * epsBind);
+        }
+    }
+
+    /**
+     * SITE-AWARE CAPTURE, motor-side pass. Applies the UNCHANGED motor-pose gates g1/g2/g3/g5 (which never
+     * referenced actin geometry) to the candidate chosen by {@link #siteGateA}, then commits the bond and
+     * performs the {@code siteSnap} bind bookkeeping ({@code prevBound}/{@code justBound}) that the downstream
+     * occupancy resolve consumes. {@code params}: the per-motor planar array (kF8 at 5N, kconv 6N, kbind 7N).
+     */
+    public static void siteCommitB(IntArray boundSeg, IntArray nuc, DoubleArray q, DoubleArray params,
+            DoubleArray sbP, IntArray candInt, DoubleArray candArc, DoubleArray candAzim,
+            FloatArray bindArc, FloatArray bindAzim, IntArray bindSite,
+            IntArray prevBound, IntArray justBound, IntArray counts) {
+        int N = counts.get(0);
+        double psiDeg = sbP.get(1), phiDeg = sbP.get(2), thetaDeg = sbP.get(3), energyKt = sbP.get(5);
+        double PHI_PRE = sbP.get(7), kT = sbP.get(9);
+        int orientOn = (int) sbP.get(11);
+        double DEG = 180.0 / Math.PI;
+        for (@Parallel int m = 0; m < N; m++) {
+            int bs = boundSeg.get(m);
+            int jb = 0;
+            if (bs < 0 && candInt.get(m) >= 0) {
+                double phi = q.get(m), psi = q.get(N + m), thetaS = q.get(2 * N + m), psiActin = q.get(3 * N + m);
+                double psiErr = dabs(psi - psiActin) * DEG, phiErr = dabs(phi - PHI_PRE) * DEG;
+                double thetaErr = dabs((psi - phi) - thetaS) * DEG;
+                double kconv = params.get(6 * N + m), kbind = params.get(7 * N + m);
+                double dth = (psi - phi) - thetaS, dpa = psi - psiActin;
+                double eKt = (0.5 * kconv * dth * dth + 0.5 * kbind * dpa * dpa) / kT;
+                boolean g1 = orientOn == 0 || psiErr < psiDeg;
+                boolean g2 = orientOn == 0 || phiErr < phiDeg;
+                boolean g3 = orientOn == 0 || thetaErr < thetaDeg;
+                boolean g5 = orientOn == 0 || eKt < energyKt;
+                if (g1 && g2 && g3 && g5) {
+                    bs = candInt.get(m);
+                    boundSeg.set(m, bs);
+                    bindArc.set(m, (float) candArc.get(m));
+                    bindAzim.set(m, (float) candAzim.get(m));
+                    bindSite.set(m, candInt.get(N + m));
+                    jb = 1;
+                }
+            }
+            if (bs < 0) bindSite.set(m, -1);
+            justBound.set(m, jb);
+            prevBound.set(m, bs);
+        }
+    }
+
+    // ===================================================================================================
     // HOST-SIDE ANALYSIS HELPERS (not device kernels)
     // ===================================================================================================
+
+    /**
+     * HOST TWIN of the site-azimuth expression inlined in {@link #siteSnap} and {@link #siteGateA}.
+     *
+     * <p>The two kernels inline this arithmetic rather than calling it (TornadoVM device-side call limits), so
+     * the three copies must be kept identical; the {@code -site-geometry} fixture gates that the azimuth this
+     * function returns equals the {@code bindAzim} a real capture latches, to the last bit. Used ONLY for the
+     * geometry table, the figures and the fixtures — it is never part of the mechanical path.
+     *
+     * @param k           filament-global site index
+     * @param localArc    the site's arc from its owning segment's end1 (µm)
+     * @param halfSeg     half that segment's length (µm)
+     * @param twistRate   signed native helical rate (rad/µm)
+     * @param stairPhase  idealized staircase advance per site (rad); 0 ⇒ use the native twist
+     * @param rise        axial site spacing (µm)
+     * @param phaseGlobal 1 ⇒ filament-global convention, 0 ⇒ legacy segment-relative
+     */
+    public static double sitePhaseHost(int k, double localArc, double halfSeg, double twistRate,
+                                       double stairPhase, double rise, double phaseGlobal) {
+        if (phaseGlobal != 0.0) {
+            double stepPhase = (stairPhase != 0.0) ? stairPhase : (twistRate * rise);
+            double tw = k * stepPhase;
+            return tw - 6.283185307179586 * (double) ((long) (tw / 6.283185307179586));
+        }
+        return (stairPhase != 0.0) ? (k * stairPhase) : (twistRate * (localArc - halfSeg));
+    }
     /** Axial (roll-driving) component of the bond's segment-side torque for motor m: TS·uSeg (N·m). */
     static double axialTorque(FloatArray bondData, FloatArray filUVec, IntArray boundSeg, int m, int nSeg) {
         int s = boundSeg.get(m); if (s < 0) return 0.0;
@@ -629,5 +872,61 @@ public final class ChiralSiteSystem {
         double tx = mirror * (uy * nz - uz * ny), ty = mirror * (uz * nx - ux * nz), tz = mirror * (ux * ny - uy * nx);
         int d = m * STRIDE;
         return bondData.get(d + 6) * tx + bondData.get(d + 7) * ty + bondData.get(d + 8) * tz;
+    }
+
+    /**
+     * ACCESSIBILITY TELEMETRY (read-only; adds no physics). Reconstructs, for BOUND motor {@code m}, the
+     * geometry needed to classify which side of the filament its attachment site sits on. Uses EXACTLY the
+     * reconstruction {@link CrossBridgeSystem#bondForcesSurface} and {@link #tangentialForce} use, so the
+     * reported normal IS the bond's own moment-arm direction — nothing is re-derived independently.
+     *
+     * <p>Frame (all from live simulated material data; {@code eup} is the assay substrate normal the existing
+     * g6 gate already uses, not a new axis):
+     * <pre>
+     *   nHat = cos(bindAzim)*segY + sin(bindAzim)*segZ      outward radial material normal at the attachment
+     *   pHat = normalize(eup - (eup·u) u)                   "away from the lawn", projected ⊥ the filament axis
+     *   qHat = u × pHat
+     *   beta = atan2(nHat·qHat, nHat·pHat)                  0 = points away from lawn (FAR), ±pi = toward it (NEAR)
+     *   aApp = nHat·(xF8 - xSite)                           head's approach side of the site's tangent plane
+     * </pre>
+     *
+     * @param out filled with {@code {cosBeta, beta, aApp_nm, rollPhase, nDotEupRaw}}; {@code aApp_nm} is
+     *            {@code NaN} when {@code outGeom} is not live. {@code rollPhase} is the same signed angle for
+     *            the segment's own material {@code yVec}, i.e. the filament roll phase in the same frame.
+     * @return false (and {@code out} untouched) if the motor is unbound or the frame is degenerate.
+     */
+    static boolean accessMetrics(FloatArray filCoord, FloatArray filUVec, FloatArray filYVec, FloatArray filSegLength,
+                                 FloatArray bindArc, FloatArray bindAzim, IntArray boundSeg,
+                                 DoubleArray outGeom, boolean geomLive, int N, int m, int nSeg,
+                                 double Ractin, double eupX, double eupY, double eupZ, double[] out) {
+        int s = boundSeg.get(m); if (s < 0) return false;
+        double ux = filUVec.get(s), uy = filUVec.get(nSeg + s), uz = filUVec.get(2 * nSeg + s);
+        double yx = filYVec.get(s), yy = filYVec.get(nSeg + s), yz = filYVec.get(2 * nSeg + s);
+        double zx = uy * yz - uz * yy, zy = uz * yx - ux * yz, zz = ux * yy - uy * yx;
+        double zl = Math.sqrt(zx * zx + zy * zy + zz * zz); if (zl < 1e-30) return false;
+        zx /= zl; zy /= zl; zz /= zl;
+        double ph = bindAzim.get(m), c = Math.cos(ph), sn = Math.sin(ph);
+        double nx = c * yx + sn * zx, ny = c * yy + sn * zy, nz = c * yz + sn * zz;
+        // pHat = the away-from-lawn direction with the axial component removed
+        double du = eupX * ux + eupY * uy + eupZ * uz;
+        double px = eupX - du * ux, py = eupY - du * uy, pz = eupZ - du * uz;
+        double pl = Math.sqrt(px * px + py * py + pz * pz); if (pl < 1e-12) return false;
+        px /= pl; py /= pl; pz /= pl;
+        double qx = uy * pz - uz * py, qy = uz * px - ux * pz, qz = ux * py - uy * px;
+        double cosB = nx * px + ny * py + nz * pz;
+        out[0] = cosB;
+        out[1] = Math.atan2(nx * qx + ny * qy + nz * qz, cosB);
+        out[2] = Double.NaN;
+        if (geomLive) {
+            double aOff = bindArc.get(m) - 0.5 * filSegLength.get(s);
+            double sx = filCoord.get(s) + aOff * ux + Ractin * nx;
+            double sy = filCoord.get(nSeg + s) + aOff * uy + Ractin * ny;
+            double sz = filCoord.get(2 * nSeg + s) + aOff * uz + Ractin * nz;
+            double fx = outGeom.get(6 * N + m), fy = outGeom.get(7 * N + m), fz = outGeom.get(8 * N + m);
+            out[2] = ((fx - sx) * nx + (fy - sy) * ny + (fz - sz) * nz) * 1e3;   // nm
+        }
+        out[3] = Math.atan2(yx * qx + yy * qy + yz * qz, yx * px + yy * py + yz * pz);
+        out[4] = nx * eupX + ny * eupY + nz * eupZ;
+        return true;
     }
 }

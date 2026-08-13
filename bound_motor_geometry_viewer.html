@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SoftBox — bound-motor helical geometry audit</title>
+<style>
+  html,body { margin:0; height:100%; background:#0a0d12; color:#dfe6f0;
+              font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow:hidden; }
+  #view { position:absolute; inset:0; }
+  #panel { position:absolute; top:0; left:0; width:310px; max-height:100%; overflow-y:auto;
+           background:rgba(10,14,20,.90); border-right:1px solid #223; padding:10px 12px; box-sizing:border-box; }
+  #panel h1 { font-size:13px; margin:0 0 8px; color:#8fd; letter-spacing:.04em; }
+  #panel h2 { font-size:11px; margin:12px 0 4px; color:#7a8aa0; text-transform:uppercase; letter-spacing:.08em;
+              border-top:1px solid #1d2733; padding-top:8px; }
+  select,button { background:#141a24; color:#dfe6f0; border:1px solid #2a3646; border-radius:3px;
+                  padding:3px 6px; font:inherit; }
+  button { cursor:pointer; }  button:hover { background:#1d2733; }
+  label { display:block; cursor:pointer; user-select:none; }
+  label input { vertical-align:-1px; margin-right:5px; }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+  #meta { font-size:11px; color:#9fb0c4; }
+  #meta b { color:#dfe6f0; font-weight:600; }
+  table { border-collapse:collapse; font-size:10.5px; width:100%; }
+  td,th { padding:1px 3px; text-align:right; } th { color:#7a8aa0; font-weight:600; }
+  td.l,th.l { text-align:left; }
+  #hint { position:absolute; bottom:8px; left:322px; font-size:11px; color:#5f6f84; }
+  #err { color:#f97; }
+</style>
+</head>
+<body>
+<div id="view"></div>
+<div id="boot" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;
+     color:#9fb0c4;background:rgba(10,14,20,.92);border:1px solid #2a3646;border-radius:5px;padding:14px 18px;">
+  loading three.js…
+</div>
+<script>
+  // If the ES-module below never boots (blocked CDN / offline / CSP), the page would otherwise sit blank and
+  // read as a hang. Say so explicitly instead.
+  window.__bvBooted = false;
+  setTimeout(function () {
+    if (window.__bvBooted) return;
+    document.getElementById('boot').innerHTML =
+      '<b style="color:#f97">three.js did not load.</b><br><br>' +
+      'This page imports three@0.168.0 from jsdelivr, exactly as <code>sim_viewer_boa.html</code> does.<br>' +
+      'Check the browser console for a blocked request, and confirm the machine can reach:<br>' +
+      '<code>https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.js</code><br><br>' +
+      'Also confirm you opened this page <b>through sim_server.py</b> (http://localhost:8000/SoftBox/…),<br>' +
+      'not as a <code>file://</code> URL — module imports and fetch() are blocked on file://.';
+  }, 8000);
+</script>
+<div id="panel">
+  <h1>BOUND-MOTOR HELICAL GEOMETRY AUDIT</h1>
+  <select id="scene" style="width:100%"></select>
+  <div id="err"></div>
+
+  <h2>Show</h2>
+  <label><input type="checkbox" id="cActin" checked><span class="sw" style="background:#3a6ea8"></span>actin cylinder (R = 3.5 nm)</label>
+  <label><input type="checkbox" id="cSites" checked><span class="sw" style="background:#8b98a8"></span>effective sites (every4)</label>
+  <label><input type="checkbox" id="cLabels" checked><span class="sw" style="background:#c9d4e2"></span>site index labels k</label>
+  <label><input type="checkbox" id="cHeads" checked><span class="sw" style="background:#4aa3ff"></span>bound motor heads</label>
+  <label><input type="checkbox" id="cNorm" checked><span class="sw" style="background:#00e5d0"></span>n_site — local outward normal</label>
+  <label><input type="checkbox" id="cPerp" checked><span class="sw" style="background:#ff3fbf"></span>h_perp — head yVec (binding-face ref)</label>
+  <label><input type="checkbox" id="cEb" checked><span class="sw" style="background:#ffd23f"></span>eBind — head long axis (xF8 − xH)</label>
+  <label><input type="checkbox" id="cTan"><span class="sw" style="background:#8f7fff"></span>t_site — site tangential</label>
+  <label><input type="checkbox" id="cBond" checked><span class="sw" style="background:#ffffff"></span>F8 bond (xF8 → x_site)</label>
+  <label><input type="checkbox" id="cHelix" checked><span class="sw" style="background:#ffa040"></span>site-to-site helical track</label>
+
+  <h2>View</h2>
+  <button id="vObl">oblique</button>
+  <button id="vSide">side</button>
+  <button id="vEnd">end-on</button>
+  <button id="vFit">fit</button>
+
+  <h2>Configuration</h2>
+  <div id="meta"></div>
+
+  <h2>Bound heads</h2>
+  <div id="tbl"></div>
+</div>
+<div id="hint">drag = orbit · wheel = zoom · right-drag = pan · lengths in nm</div>
+
+<script type="importmap">
+{ "imports": {
+  "three":         "https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.168.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+window.__bvBooted = true;
+document.getElementById('boot').remove();
+
+// ---------------------------------------------------------------- scene catalogue
+const BASE = 'docs/attachment/figures/bound_motor_helical_visual_audit/scenes/';
+const SCENES = [
+  ['fixtureC_radial_ring', 'C — full ring, radial-approach head (12 sites)'],
+  ['fixtureA_contiguous',  'A — contiguous sites, reference-pose head'],
+  ['fixtureB_alternate',   'B — every-other site, reference-pose head'],
+  ['natural',              'natural short-run snapshot (real gliding run)'],
+];
+const sel = document.getElementById('scene');
+for (const [f, t] of SCENES) { const o = document.createElement('option'); o.value = f; o.textContent = t; sel.appendChild(o); }
+const qs = new URLSearchParams(location.search);
+if (qs.get('scene')) { const o = document.createElement('option'); o.value = qs.get('scene'); o.textContent = 'custom: ' + qs.get('scene'); sel.appendChild(o); sel.value = qs.get('scene'); }
+
+// ---------------------------------------------------------------- three.js boilerplate
+const NM = 1000;                                  // model units are um; render in nm
+const host = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+host.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a0d12);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.05, 40000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+scene.add(new THREE.AmbientLight(0xffffff, 0.62));
+const key = new THREE.DirectionalLight(0xffffff, 0.85); key.position.set(1, 1, 1); scene.add(key);
+const fill = new THREE.DirectionalLight(0x88aaff, 0.35); fill.position.set(-1, -0.6, -0.8); scene.add(fill);
+
+const G = { actin:new THREE.Group(), sites:new THREE.Group(), labels:new THREE.Group(), heads:new THREE.Group(),
+            norm:new THREE.Group(), perp:new THREE.Group(), eb:new THREE.Group(), tan:new THREE.Group(),
+            bond:new THREE.Group(), helix:new THREE.Group() };
+for (const g of Object.values(G)) scene.add(g);
+const TOGGLE = { cActin:'actin', cSites:'sites', cLabels:'labels', cHeads:'heads', cNorm:'norm',
+                 cPerp:'perp', cEb:'eb', cTan:'tan', cBond:'bond', cHelix:'helix' };
+for (const [id, g] of Object.entries(TOGGLE)) {
+  const el = document.getElementById(id);
+  el.addEventListener('change', () => { G[g].visible = el.checked; });
+  G[g].visible = el.checked;
+}
+
+function clear(g) { while (g.children.length) { const c = g.children.pop(); c.geometry?.dispose?.(); c.material?.dispose?.(); } }
+const V = a => new THREE.Vector3(a[0]*NM, a[1]*NM, a[2]*NM);
+
+function tube(a, b, r, color, opacity = 1) {
+  const d = new THREE.Vector3().subVectors(b, a), L = d.length();
+  if (L < 1e-9) return null;
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, L, 16, 1, true),
+      new THREE.MeshStandardMaterial({ color, transparent: opacity < 1, opacity, roughness:0.55,
+                                       side: THREE.DoubleSide }));
+  m.position.copy(a).addScaledVector(d, 0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d.clone().normalize());
+  return m;
+}
+function arrow(origin, dir, len, color) {
+  const a = new THREE.ArrowHelper(dir.clone().normalize(), origin, len, color, len*0.30, len*0.16);
+  a.line.material.linewidth = 2; return a;
+}
+function label(text, pos, color = '#c9d4e2', size = 46) {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 64;
+  const x = c.getContext('2d');
+  x.font = `bold ${size}px ui-monospace,monospace`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillStyle = color; x.fillText(text, 64, 32);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest:false, transparent:true }));
+  s.position.copy(pos); s.scale.set(9, 4.5, 1); return s;
+}
+
+let bbox = new THREE.Box3(), axisDir = new THREE.Vector3(1,0,0), centre = new THREE.Vector3();
+
+// ---------------------------------------------------------------- build a scene
+function build(D) {
+  for (const g of Object.values(G)) clear(g);
+  const R = D.radius * NM;
+
+  // --- actin: one translucent cylinder per segment
+  for (const s of D.filament) {
+    const a = V([s.x1, s.y1, s.z1]), b = V([s.x2, s.y2, s.z2]);
+    const m = tube(a, b, R, 0x3a6ea8, 0.20); if (m) G.actin.add(m);
+    const core = tube(a, b, R*0.055, 0x9fd2ff, 0.9); if (core) G.actin.add(core);   // centreline
+  }
+  const f0 = D.filament[0], fN = D.filament[D.filament.length-1];
+  axisDir = V([fN.x2, fN.y2, fN.z2]).sub(V([f0.x1, f0.y1, f0.z1])).normalize();
+
+  // --- effective sites + helical track
+  const occ = [];
+  let prev = null;
+  for (const s of D.sites) {
+    const p = V([s.x, s.y, s.z]);
+    const g = new THREE.Mesh(new THREE.SphereGeometry(s.occ ? 1.15 : 0.75, 18, 14),
+        new THREE.MeshStandardMaterial({ color: s.occ ? 0xffa040 : 0x8b98a8,
+                                         emissive: s.occ ? 0x552200 : 0x000000, roughness:0.4 }));
+    g.position.copy(p); G.sites.add(g);
+    G.labels.add(label(String(s.k), p.clone().addScaledVector(V([s.nx, s.ny, s.nz]).normalize(), 3.4),
+                       s.occ ? '#ffc98a' : '#8fa0b4'));
+    if (prev) { const t = tube(prev, p, 0.22, 0xffa040, 0.85); if (t) G.helix.add(t); }
+    prev = p;
+    if (s.occ) occ.push(s);
+  }
+
+  // --- bound heads and their vectors
+  for (const h of D.heads) {
+    const xs = V(h.site), xf = V(h.F8), xh = V(h.H);
+    const n = V(h.n).normalize(), hp = V(h.hp).normalize(), eb = V(h.eb).normalize(), tv = V(h.t).normalize();
+    const headR = 3.5;
+    const s = new THREE.Mesh(new THREE.SphereGeometry(headR, 22, 16),
+        new THREE.MeshStandardMaterial({ color:0x4aa3ff, transparent:true, opacity:0.42, roughness:0.35 }));
+    s.position.copy(xh); G.heads.add(s);
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.9, 14, 10),
+        new THREE.MeshStandardMaterial({ color:0xffffff })); cap.position.copy(xf); G.heads.add(cap);
+    G.norm.add(arrow(xs, n, 7.0, 0x00e5d0));
+    G.perp.add(arrow(xh, hp, 7.0, 0xff3fbf));
+    G.eb.add(arrow(xh, eb, xf.distanceTo(xh) || 3.8, 0xffd23f));
+    G.tan.add(arrow(xs, tv, 5.0, 0x8f7fff));
+    const b = tube(xf, xs, 0.30, 0xffffff, 0.95); if (b) G.bond.add(b);
+  }
+
+  bbox = new THREE.Box3().setFromObject(scene);
+  centre = bbox.getCenter(new THREE.Vector3());
+  fit();
+
+  // --- panel text
+  const M = D.meta;
+  document.getElementById('meta').innerHTML =
+    `<b>${D.title}</b><br>lattice <b>${M.lattice}</b>, phase <b>${M.phase}</b><br>` +
+    `rise <b>${M.rise_nm.toFixed(3)} nm</b> · Δazimuth <b>+${M.dAzim_deg.toFixed(3)}°</b> · pitch <b>${M.pitch_nm.toFixed(2)} nm</b><br>` +
+    `R_actin <b>${M.Ractin_nm.toFixed(2)} nm</b> · sites shown <b>${M.nSites}</b> · bound heads <b>${M.nHeads}</b><br>` +
+    `capture <b>${M.bindPath}</b><br>registry k <b>${M.regK.toExponential(2)}</b> · head-roll DOF <b>${M.headRoll}</b><br>` +
+    `F9/F10 head alignment <b>${M.f9f10}</b>`;
+
+  let t = '<table><tr><th class="l">k</th><th>azim°</th><th>∠(n,h⊥)</th><th>Δphase°</th><th>bond nm</th></tr>';
+  for (const h of D.heads)
+    t += `<tr><td class="l">${h.k}</td><td>${h.phaseSite.toFixed(1)}</td><td>${h.angNHp.toFixed(1)}</td>` +
+         `<td>${h.dPhase.toFixed(1)}</td><td>${h.bondNm.toFixed(2)}</td></tr>`;
+  t += '</table>';
+  document.getElementById('tbl').innerHTML = t;
+}
+
+// ---------------------------------------------------------------- camera presets
+function radius() { const s = bbox.getSize(new THREE.Vector3()); return Math.max(s.x, s.y, s.z, 20) * 0.5; }
+function place(dir, up) {
+  const d = radius() / Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 1.55;
+  camera.up.copy(up);
+  camera.position.copy(centre).addScaledVector(dir.clone().normalize(), d);
+  controls.target.copy(centre); controls.update();
+}
+function fit()  { place(new THREE.Vector3(0.55, -0.72, 0.42), new THREE.Vector3(0,0,1)); }
+function side() { const p = new THREE.Vector3(0,0,1).cross(axisDir).normalize();
+                  place(p.lengthSq() < 1e-6 ? new THREE.Vector3(0,1,0) : p, new THREE.Vector3(0,0,1)); }
+function endOn(){ place(axisDir.clone().negate(), new THREE.Vector3(0,0,1)); }
+document.getElementById('vObl').onclick  = fit;
+document.getElementById('vSide').onclick = side;
+document.getElementById('vEnd').onclick  = endOn;
+document.getElementById('vFit').onclick  = fit;
+
+// ---------------------------------------------------------------- load / resize / loop
+async function load() {
+  const url = BASE + 'scene_' + sel.value + '.json';
+  const err = document.getElementById('err'); err.textContent = '';
+  try {
+    const r = await fetch(url, { cache:'no-store' });
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    build(await r.json());
+  } catch (ex) {
+    err.textContent = 'could not load ' + url + ' — ' + ex.message;
+  }
+}
+sel.onchange = load;
+function resize() {
+  const w = host.clientWidth, h = host.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+(function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+load();
+</script>
+</body>
+</html>

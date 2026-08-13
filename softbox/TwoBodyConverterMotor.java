@@ -4428,6 +4428,8 @@ public final class TwoBodyConverterMotor {
         double dt,kF8Code,kconvCode,kbindCode,lb,gammaPhi,gammaPsi;
         double[] bhat,phat,eup,econv,uvecPhys,rF8,rConv;
         double[] phi,psi,thetaS,psiActin; double[][] A,C_,xH_,xF8_; boolean[] noBind,active;
+        /** S2->lever terminal-joint rest angles, one per motor (negative or null ⇒ the legacy zero-moment pin). */
+        double[] leverRest0;
         double matXlo,matXhi,matYlo,matYhi,density; long candAcc,candSteps;
         // 4D-ii: per-motor SITE (ideal head position ax,ay) + cull mode (0=legacy AABB / 1=per-segment union / 2=brute)
         double[] siteX,siteY; int cullMode=0; double queryR=G4_QUERYR; boolean fullViewer=false;
@@ -4529,6 +4531,23 @@ public final class TwoBodyConverterMotor {
     // ownership past a joint ⇒ bindArc>segLength), NOT a myosin-affinity/rate change. LEGACY_OWNERSHIP=true restores
     // the deprecated pre-rollout behaviour (first-min + `half+0.02` overlap + the 50 nm `margin`) for REGRESSION ONLY.
     static boolean LEGACY_OWNERSHIP = Boolean.getBoolean("softbox.legacyOwnership");
+
+    // ------------------------------------------------------------------ F8 GENERALIZED-FORCE AXIS (repaired)
+    /**
+     * The axis about which the (purely TRANSLATIONAL) F8 spring is projected onto the converter coordinates
+     * phi/psi. The explicit-S2 geometry is {@code uB = R_econv(phi)*eup} and {@code xF8 - C = R_econv(psi)*d0},
+     * so the exact Jacobian columns are {@code econv x (C-P)} and {@code econv x (xF8-C)}. From the introduction
+     * of the explicit-S2 model (1b227c0) until 2026-08-12 these two solvers projected about {@code eup} instead,
+     * which is ORTHOGONAL to the true Jacobian whenever the converter geometry is planar — so an in-plane bond
+     * force fed exactly ZERO generalized load into phi and psi. F8's stiffness and rest length are unchanged;
+     * only the chain rule is corrected. Set true ONLY to byte-reproduce a pre-repair run.
+     * Report: docs/motor/RESTORED_3D_HEAD_TILT_DOF.md, "F8 VIRTUAL-WORK AXIS REPAIR".
+     */
+    static boolean F8_AXIS_LEGACY = Boolean.getBoolean("softbox.legacyF8Axis");
+    /** The F8 generalized-force rotation axis for a Cmot-path motor (econv unless the legacy toggle is set). */
+    static double[] f8Axis(Cmot cm) { return F8_AXIS_LEGACY ? cm.eup : cm.econv; }
+    /** The F8 generalized-force rotation axis for a mat-path scene (econv unless the legacy toggle is set). */
+    static double[] f8Axis(Glide2D G) { return F8_AXIS_LEGACY ? G.eup : G.econv; }
     static final double BIND_EPS = 1e-6;            // machine-scale arc tolerance (µm)
     static final double LEGACY_MARGIN = 0.05;       // DEPRECATED 50 nm segment-end exclusion (regression only)
     /** The g7 in-segment arc margin: machine-ε (canonical) or the deprecated 50 nm (legacy). */
@@ -6395,7 +6414,7 @@ public final class TwoBodyConverterMotor {
     /** The coupled (3M+2) linearly-implicit pivot+beam+angle solve shared by stepS2 (bound, F8h from the bond) and
      *  s2SearchStep (unbound, F8h=0). Node DOF are WORLD coords (nodes 1..M); node M = pivot P. */
     static void s2Solve(Cmot cm,int t,int seed,boolean brownian,double[] F8h){
-        int M=cm.g4M, nF=3*M, n=nF+2; double[] E=cm.eup;
+        int M=cm.g4M, nF=3*M, n=nF+2; double[] E=f8Axis(cm);   // econv = the exact Jacobian axis (repaired)
         double[][] Msys=new double[n][n]; double[] F=new double[n];
         // --- beam: RHS internal force on free nodes 1..M (SI) + FULL numeric tangent K=−∂F/∂q (stretch AND bending
         //     implicit ⇒ each step is a Newton step toward the true force-equilibrium; the beam stays at its contour) ---
@@ -6781,9 +6800,68 @@ public final class TwoBodyConverterMotor {
         double h=1e-5; for(int j=0;j<=M;j++) for(int k=0;k<3;k++){ double sav=nd[j][k]; nd[j][k]=sav+h; double Ep=s2BendEnergyM(G,nd); nd[j][k]=sav-h; double Em=s2BendEnergyM(G,nd); nd[j][k]=sav; F[j][k]+= -((Ep-Em)/(2*h))*1e6; }
         for(int j=0;j<=M;j++){ double z=dot(nd[j],G.eup); if(z<G.g4floorZ){ double pen=(G.g4floorZ-z)*1e-6; double fk=G.g4kfloor*pen; for(int k=0;k<3;k++) F[j][k]+=fk*G.eup[k]; } }
         return F; }
+    /**
+     * S2 -> LEVER TERMINAL BEND JOINT — the scalar twin of the block in {@code matS2SolveStep} (identical maths;
+     * see that kernel for the derivation and the provenance). The lever P->C is the terminal orientation of the
+     * S2 chain, so the joint at the distal beam node carries a bending moment like every interior beam joint,
+     * with the beam's OWN kbend and an unstrained angle read off the as-built geometry. Without it the S2 ends at
+     * P as an exact zero-moment pin and the lever angle phi is completely unconstrained.
+     * {@code G.leverRest0 == null} or a negative entry ⇒ the legacy free hinge, byte-identical to before.
+     */
+    /**
+     * The S2->lever joint's UNSTRAINED angles, one per motor, from the AS-BUILT beam at the native lever angle
+     * {@code PHI_PRE_3E}. THE SINGLE SOURCE OF TRUTH: every runner (the scalar {@code s2SolveM} and the packed
+     * {@code matS2SolveStep} params row 17) reads THIS array, so the two can never disagree. Computing it here —
+     * at build, before any initial-condition scramble, perturbation or diagnostic scene modifier — is what makes
+     * it a genuine geometric constant of the model rather than an accident of the state the scene happens to be
+     * in when it is packed. Call again after a change to the built S2 geometry (e.g. a heterogeneous lawn).
+     */
+    static void computeLeverRest0(Glide2D G){
+        int M=G.g4M;
+        if(!ExplicitCompleteMatHarness.leverJointOn() || M<2){ G.leverRest0=null; return; }
+        G.leverRest0=new double[Math.max(1,G.N)];
+        double cc=Math.cos(PHI_PRE_3E), ss=Math.sin(PHI_PRE_3E);
+        double[] uB={G.eup[0]*cc+G.bhat[0]*ss, G.eup[1]*cc+G.bhat[1]*ss, G.eup[2]*cc+G.bhat[2]*ss};
+        for(int m=0;m<G.N;m++){ double[][] nd=G.g4Node[m];
+            double[] a=sub(nd[M],nd[M-1]); double la=Math.sqrt(dot(a,a));
+            G.leverRest0[m] = la>1e-12 ? Math.acos(Math.max(-1,Math.min(1,dot(a,uB)/la))) : -1.0; }
+    }
+
+    static void leverJoint(Glide2D G,int m,double[][] nd,double[] C,double[] P,double[][] Msys,double[] F,int iPhi,int M){
+        if(G.leverRest0==null || M<2) return;
+        double th0=G.leverRest0[m]; if(!(th0>=0)) return;
+        double[] a=sub(nd[M],nd[M-1]); double La=Math.sqrt(dot(a,a)); if(!(La>1e-12)) return;
+        double iL=1.0/La; double[] s={a[0]*iL,a[1]*iL,a[2]*iL};
+        double lb=G.lb, ilb=1.0/lb; double[] uB={(C[0]-P[0])*ilb,(C[1]-P[1])*ilb,(C[2]-P[2])*ilb};
+        double c=Math.max(-1,Math.min(1,dot(s,uB))); double th=Math.acos(c), sn=Math.sin(th);
+        if(!(sn>1e-6)) return;
+        double kb=G.g4kb, dth=th-th0, A1=dth/sn, A2=(1.0-dth*c/sn)/(sn*sn);
+        double[] g={(uB[0]-c*s[0])*iL,(uB[1]-c*s[1])*iL,(uB[2]-c*s[2])*iL};
+        double[] w=crs(G.econv,uB);                       // d uB / d phi
+        double cph=dot(s,w);
+        int rM=(M-1)*3, rMm=(M-2)*3;
+        for(int p=0;p<3;p++){ F[rM+p]+=kb*A1*1e6*g[p]; F[rMm+p]-=kb*A1*1e6*g[p]; }
+        F[iPhi]+=kb*A1*cph;
+        double iL2=iL*iL;
+        for(int p=0;p<3;p++){
+            for(int q=0;q<3;q++){
+                double id=(p==q)?1.0:0.0;
+                double Hc=(-(uB[p]*s[q]+s[p]*uB[q])+3.0*c*s[p]*s[q]-c*id)*iL2;
+                double kv=1e12*kb*(A2*g[p]*g[q]-A1*Hc);
+                Msys[rM+p][rM+q]+=kv;   Msys[rMm+p][rMm+q]+=kv;
+                Msys[rM+p][rMm+q]-=kv;  Msys[rMm+p][rM+q]-=kv;
+            }
+            double Hm=(w[p]-cph*s[p])*iL;
+            double km=1e6*kb*(A2*g[p]*cph-A1*Hm);
+            Msys[rM+p][iPhi]+=km;  Msys[iPhi][rM+p]+=km;
+            Msys[rMm+p][iPhi]-=km; Msys[iPhi][rMm+p]-=km;
+        }
+        Msys[iPhi][iPhi]+=kb*(A2*cph*cph+A1*c);
+    }
+
     /** Per-motor coupled (3M+2) implicit beam+angle solve for mat motor m (Brownian ON). bound ⇒ F8 load. */
     static void s2SolveM(Glide2D G,int m,int t,int seed,boolean bound){
-        int M=G.g4M, nF=3*M, n=nF+2; double[][] nd=G.g4Node[m]; double[] E=G.eup; int d=m*STRIDE;
+        int M=G.g4M, nF=3*M, n=nF+2; double[][] nd=G.g4Node[m]; double[] E=f8Axis(G); int d=m*STRIDE;   // econv (repaired)
         double[] F8h = bound? new double[]{G.bondData.get(d),G.bondData.get(d+1),G.bondData.get(d+2)} : new double[]{0,0,0};
         double[][] Msys=new double[n][n]; double[] F=new double[n];
         double[][] Fn=s2NodeForcesM(G,nd); for(int j=1;j<=M;j++) for(int k=0;k<3;k++) F[3*(j-1)+k]=Fn[j][k];
@@ -6809,6 +6887,7 @@ public final class TwoBodyConverterMotor {
         F[pB]+=F8h[0]; F[pB+1]+=F8h[1]; F[pB+2]+=F8h[2];
         F[iPhi]+=Qphi+kc*(th-G.thetaS[m])+brownTorque(G.gammaPhi,G.dt,seed,t,0x4841L+m*7919L);
         F[iPsi]+=Qpsi-kc*(th-G.thetaS[m])-kb*(G.psi[m]-G.psiActin[m])+brownTorque(G.gammaPsi,G.dt,seed,t,0x4842L+m*7919L);
+        leverJoint(G,m,nd,C,P,Msys,F,iPhi,M);      // S2 -> lever terminal bend joint (moment continuity)
         double[] dq=solveLin(Msys,F,n);
         for(int j=1;j<=M;j++){ int fb=j-1; for(int k=0;k<3;k++) nd[j][k]+=dq[3*fb+k]*1e6; }
         G.phi[m]+=dq[iPhi]; G.psi[m]+=dq[iPsi]; nd[0]=G.g4E[m].clone(); G.A[m]=nd[M]; geom2D(G,m);
@@ -6842,6 +6921,7 @@ public final class TwoBodyConverterMotor {
             double[][] nd=new double[M+1][]; for(int j=0;j<=M;j++){ double fr=(double)j/M; double[] p=add(Em,scl(sub(P,Em),fr)); nd[j]=add(p,scl(G.eup,sag*Math.sin(Math.PI*fr))); }
             nd[0]=Em.clone(); nd[M]=P.clone(); G.g4Node[m]=nd; }
         G.g4floorZ=zfl-0.05;
+        computeLeverRest0(G);
         return G;
     }
     static void stepGlideS2(Glide2D G,int t,int seed,Tol tol){

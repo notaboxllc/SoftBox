@@ -1225,7 +1225,7 @@ public final class VilfanTargetZoneHarness {
     static double[][] s2Replay(ExplicitCompleteMatHarness.ExMat e, Glide2D G, int t, int seed, int brownOn, int policy) {
         DoubleArray nodes = cpD(e.nodes), q = cpD(e.q), sys = cpD(e.sys), outGeom = cpD(e.outGeom);
         FloatArray fdf = cpF(G.mot.forceDotFil), fm = cpF(G.mot.forceMag);
-        IntArray matc = IntArray.fromElements(t, seed, brownOn, policy);
+        IntArray matc = IntArray.fromElements(t, seed, brownOn, policy, TwoBodyConverterMotor.F8_AXIS_LEGACY ? 0 : 1);
         TwoBodyBeamAnalyticGpu.matS2SolveStep(nodes, e.frame, q, G.bondData, G.mot.boundSeg, e.params, sys, outGeom, fdf, fm, matc, e.exCounts, e.convF);
         int N = e.N;
         double[][] out = new double[N][3];

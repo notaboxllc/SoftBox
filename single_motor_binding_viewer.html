@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SoftBox — single-motor fine-time binding movie</title>
+<style>
+  html,body { margin:0; height:100%; background:#080b10; color:#dfe6f0;
+              font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow:hidden; }
+  #view { position:absolute; inset:0; }
+  #panel { position:absolute; top:0; left:0; width:330px; max-height:100%; overflow-y:auto;
+           background:rgba(8,11,16,.92); border-right:1px solid #1d2733; padding:10px 12px; box-sizing:border-box; }
+  #panel h1 { font-size:13px; margin:0 0 8px; color:#8fd; letter-spacing:.04em; }
+  #panel h2 { font-size:11px; margin:12px 0 4px; color:#7a8aa0; text-transform:uppercase; letter-spacing:.08em;
+              border-top:1px solid #1d2733; padding-top:8px; }
+  select,button,input[type=number] { background:#141a24; color:#dfe6f0; border:1px solid #2a3646; border-radius:3px;
+                  padding:3px 6px; font:inherit; }
+  button { cursor:pointer; } button:hover { background:#1d2733; }
+  button.on { background:#1e3a2a; border-color:#3d7a56; }
+  label { display:block; cursor:pointer; user-select:none; font-size:12px; }
+  label input { vertical-align:-1px; margin-right:5px; }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+  table { border-collapse:collapse; font-size:11px; width:100%; }
+  td { padding:1px 3px; } td.k { color:#7a8aa0; } td.v { text-align:right; color:#dfe6f0; }
+  #transport { position:absolute; bottom:0; left:330px; right:0; background:rgba(8,11,16,.94);
+               border-top:1px solid #1d2733; padding:8px 12px; box-sizing:border-box; }
+  #slider { width:100%; }
+  #gate { font-size:11px; color:#f9c; margin-top:4px; min-height:15px; }
+  #err { color:#f97; }
+  .bnd { color:#7f7; } .det { color:#fc6; }
+</style>
+</head>
+<body>
+<div id="view"></div>
+<div id="boot" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;
+     color:#9fb0c4;background:rgba(10,14,20,.92);border:1px solid #2a3646;border-radius:5px;padding:14px 18px;">
+  loading three.js…
+</div>
+<div id="panel">
+  <h1>SINGLE-MOTOR FINE-TIME BINDING</h1>
+  <div id="meta">loading…</div>
+
+  <h2>motor</h2>
+  <select id="dataset">
+    <option value="repaired">REPAIRED — econv F8 axis + S2→lever joint</option>
+    <option value="prerepair">pre-repair — legacy eup axis, free hinge</option>
+  </select>
+
+  <h2>arm</h2>
+  <select id="arm">
+    <option value="off">A — control (no χ)</option>
+    <option value="on">B — 3-D head candidate (χ dynamic)</option>
+  </select>
+
+  <h2>camera</h2>
+  <button id="cSide">side</button>
+  <button id="cObl">oblique</button>
+  <button id="cAxis">filament-axis</button>
+
+  <h2>motor</h2>
+  <label><input type="checkbox" id="tS2" checked><span class="sw" style="background:#6ad"></span>S2 beam + anchor</label>
+  <label><input type="checkbox" id="tLev" checked><span class="sw" style="background:#fd6"></span>lever P→C (neck)</label>
+  <label><input type="checkbox" id="tHead" checked><span class="sw" style="background:#e85"></span>head body + F8</label>
+  <label><input type="checkbox" id="tPiv" checked><span class="sw" style="background:#fff"></span>pivot C</label>
+  <label><input type="checkbox" id="tEB" checked><span class="sw" style="background:#ff0"></span>eBind</label>
+  <label><input type="checkbox" id="tER" checked><span class="sw" style="background:#f80"></span>eBind_rest (live frame)</label>
+  <label><input type="checkbox" id="tNF"><span class="sw" style="background:#aaa"></span>neck frame n1/n2/n3</label>
+
+  <h2>actin</h2>
+  <label><input type="checkbox" id="tFil" checked><span class="sw" style="background:#456"></span>filament surface</label>
+  <label><input type="checkbox" id="tSites" checked><span class="sw" style="background:#889"></span>every4 sites</label>
+  <label><input type="checkbox" id="tCand" checked><span class="sw" style="background:#0cf"></span>candidate / bound site</label>
+  <label><input type="checkbox" id="tNS" checked><span class="sw" style="background:#0ff"></span>n_site</label>
+  <label><input type="checkbox" id="tBond" checked><span class="sw" style="background:#fff"></span>F8 bond</label>
+
+  <h2>trails (last <input type="number" id="trailN" value="120" min="10" max="400" step="10" style="width:56px">)</h2>
+  <label><input type="checkbox" id="tTF" checked><span class="sw" style="background:#e85"></span>xF8</label>
+  <label><input type="checkbox" id="tTH"><span class="sw" style="background:#8cf"></span>head centre</label>
+  <label><input type="checkbox" id="tTE"><span class="sw" style="background:#ff0"></span>eBind endpoint</label>
+
+  <h2>telemetry</h2>
+  <table id="tel"></table>
+  <div id="gate"></div>
+</div>
+
+<div id="transport">
+  <input type="range" id="slider" min="0" max="0" value="0">
+  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
+    <button id="bPrev">◀ step</button>
+    <button id="bPlay">▶ play</button>
+    <button id="bNext">step ▶</button>
+    <button id="bBind">⟲ jump to BINDING</button>
+    <span style="color:#7a8aa0">speed</span>
+    <select id="speed">
+      <option value="0.1">0.1×</option><option value="0.25">0.25×</option>
+      <option value="0.5">0.5×</option><option value="1" selected>1×</option>
+      <option value="2">2×</option><option value="4">4×</option>
+    </select>
+    <span id="clock" style="color:#9fb0c4"></span>
+  </div>
+</div>
+
+<script>
+  window.__booted = false;
+  setTimeout(function () {
+    if (!window.__booted) document.getElementById('boot').innerHTML =
+      '<b id="err">three.js did not load.</b><br><br>This page needs network access to<br>' +
+      '<code>https://cdn.jsdelivr.net/npm/three@0.168.0/</code><br><br>' +
+      'Serve it from ~/Code with <code>python3 SoftBox/sim_server.py 8000</code> and open it over http://.';
+  }, 6000);
+</script>
+<script type="importmap">
+{ "imports": {
+  "three":         "https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.168.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+window.__booted = true;
+document.getElementById('boot').style.display = 'none';
+
+const DIRS = {
+  repaired:  'RUN_LOGS/motor_audit/mechanics_repair/single_motor_movie',
+  prerepair: 'RUN_LOGS/motor_audit/restored_3d_head_tilt/single_motor_movie'
+};
+const dirNow = () => DIRS[document.getElementById('dataset').value];
+const S = 1000;                      // µm -> nm for display
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth, innerHeight);
+document.getElementById('view').appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x080b10);
+const camera = new THREE.PerspectiveCamera(42, innerWidth/innerHeight, 0.05, 20000);
+const controls = new OrbitControls(camera, renderer.domElement);
+scene.add(new THREE.AmbientLight(0xffffff, 0.72));
+const dl = new THREE.DirectionalLight(0xffffff, 0.85); dl.position.set(1,1.4,1); scene.add(dl);
+addEventListener('resize', () => { camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+// ---------------------------------------------------------------- helpers
+const V = a => new THREE.Vector3(a[0]*S, a[1]*S, a[2]*S);
+function tube(col, r) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 1, 12), new THREE.MeshLambertMaterial({ color: col }));
+  m.userData.r = r; scene.add(m); return m;
+}
+function setSeg(mesh, a, b) {
+  const d = new THREE.Vector3().subVectors(b, a), L = d.length();
+  if (L < 1e-9) { mesh.visible = false; return; }
+  mesh.scale.set(1, L, 1);
+  mesh.position.copy(a).addScaledVector(d, 0.5);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d.clone().normalize());
+}
+function ball(col, r) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), new THREE.MeshLambertMaterial({ color: col }));
+  scene.add(m); return m;
+}
+function line(col, n, w) {
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n*3), 3));
+  const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color: col, linewidth: w||1 })); scene.add(l); return l;
+}
+
+// persistent objects
+const gAct = new THREE.Group(); scene.add(gAct);
+const gSite = new THREE.Group(); scene.add(gSite);
+const s2 = []; for (let i = 0; i < 12; i++) s2.push(tube(0x66aadd, 0.55));
+const s2n = []; for (let i = 0; i < 13; i++) s2n.push(ball(0x88ccee, 0.75));
+const lever = tube(0xffdd66, 0.75);
+const headBody = tube(0xee8855, 2.3);          // the head as a capsule from xH toward xF8
+const headSph = ball(0xee8855, 4.6);           // the head sphere (R_head = 4.6 nm)
+const f8Dot = ball(0xffffff, 1.0);
+const pivC = ball(0xffffff, 1.2);
+const anchor = ball(0x6688aa, 1.6);
+const eB = tube(0xffff00, 0.5), eBt = ball(0xffff00, 1.1);
+const eR = tube(0xff8800, 0.35), eRt = ball(0xff8800, 0.9);
+const nf1 = tube(0xbbbbbb, 0.3), nf2 = tube(0x888888, 0.3), nf3 = tube(0x888888, 0.3);
+const bond = tube(0xffffff, 0.35);
+const candMk = ball(0x00ccff, 1.9);
+const nsArrow = tube(0x00ffff, 0.4);
+const trF8 = line(0xee8855, 400), trH = line(0x88ccff, 400), trE = line(0xffff00, 400);
+
+let scn = null, frames = null, idx = 0, playing = false, acc = 0, last = performance.now();
+
+async function load(arm) {
+  playing = false; document.getElementById('bPlay').textContent = '▶ play';
+  const [a, b] = await Promise.all([
+    fetch(`${dirNow()}/scene_${arm}.json`).then(r => r.json()),
+    fetch(`${dirNow()}/frames_${arm}.json`).then(r => r.json())
+  ]);
+  scn = a; frames = b.frames;
+  document.getElementById('slider').max = frames.length - 1;
+  document.getElementById('meta').innerHTML =
+    `<b style="color:${document.getElementById('dataset').value==='repaired'?'#2a9d8f':'#e76f51'}">` +
+    `${document.getElementById('dataset').value==='repaired'?'REPAIRED MOTOR':'PRE-REPAIR MOTOR'}</b><br>` +
+    `arm <b>${scn.arm}</b> · motor #${scn.motor} · dt <b>${(scn.dt*1e6).toFixed(2)} µs</b><br>` +
+    `<b>1 frame = 1 timestep</b> · ${frames.length} frames<br>` +
+    `binding at frame <b>${scn.bindFrame}</b> · site <b>k=${scn.boundSite}</b> seg ${scn.boundSeg}<br>` +
+    `lateral offset ${scn.lateralNm.toFixed(2)} nm · filament FROZEN (fixture)`;
+  buildStatic();
+  idx = Math.max(0, scn.bindFrame - 250); draw();
+  fitCamera('obl');
+}
+
+function buildStatic() {
+  gAct.clear(); gSite.clear();
+  for (const s of scn.filament) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(scn.Ractin*S, scn.Ractin*S, s.len*S, 20, 1, true),
+                             new THREE.MeshLambertMaterial({ color: 0x445566, transparent: true, opacity: 0.42, side: THREE.DoubleSide }));
+    const a = V(s.c), d = new THREE.Vector3(s.u[0], s.u[1], s.u[2]);
+    m.position.copy(a); m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d);
+    gAct.add(m);
+  }
+  for (const st of scn.sites) {
+    const isB = st.k === scn.boundSite;
+    const m = new THREE.Mesh(new THREE.SphereGeometry(isB ? 1.5 : 0.95, 14, 10),
+              new THREE.MeshLambertMaterial({ color: isB ? 0x33ff88 : 0x8899aa }));
+    m.position.copy(V(st.p)); gSite.add(m);
+    const n = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 3.2, 6),
+              new THREE.MeshLambertMaterial({ color: isB ? 0x33ff88 : 0x66788a }));
+    const p0 = V(st.p), p1 = p0.clone().addScaledVector(new THREE.Vector3(st.n[0], st.n[1], st.n[2]), 3.2);
+    setSeg(n, p0, p1); gSite.add(n);
+  }
+  anchor.position.copy(V(scn.anchor));
+}
+
+function fitCamera(kind) {
+  if (!frames) return;
+  const f = frames[scn.bindFrame], c = V(f.F);
+  const d = { side: [0, -170, 40], obl: [70, -130, 90], axis: [230, 0, 25] }[kind];
+  controls.target.copy(c);
+  camera.position.set(c.x + d[0], c.y + d[1], c.z + d[2]);
+  camera.up.set(0, 0, 1); controls.update();
+}
+
+function setTrail(l, on, key, n) {
+  l.visible = on; if (!on) return;
+  const pos = l.geometry.attributes.position.array;
+  const i0 = Math.max(0, idx - n);
+  let w = 0;
+  for (let i = i0; i <= idx; i++) {
+    const f = frames[i];
+    let p;
+    if (key === 'E') { const b = V(f.F); p = b.clone().addScaledVector(new THREE.Vector3(f.eB[0],f.eB[1],f.eB[2]), 12); }
+    else p = V(f[key]);
+    pos[w*3] = p.x; pos[w*3+1] = p.y; pos[w*3+2] = p.z; w++;
+  }
+  for (let i = w; i < 400; i++) { pos[i*3] = pos[(w-1)*3]; pos[i*3+1] = pos[(w-1)*3+1]; pos[i*3+2] = pos[(w-1)*3+2]; }
+  l.geometry.attributes.position.needsUpdate = true;
+}
+
+const $ = id => document.getElementById(id);
+function draw() {
+  if (!frames) return;
+  const f = frames[idx];
+  const nNodes = f.nd.length / 3;
+  const P = [];
+  for (let j = 0; j < nNodes; j++) P.push(new THREE.Vector3(f.nd[3*j]*S, f.nd[3*j+1]*S, f.nd[3*j+2]*S));
+  const showS2 = $('tS2').checked;
+  for (let i = 0; i < s2.length; i++) { const on = showS2 && i < nNodes-1; s2[i].visible = on; if (on) setSeg(s2[i], P[i], P[i+1]); }
+  for (let i = 0; i < s2n.length; i++) { const on = showS2 && i < nNodes; s2n[i].visible = on; if (on) s2n[i].position.copy(P[i]); }
+  anchor.visible = showS2;
+
+  const C = V(f.C), H = V(f.H), F = V(f.F);
+  lever.visible = $('tLev').checked; if (lever.visible) setSeg(lever, P[nNodes-1], C);
+  headBody.visible = $('tHead').checked; if (headBody.visible) setSeg(headBody, H, F);
+  headSph.visible = $('tHead').checked; headSph.position.copy(H);
+  headSph.material.opacity = 0.35; headSph.material.transparent = true;
+  f8Dot.visible = $('tHead').checked; f8Dot.position.copy(F);
+  pivC.visible = $('tPiv').checked; pivC.position.copy(C);
+
+  const eb = new THREE.Vector3(f.eB[0], f.eB[1], f.eB[2]);
+  eB.visible = eBt.visible = $('tEB').checked;
+  if (eB.visible) { const t = F.clone().addScaledVector(eb, 12); setSeg(eB, F, t); eBt.position.copy(t); }
+  const er = new THREE.Vector3(f.eR[0], f.eR[1], f.eR[2]);
+  const hasER = er.lengthSq() > 1e-6;
+  eR.visible = eRt.visible = $('tER').checked && hasER;
+  if (eR.visible) { const t = F.clone().addScaledVector(er, 10); setSeg(eR, F, t); eRt.position.copy(t); }
+  const nfOn = $('tNF').checked;
+  [[nf1, f.n1], [nf2, f.n2], [nf3, f.n3]].forEach(([m, v]) => {
+    m.visible = nfOn; if (nfOn) setSeg(m, C, C.clone().addScaledVector(new THREE.Vector3(v[0],v[1],v[2]), 8)); });
+
+  const hasSite = !!f.sp;
+  candMk.visible = $('tCand').checked && hasSite; if (hasSite) candMk.position.copy(V(f.sp));
+  candMk.material.color.setHex(f.b ? 0x33ff88 : 0x00ccff);
+  nsArrow.visible = $('tNS').checked && hasSite;
+  if (nsArrow.visible) { const p0 = V(f.sp); setSeg(nsArrow, p0, p0.clone().addScaledVector(new THREE.Vector3(f.sn[0],f.sn[1],f.sn[2]), 6)); }
+  bond.visible = $('tBond').checked && hasSite; if (bond.visible) setSeg(bond, F, V(f.sp));
+  bond.material.color.setHex(f.b ? 0xffffff : 0x445566);
+
+  gAct.visible = $('tFil').checked; gSite.visible = $('tSites').checked;
+  const n = parseInt($('trailN').value) || 120;
+  setTrail(trF8, $('tTF').checked, 'F', n); setTrail(trH, $('tTH').checked, 'H', n); setTrail(trE, $('tTE').checked, 'E', n);
+
+  $('slider').value = idx;
+  const rel = idx - scn.bindFrame;
+  $('clock').innerHTML = `frame ${idx} (<b>${rel >= 0 ? '+' : ''}${rel}</b> rel. binding) · t = ${(f.t*scn.dt*1e3).toFixed(5)} ms`;
+  const D = 180/Math.PI;
+  $('tel').innerHTML = [
+    ['state', f.b ? '<span class="bnd">BOUND</span>' : '<span class="det">detached</span>'],
+    ['nucleotide', ['NONE','ATP','ADP·Pi','ADP'][f.nuc] || f.nuc],
+    ['site ID', f.b ? f.site : (f.cand >= 0 ? f.cand + ' (nearest)' : '—')],
+    ['ψ', (f.psi*D).toFixed(2) + '°'],
+    ['χ', (f.chi*D).toFixed(2) + '°'],
+    ['φ', (f.phi*D).toFixed(2) + '°'],
+    ['θ = ψ−φ', (f.th*D).toFixed(2) + '°'],
+    ['∠(eBind, eBind_rest)', hasER ? f.aR.toFixed(2) + '°' : '—'],
+    ['∠(eBind, n_site)', isFinite(f.aS) ? f.aS.toFixed(2) + '°' : '—'],
+    ['F8→site', isFinite(f.d) ? f.d.toFixed(3) + ' nm' : '—'],
+    [f.b ? 'bond extension' : 'bond', f.b ? f.d.toFixed(3) + ' nm' : '—'],
+    ['S2 extension', f.s2.toFixed(3) + ' nm']
+  ].map(([k, v]) => `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join('');
+  $('gate').textContent = f.g;
+  renderer.render(scene, camera);
+}
+
+// ---------------------------------------------------------------- transport
+$('slider').oninput = e => { idx = +e.target.value; draw(); };
+$('bPrev').onclick = () => { idx = Math.max(0, idx-1); draw(); };
+$('bNext').onclick = () => { idx = Math.min(frames.length-1, idx+1); draw(); };
+$('bBind').onclick = () => { idx = scn.bindFrame; draw(); };
+$('bPlay').onclick = () => { playing = !playing; $('bPlay').textContent = playing ? '❚❚ pause' : '▶ play'; };
+$('arm').onchange = e => load(e.target.value);
+$('dataset').onchange = () => load($('arm').value);   // reload the same arm from the other motor
+$('cSide').onclick = () => fitCamera('side');
+$('cObl').onclick = () => fitCamera('obl');
+$('cAxis').onclick = () => fitCamera('axis');
+document.querySelectorAll('#panel input').forEach(i => i.addEventListener('change', draw));
+addEventListener('keydown', ev => {
+  if (ev.key === 'ArrowRight') { idx = Math.min(frames.length-1, idx+1); draw(); }
+  if (ev.key === 'ArrowLeft')  { idx = Math.max(0, idx-1); draw(); }
+  if (ev.key === ' ') { ev.preventDefault(); $('bPlay').click(); }
+});
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dtms = now - last; last = now;
+  if (playing && frames) {
+    acc += dtms * (+$('speed').value) / 33.3;      // 30 frames/s at 1x
+    while (acc >= 1) { acc -= 1; idx++; if (idx >= frames.length) { idx = frames.length-1; playing = false;
+      $('bPlay').textContent = '▶ play'; } }
+    draw();
+  } else renderer.render(scene, camera);
+}
+requestAnimationFrame(loop);
+load('off');
+</script>
+</body>
+</html>

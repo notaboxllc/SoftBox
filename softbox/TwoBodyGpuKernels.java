@@ -435,13 +435,14 @@ public final class TwoBodyGpuKernels {
                 if (brown != 0) Msys[3 * fb + k][n] += brownTorqueD(gNode, dt, seed, tt, 0x4711L + ((long) j * 131 + k) * 7919L);
             } }
             // F8 + converter/bind coupling on P=node M and φ,ψ.
-            // NB: s2Solve uses E = eup (NOT econv) as the generalized-force rotation axis — a genuine
-            // divergence from stepC/stepSup (which use econv). Faithful match ⇒ use eup=(ux,uy,uz) here.
+            // E = econv, the geometry's own rotation axis (uB = R_econv(phi)*eup, xF8-C = R_econv(psi)*d0).
+            // REPAIRED 2026-08-12 together with s2Solve, which had used eup here since the explicit-S2 model was
+            // introduced. See docs/motor/RESTORED_3D_HEAD_TILT_DOF.md, "F8 VIRTUAL-WORK AXIS REPAIR".
             int pB = 3 * (M - 1), iPhi = nF, iPsi = nF + 1;
             double cpx = Cx - Px, cpy = Cy - Py, cpz = Cz - Pz;
             double fcx = xF8x - Cx, fcy = xF8y - Cy, fcz = xF8z - Cz;
-            double Jphix = uy * cpz - uz * cpy, Jphiy = uz * cpx - ux * cpz, Jphiz = ux * cpy - uy * cpx;
-            double Jpsix = uy * fcz - uz * fcy, Jpsiy = uz * fcx - ux * fcz, Jpsiz = ux * fcy - uy * fcx;
+            double Jphix = ey * cpz - ez * cpy, Jphiy = ez * cpx - ex * cpz, Jphiz = ex * cpy - ey * cpx;
+            double Jpsix = ey * fcz - ez * fcy, Jpsiy = ez * fcx - ex * fcz, Jpsiz = ex * fcy - ey * fcx;
             double J03 = Jphix * 1e-6, J04 = Jpsix * 1e-6, J13 = Jphiy * 1e-6, J14 = Jpsiy * 1e-6, J23 = Jphiz * 1e-6, J24 = Jpsiz * 1e-6;
             double kfSI = kF8Code * 1e6;
             double[][] J = {{1, 0, 0, J03, J04}, {0, 1, 0, J13, J14}, {0, 0, 1, J23, J24}};
@@ -455,8 +456,8 @@ public final class TwoBodyGpuKernels {
             double th = psi - phi;
             double caF_x = cpy * f8z - cpz * f8y, caF_y = cpz * f8x - cpx * f8z, caF_z = cpx * f8y - cpy * f8x;
             double fcF_x = fcy * f8z - fcz * f8y, fcF_y = fcz * f8x - fcx * f8z, fcF_z = fcx * f8y - fcy * f8x;
-            double QphiF8 = (ux * caF_x + uy * caF_y + uz * caF_z) * 1e-6;   // E = eup (see note above)
-            double QpsiF8 = (ux * fcF_x + uy * fcF_y + uz * fcF_z) * 1e-6;
+            double QphiF8 = (ex * caF_x + ey * caF_y + ez * caF_z) * 1e-6;   // E = econv (see note above)
+            double QpsiF8 = (ex * fcF_x + ey * fcF_y + ez * fcF_z) * 1e-6;
             Msys[pB][n] += f8x; Msys[pB + 1][n] += f8y; Msys[pB + 2][n] += f8z;
             Msys[iPhi][n] += QphiF8 + kc * (th - thetaS);
             Msys[iPsi][n] += QpsiF8 - kc * (th - thetaS) - kb * (psi - psiActin);

@@ -55,7 +55,7 @@ final class ExplicitBeamSolver {
     //  Requires cm.C, cm.P, cm.xF8, cm.phi, cm.psi current (caller does A=node[M]; geomC — as stepS2 does).
     // =============================================================================================
     static void assemble(Cmot cm,int t,int seed,boolean brownian,double[] F8h,Mode mode,double[] Mout,double[] Fout){
-        int M=cm.g4M, nF=3*M, n=nF+2; double[] E=cm.eup;
+        int M=cm.g4M, nF=3*M, n=nF+2; double[] E=TwoBodyConverterMotor.f8Axis(cm);   // econv (repaired)
         java.util.Arrays.fill(Mout,0,n*n,0.0); java.util.Arrays.fill(Fout,0,n,0.0);
 
         // ---- residual RHS on free nodes 1..M ----
@@ -82,7 +82,7 @@ final class ExplicitBeamSolver {
         for(int j=1;j<=M;j++){ int fb=j-1; for(int k=0;k<3;k++){ Mout[(3*fb+k)*n+(3*fb+k)]+=aN;
             if(brownian) Fout[3*fb+k]+=TwoBodyConverterMotor.brownTorque(cm.g4gammaNode,cm.dt,seed,t,0x4711L+((long)j*131+k)*7919L); } }
 
-        // ---- F8 + converter/bind coupling (identical to s2Solve :6374-6392; E=eup axis) ----
+        // ---- F8 + converter/bind coupling (identical to s2Solve :6374-6392; E=econv, the exact axis) ----
         int pB=3*(M-1), iPhi=nF, iPsi=nF+1;
         double[] C=cm.C, xF8=cm.xF8;
         double[] Jphi=crs(E,sub(C,cm.P)), Jpsi=crs(E,sub(xF8,C));

@@ -425,6 +425,59 @@ public final class MatSoaSlice {
         for (@Parallel int s = 0; s < nSeg; s++) { int iz = 2 * nSeg + s; filForceSum.set(iz, filForceSum.get(iz) - kz * filCoord.get(iz)); }
     }
 
+    // ===============================================================================================
+    // KERNEL — matZSlab: HARD/STERIC z SLAB (noncanonical, flag-gated, DEFAULT-OFF). The REPLACEMENT for
+    // matZConfine's harmonic well when the filament is to have NO preferred interior height.
+    //
+    //   interior  : EXACTLY zero force — the accumulator is not touched at all (no `+= 0`), so an in-slab
+    //               filament is byte-identical to having no z term whatsoever.
+    //   walls     : one-sided, acting on the SEGMENT SURFACE, not the centre.
+    //
+    // Surface extent of a capped cylinder (centre c, axis u, half-length h, radius R): the exact z half-extent is
+    //     ext = h·|u_z| + R·sqrt(1 − u_z²)
+    // (max over the surface of t·u_z + r(cosθ·e1_z + sinθ·e2_z), |t|≤h, r≤R, with e1,e2 ⊥ u orthonormal, whose
+    // z-components satisfy e1_z² + e2_z² = 1 − u_z²). This is EXACT for a straight segment and therefore
+    // conservative for any tilt; chain bending is handled because every segment is tested independently.
+    //
+    // Wall law — the fracMove idiom already used by ContainmentSystem/v1 (NOT a new fitted stiffness): the force
+    // removes a fixed FRACTION of the penetration per step,
+    //     F = frac · pen · gammaPerp / (1e6 · dt)          [N;  pen in µm; gammaPerp in N·s/m]
+    // because the integrator advances z by 1e6·F·dt/gamma µm. It is therefore automatically dt- and
+    // viscosity-consistent (the single-source-dt rule), has no biological content, and its equivalent linear
+    // stiffness k_eff = frac·gamma/(1e6·dt) is reported by the harness in pN/nm.
+    //
+    // The reaction is a PURE z FORCE applied through the segment's force accumulator: no torque, no tangential
+    // component ⇒ a wall contact can inject neither tangential nor angular momentum, by construction.
+    //
+    //   zsP = [zLo(µm), zHi(µm), Ractin(µm), frac, dt(s)]   — zLo/zHi are the limits for the segment SURFACE.
+    //   filBTransGam: the rod drag tensor; index nSeg+s is the PERPENDICULAR component (the one that governs a
+    //   lab-z force on a near-horizontal filament, and the larger drag ⇒ never over-corrects).
+    // ===============================================================================================
+    public static void matZSlab(FloatArray filCoord, FloatArray filUVec, FloatArray filSegLength,
+                                FloatArray filBTransGam, FloatArray filForceSum, FloatArray zsP, IntArray counts) {
+        int nSeg = counts.get(3);
+        float zLo = zsP.get(0), zHi = zsP.get(1), Ract = zsP.get(2), frac = zsP.get(3), dt = zsP.get(4);
+        for (@Parallel int s = 0; s < nSeg; s++) {
+            int iz = 2 * nSeg + s;
+            float uz = filUVec.get(iz);
+            float half = 0.5f * filSegLength.get(s);
+            float perp2 = 1.0f - uz * uz; if (perp2 < 0.0f) perp2 = 0.0f;
+            float au = uz < 0.0f ? -uz : uz;
+            float ext = half * au + Ract * (float) Math.sqrt(perp2);
+            float zc = filCoord.get(iz);
+            float penLo = zLo - (zc - ext);          // >0 ⇒ the lowest surface point is below the lower wall
+            float penHi = (zc + ext) - zHi;          // >0 ⇒ the highest surface point is above the upper wall
+            if (penLo > 0.0f || penHi > 0.0f) {
+                float g = filBTransGam.get(nSeg + s);
+                float k = frac * g / (1.0e6f * dt);
+                float f = 0.0f;
+                if (penLo > 0.0f) f += k * penLo;
+                if (penHi > 0.0f) f -= k * penHi;
+                filForceSum.set(iz, filForceSum.get(iz) + f);
+            }
+        }
+    }
+
     // KERNEL — Stage 9: matReduce. Single-thread reduced measurements: [0]=nBound [1..3]=COM [4]=Σ forceDotFil [5]=nActive.
     public static void matReduce(IntArray boundSeg, IntArray active, FloatArray forceDotFil, FloatArray filCoord,
                                  IntArray counts, DoubleArray redOut) {
@@ -1867,5 +1920,36 @@ public final class MatSoaSlice {
         try { Process p = new ProcessBuilder("nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits").start();
             String out = new String(p.getInputStream().readAllBytes()).trim(); p.waitFor();
             return out.isEmpty() ? "?" : out.split("\\R")[0].trim(); } catch (Exception e) { return "?"; }
+    }
+
+    // ===============================================================================================
+    // KERNEL — BINDING-STATE GATE ON THE HEAD-ORIENTATION ANGULAR STIFFNESS (noncanonical, DEFAULT-OFF).
+    // Report: docs/motor/RESTORED_3D_HEAD_TILT_DOF.md §"WEAK DETACHED HEAD RESTORING ELASTICITY".
+    //
+    // The angular stiffness the solver applies to the head orientation coordinate lives in the PER-MOTOR
+    // slot params[7N+m] and is read by matS2SolveStep as `kbnd` (residual term -kbnd*(psi - psiActin) and
+    // Jacobian entry a44). Today it is the SAME strong value whether or not the head is attached, which
+    // pins the DETACHED searching head to SD(psi) = 3.2 deg (measured, §0).
+    //
+    // This kernel writes that per-motor slot from the motor's own binding state:
+    //     bound    -> kBind  (the historical 512 pN.nm/rad^2 actomyosin orientation stiffness, UNCHANGED)
+    //     detached -> kDet   (a weak INTERNAL neck-relative rest elasticity, a separate named parameter)
+    //
+    // FRAME NOTE (load-bearing): psi is measured about `econv` in the motor's OWN base triad, so
+    // psi = psiActin is already a NECK/CONVERTER-RELATIVE rest pose, not a laboratory one. It merely looks
+    // lab-fixed because every motor currently shares one base triad. Splitting the magnitude by binding
+    // state therefore needs no new frame machinery: the detached potential is internal by construction.
+    //
+    // DATA-ONLY: no solver edit, no buffer resize, no TaskGraph change (the applyS2Lawn / -eta precedent).
+    // Race-free: each motor writes only its own slot. Must run BEFORE matS2SolveStep in the step order.
+    // Never wired when the feature is off ⇒ byte-identical.
+    //   gateP: [0] kBind (N.m/rad^2)  [1] kDet (N.m/rad^2)
+    // ===============================================================================================
+    public static void matKbindGate(IntArray boundSeg, DoubleArray params, DoubleArray gateP, IntArray counts) {
+        int N = counts.get(0);
+        double kBind = gateP.get(0), kDet = gateP.get(1);
+        for (@Parallel int m = 0; m < N; m++) {
+            params.set(7 * N + m, boundSeg.get(m) >= 0 ? kBind : kDet);
+        }
     }
 }

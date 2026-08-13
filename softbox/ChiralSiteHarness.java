@@ -66,6 +66,19 @@ public final class ChiralSiteHarness {
     //
     // r == 1 ⇒ EXACT early-return no-op ⇒ eta = 0.1 reproduces the unflagged path BIT-IDENTICALLY.
     // ---------------------------------------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------------------------------------
+    // PATH-B SITE-ACCESSIBILITY TELEMETRY (noncanonical, DEFAULT-OFF, TRAJECTORY-INERT).
+    // Report: docs/attachment/PATH_B_SITE_ACCESSIBILITY_TELEMETRY.md
+    //
+    // Quantifies where on the filament circumference Path-B attachments actually land (lawn-facing / side /
+    // far side) and how much axial torque each class carries. It is a PURE HOST-SIDE REDUCTION over values the
+    // measurement loop already reads back every step (boundSeg, bindArc, bindAzim, filUVec, filYVec, filCoord,
+    // bondData, outGeom): NO kernel is added or changed, NO device task, NO buffer, NO transfer, NO RNG draw,
+    // NO branch the physics takes, NO ordering. Exactly the §STEP5/6 per-head-decomposition precedent.
+    // ACCESS_TELEM=false ⇒ nothing is allocated and no accumulation runs.
+    // ---------------------------------------------------------------------------------------------------------
+    static boolean ACCESS_TELEM = false;      // -access-telemetry
+
     static double  ETA = Constants.aeta;      // -eta <Pa·s>  (0.1 ⇒ no-op)
     static double[] ETA_MAP = { 0.10, 0.05, 0.02, 0.01 };   // -eta-map: the premise-test ladder (eta0 FIRST)
     // -eta-mirror ⇒ −1: run the SAME arms on a MIRRORED actin lattice. The chirality control the brief
@@ -162,6 +175,11 @@ public final class ChiralSiteHarness {
         boolean atpFix = false, atpPilot = false, atpMap = false, atpReport = false, atpMirrorRep = false, atpNull = false;
         boolean atpDensRep = false;
         boolean atpEquiv = false;
+        boolean accStatic = false, accInert = false, accAudit = false;
+        boolean zAudit = false, zFree = false, siteFix = false; String siteDump = null;
+        boolean siteGeom = false, latCmp = false, latCmpRep = false;
+        boolean zsm = false, zsmRep = false, zsmGates = false;
+        boolean boundViz = false, normalAudit = false;
         boolean convFix = false, convStage1 = false, convEquiv = false, convPilot = false, convCamp = false,
                 convCompare = false, convDt = false, convSweep = false, convControls = false,
                 convBudget = false, convGaugeCmp = false, gatedFix = false, gatedSweep = false, rampAudit = false, rampFix = false, rampScreen = false, powered = false, poweredReport = false, s2Fix = false, s2Map = false, s2DtCmp = false, studyB = false, studyBRep = false;
@@ -250,6 +268,50 @@ public final class ChiralSiteHarness {
                 case "-mech-mirror" -> MECH_MIRROR = -1.0;
                 case "-eta" -> ETA = Double.parseDouble(args[++i]);
                 case "-eta-fixed-dt" -> ETA_FIXED_DT = true;
+                case "-access-telemetry" -> ACCESS_TELEM = true;
+                case "-site-aware" -> ExplicitCompleteMatHarness.SITE_AWARE = args[++i].equals("on");
+                case "-site-fixtures" -> siteFix = true;
+                case "-site-dump" -> siteDump = args[++i];
+                // ---- SPARSE LONG-PITCH LATTICE (2026-08-12) ----
+                case "-site-lattice" -> PATH_B_SITE_MODE = latticeCode(args[++i]);
+                case "-site-phase" -> PATH_B_PHASE_GLOBAL = args[++i].equals("global");
+                case "-legacy-lattice" -> { PATH_B_SITE_MODE = 2; PATH_B_PHASE_GLOBAL = false; }
+                // ---- MECHANICS REPAIR escapes (2026-08-12): reproduce the pre-repair motor byte-for-byte ----
+                case "-legacy-f8axis" -> { ExplicitCompleteMatHarness.HEAD_TILT_AXIS_FIX = false;
+                                           TwoBodyConverterMotor.F8_AXIS_LEGACY = true; }
+                case "-legacy-freehinge" -> ExplicitCompleteMatHarness.LEVER_JOINT = false;
+                case "-legacy-mechanics" -> { ExplicitCompleteMatHarness.HEAD_TILT_AXIS_FIX = false;
+                                              TwoBodyConverterMotor.F8_AXIS_LEGACY = true;
+                                              ExplicitCompleteMatHarness.LEVER_JOINT = false; }
+                case "-site-geometry" -> siteGeom = true;
+                case "-equiv-segs" -> EQUIV_SEGS = Integer.parseInt(args[++i]);
+                case "-site-geometry-dir" -> SITE_GEOM_DIR = args[++i];
+                case "-lattice-compare" -> latCmp = true;
+                case "-lattice-mirror" -> { LAT_MIRROR = -1.0; latCmp = true; }
+                // ---- POWERED ZERO-SKEW NATIVE-vs-MIRROR CAMPAIGN ----
+                case "-zsm-campaign" -> zsm = true;
+                case "-zsm-report" -> zsmRep = true;
+                case "-zsm-gates" -> zsmGates = true;
+                case "-zsm-seed0" -> ZSM_SEED0 = Integer.parseInt(args[++i]);
+                case "-lattice-compare-report" -> latCmpRep = true;
+                // --- BOUND-MOTOR HELICAL GEOMETRY VISUAL AUDIT (read-only; no physics, no trajectory except §5) ---
+                case "-normal-audit" -> normalAudit = true;
+                case "-bound-viz" -> boundViz = true;
+                case "-bound-viz-dir" -> BV_DIR = args[++i];
+                case "-bound-viz-steps" -> BV_STEPS = Integer.parseInt(args[++i]);
+                case "-bound-viz-heads" -> BV_HEADS = Integer.parseInt(args[++i]);
+                // the whole candidate Path-B geometry in one switch (lattice + phase + capture + boundary)
+                case "-path-b-candidate" -> { PATH_B_SITE_MODE = 3; PATH_B_PHASE_GLOBAL = true;
+                                              ExplicitCompleteMatHarness.SITE_AWARE = true;
+                                              ExplicitCompleteMatHarness.Z_SLAB = true; }
+                case "-z-slab" -> ExplicitCompleteMatHarness.Z_SLAB = args[++i].equals("on");
+                case "-z-slab-lo-nm" -> ExplicitCompleteMatHarness.Z_SLAB_LO_NM = Double.parseDouble(args[++i]);
+                case "-z-slab-hi-nm" -> ExplicitCompleteMatHarness.Z_SLAB_HI_NM = Double.parseDouble(args[++i]);
+                case "-z-audit" -> zAudit = true;
+                case "-z-free" -> zFree = true;
+                case "-access-static" -> accStatic = true;
+                case "-access-inert" -> accInert = true;
+                case "-access-audit" -> accAudit = true;
                 case "-eta-audit" -> etaAudit = true;
                 case "-eta-controls" -> etaControls = true;
                 case "-eta-map" -> etaMap = true;
@@ -301,10 +363,26 @@ public final class ChiralSiteHarness {
         boolean ok = true;
         boolean twirlMode = twirl || twirlAudit || twirlEquiv || twirlPilot || dtCheck;
         if (twirlMode) printTwirlConfigBlock();
-        if (jsDir != null) {
+        if (jsDir != null && !boundViz) {
             if (twirlMode) makeTwirlMovies(jsDir); else makeMovies(jsDir);
             TornadoCrashDiagnostic.normalMainReturn("mode=3js"); return; }
-        if (atpFix)          ok = runAtpFixtures();
+        if (jsDir != null) BV_JS = jsDir;
+        if (normalAudit)     ok = runNormalAudit();
+        else if (boundViz)   ok = runBoundViz();
+        else if (siteDump != null) ok = runSiteDump(siteDump);
+        else if (siteFix)    ok = runSiteFixtures();
+        else if (siteGeom)   ok = runSiteGeometry();
+        else if (latCmp)     runLatticeCompare();
+        else if (latCmpRep)  reportLatticeCompare();
+        else if (zsmGates)   ok = runZsmGates();
+        else if (zsm)        runZeroSkewMirror();
+        else if (zsmRep)     reportZeroSkewMirror();
+        else if (zAudit)     ok = runZAudit();
+        else if (zFree)      ok = runZFree();
+        else if (accStatic)       ok = runAccessStatic();
+        else if (accInert)   ok = runAccessInert();
+        else if (accAudit)   runAccessAudit();
+        else if (atpFix)     ok = runAtpFixtures();
         else if (atpEquiv)   ok = runAtpEquiv();
         else if (atpPilot)   runAtpPilot(ATP_DUR_MS > 0 ? ATP_DUR_MS : 200.0);
         else if (atpDensRep) { double d = (ATP_DUR_MS > 0 ? ATP_DUR_MS : 200.0)*1e-3; atpSetDuration(d); reportAtpDensity(d); }
@@ -361,6 +439,21 @@ public final class ChiralSiteHarness {
         if (!ok) System.exit(1);
     }
 
+    // =========================================================== SPARSE LONG-PITCH Path-B lattice selection
+    /**
+     * The lattice every Path-B campaign arm uses. <b>Changed 2026-08-12 from {@code every3} to {@code every4}</b>
+     * (sparse long-pitch) together with {@link #PATH_B_PHASE_GLOBAL}. Every campaign published before that date —
+     * the viscosity map + mirror control, the low-[ATP] transfer, the density-occupancy screen and every twirling
+     * / converter-skew arm — ran {@code every3} with the segment-relative azimuth convention; those results remain
+     * valid for THAT model and are NOT regenerated here. {@code -legacy-lattice} reproduces it exactly.
+     * Report: {@code docs/attachment/SPARSE_LONG_PITCH_ACTIN_SITE_LATTICE.md}.
+     */
+    /** filament segments used by {@code -twirl-equiv} (1 = the historical rigid graph; 12 exercises boundaries). */
+    static int EQUIV_SEGS = 1;                   // -equiv-segs
+    static int PATH_B_SITE_MODE = 3;             // -site-lattice every3|every4|...
+    static boolean PATH_B_PHASE_GLOBAL = true;   // -site-phase segment|global
+    static String SITE_GEOM_DIR = "RUN_LOGS/attachment_audit/sparse_long_pitch_sites";
+
     static int latticeCode(String s) {
         return switch (s) { case "native" -> 1; case "every3" -> 2; case "every4" -> 3;
                             case "stair9-45" -> 4; case "stair9-90" -> 5; default -> 0; }; }
@@ -369,8 +462,17 @@ public final class ChiralSiteHarness {
     /** Set the full independent feature configuration for one arm; everything not named is reset to default-off. */
     static void cfg(int siteMode, boolean headRoll, double regK, double epsBindDeg, double epsStrokeDeg,
                     boolean randBase, double mirror, boolean headBrown) {
+        boolean savedSiteAware = ExplicitCompleteMatHarness.SITE_AWARE;
         ExplicitCompleteMatHarness.resetChiral();
+        ExplicitCompleteMatHarness.SITE_AWARE = savedSiteAware;   // a run-level mode, not a per-arm feature
         ExplicitCompleteMatHarness.SITE_MODE = siteMode;
+        // The site AZIMUTH convention travels WITH THE LATTICE THE CALLER ASKED FOR. A caller that names a
+        // lattice other than the configured campaign lattice (the many internal diagnostics that hard-code
+        // `cfg(2, ...)` for the historical every3 geometry) keeps that lattice's historical segment-relative
+        // convention and is therefore byte-identical to its pre-2026-08-12 behaviour; only the campaign
+        // lattice carries the corrected filament-global phase. `-site-lattice every3 -site-phase global`
+        // still works — it makes every3 the campaign lattice and honours the explicit request.
+        ExplicitCompleteMatHarness.SITE_PHASE_GLOBAL = (siteMode == PATH_B_SITE_MODE) && PATH_B_PHASE_GLOBAL;
         ExplicitCompleteMatHarness.HEAD_ROLL = headRoll;
         ExplicitCompleteMatHarness.HEAD_ROLL_BROWN = headBrown;
         ExplicitCompleteMatHarness.REG_K = regK;
@@ -1642,7 +1744,7 @@ public final class ChiralSiteHarness {
         final boolean rand; final double mirror, rNm; final boolean filBrown; final int segs;
         double convSkew = 0.0;   // TRUE converter-stroke-plane rotation for this arm (deg); 0 ⇒ off
         TArm(String tag, double epsB, boolean rand, double mirror, boolean filBrown, int segs) {
-            this(tag, 2, true, 0.0, epsB, 0.0, rand, mirror, filBrown, segs, R_NM); }
+            this(tag, PATH_B_SITE_MODE, true, 0.0, epsB, 0.0, rand, mirror, filBrown, segs, R_NM); }
         TArm(String tag, int mode, boolean roll, double k, double epsB, double epsS, boolean rand, double mirror,
              boolean filBrown, int segs, double rNm) {
             this.tag = tag; this.mode = mode; this.roll = roll; this.k = k; this.epsB = epsB; this.epsS = epsS;
@@ -1696,6 +1798,7 @@ public final class ChiralSiteHarness {
         // All are TIME-AVERAGES over the measurement window of a per-step reduction across bound heads, so each
         // is directly comparable with r.tau (which is the time-average of the signed SUM). Analysis-only: every
         // input is a value the measurement loop already computes, and nothing is written back into the sim.
+        AccessTel acc;                      // §PATH-B ACCESSIBILITY telemetry (null unless ACCESS_TELEM)
         double tauPos, tauNeg;              // summed POSITIVE / NEGATIVE per-head axial torque
         double nTauPos, nTauNeg;            // mean count of positive- / negative-torque heads
         double[] tauByState = new double[4], nByState = new double[4];   // by MotorStore.NUC_*
@@ -1845,6 +1948,98 @@ public final class ChiralSiteHarness {
         }
     }
 
+    // =================================================================== §PATH-B ACCESSIBILITY TELEMETRY
+    /**
+     * Read-only accumulators for the site-accessibility audit. Every field is a sum over quantities the
+     * measurement loop already computes; nothing here is fed back into the simulation.
+     *
+     * <p>Classification (PREREGISTERED, chosen before any data was taken, and deliberately symmetric so the
+     * three classes cover equal 120° arcs of the filament circumference — i.e. the uniform-azimuth null is
+     * exactly 1/3 : 1/3 : 1/3):
+     * <pre>
+     *   cosBeta = nHat·pHat   (pHat = away-from-lawn, ⊥ filament axis)
+     *   FAR  : cosBeta > +0.5    (|beta| <  60°, site normal points away from the lawn)
+     *   SIDE : |cosBeta| <= 0.5  (60° <= |beta| <= 120°)
+     *   NEAR : cosBeta < -0.5    (|beta| > 120°, site normal points toward the lawn)
+     * </pre>
+     * The continuous distribution is retained as an 18-bin beta histogram so no conclusion depends on the
+     * threshold.
+     */
+    static final class AccessTel {
+        static final int NB = 18, NA = 16, NR = 8;
+        static final int NEAR = 0, SIDE = 1, FAR = 2;
+        static final double APP_LO = -8.0, APP_HI = 8.0;   // nm, approach-metric histogram range
+        long nMeasSteps, nBoundSamp, nBindEv, nDetEv;
+        boolean geomLive;
+        double[] occ = new double[3], tau = new double[3], tauAbs = new double[3];
+        double[] tauPos = new double[3], tauNeg = new double[3], nPos = new double[3], nNeg = new double[3];
+        double[] fax = new double[3], fmag = new double[3];
+        double[] bindEv = new double[3], detEv = new double[3], resid = new double[3];
+        long[] hBeta = new long[NB]; double[] hBetaTau = new double[NB]; long[] hBetaBind = new long[NB];
+        long[] hApp = new long[NA]; double appSum = 0, appMin = Double.NaN, appMax = Double.NaN;
+        long appN = 0, appNeg = 0;
+        long[] rollN = new long[NR]; double[][] rollOcc = new double[NR][3], rollTau = new double[NR][3];
+        double[][] roleN = new double[3][2], roleFax = new double[3][2], roleTau = new double[3][2];
+        // ---- §Z-SLAB height telemetry (read-only; mirrors MatSoaSlice.matZSlab arithmetic exactly) ----
+        static final int NZ = 16;                      // z_COM histogram bins over the slab
+        long   zN;                                     // measurement steps contributing
+        double zSum, zSum2, zMin = Double.NaN, zMax = Double.NaN;   // filament z_COM (µm)
+        double segZSum, segZSum2; long segZN;          // per-segment z (µm)
+        long   wallLoN, wallHiN, wallTot;              // segment-steps in contact with each wall
+        double wallLoF, wallHiF;                       // summed |wall reaction| (N)
+        double penLoSum, penHiSum, penLoMax, penHiMax; // penetration depth (nm)
+        double motFzSum; long motFzN;                  // summed motor-side z force on the filament (N)
+        long[] zHist = new long[NZ];                   // z_COM histogram
+        double[][] zCls = new double[NZ][3];           // class occupancy by z_COM bin
+        double zLo, zHi;                               // the slab walls actually used (µm, SURFACE limits)
+        boolean slabOn;
+        int[] lastCls;                                     // class on the head's last bound step (residence attribution)
+
+        static int cls(double cosB) { return cosB > 0.5 ? FAR : (cosB < -0.5 ? NEAR : SIDE); }
+        static int betaBin(double beta) { int b = (int) Math.floor((beta + Math.PI) / (2 * Math.PI) * NB); return b < 0 ? 0 : (b >= NB ? NB - 1 : b); }
+        static int rollBin(double ph) { int b = (int) Math.floor((ph + Math.PI) / (2 * Math.PI) * NR); return b < 0 ? 0 : (b >= NR ? NR - 1 : b); }
+        static int appBin(double a) { int b = (int) Math.floor((a - APP_LO) / (APP_HI - APP_LO) * NA); return b < 0 ? 0 : (b >= NA ? NA - 1 : b); }
+        static String clsName(int c) { return c == NEAR ? "NEAR" : c == SIDE ? "SIDE" : "FAR"; }
+
+        void add(AccessTel o) {
+            nMeasSteps += o.nMeasSteps; nBoundSamp += o.nBoundSamp; nBindEv += o.nBindEv; nDetEv += o.nDetEv;
+            geomLive |= o.geomLive;
+            for (int c = 0; c < 3; c++) {
+                occ[c] += o.occ[c]; tau[c] += o.tau[c]; tauAbs[c] += o.tauAbs[c];
+                tauPos[c] += o.tauPos[c]; tauNeg[c] += o.tauNeg[c]; nPos[c] += o.nPos[c]; nNeg[c] += o.nNeg[c];
+                fax[c] += o.fax[c]; fmag[c] += o.fmag[c];
+                bindEv[c] += o.bindEv[c]; detEv[c] += o.detEv[c]; resid[c] += o.resid[c];
+                for (int k = 0; k < 2; k++) { roleN[c][k] += o.roleN[c][k]; roleFax[c][k] += o.roleFax[c][k]; roleTau[c][k] += o.roleTau[c][k]; }
+            }
+            for (int b = 0; b < NB; b++) { hBeta[b] += o.hBeta[b]; hBetaTau[b] += o.hBetaTau[b]; hBetaBind[b] += o.hBetaBind[b]; }
+            for (int b = 0; b < NA; b++) hApp[b] += o.hApp[b];
+            appSum += o.appSum; appN += o.appN; appNeg += o.appNeg;
+            if (o.appN > 0) { appMin = Double.isNaN(appMin) ? o.appMin : Math.min(appMin, o.appMin);
+                              appMax = Double.isNaN(appMax) ? o.appMax : Math.max(appMax, o.appMax); }
+            for (int b = 0; b < NR; b++) { rollN[b] += o.rollN[b];
+                for (int c = 0; c < 3; c++) { rollOcc[b][c] += o.rollOcc[b][c]; rollTau[b][c] += o.rollTau[b][c]; } }
+            zN += o.zN; zSum += o.zSum; zSum2 += o.zSum2;
+            segZSum += o.segZSum; segZSum2 += o.segZSum2; segZN += o.segZN;
+            wallLoN += o.wallLoN; wallHiN += o.wallHiN; wallTot += o.wallTot;
+            wallLoF += o.wallLoF; wallHiF += o.wallHiF;
+            penLoSum += o.penLoSum; penHiSum += o.penHiSum;
+            penLoMax = Math.max(penLoMax, o.penLoMax); penHiMax = Math.max(penHiMax, o.penHiMax);
+            motFzSum += o.motFzSum; motFzN += o.motFzN;
+            for (int b = 0; b < NZ; b++) { zHist[b] += o.zHist[b]; for (int c = 0; c < 3; c++) zCls[b][c] += o.zCls[b][c]; }
+            if (o.zN > 0) { zMin = Double.isNaN(zMin) ? o.zMin : Math.min(zMin, o.zMin);
+                            zMax = Double.isNaN(zMax) ? o.zMax : Math.max(zMax, o.zMax); }
+            zLo = o.zLo; zHi = o.zHi; slabOn |= o.slabOn;
+        }
+        int zBin(double zcom) { double f = (zcom - zLo) / Math.max(1e-12, zHi - zLo);
+            int b = (int) Math.floor(f * NZ); return b < 0 ? 0 : (b >= NZ ? NZ - 1 : b); }
+        double zMean() { return zN > 0 ? zSum / zN : Double.NaN; }
+        double zSD() { if (zN < 2) return Double.NaN; double m = zSum / zN; return Math.sqrt(Math.max(0, zSum2 / zN - m * m)); }
+        double occFrac(int c) { double s = occ[0] + occ[1] + occ[2]; return s > 0 ? occ[c] / s : Double.NaN; }
+        double bindFrac(int c) { double s = bindEv[0] + bindEv[1] + bindEv[2]; return s > 0 ? bindEv[c] / s : Double.NaN; }
+        double tauTotal() { return tau[0] + tau[1] + tau[2]; }
+        double tauPerBound(int c) { return occ[c] > 0 ? tau[c] / occ[c] : Double.NaN; }
+    }
+
     // ------------------------------------------------------------------------------------ one arm, one seed
     static TRes runTwirlArm(TArm a, int seed, int steps) {
         int savedSegs = FIL_SEGS; boolean savedBrown = FIL_BROWN; double savedR = R_NM; double savedConv = EPS_CONV_ARM;
@@ -1904,6 +2099,15 @@ public final class ChiralSiteHarness {
             double aTauPull = 0, aTauDrag = 0, aNPull = 0, aNDrag = 0, aFaxPull = 0, aFaxDrag = 0;
             double aResidPull = 0, aResidDrag = 0; long nDetPull = 0, nDetDrag = 0;
             double aVfil = 0;
+            // §PATH-B ACCESSIBILITY TELEMETRY — read-only; allocated only when explicitly requested.
+            AccessTel acc = ACCESS_TELEM ? new AccessTel() : null;
+            double[] am = acc != null ? new double[5] : null;
+            double[] stepCls = new double[3];
+            double accRact = ExplicitCompleteMatHarness.R_ACTIN_NM * 1e-3;
+            boolean accGeom = ExplicitCompleteMatHarness.EPISODE_TELEM || !GPU;   // outGeom live on the host?
+            if (acc != null) { acc.lastCls = new int[N]; java.util.Arrays.fill(acc.lastCls, -1); acc.geomLive = accGeom;
+                acc.slabOn = ExplicitCompleteMatHarness.zSlabOn();
+                acc.zLo = e.zsP.get(0); acc.zHi = e.zsP.get(1); }
             double prevGl = Double.NaN;          // previous projected centroid, for the instantaneous v_filament
             int[] lastClass = new int[N];        // +1 puller / -1 dragger / 0 unclassified, at the previous step
             // §LOW-ATP nested-window prefix trace: sampled from step 0 so any leading sub-window is a genuine
@@ -1945,6 +2149,7 @@ public final class ChiralSiteHarness {
                     continue;
                 }
                 double sn = 0, sa = 0; int nb = 0;
+                if (acc != null) { stepCls[0] = 0; stepCls[1] = 0; stepCls[2] = 0; }
                 // instantaneous axial filament velocity for the puller/dragger classification (µm/s)
                 double vFil = Double.isNaN(prevGl) ? 0.0 : (gl - prevGl) / DTR;
                 prevGl = gl; aVfil += vFil;
@@ -1963,6 +2168,10 @@ public final class ChiralSiteHarness {
                         if (lastClass[m] > 0) { aResidPull += age[m] * DTR; nDetPull++; }
                         else if (lastClass[m] < 0) { aResidDrag += age[m] * DTR; nDetDrag++; }
                         lastClass[m] = 0;
+                        if (acc != null && acc.lastCls[m] >= 0) {   // accessibility class of the LAST bound step
+                            acc.detEv[acc.lastCls[m]]++; acc.resid[acc.lastCls[m]] += age[m] * DTR; acc.nDetEv++;
+                            acc.lastCls[m] = -1;
+                        }
                     }
                     if (nu >= 0 && nu < 4) { occA[nu]++; if (bs >= 0) occB[nu]++; }
                     if (nested != null) {
@@ -2016,7 +2225,55 @@ public final class ChiralSiteHarness {
                     if (L != null) L.accumulate(m, t, bs, tau, fax, ftan, dRoll[bs], stroked, prevNb, a.mirror);
                     if (lawn != null) { int c = lawn[m] <= clsSplit ? 0 : 1;
                         clsBound[c]++; clsFprop[c] += fax; clsFabs[c] += Math.abs(fax); clsTau[c] += tau; }
+                    // ---- §PATH-B ACCESSIBILITY: classify this bound sample (read-only reduction) --------------
+                    if (acc != null && ChiralSiteSystem.accessMetrics(f.coord, f.uVec, f.yVec, f.segLength,
+                            G.mot.bindArc, G.mot.bindAzim, G.mot.boundSeg, e.outGeom, accGeom, N, m, nSeg,
+                            accRact, G.eup[0], G.eup[1], G.eup[2], am)) {
+                        int cA = AccessTel.cls(am[0]);
+                        acc.occ[cA]++; acc.tau[cA] += tau; acc.tauAbs[cA] += Math.abs(tau);
+                        if (tau > 0) { acc.tauPos[cA] += tau; acc.nPos[cA]++; }
+                        else if (tau < 0) { acc.tauNeg[cA] += tau; acc.nNeg[cA]++; }
+                        acc.fax[cA] += fax;
+                        acc.fmag[cA] += Math.sqrt(sq(G.bondData.get(d)) + sq(G.bondData.get(d+1)) + sq(G.bondData.get(d+2)));
+                        int bb = AccessTel.betaBin(am[1]); acc.hBeta[bb]++; acc.hBetaTau[bb] += tau;
+                        int rb = AccessTel.rollBin(am[3]); acc.rollN[rb]++; acc.rollOcc[rb][cA]++; acc.rollTau[rb][cA] += tau;
+                        if (!Double.isNaN(am[2])) {
+                            acc.hApp[AccessTel.appBin(am[2])]++; acc.appSum += am[2]; acc.appN++;
+                            if (am[2] < 0) acc.appNeg++;
+                            acc.appMin = Double.isNaN(acc.appMin) ? am[2] : Math.min(acc.appMin, am[2]);
+                            acc.appMax = Double.isNaN(acc.appMax) ? am[2] : Math.max(acc.appMax, am[2]);
+                        }
+                        int role = power > 0 ? 0 : (power < 0 ? 1 : -1);
+                        if (role >= 0) { acc.roleN[cA][role]++; acc.roleFax[cA][role] += fax; acc.roleTau[cA][role] += tau; }
+                        if (myAge == 0) { acc.bindEv[cA]++; acc.nBindEv++; acc.hBetaBind[bb]++; }   // fresh attachment
+                        acc.lastCls[m] = cA; acc.nBoundSamp++; stepCls[cA]++;
+                    }
                     misAcc += Math.abs(e.headMis.get(m)); nBoundSamp++;
+                }
+                // ---- §Z-SLAB height + wall telemetry (read-only; mirrors matZSlab exactly) ---------------
+                if (acc != null) {
+                    double zc = 0;
+                    for (int s2 = 0; s2 < nSeg; s2++) {
+                        double zs = f.coord.get(2*nSeg + s2); zc += zs;
+                        acc.segZSum += zs; acc.segZSum2 += zs*zs; acc.segZN++;
+                        double uz = f.uVec.get(2*nSeg + s2), h2 = 0.5*f.segLength.get(s2);
+                        double ext = h2*Math.abs(uz) + Constants.radius*Math.sqrt(Math.max(0.0, 1.0 - uz*uz));
+                        double pLo = acc.zLo - (zs - ext), pHi = (zs + ext) - acc.zHi;
+                        acc.wallTot++;
+                        double kW = ExplicitCompleteMatHarness.Z_SLAB_FRAC * f.bTransGam.get(nSeg + s2) / (1e6 * DTR);
+                        if (pLo > 0) { acc.wallLoN++; acc.wallLoF += kW*pLo; acc.penLoSum += pLo*1e3; acc.penLoMax = Math.max(acc.penLoMax, pLo*1e3); }
+                        if (pHi > 0) { acc.wallHiN++; acc.wallHiF += kW*pHi; acc.penHiSum += pHi*1e3; acc.penHiMax = Math.max(acc.penHiMax, pHi*1e3); }
+                    }
+                    zc /= nSeg;
+                    acc.zN++; acc.zSum += zc; acc.zSum2 += zc*zc;
+                    acc.zMin = Double.isNaN(acc.zMin) ? zc : Math.min(acc.zMin, zc);
+                    acc.zMax = Double.isNaN(acc.zMax) ? zc : Math.max(acc.zMax, zc);
+                    int zb = acc.zBin(zc); acc.zHist[zb]++;
+                    for (int c2 = 0; c2 < 3; c2++) acc.zCls[zb][c2] += stepCls[c2];
+                    // motor-side vertical force delivered to the filament this step (bondData seg-side Fz)
+                    double fzm = 0;
+                    for (int m2 = 0; m2 < N; m2++) if (G.mot.boundSeg.get(m2) >= 0) fzm += G.bondData.get(m2*13 + 8);
+                    acc.motFzSum += fzm; acc.motFzN++;
                 }
                 tauAcc += sn; tauAbsAcc += sa; boundAcc += nb; measSteps++;
                 r.nbHist[Math.min(nb, NB_BINS - 1)]++;   // P(N_b): the distribution boundAcc/measSteps is the mean of
@@ -2114,6 +2371,7 @@ public final class ChiralSiteHarness {
             r.residDrag = nDetDrag > 0 ? aResidDrag/nDetDrag : Double.NaN;
             r.nDetPull = nDetPull; r.nDetDrag = nDetDrag;
             r.vFilMean = aVfil*invMeas;
+            if (acc != null) { acc.nMeasSteps = measSteps; r.acc = acc; }
             if (nested != null) r.nested(nested, steps * DTR);
             for (int i = 0; i < 3*nSeg; i++) if (!Float.isFinite(f.coord.get(i))) r.invalid++;
             if (GPU) {
@@ -2675,7 +2933,7 @@ public final class ChiralSiteHarness {
         DoubleArray gOn = copyD(e.outGeom), gOff = copyD(e.outGeom);
         FloatArray fdOn = copyF(G.mot.forceDotFil), fdOff = copyF(G.mot.forceDotFil);
         FloatArray fmOn = copyF(G.mot.forceMag), fmOff = copyF(G.mot.forceMag);
-        IntArray mcOn = IntArray.fromElements(t, seed, 1, 0), mcOff = IntArray.fromElements(t, seed, 0, 0);
+        IntArray mcOn = IntArray.fromElements(t, seed, 1, 0, TwoBodyConverterMotor.F8_AXIS_LEGACY ? 0 : 1), mcOff = IntArray.fromElements(t, seed, 0, 0, TwoBodyConverterMotor.F8_AXIS_LEGACY ? 0 : 1);
         TwoBodyBeamAnalyticGpu.matS2SolveStep(nOn, e.frame, qOn, G.bondData, G.mot.boundSeg, e.params, sOn, gOn, fdOn, fmOn, mcOn, e.exCounts, e.convF);
         TwoBodyBeamAnalyticGpu.matS2SolveStep(nOff, e.frame, qOff, G.bondData, G.mot.boundSeg, e.params, sOff, gOff, fdOff, fmOff, mcOff, e.exCounts, e.convF);
         double worst = 0;
@@ -2696,10 +2954,10 @@ public final class ChiralSiteHarness {
 
     // ------------------------------------------------------------------------------------ CPU/GPU on the assay
     static boolean runTwirlEquiv() {
-        System.out.println("\n--- CPU/GPU EQUIVALENCE — one-segment, filament-Brownian-off twirl graph, device-resident ---");
-        FIL_SEGS = 1; FIL_BROWN = false;
+        System.out.printf("%n--- CPU/GPU EQUIVALENCE — %d-segment, filament-Brownian-off twirl graph, device-resident ---%n", EQUIV_SEGS);
+        FIL_SEGS = EQUIV_SEGS; FIL_BROWN = false;
         boolean savedGpu = GPU; GPU = false;   // cfg() must not force TELEMETRY on the validation graph
-        cfg(2, true, 0.0, EPS_TWIRL_DEG, 0, true, 1.0, true);
+        cfg(PATH_B_SITE_MODE, true, 0.0, EPS_TWIRL_DEG, 0, true, 1.0, true);
         GPU = savedGpu;
         System.out.println("  config: " + ExplicitCompleteMatHarness.chiralConfigString());
         System.out.println("  brownian: " + ExplicitCompleteMatHarness.brownianPolicyString());
@@ -4558,8 +4816,14 @@ public final class ChiralSiteHarness {
         return (m - t*sem) * (m + t*sem) <= 0;        // interval straddles zero
     }
     /** Two-sided 95 % t quantiles indexed by degrees of freedom (index 0 unused; tail -> normal limit). */
+    // Two-sided 95 % Student t by degrees of freedom (index = df = n-1). EXTENDED 2026-08-12 from df=20 to
+    // df=40: the old table clamped everything above df=20 to the normal-approximation 1.960, which makes the
+    // interval slightly TOO NARROW at the n=24 sample sizes this project now runs (t_23 = 2.069). Purely a
+    // lookup of a standard constant — no result depends on the third digit, and the correction is conservative.
     static final double[] T95_TWO_SIDED = { 0, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306,
-            2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086, 1.960 };
+            2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
+            2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042,
+            2.040, 2.037, 2.035, 2.032, 2.030, 2.028, 2.026, 2.024, 2.023, 2.021 };
     static double rel(double a, double b) {
         double d = Math.max(Math.abs(a), Math.abs(b));
         return d > 0 ? Math.abs(a - b) / d : 0.0;
@@ -7138,5 +7402,2492 @@ public final class ChiralSiteHarness {
         }
         DTR = baseDt; STEPS = baseSteps;
         FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true; cfgOff(); EPS_CONV_ARM = 0;
+    }
+
+    // =====================================================================================================
+    // §PATH-B SITE-ACCESSIBILITY AUDIT (noncanonical, default-off, TELEMETRY ONLY — no physics is changed).
+    //   -access-static   Phase 0/3: substrate-side sign verification + deterministic classifier fixtures
+    //   -access-inert    Phase 2:   matched-seed telemetry OFF vs ON, every pre-existing output compared
+    //   -access-audit    Phase 5/6: short current-configuration arms + the class/torque readout
+    // Report: docs/attachment/PATH_B_SITE_ACCESSIBILITY_TELEMETRY.md
+    // =====================================================================================================
+    static final String ACC_DIR = "RUN_LOGS/attachment_audit/path_b_accessibility";
+    static final String ZS_DIR  = "RUN_LOGS/attachment_audit/z_slab";
+    static final double[] zDtPen = new double[2];
+
+    // =====================================================================================================
+    // §FILAMENT z BOUNDARY (report: docs/attachment/FILAMENT_Z_SLAB_AND_ACCESSIBILITY_RERUN.md)
+    //   -z-audit  PHASE A0/A2: trace every z force in the built scene and size the slab from measured numbers
+    //   -z-free   PHASE A5:    free-filament validation of the slab (flatness, diffusion, walls, tilt, dt)
+    // =====================================================================================================
+
+    /** SITE-AWARE CAPTURE micro-fixtures (PHASE 7). Deterministic, no trajectory advanced: the two capture
+     *  kernels are driven directly on a real built scene with a hand-placed head and hand-placed sites. */
+    /** VISUALIZATION EXPORT (analysis only): write the REAL Path-B lattice geometry — every site's material
+     *  position, normal and accessibility class — straight out of the built scene, so the figures plot what the
+     *  capture kernel actually sees rather than a re-derivation. Optionally also dumps a live bound-head snapshot. */
+    static boolean runSiteDump(String dir) {
+        try { java.nio.file.Files.createDirectories(java.nio.file.Paths.get(dir)); }
+        catch (java.io.IOException ex) { throw new RuntimeException(ex); }
+        int savedSegs = FIL_SEGS; boolean savedBrown = FIL_BROWN;
+        boolean savedSA = ExplicitCompleteMatHarness.SITE_AWARE, savedSlab = ExplicitCompleteMatHarness.Z_SLAB;
+        ExplicitCompleteMatHarness.SITE_AWARE = true; ExplicitCompleteMatHarness.Z_SLAB = true;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        cfg(2, true, 0.0, 0.0, 0.0, false, 1.0, true);
+        Glide2D G = build(SEED); FilamentStore f = G.fil; int nSeg = G.nSeg, N = G.N;
+        var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+        double Ract = e.sbP.get(19), rise = e.sbP.get(16), twist = e.sbP.get(17);
+        StringBuilder sb = new StringBuilder();
+        sb.append("# Path-B discrete helical binding sites, exported from the BUILT scene (site geometry as the\n");
+        sb.append("# capture kernel ChiralSiteSystem.siteGateA computes it). lengths um; eup=(0,0,1) away from the lawn.\n");
+        sb.append(String.format(Locale.US, "# rise=%.6f um  twistRate=%.4f rad/um  Ractin=%.6f um  nSeg=%d  lawn_z=%.6f um%n",
+                rise, twist, Ract, nSeg, ExplicitCompleteMatHarness.Z_LAWN_UM));
+        sb.append("k\tseg\tarc\tx\ty\tz\tnx\tny\tnz\tcosBeta\tclass\n");
+        for (int s = 0; s < nSeg; s++) {
+            double half = 0.5 * f.segLength.get(s), cum = e.segCumArc.get(s);
+            double cx = f.coord.get(s), cy = f.coord.get(nSeg + s), cz = f.coord.get(2 * nSeg + s);
+            double ux = f.uVec.get(s), uy = f.uVec.get(nSeg + s), uz = f.uVec.get(2 * nSeg + s);
+            double yx = f.yVec.get(s), yy = f.yVec.get(nSeg + s), yz = f.yVec.get(2 * nSeg + s);
+            double zx = uy*yz-uz*yy, zy = uz*yx-ux*yz, zz = ux*yy-uy*yx;
+            double zl = Math.sqrt(zx*zx+zy*zy+zz*zz); if (zl > 1e-30) { zx/=zl; zy/=zl; zz/=zl; }
+            int k0 = (int) (cum / rise + 0.5), k1 = (int) ((cum + 2*half) / rise + 0.5);
+            for (int k = k0; k <= k1; k++) {
+                double la = k * rise - cum; if (la < 0 || la > 2*half) continue;
+                double ph = twist * (la - half);
+                double nx = Math.cos(ph)*yx + Math.sin(ph)*zx, ny = Math.cos(ph)*yy + Math.sin(ph)*zy, nz = Math.cos(ph)*yz + Math.sin(ph)*zz;
+                double aOff = la - half;
+                double px = cx + aOff*ux + Ract*nx, py = cy + aOff*uy + Ract*ny, pz = cz + aOff*uz + Ract*nz;
+                double du = ux*0 + uy*0 + uz*1.0;
+                double ppx = 0 - du*ux, ppy = 0 - du*uy, ppz = 1.0 - du*uz;
+                double pl = Math.sqrt(ppx*ppx+ppy*ppy+ppz*ppz); if (pl > 1e-12) { ppx/=pl; ppy/=pl; ppz/=pl; }
+                double cosB = nx*ppx + ny*ppy + nz*ppz;
+                String cls = cosB > 0.5 ? "FAR" : (cosB < -0.5 ? "NEAR" : "SIDE");
+                sb.append(String.format(Locale.US, "%d\t%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.5f\t%.5f\t%.5f\t%.5f\t%s%n",
+                        k, s, cum+la, px, py, pz, nx, ny, nz, cosB, cls));
+            }
+        }
+        // live bound-head snapshot: advance a short site-aware CPU trajectory, then dump the bonds
+        StringBuilder bs = new StringBuilder();
+        bs.append("# bound heads after a short site-aware Path-B run (CPU runner). lengths um.\n");
+        bs.append("motor\tseg\tsite\tarc\tazim\tsx\tsy\tsz\tnx\tny\tnz\tcosBeta\tclass\thx\thy\thz\n");
+        int steps = 4000;
+        for (int t = 0; t < steps; t++) ExplicitCompleteMatHarness.stepGlidingCPU(e, t, SEED);
+        double[] am = new double[5];
+        int nb = 0;
+        for (int m = 0; m < N; m++) {
+            int s = G.mot.boundSeg.get(m); if (s < 0) continue;
+            if (!ChiralSiteSystem.accessMetrics(f.coord, f.uVec, f.yVec, f.segLength, G.mot.bindArc, G.mot.bindAzim,
+                    G.mot.boundSeg, e.outGeom, true, N, m, nSeg, Ract, G.eup[0], G.eup[1], G.eup[2], am)) continue;
+            double half = 0.5*f.segLength.get(s);
+            double cx = f.coord.get(s), cy = f.coord.get(nSeg+s), cz = f.coord.get(2*nSeg+s);
+            double ux = f.uVec.get(s), uy = f.uVec.get(nSeg+s), uz = f.uVec.get(2*nSeg+s);
+            double yx = f.yVec.get(s), yy = f.yVec.get(nSeg+s), yz = f.yVec.get(2*nSeg+s);
+            double zx = uy*yz-uz*yy, zy = uz*yx-ux*yz, zz = ux*yy-uy*yx;
+            double zl = Math.sqrt(zx*zx+zy*zy+zz*zz); if (zl > 1e-30) { zx/=zl; zy/=zl; zz/=zl; }
+            double az = G.mot.bindAzim.get(m), aOff = G.mot.bindArc.get(m) - half;
+            double nx = Math.cos(az)*yx + Math.sin(az)*zx, ny = Math.cos(az)*yy + Math.sin(az)*zy, nz = Math.cos(az)*yz + Math.sin(az)*zz;
+            double px = cx + aOff*ux + Ract*nx, py = cy + aOff*uy + Ract*ny, pz = cz + aOff*uz + Ract*nz;
+            String cls = am[0] > 0.5 ? "FAR" : (am[0] < -0.5 ? "NEAR" : "SIDE");
+            bs.append(String.format(Locale.US, "%d\t%d\t%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.5f\t%.5f\t%.5f\t%.5f\t%s\t%.6f\t%.6f\t%.6f%n",
+                    m, s, e.bindSite.get(m), G.mot.bindArc.get(m), az, px, py, pz, nx, ny, nz, am[0], cls,
+                    e.outGeom.get(6*N+m), e.outGeom.get(7*N+m), e.outGeom.get(8*N+m)));
+            nb++;
+        }
+        // filament pose for the figures
+        StringBuilder fs = new StringBuilder();
+        fs.append("seg\tcx\tcy\tcz\tux\tuy\tuz\thalf\n");
+        for (int s = 0; s < nSeg; s++)
+            fs.append(String.format(Locale.US, "%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f%n", s,
+                    f.coord.get(s), f.coord.get(nSeg+s), f.coord.get(2*nSeg+s),
+                    f.uVec.get(s), f.uVec.get(nSeg+s), f.uVec.get(2*nSeg+s), 0.5*f.segLength.get(s)));
+        try {
+            java.nio.file.Files.writeString(java.nio.file.Paths.get(dir, "sites.tsv"), sb.toString());
+            java.nio.file.Files.writeString(java.nio.file.Paths.get(dir, "bound_heads.tsv"), bs.toString());
+            java.nio.file.Files.writeString(java.nio.file.Paths.get(dir, "filament.tsv"), fs.toString());
+        } catch (java.io.IOException ex) { throw new RuntimeException(ex); }
+        System.out.printf("  site dump: %s/{sites,bound_heads,filament}.tsv  (%d bound heads after %d site-aware steps)%n", dir, nb, steps);
+        FIL_SEGS = savedSegs; FIL_BROWN = savedBrown;
+        ExplicitCompleteMatHarness.SITE_AWARE = savedSA; ExplicitCompleteMatHarness.Z_SLAB = savedSlab; cfgOff();
+        return true;
+    }
+
+    // ==================================================================================================
+    // SPARSE LONG-PITCH SITE LATTICE — geometry verification (Phases 1/5/8/9)
+    // ==================================================================================================
+
+    // ==================================================================================================
+    // POWERED ZERO-SKEW NATIVE-vs-MIRROR CAMPAIGN (2026-08-12)
+    //
+    // Question: does the sparse long-pitch helical actin-binding geometry, interacting with the explicit
+    // flexible-S2 motor, generate a REPRODUCIBLE handed deterministic torque when the motor itself carries
+    // ZERO imposed skew? Report: docs/twirling/ZERO_SKEW_SPARSE_LATTICE_MIRROR_GPU.md
+    //
+    // PREREGISTERED ANALYSIS PLAN (fixed before the n=24 data existed; the 2-seed pilot is the only prior):
+    //   primary endpoint   tau_mirror_odd = 0.5*(tau_native - tau_mirror), per matched seed
+    //   replicate axis     independent SEEDS (never trajectory blocks)
+    //   directional prior  the pilot gave native tau < 0 and mirror tau > 0 for every4, i.e. tau_mirror_odd < 0
+    //   secondary          Omega_mirror_odd, turns_mirror_odd — NOT required to resolve
+    //   control            tau_mirror_even = 0.5*(tau_native + tau_mirror) must NOT carry the effect
+    //   ladder             n = 8, 12, 16, 20, 24, each reporting mean, SEM, |mean|/SEM, 95% t CI,
+    //                      sign count and an exact two-sided sign test
+    //   futility           stop early ONLY if at n=16 |mean|/SEM < 0.5 AND the sign count is within 1 of even
+    //   achiral sanity     glide / avgBound / attachment flux / mean z must match native vs mirror within noise
+    //
+    // Every arm is eps = 0 (no converter skew, no bind skew, no stroke skew): the ONLY chirality in the model
+    // is the actin lattice's own helical sense, and MIRROR_SIGN = -1 reflects exactly that.
+    // ==================================================================================================
+    static final String ZSM_DIR = "RUN_LOGS/chiral_sites/zero_skew_sparse_mirror";
+    static int ZSM_SEED0 = 7001;                 // -zsm-seed0 : a fresh seed range, unused for model selection
+    static boolean ZSM_EPISODES = true;          // persist the raw per-episode records for mechanism analysis
+
+    static String zsmId(int seed, double mirror, int steps) {
+        return String.format(Locale.US, "zsm_%s_s%d_n%d", mirror < 0 ? "mirror" : "native", seed, steps);
+    }
+
+    /** One arm's scalar summary, as an ordered name→value map (robust to later additions). */
+    static java.util.LinkedHashMap<String, Double> zsmValues(TRes r) {
+        var v = new java.util.LinkedHashMap<String, Double>();
+        double meas = Math.max(1, (int) Math.round((1 - EQUIL_FRAC) * STEPS));
+        // ---- primary + secondary endpoints ----
+        v.put("tau", r.tau);                       // PRIMARY: mean deterministic axial torque (N·m)
+        v.put("omega", r.omega);
+        v.put("omegaFit", r.omegaFit);             // SECONDARY: LS slope of transported body-fixed roll
+        v.put("turns", r.turns);
+        v.put("rollR2", r.rollR2);
+        v.put("qOmega", r.qOmega);
+        v.put("gammaRoll", r.gammaRoll);
+        v.put("tauBlkSem", r.tauBlkSem);
+        v.put("omegaBlkSem", r.omegaBlkSem);
+        // ---- achiral transport sanity ----
+        v.put("glide", r.glide);
+        v.put("avgBound", r.avgBound);
+        v.put("bindsPerS", r.bindsPerStep / DTR);
+        v.put("detachPerS", r.detachPerStep / DTR);
+        v.put("strokeRatePerS", r.strokeRatePerS);
+        v.put("cancel", r.cancel);
+        v.put("tauPerHead", r.tauPerHead);
+        v.put("vFilMean", r.vFilMean);
+        // ---- hard-stop counters ----
+        v.put("invalid", (double) r.invalid);
+        v.put("solverFail", (double) r.solverFail);
+        v.put("measSteps", meas);
+        v.put("nSeg", (double) r.nSeg);
+        // ---- torque decomposition (mechanism) ----
+        v.put("tauPos", r.tauPos); v.put("tauNeg", r.tauNeg);
+        v.put("nTauPos", r.nTauPos); v.put("nTauNeg", r.nTauNeg);
+        v.put("tauPre", r.tauPre); v.put("tauPost", r.tauPost);
+        v.put("nPre", r.nPre); v.put("nPost", r.nPost);
+        v.put("tauPull", r.tauPull); v.put("tauDrag", r.tauDrag);
+        v.put("nPull", r.nPull); v.put("nDrag", r.nDrag);
+        for (int s = 0; s < 4; s++) { v.put("tauState" + s, r.tauByState[s]); v.put("nState" + s, r.nByState[s]); }
+        for (int b = 0; b < AGE_BINS; b++) {
+            v.put("ageTau" + b, r.ageTau[b]); v.put("ageN" + b, (double) r.ageN[b]);
+        }
+        v.put("meanResidenceSteps", r.meanResidenceSteps);
+        // ---- accessibility / azimuth telemetry ----
+        AccessTel a = r.acc;
+        if (a != null) {
+            v.put("meanZ_nm", a.zMean() * 1e3); v.put("sdZ_nm", a.zSD() * 1e3);
+            v.put("wallLoFrac", a.wallTot > 0 ? (double) a.wallLoN / a.wallTot : Double.NaN);
+            v.put("wallHiFrac", a.wallTot > 0 ? (double) a.wallHiN / a.wallTot : Double.NaN);
+            v.put("nBoundSamp", (double) a.nBoundSamp); v.put("nBindEv", (double) a.nBindEv);
+            for (int c = 0; c < 3; c++) {
+                String nm = AccessTel.clsName(c);
+                v.put("occ" + nm, a.occ[c]); v.put("tau" + nm, a.tau[c]); v.put("bindEv" + nm, a.bindEv[c]);
+                v.put("resid" + nm, a.resid[c]);
+                for (int k = 0; k < 2; k++) {           // 0 = PULLER, 1 = DRAGGER
+                    v.put("roleN" + nm + k, a.roleN[c][k]);
+                    v.put("roleTau" + nm + k, a.roleTau[c][k]);
+                    v.put("roleFax" + nm + k, a.roleFax[c][k]);
+                }
+            }
+            for (int b = 0; b < AccessTel.NB; b++) {    // SITE AZIMUTH x TORQUE — the mechanism histogram
+                v.put("hBeta" + b, (double) a.hBeta[b]);
+                v.put("hBetaTau" + b, a.hBetaTau[b]);
+                v.put("hBetaBind" + b, (double) a.hBetaBind[b]);
+            }
+        }
+        return v;
+    }
+
+    static void zsmWrite(String id, java.util.LinkedHashMap<String, Double> v, java.util.List<double[]> eps,
+                         String prov) throws java.io.IOException {
+        new java.io.File(ZSM_DIR).mkdirs();
+        StringBuilder sb = new StringBuilder("# " + prov + "\n");
+        for (var en : v.entrySet()) sb.append(String.format(Locale.US, "%s\t%.12g%n", en.getKey(), en.getValue()));
+        java.nio.file.Files.writeString(java.nio.file.Path.of(ZSM_DIR, id + ".tsv"), sb.toString());
+        if (ZSM_EPISODES && eps != null) {           // raw episodes: mechanism analysis without re-running
+            StringBuilder eb = new StringBuilder();
+            eb.append("seed\tmotor\tattach\tstroke\tdetach\tcensored\tsite\tazim\tepsSign\tpreLife\tpostLife\t")
+              .append("s2Ext\ts2Bend\tphi\tpsi\tfAx\tfTan\tfRad\ttauAx\tjPre\tjStroke\tjEarly\tjLate\t")
+              .append("nStroke\tnBound\tbaseAz\tanchAz\twF8\twChiral\ttrunc\tfastDet\n");
+            for (double[] r : eps) {
+                for (int i = 0; i <= ConvBudget.F_FASTDET; i++)
+                    eb.append(String.format(Locale.US, "%.10g", r[i])).append(i == ConvBudget.F_FASTDET ? "\n" : "\t");
+            }
+            java.nio.file.Files.writeString(java.nio.file.Path.of(ZSM_DIR, id + "_ep.tsv"), eb.toString());
+        }
+    }
+    static java.util.Map<String, Double> zsmRead(String id) {
+        java.io.File f = new java.io.File(ZSM_DIR, id + ".tsv");
+        if (!f.isFile()) return null;
+        var m = new java.util.LinkedHashMap<String, Double>();
+        try (java.util.Scanner sc = new java.util.Scanner(f)) {
+            while (sc.hasNextLine()) { String[] p = sc.nextLine().split("\t");
+                if (p.length == 2 && !p[0].startsWith("#")) m.put(p[0], Double.parseDouble(p[1])); }
+        } catch (Exception ex) { return null; }
+        return m.isEmpty() ? null : m;
+    }
+
+    /** Configure and freeze the candidate Path-B geometry for every arm of this campaign. */
+    static void zsmFreezeCandidate() {
+        PATH_B_SITE_MODE = 3;                                   // sparse every4
+        PATH_B_PHASE_GLOBAL = true;                             // filament-global helical phase
+        ExplicitCompleteMatHarness.SITE_AWARE = true;           // site-first capture
+        ExplicitCompleteMatHarness.Z_SLAB = true;               // hard slab; matZConfine not wired
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        EPS_CONV_DEG = 0; EPS_CONV_ARM = 0; EPS_TWIRL_DEG = 0;  // zero imposed motor skew, every arm
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;           // same ramp declaration as the pilot (inert at eps=0)
+    }
+
+    /** Print the EXPANDED configuration and assert every hard-stop precondition. Returns false to abort. */
+    static boolean zsmVerifyConfig(Glide2D G, ExplicitCompleteMatHarness.ExMat e) {
+        boolean ok = true;
+        System.out.println("  EXPANDED CONFIG: " + ExplicitCompleteMatHarness.chiralConfigString());
+        double rise = e.sbP.get(16), phaseGlobal = e.sbP.get(25);
+        boolean lattice = ExplicitCompleteMatHarness.SITE_MODE == 3
+                && Math.abs(rise - 4 * Constants.actinMonoRadius) < 1e-12;
+        boolean phase = phaseGlobal == 1.0;
+        boolean siteAware = ExplicitCompleteMatHarness.siteAwareOn();
+        boolean slab = ExplicitCompleteMatHarness.zSlabOn();
+        boolean excl = ExplicitCompleteMatHarness.SITE_EXCLUSIVE;
+        boolean radius = Math.abs(e.sbP.get(19) - Constants.radius) < 1e-12;
+        double skew = Math.abs(ExplicitCompleteMatHarness.CONV_SKEW_DEG)
+                    + Math.abs(ExplicitCompleteMatHarness.EPS_BIND_DEG)
+                    + Math.abs(ExplicitCompleteMatHarness.EPS_STROKE_DEG);
+        boolean zeroSkew = skew == 0.0;
+        boolean tzOff = !ExplicitCompleteMatHarness.TZ_ON;
+        System.out.printf(Locale.US,
+                "    lattice every4 rise=%.4f nm .......... %s%n"
+              + "    filament-global phase ................ %s%n"
+              + "    site-aware capture ................... %s%n"
+              + "    z SLAB on (harmonic well NOT wired) .. %s%n"
+              + "    site exclusivity ..................... %s%n"
+              + "    surface radius = Constants.radius .... %s (%.4f nm)%n"
+              + "    imposed motor skew (conv+bind+stroke)  %.1f deg %s%n"
+              + "    Vilfan target-zone hazard OFF ........ %s%n",
+                rise * 1e3, lattice ? "OK" : "*** FAIL ***", phase ? "OK" : "*** FAIL ***",
+                siteAware ? "OK" : "*** FAIL ***", slab ? "OK" : "*** FAIL ***", excl ? "OK" : "*** FAIL ***",
+                radius ? "OK" : "*** FAIL ***", e.sbP.get(19) * 1e3, skew, zeroSkew ? "OK" : "*** FAIL ***",
+                tzOff ? "OK" : "*** FAIL ***");
+        ok = lattice && phase && siteAware && slab && excl && radius && zeroSkew && tzOff;
+        if (!ok) System.out.println("  *** HARD STOP: candidate configuration is not what this campaign requires ***");
+        return ok;
+    }
+
+    /**
+     * PRE-CAMPAIGN GATES 1–6. Nothing here advances a scientific arm; every check either inspects built
+     * geometry or runs a short throwaway trajectory. Returns false if any gate fails (⇒ do not launch).
+     */
+    static boolean runZsmGates() {
+        System.out.println("\n=== ZERO-SKEW MIRROR CAMPAIGN — PRE-LAUNCH GATES ===");
+        boolean ok = true;
+        zsmFreezeCandidate();
+
+        // ---- GATE 1a: the candidate geometry, expanded and asserted (also GATES 2 and 4) ----------------
+        System.out.println("\n  GATE 1a/2/4 — expanded configuration, site-aware capture, zero imposed skew");
+        cfg(PATH_B_SITE_MODE, true, 0.0, 0.0, 0.0, false, 1.0, true);
+        Glide2D Gn = build(ZSM_SEED0);
+        var en = ExplicitCompleteMatHarness.packExMat(Gn, 1);
+        ok &= zsmVerifyConfig(Gn, en);
+
+        // ---- GATE 1b: MIRROR is an EXACT reflection of the lattice ---------------------------------------
+        System.out.println("\n  GATE 1b — MIRROR_SIGN = -1 is an exact geometric reflection of the site lattice");
+        java.util.List<Site> SN = enumerateSites(Gn, en);
+        cfg(PATH_B_SITE_MODE, true, 0.0, 0.0, 0.0, false, -1.0, true);
+        Glide2D Gm = build(ZSM_SEED0);
+        var em = ExplicitCompleteMatHarness.packExMat(Gm, 1);
+        java.util.List<Site> SM = enumerateSites(Gm, em);
+        double dAx = 0, dPhi = 0, dY = 0, dZ = 0; boolean sameCount = SN.size() == SM.size();
+        for (int i = 0; i < Math.min(SN.size(), SM.size()); i++) {
+            Site a = SN.get(i), b = SM.get(i);
+            if (a.k != b.k) { sameCount = false; break; }
+            dAx = Math.max(dAx, Math.abs(a.gArc - b.gArc));
+            double s = Math.toDegrees(a.phi + b.phi); s = wrapDeg(s);      // reflection ⇒ phi_mir = -phi_nat
+            dPhi = Math.max(dPhi, Math.abs(s));
+            dY = Math.max(dY, Math.abs(a.y - b.y));                        // reflection plane contains y
+            dZ = Math.max(dZ, Math.abs(a.z + b.z));                        // ... and negates z
+        }
+        boolean nonChiral = em.sbP.get(16) == en.sbP.get(16) && em.sbP.get(19) == en.sbP.get(19)
+                && em.sbP.get(0) == en.sbP.get(0) && em.sbP.get(4) == en.sbP.get(4)
+                && Gm.N == Gn.N && Gm.nSeg == Gn.nSeg;
+        boolean g1b = sameCount && dAx < 1e-12 && dPhi < 1e-9 && dY < 1e-12 && dZ < 1e-12 && nonChiral;
+        ok &= g1b;
+        System.out.printf(Locale.US,
+                "    %d sites both signs; max|d(axial)| = %.2e µm, max|phi_nat + phi_mir| = %.2e deg,%n"
+              + "    max|dy| = %.2e µm, max|z_nat + z_mir| = %.2e µm; rise/radius/dBind/preload/N/nSeg identical: %s%n"
+              + "    ⇒ %s%n", SN.size(), dAx, dPhi, dY, dZ, nonChiral ? "yes" : "NO",
+                g1b ? "EXACT REFLECTION — PASS" : "*** FAIL ***");
+
+        // ---- GATE 1c: RNG streams are identical under reflection ------------------------------------------
+        System.out.println("\n  GATE 1c — the counter-based RNG streams are IDENTICAL native vs mirror (same seed)");
+        BrownianForceSystem.brownianForce(Gn.fil.randForce, Gn.fil.randTorque, Gn.fil.bTransGam, Gn.fil.bRotGam,
+                Gn.fil.brownTransScale, Gn.fil.brownRotScale, Gn.fil.params, Gn.fil.counts);
+        BrownianForceSystem.brownianForce(Gm.fil.randForce, Gm.fil.randTorque, Gm.fil.bTransGam, Gm.fil.bRotGam,
+                Gm.fil.brownTransScale, Gm.fil.brownRotScale, Gm.fil.params, Gm.fil.counts);
+        double dRnd = 0;
+        for (int i = 0; i < 3 * Gn.nSeg; i++) {
+            dRnd = Math.max(dRnd, Math.abs(Gn.fil.randForce.get(i) - Gm.fil.randForce.get(i)));
+            dRnd = Math.max(dRnd, Math.abs(Gn.fil.randTorque.get(i) - Gm.fil.randTorque.get(i)));
+        }
+        boolean g1c = dRnd == 0.0; ok &= g1c;
+        System.out.printf(Locale.US, "    max|d(filament Brownian draw)| = %.3e ⇒ %s (the pair is matched at the "
+                + "RNG source; trajectories diverge only through the reflected FORCES)%n",
+                dRnd, g1c ? "BIT-IDENTICAL — PASS" : "*** FAIL ***");
+
+        // ---- GATE 3: z boundary ---------------------------------------------------------------------------
+        System.out.println("\n  GATE 3 — z SLAB active, harmonic z well NOT wired, upper wall rarely active");
+        boolean slabOn = ExplicitCompleteMatHarness.zSlabOn();
+        System.out.printf("    zSlabOn() = %s ⇒ MatSoaSlice.matZSlab wired, matZConfine NOT wired (mutually exclusive branch)%n",
+                slabOn);
+        System.out.printf(Locale.US, "    slab walls: [%.2f, %.2f] nm (surface limits), lawn plane %.2f nm%n",
+                en.zsP.get(0) * 1e3, en.zsP.get(1) * 1e3, ExplicitCompleteMatHarness.Z_LAWN_UM * 1e3);
+        ok &= slabOn;
+
+        // ---- GATE 5: telemetry inertness (matched seed, OFF vs ON) -----------------------------------------
+        System.out.println("\n  GATE 5 — telemetry inertness: BUDGET + EPISODE_TELEM + ACCESS_TELEM OFF vs ON");
+        int gSteps = Math.min(STEPS, 1200);
+        boolean sB = BUDGET, sT = ExplicitCompleteMatHarness.EPISODE_TELEM, sA = ACCESS_TELEM;
+        TArm TA = new TArm("gate5-off", 0.0, false, +1, true, TwoBodyConverterMotor.G4_NSEG).conv(0.0);
+        BUDGET = false; ExplicitCompleteMatHarness.EPISODE_TELEM = false; ACCESS_TELEM = false;
+        TRes off = runTwirlArm(TA, ZSM_SEED0, gSteps);
+        BUDGET = true; ExplicitCompleteMatHarness.EPISODE_TELEM = true; ACCESS_TELEM = true;
+        TRes on = runTwirlArm(TA, ZSM_SEED0, gSteps);
+        BUDGET = sB; ExplicitCompleteMatHarness.EPISODE_TELEM = sT; ACCESS_TELEM = sA;
+        double dTau = Math.abs(off.tau - on.tau), dGl = Math.abs(off.glide - on.glide);
+        double dAB = Math.abs(off.avgBound - on.avgBound), dOm = Math.abs(off.omegaFit - on.omegaFit);
+        double dTu = Math.abs(off.turns - on.turns);
+        boolean g5 = dTau == 0.0 && dGl == 0.0 && dAB == 0.0 && dOm == 0.0 && dTu == 0.0;
+        ok &= g5;
+        System.out.printf(Locale.US, "    %d steps, seed %d: |d tau| = %.3e  |d glide| = %.3e  |d avgBound| = %.3e  "
+                + "|d omegaFit| = %.3e  |d turns| = %.3e ⇒ %s%n", gSteps, ZSM_SEED0, dTau, dGl, dAB, dOm, dTu,
+                g5 ? "TRAJECTORY-INERT (exactly identical) — PASS" : "*** FAIL: telemetry perturbs the run ***");
+        if (on.acc != null)
+            System.out.printf(Locale.US, "    pilot z: mean %.2f nm (SD %.2f), lower wall %.3f %% / upper wall %.3f %% "
+                    + "of segment-steps ⇒ %s%n", on.acc.zMean() * 1e3, on.acc.zSD() * 1e3,
+                    100.0 * on.acc.wallLoN / Math.max(1, on.acc.wallTot),
+                    100.0 * on.acc.wallHiN / Math.max(1, on.acc.wallTot),
+                    on.acc.wallHiN * 1.0 / Math.max(1, on.acc.wallTot) < 0.02 ? "upper wall rarely active — PASS"
+                                                                              : "*** upper wall active — CHECK ***");
+
+        // ---- GATE 6: CPU/GPU -------------------------------------------------------------------------------
+        System.out.println("\n  GATE 6 — CPU/GPU: this campaign introduces NO new device kernel (telemetry is");
+        System.out.println("    transfer-only + host reduction). Site enumeration/capture equivalence was gated");
+        System.out.println("    separately by `-twirl-equiv -site-aware on` at 1 and 12 segments (siteIdMism = 0,");
+        System.out.println("    bindMism = 0, max|dAzim| = 0) — see docs/attachment/SPARSE_LONG_PITCH_ACTIN_SITE_LATTICE.md §10.");
+
+        System.out.printf("%n  PRE-LAUNCH GATES: %s%n", ok ? "ALL PASS — campaign may launch" : "*** BLOCKED ***");
+        CONV_RAMP_ARM = null; cfgOff();
+        return ok;
+    }
+
+    static void runZeroSkewMirror() {
+        int savedSeed = SEED;
+        zsmFreezeCandidate();
+        boolean savedBudget = BUDGET, savedTelem = ExplicitCompleteMatHarness.EPISODE_TELEM, savedAcc = ACCESS_TELEM;
+        BUDGET = true; ExplicitCompleteMatHarness.EPISODE_TELEM = true; ACCESS_TELEM = true;
+        int n = SEEDS;
+        System.out.printf(Locale.US, "%n--- POWERED ZERO-SKEW NATIVE-vs-MIRROR CAMPAIGN ---%n"
+                + "    n = %d matched seeds (%d..%d), eps = 0 in EVERY arm, %d steps x dt %.3e s = %.1f ms physical,%n"
+                + "    equilibration %.0f %% discarded ⇒ %.1f ms measured. Runner: %s. Native and mirror are%n"
+                + "    interleaved per seed so the pair is acquired under identical machine conditions.%n",
+                n, ZSM_SEED0, ZSM_SEED0 + n - 1, STEPS, DTR, STEPS * DTR * 1e3,
+                100 * EQUIL_FRAC, (1 - EQUIL_FRAC) * STEPS * DTR * 1e3, GPU ? "GPU device-resident" : "CPU");
+        System.out.println("    PRIMARY endpoint: tau_mirror_odd = 0.5*(tau_native - tau_mirror). Replicates = seeds.");
+
+        // one-time expanded-config verification on a built scene, before any arm runs
+        cfg(PATH_B_SITE_MODE, true, 0.0, 0.0, 0.0, false, 1.0, true);
+        Glide2D Gv = build(ZSM_SEED0);
+        var ev = ExplicitCompleteMatHarness.packExMat(Gv, 1);
+        if (!zsmVerifyConfig(Gv, ev)) { BUDGET = savedBudget; ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem;
+            ACCESS_TELEM = savedAcc; SEED = savedSeed; cfgOff(); return; }
+
+        String prov = String.format(Locale.US,
+                "zero-skew mirror campaign | every4 sparse + filament-global phase | site-aware | z-slab | eps=0 | "
+              + "dt=%.4e steps=%d density=%.0f eta=%.4g nSeg=%d equilFrac=%.2f runner=%s",
+                DTR, STEPS, DENSITY, ETA, TwoBodyConverterMotor.G4_NSEG, EQUIL_FRAC, GPU ? "GPU" : "CPU");
+        int done = 0, ran = 0; long t00 = System.currentTimeMillis();
+        for (int i = 0; i < n; i++) {
+            int seed = ZSM_SEED0 + i;
+            for (double mirror : new double[]{ +1.0, -1.0 }) {     // matched pair, back to back
+                String id = zsmId(seed, mirror, STEPS);
+                if (zsmRead(id) != null) { done++; continue; }
+                TArm T = new TArm(id, 0.0, false, mirror, true, TwoBodyConverterMotor.G4_NSEG).conv(0.0);
+                long t0 = System.currentTimeMillis();
+                TRes r = runTwirlArm(T, seed, STEPS);
+                if (r.invalid > 0 || r.solverFail > 0) {
+                    System.out.printf("  *** HARD STOP: %s produced invalid=%d solverFail=%d — campaign aborted ***%n",
+                            id, r.invalid, r.solverFail);
+                    BUDGET = savedBudget; ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem;
+                    ACCESS_TELEM = savedAcc; SEED = savedSeed; cfgOff(); return;
+                }
+                try { zsmWrite(id, zsmValues(r), r.episodes, prov); }
+                catch (java.io.IOException ex) { throw new RuntimeException("record write failed: " + id, ex); }
+                ran++;
+                System.out.printf(Locale.US, "    [%2d/%2d] %-24s tau=%+11.4e  Omega=%+8.2f  glide=%+6.3f  avgB=%5.2f  "
+                        + "binds/s=%7.1f  z=%5.1f nm  ep=%d  inv=%d sf=%d (%.0f s)%n",
+                        done + ran, 2 * n, id, r.tau, r.omegaFit, r.glide, r.avgBound, r.bindsPerStep / DTR,
+                        r.acc != null ? r.acc.zMean() * 1e3 : Double.NaN, r.episodes.size(),
+                        r.invalid, r.solverFail, (System.currentTimeMillis() - t0) / 1000.0);
+            }
+            int nn = i + 1;
+            if (nn == 8 || nn == 12 || nn == 16 || nn == 20 || nn == 24)
+                System.out.printf("  --- sequential ladder checkpoint: n = %d complete (%.1f min elapsed) ---%n",
+                        nn, (System.currentTimeMillis() - t00) / 60000.0);
+        }
+        System.out.printf("%n  records: %d reused, %d newly run, %d expected (%.1f min)%n",
+                done, ran, 2 * n, (System.currentTimeMillis() - t00) / 60000.0);
+        BUDGET = savedBudget; ExplicitCompleteMatHarness.EPISODE_TELEM = savedTelem; ACCESS_TELEM = savedAcc;
+        CONV_RAMP_ARM = null; SEED = savedSeed; cfgOff();
+        reportZeroSkewMirror();
+    }
+
+    // ------------------------------------------------------------------------------- statistics for the report
+    /** Exact two-sided sign test p-value for k successes out of the m non-zero of n paired differences. */
+    static double signTestP(int k, int m) {
+        if (m == 0) return Double.NaN;
+        int lo = Math.min(k, m - k);
+        double tail = 0;
+        for (int i = 0; i <= lo; i++) tail += binom(m, i);
+        double p = 2.0 * tail / Math.pow(2, m);
+        return Math.min(1.0, p);
+    }
+    static double binom(int n, int k) { double c = 1; for (int i = 0; i < k; i++) c = c * (n - i) / (i + 1); return c; }
+
+    /** {mean, SEM, n, |mean|/SEM, ciLo, ciHi} over the finite entries, 95 % two-sided t interval. */
+    static double[] zsmStat(double[] v) {
+        double s = 0, s2 = 0; int n = 0;
+        for (double x : v) if (Double.isFinite(x)) { s += x; s2 += x * x; n++; }
+        if (n == 0) return new double[]{ Double.NaN, Double.NaN, 0, Double.NaN, Double.NaN, Double.NaN };
+        double m = s / n;
+        if (n == 1) return new double[]{ m, Double.NaN, 1, Double.NaN, Double.NaN, Double.NaN };
+        double sd = Math.sqrt(Math.max(0, (s2 - n * m * m) / (n - 1))), sem = sd / Math.sqrt(n);
+        double t = T95_TWO_SIDED[Math.min(n - 1, T95_TWO_SIDED.length - 1)];
+        return new double[]{ m, sem, n, sem > 0 ? Math.abs(m) / sem : Double.NaN, m - t * sem, m + t * sem };
+    }
+
+    /** per-seed column over the first {@code n} seeds, for one mirror sign. */
+    static double[] zsmCol(String key, double mirror, int n) {
+        double[] o = new double[n]; java.util.Arrays.fill(o, Double.NaN);
+        for (int i = 0; i < n; i++) {
+            var m = zsmRead(zsmId(ZSM_SEED0 + i, mirror, STEPS));
+            if (m != null && m.get(key) != null) o[i] = m.get(key);
+        }
+        return o;
+    }
+    static double[] zsmOdd(String key, int n) {
+        double[] a = zsmCol(key, +1, n), b = zsmCol(key, -1, n), o = new double[n];
+        for (int i = 0; i < n; i++) o[i] = 0.5 * (a[i] - b[i]);
+        return o;
+    }
+    static double[] zsmEven(String key, int n) {
+        double[] a = zsmCol(key, +1, n), b = zsmCol(key, -1, n), o = new double[n];
+        for (int i = 0; i < n; i++) o[i] = 0.5 * (a[i] + b[i]);
+        return o;
+    }
+
+    static void zsmLine(String label, double[] v, String fmt) {
+        double[] st = zsmStat(v);
+        int neg = 0, pos = 0;
+        for (double x : v) if (Double.isFinite(x)) { if (x < 0) neg++; else if (x > 0) pos++; }
+        int k = Math.max(neg, pos), m = neg + pos;
+        System.out.printf(Locale.US, "    %-22s " + fmt + " ± " + fmt + "   %6.2f   [" + fmt + ", " + fmt + "]   %2d-/%2d+  p=%.4f%n",
+                label, st[0], st[1], st[3], st[4], st[5], neg, pos, signTestP(k, m));
+    }
+
+    static void reportZeroSkewMirror() {
+        System.out.println("\n=== POWERED ZERO-SKEW NATIVE-vs-MIRROR — sparse long-pitch lattice, eps = 0 ===");
+        System.out.printf("  records under %s   (steps=%d, seeds %d..)%n", ZSM_DIR, STEPS, ZSM_SEED0);
+        int nAll = 0;
+        while (nAll < 512 && zsmRead(zsmId(ZSM_SEED0 + nAll, +1, STEPS)) != null
+                          && zsmRead(zsmId(ZSM_SEED0 + nAll, -1, STEPS)) != null) nAll++;
+        System.out.printf("  complete matched pairs: n = %d%n", nAll);
+        if (nAll == 0) { System.out.println("  (nothing to report)"); return; }
+
+        System.out.println("\n  -- SEQUENTIAL LADDER, PRIMARY endpoint tau_mirror_odd = 0.5*(tau_nat - tau_mir), N·m --");
+        System.out.printf("    %-8s %14s %12s %8s %26s %10s %8s%n", "n", "mean", "SEM", "|m|/SEM", "95% t CI", "signs", "sign-p");
+        for (int nn : new int[]{ 2, 4, 8, 12, 16, 20, 24 }) {
+            if (nn > nAll) continue;
+            double[] v = zsmOdd("tau", nn); double[] st = zsmStat(v);
+            int neg = 0, pos = 0; for (double x : v) if (Double.isFinite(x)) { if (x < 0) neg++; else if (x > 0) pos++; }
+            System.out.printf(Locale.US, "    n=%-6d %14.5e %12.3e %8.2f  [%11.4e, %11.4e] %5d-/%2d+  %8.4f%n",
+                    nn, st[0], st[1], st[3], st[4], st[5], neg, pos, signTestP(Math.max(neg, pos), neg + pos));
+        }
+        if (nAll < 24) System.out.printf("    (ladder truncated at the %d pairs currently on disk)%n", nAll);
+
+        System.out.println("\n  -- PRIMARY + SECONDARY at the full n, mirror-ODD channel --");
+        System.out.printf("    %-22s %14s   %14s   %8s   %26s   %8s %s%n",
+                "quantity", "mean", "SEM", "|m|/SEM", "95% t CI", "signs", "sign-p");
+        zsmLine("tau_odd (N·m)", zsmOdd("tau", nAll), "%14.5e");
+        zsmLine("omegaFit_odd (rad/s)", zsmOdd("omegaFit", nAll), "%14.5e");
+        zsmLine("turns_odd", zsmOdd("turns", nAll), "%14.5e");
+        zsmLine("tauPerHead_odd", zsmOdd("tauPerHead", nAll), "%14.5e");
+
+        System.out.println("\n  -- MIRROR-EVEN control (must NOT carry the effect) --");
+        zsmLine("tau_even (N·m)", zsmEven("tau", nAll), "%14.5e");
+        zsmLine("omegaFit_even", zsmEven("omegaFit", nAll), "%14.5e");
+
+        System.out.println("\n  -- RAW arms (native / mirror separately) --");
+        System.out.printf("    %-22s %20s %20s%n", "quantity", "native", "mirror");
+        for (String c : new String[]{ "tau", "omegaFit", "turns", "glide", "avgBound", "bindsPerS", "meanZ_nm" }) {
+            double[] a = zsmStat(zsmCol(c, +1, nAll)), b = zsmStat(zsmCol(c, -1, nAll));
+            System.out.printf(Locale.US, "    %-22s %11.4e±%-8.2e %11.4e±%-8.2e%n", c, a[0], a[1], b[0], b[1]);
+        }
+
+        System.out.println("\n  -- ACHIRAL TRANSPORT SANITY: native vs mirror must match within noise --");
+        System.out.printf("    %-22s %14s %12s %8s %s%n", "quantity (odd channel)", "mean", "SEM", "|m|/SEM", "verdict");
+        for (String c : new String[]{ "glide", "avgBound", "bindsPerS", "meanZ_nm", "strokeRatePerS", "wallHiFrac" }) {
+            double[] st = zsmStat(zsmOdd(c, nAll));
+            System.out.printf(Locale.US, "    %-22s %14.5e %12.3e %8.2f %s%n", c, st[0], st[1], st[3],
+                    !Double.isFinite(st[3]) ? "-" : (st[3] < 2 ? "matched" : "*** CHECK ***"));
+        }
+
+        System.out.println("\n  -- MECHANISM: where does the mirror-odd torque live? (odd channel of each sub-total) --");
+        System.out.printf("    %-22s %14s %12s %8s%n", "channel", "mean", "SEM", "|m|/SEM");
+        String[][] mech = {
+            { "tauPre", "pre-stroke (ADP·Pi dwell)" }, { "tauPost", "post-stroke" },
+            { "tauPull", "puller heads" }, { "tauDrag", "dragger heads" },
+            { "tauPos", "positive-torque heads" }, { "tauNeg", "negative-torque heads" },
+            { "tauState0", "nucleotide state 0" }, { "tauState1", "state 1" },
+            { "tauState2", "state 2 (ADP·Pi)" }, { "tauState3", "state 3 (ADP)" },
+            { "tauNEAR", "NEAR sites" }, { "tauSIDE", "SIDE sites" }, { "tauFAR", "FAR sites" },
+        };
+        for (String[] mm : mech) {
+            double[] st = zsmStat(zsmOdd(mm[0], nAll));
+            System.out.printf(Locale.US, "    %-22s %14.5e %12.3e %8.2f%n", mm[1], st[0], st[1], st[3]);
+        }
+        System.out.println("\n  -- ATTACHMENT-AGE resolved mirror-odd torque (bin b = ages [2^b-1, 2^(b+1)-1) steps) --");
+        System.out.printf("    %-8s %14s %12s %8s %10s%n", "bin", "mean", "SEM", "|m|/SEM", "mean n");
+        for (int b = 0; b < AGE_BINS; b++) {
+            double[] st = zsmStat(zsmOdd("ageTau" + b, nAll));
+            double[] nb = zsmStat(zsmEven("ageN" + b, nAll));
+            if (!(nb[0] > 0)) continue;
+            System.out.printf(Locale.US, "    b=%-6d %14.5e %12.3e %8.2f %10.1f%n", b, st[0], st[1], st[3], nb[0]);
+        }
+
+        System.out.println("\n  -- SITE AZIMUTH x TORQUE (18 beta bins; beta = 0 points AWAY from the lawn) --");
+        System.out.printf("    %-10s %10s %14s %14s %10s%n", "beta deg", "occ(nat)", "tau(nat)", "tau_odd", "|m|/SEM");
+        for (int b = 0; b < AccessTel.NB; b++) {
+            double[] occ = zsmStat(zsmCol("hBeta" + b, +1, nAll));
+            if (!(occ[0] > 0)) continue;
+            double[] tn = zsmStat(zsmCol("hBetaTau" + b, +1, nAll));
+            double[] to = zsmStat(zsmOdd("hBetaTau" + b, nAll));
+            System.out.printf(Locale.US, "    %+10.0f %10.1f %14.5e %14.5e %10.2f%n",
+                    Math.toDegrees((b + 0.5) * 2 * Math.PI / AccessTel.NB - Math.PI), occ[0], tn[0], to[0], to[3]);
+        }
+
+        double inv = 0, sf = 0;
+        for (double mm : new double[]{ +1, -1 }) {
+            for (double x : zsmCol("invalid", mm, nAll)) if (Double.isFinite(x)) inv += x;
+            for (double x : zsmCol("solverFail", mm, nAll)) if (Double.isFinite(x)) sf += x;
+        }
+        System.out.printf("%n  HARD STOPS across all %d arms: invalid = %.0f, solverFail = %.0f%n", 2 * nAll, inv, sf);
+    }
+
+    // ==================================================================================================
+    // PHASE 12/13 — BOUNDED every3-vs-every4 COMPATIBILITY PANEL (not a production campaign)
+    // ==================================================================================================
+    static final String LAT_DIR = "RUN_LOGS/attachment_audit/sparse_long_pitch_sites/compare";
+    static final String[] LAT_COLS = {
+        "glide_um_s", "avgBound", "binds_per_s", "tau_Nm", "omegaFit_rad_s", "turns",
+        "meanZ_nm", "nearBind", "sideBind", "farBind", "nearBound", "sideBound", "farBound",
+        "siteOcc", "invalid", "solverFail", "measSteps" };
+
+    /** −1 ⇒ run the MIRRORED lattice (a genuine reflection: twist, staircase and site tangential sense all flip). */
+    static double LAT_MIRROR = 1.0;              // -lattice-mirror
+    static String latId(String lat, int sgn, int seed) {
+        return String.format(Locale.US, "%slat_%s_e%s_s%d_n%d", LAT_MIRROR < 0 ? "m_" : "", lat,
+                sgn > 0 ? "p" : (sgn < 0 ? "m" : "0"), seed, STEPS);
+    }
+    static String latIdM(String lat, int sgn, int seed, double mirror) {
+        return String.format(Locale.US, "%slat_%s_e%s_s%d_n%d", mirror < 0 ? "m_" : "", lat,
+                sgn > 0 ? "p" : (sgn < 0 ? "m" : "0"), seed, STEPS);
+    }
+    static double[] latRead(String id) {
+        java.io.File f = new java.io.File(LAT_DIR, id + ".tsv");
+        if (!f.isFile()) return null;
+        try (java.util.Scanner sc = new java.util.Scanner(f)) {
+            java.util.List<Double> v = new java.util.ArrayList<>();
+            while (sc.hasNextLine()) { String[] p = sc.nextLine().split("\t");
+                if (p.length == 2 && !p[0].startsWith("#")) v.add(Double.parseDouble(p[1])); }
+            if (v.size() != LAT_COLS.length) return null;
+            double[] o = new double[v.size()]; for (int i = 0; i < o.length; i++) o[i] = v.get(i); return o;
+        } catch (Exception ex) { return null; }
+    }
+    static void latWrite(String id, double[] v, String prov) throws java.io.IOException {
+        new java.io.File(LAT_DIR).mkdirs();
+        StringBuilder sb = new StringBuilder("# " + prov + "\n");
+        for (int i = 0; i < LAT_COLS.length; i++) sb.append(String.format(Locale.US, "%s\t%.10g%n", LAT_COLS[i], v[i]));
+        java.nio.file.Files.writeString(java.nio.file.Path.of(LAT_DIR, id + ".tsv"), sb.toString());
+    }
+    /** Effective sites the filament presents, from the lattice geometry — the denominator of {@code siteOcc}. */
+    static double latNSites(double riseUm) { return TwoBodyConverterMotor.G4_NSEG * (TwoBodyConverterMotor.G4_MONO + 1)
+            * Constants.actinMonoRadius / riseUm; }
+
+    static double[] latValues(TRes r, double riseUm) {
+        AccessTel a = r.acc;
+        double meas = Math.max(1, (int) Math.round((1 - EQUIL_FRAC) * STEPS));
+        return new double[]{
+            r.glide, r.avgBound, r.bindsPerStep / DTR, r.tau, r.omegaFit, r.turns,
+            a != null ? a.zMean() * 1e3 : Double.NaN,
+            a != null ? a.bindFrac(AccessTel.NEAR) : Double.NaN,
+            a != null ? a.bindFrac(AccessTel.SIDE) : Double.NaN,
+            a != null ? a.bindFrac(AccessTel.FAR)  : Double.NaN,
+            a != null ? a.occFrac(AccessTel.NEAR)  : Double.NaN,
+            a != null ? a.occFrac(AccessTel.SIDE)  : Double.NaN,
+            a != null ? a.occFrac(AccessTel.FAR)   : Double.NaN,
+            r.avgBound / latNSites(riseUm),
+            r.invalid, r.solverFail, meas };
+    }
+
+    /**
+     * Run the bounded every3 (legacy) vs sparse every4 (candidate) comparison. Both arms use the SAME
+     * site-aware capture and the SAME validated z slab, so the ONLY difference is the actin-side lattice
+     * (rise + azimuth convention). Resume-safe: one atomic TSV per (lattice, eps sign, seed).
+     */
+    static void runLatticeCompare() {
+        int savedMode = PATH_B_SITE_MODE; boolean savedPh = PATH_B_PHASE_GLOBAL;
+        boolean savedSA = ExplicitCompleteMatHarness.SITE_AWARE, savedSlab = ExplicitCompleteMatHarness.Z_SLAB;
+        ACCESS_TELEM = true;
+        ExplicitCompleteMatHarness.SITE_AWARE = true; ExplicitCompleteMatHarness.Z_SLAB = true;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        double epsMax = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0;
+        int nSeeds = Math.max(1, Math.min(SEEDS, 2));
+        System.out.printf(Locale.US, "%n--- LATTICE COMPATIBILITY PANEL: every3 (legacy, segment-relative phase) vs%n"
+                + "    every4 SPARSE LONG-PITCH (candidate, filament-global phase).%n"
+                + "    IDENTICAL in both arms: site-aware capture ON, z slab ON, %d-segment filament, filament%n"
+                + "    Brownian ON, density %.0f heads/µm², dt %.2e s, %d steps, %d matched seeds, eps in {0,+%.0f,-%.0f} deg,%n"
+                + "    linear progress ramp. Runner: %s. This is a COMPATIBILITY PANEL, not a production campaign. ---%n",
+                TwoBodyConverterMotor.G4_NSEG, DENSITY, DTR, STEPS, nSeeds, epsMax, epsMax,
+                GPU ? "GPU device-resident" : "CPU");
+        int done = 0, ran = 0;
+        for (String lat : new String[]{ "every3", "every4" }) {
+            PATH_B_SITE_MODE = lat.equals("every3") ? 2 : 3;
+            PATH_B_PHASE_GLOBAL = lat.equals("every4");
+            double rise = ExplicitCompleteMatHarness.siteRise(PATH_B_SITE_MODE);
+            // the MIRROR control is a zero-skew test by construction: with eps = 0 the ONLY chirality left in
+            // the model is the actin lattice's own helical sense, so reflecting it is the decisive experiment.
+            for (int sgn : (LAT_MIRROR < 0 ? new int[]{ 0 } : new int[]{ 0, +1, -1 })) {
+                for (int i = 0; i < nSeeds; i++) {
+                    int seed = SEED + i; String id = latId(lat, sgn, seed);
+                    if (latRead(id) != null) { done++; continue; }
+                    TArm T = new TArm(id, 0.0, false, LAT_MIRROR, true, TwoBodyConverterMotor.G4_NSEG).conv(sgn * epsMax);
+                    long t0 = System.currentTimeMillis();
+                    TRes r = runTwirlArm(T, seed, STEPS);
+                    try { latWrite(id, latValues(r, rise), String.format(Locale.US,
+                            "lattice=%s phase=%s siteAware=ON zSlab=ON eps=%+.1f seed=%d steps=%d dt=%.3e density=%.0f",
+                            lat, PATH_B_PHASE_GLOBAL ? "global" : "segment", sgn * epsMax, seed, STEPS, DTR, DENSITY)); }
+                    catch (java.io.IOException ex) { throw new RuntimeException("record write failed: " + id, ex); }
+                    ran++;
+                    if (LAT_MIRROR < 0) System.out.print("  [MIRROR]");
+                    System.out.printf(Locale.US, "    [%2d] %-32s glide=%+7.3f  avgB=%5.2f  binds/s=%8.1f  Omega=%+8.2f  inv=%d sf=%d (%.1f s)%n",
+                            done + ran, id, r.glide, r.avgBound, r.bindsPerStep / DTR, r.omegaFit,
+                            r.invalid, r.solverFail, (System.currentTimeMillis() - t0) / 1000.0);
+                }
+            }
+        }
+        System.out.printf("%n  records: %d reused, %d newly run, %d expected%n", done, ran,
+                2 * (LAT_MIRROR < 0 ? 1 : 3) * nSeeds);
+        PATH_B_SITE_MODE = savedMode; PATH_B_PHASE_GLOBAL = savedPh;
+        ExplicitCompleteMatHarness.SITE_AWARE = savedSA; ExplicitCompleteMatHarness.Z_SLAB = savedSlab;
+        CONV_RAMP_ARM = null; ACCESS_TELEM = false; cfgOff(); EPS_CONV_ARM = 0;
+        LAT_MIRROR = 1.0;                 // the report always reads the native ids explicitly
+        reportLatticeCompare();
+    }
+
+    static double[] latCol(String lat, int sgn, String col) {
+        int c = java.util.Arrays.asList(LAT_COLS).indexOf(col);
+        int nSeeds = Math.max(1, Math.min(SEEDS, 2));
+        double[] o = new double[nSeeds]; java.util.Arrays.fill(o, Double.NaN);
+        for (int i = 0; i < nSeeds; i++) {   // the panels always report the NATIVE lattice; mirror has its own block
+            double[] v = latRead(latIdM(lat, sgn, SEED + i, +1.0)); if (v != null) o[i] = v[c]; }
+        return o;
+    }
+    /** eps-ODD half-difference per seed: (X(+eps) - X(-eps))/2 — the chiral channel. */
+    static double[] latOdd(String lat, String col) {
+        double[] p = latCol(lat, +1, col), m = latCol(lat, -1, col);
+        double[] o = new double[p.length]; for (int i = 0; i < p.length; i++) o[i] = 0.5 * (p[i] - m[i]);
+        return o;
+    }
+    /** eps-EVEN half-sum per seed: (X(+eps) + X(-eps))/2 — the achiral (gliding) channel. */
+    static double[] latEven(String lat, String col) {
+        double[] p = latCol(lat, +1, col), m = latCol(lat, -1, col);
+        double[] o = new double[p.length]; for (int i = 0; i < p.length; i++) o[i] = 0.5 * (p[i] + m[i]);
+        return o;
+    }
+    static double[] msn(double[] v) {
+        double s = 0, s2 = 0; int n = 0;
+        for (double x : v) if (Double.isFinite(x)) { s += x; s2 += x * x; n++; }
+        if (n == 0) return new double[]{ Double.NaN, Double.NaN, 0 };
+        double m = s / n, sd = n > 1 ? Math.sqrt(Math.max(0, (s2 - n * m * m) / (n - 1))) : 0;
+        return new double[]{ m, n > 1 ? sd / Math.sqrt(n) : Double.NaN, n };
+    }
+
+    static void reportLatticeCompare() {
+        System.out.println("\n=== LATTICE COMPATIBILITY PANEL — every3 (legacy) vs every4 (sparse long-pitch) ===");
+        System.out.printf("  records under %s%n", LAT_DIR);
+        System.out.println("  n is small BY DESIGN (2 matched seeds): read DIRECTION and MAGNITUDE, not significance.\n");
+        String[] evenCols = { "glide_um_s", "avgBound", "binds_per_s", "siteOcc", "meanZ_nm",
+                              "nearBind", "sideBind", "farBind", "nearBound", "sideBound", "farBound" };
+        System.out.printf("  -- eps-EVEN channel (gliding / engagement; mean of +eps and -eps, then over seeds) --%n");
+        System.out.printf("    %-14s %22s %22s %12s%n", "quantity", "every3 (legacy)", "every4 (sparse)", "ratio 4/3");
+        for (String c : evenCols) {
+            double[] a = msn(latEven("every3", c)), b = msn(latEven("every4", c));
+            System.out.printf(Locale.US, "    %-14s %12.4f ± %-7.4f %12.4f ± %-7.4f %12s%n", c, a[0], a[1], b[0], b[1],
+                    Double.isFinite(a[0]) && a[0] != 0 ? String.format(Locale.US, "%.3f", b[0] / a[0]) : "-");
+        }
+        System.out.printf("%n  -- eps-ODD channel (chiral; (X(+eps) - X(-eps))/2) --%n");
+        System.out.printf("    %-14s %24s %24s%n", "quantity", "every3 (legacy)", "every4 (sparse)");
+        for (String c : new String[]{ "tau_Nm", "omegaFit_rad_s", "turns", "glide_um_s" }) {
+            double[] a = msn(latOdd("every3", c)), b = msn(latOdd("every4", c));
+            System.out.printf(Locale.US, "    %-14s %13.5e ± %-9.2e %13.5e ± %-9.2e%n", c, a[0], a[1], b[0], b[1]);
+        }
+        System.out.printf("%n  -- ZERO-SKEW arms (eps = 0 exactly; NO effect is expected or demanded) --%n");
+        System.out.printf("    %-14s %22s %22s%n", "quantity", "every3 (legacy)", "every4 (sparse)");
+        for (String c : new String[]{ "tau_Nm", "omegaFit_rad_s", "turns", "glide_um_s", "avgBound",
+                                      "binds_per_s", "nearBound", "farBound", "meanZ_nm" }) {
+            double[] a = msn(latCol("every3", 0, c)), b = msn(latCol("every4", 0, c));
+            System.out.printf(Locale.US, "    %-14s %13.5e ± %-8.2e %13.5e ± %-8.2e%n", c, a[0], a[1], b[0], b[1]);
+        }
+        // ---- zero-skew MIRROR control, when it has been run ------------------------------------------------
+        int nSeeds = Math.max(1, Math.min(SEEDS, 2));
+        boolean haveMirror = latRead(latIdM("every4", 0, SEED, -1.0)) != null;
+        if (haveMirror) {
+            System.out.printf("%n  -- ZERO-SKEW MIRROR CONTROL (eps = 0, MIRROR_SIGN = -1: the lattice's own helical%n"
+                    + "     sense reflected. With eps = 0 this is the ONLY chirality left in the model, so a%n"
+                    + "     SIGN REVERSAL would attribute the zero-skew torque to the lattice; no reversal would%n"
+                    + "     attribute it to an ACHIRAL bias of the assay.) --%n");
+            System.out.printf("    %-8s %-16s %14s %14s %14s %s%n", "lattice", "quantity", "native", "mirror", "sum", "per-seed signs");
+            for (String lat : new String[]{ "every3", "every4" }) {
+                for (String c : new String[]{ "tau_Nm", "omegaFit_rad_s", "turns" }) {
+                    int ci = java.util.Arrays.asList(LAT_COLS).indexOf(c);
+                    double[] nv = new double[nSeeds], mv = new double[nSeeds], sv = new double[nSeeds];
+                    StringBuilder sg = new StringBuilder();
+                    for (int i = 0; i < nSeeds; i++) {
+                        double[] a = latRead(latIdM(lat, 0, SEED + i, +1.0)), b = latRead(latIdM(lat, 0, SEED + i, -1.0));
+                        nv[i] = a != null ? a[ci] : Double.NaN; mv[i] = b != null ? b[ci] : Double.NaN;
+                        sv[i] = nv[i] + mv[i];
+                        sg.append(nv[i] < 0 ? '-' : '+').append(mv[i] < 0 ? '-' : '+').append(' ');
+                    }
+                    double[] n = msn(nv), m = msn(mv), s = msn(sv);
+                    System.out.printf(Locale.US, "    %-8s %-16s %14.5e %14.5e %14.5e  %s%n", lat, c, n[0], m[0], s[0], sg);
+                }
+            }
+            System.out.println("    (per-seed signs are printed as native/mirror pairs; a reversal shows as '-+' or '+-')");
+        } else {
+            System.out.println("\n  -- ZERO-SKEW MIRROR CONTROL: not run (use -lattice-compare -lattice-mirror) --");
+        }
+
+        double ia = msn(latCol("every3", 0, "invalid"))[0] + msn(latCol("every4", 0, "invalid"))[0];
+        double sa = msn(latCol("every3", 0, "solverFail"))[0] + msn(latCol("every4", 0, "solverFail"))[0];
+        System.out.printf("%n  HARD STOPS: invalid (eps=0 arms) = %.0f, solverFail = %.0f%n", ia, sa);
+    }
+
+    /** One effective binding site, reconstructed EXACTLY as the capture kernels reconstruct it. */
+    static final class Site {
+        int k, seg; double gArc, lArc, phi, x, y, z, nx, ny, nz;
+    }
+
+    /**
+     * Enumerate the WHOLE effective-site lattice of a built scene using the kernels' own parameters
+     * ({@code sbP[16..19]}, {@code sbP[25]}) and the kernels' own site-position expression. Nothing is
+     * hard-coded: rise, twist, phase convention, radius and the segment material frames all come from the
+     * packed run configuration, so this is the lattice the simulation actually binds to.
+     */
+    static java.util.List<Site> enumerateSites(Glide2D G, ExplicitCompleteMatHarness.ExMat e) {
+        FilamentStore f = G.fil; int nSeg = G.nSeg;
+        double rise = e.sbP.get(16), twist = e.sbP.get(17), stair = e.sbP.get(18), Ract = e.sbP.get(19);
+        double phaseGlobal = e.sbP.get(25);
+        double total = 0; for (int s = 0; s < nSeg; s++) total += f.segLength.get(s);
+        java.util.List<Site> out = new java.util.ArrayList<>();
+        for (int k = 0; k * rise <= total; k++) {
+            double g = k * rise;
+            int s = -1; double la = 0;
+            double segTol = e.sbP.get(26);
+            for (int q = 0; q < nSeg; q++) {   // the siteGateA membership rule, verbatim (tolerant + clamped)
+                double c = e.segCumArc.get(q), L = f.segLength.get(q), lr = g - c;
+                if (lr < -segTol || lr > L + segTol) continue;
+                s = q; la = lr < 0.0 ? 0.0 : (lr > L ? L : lr); break;
+            }
+            if (s < 0) continue;
+            double half = 0.5 * f.segLength.get(s);
+            double ux = f.uVec.get(s), uy = f.uVec.get(nSeg + s), uz = f.uVec.get(2 * nSeg + s);
+            double yx = f.yVec.get(s), yy = f.yVec.get(nSeg + s), yz = f.yVec.get(2 * nSeg + s);
+            double zx = uy * yz - uz * yy, zy = uz * yx - ux * yz, zz = ux * yy - uy * yx;
+            double zl = Math.sqrt(zx * zx + zy * zy + zz * zz); if (zl > 1e-30) { zx /= zl; zy /= zl; zz /= zl; }
+            Site t = new Site();
+            t.k = k; t.seg = s; t.gArc = g; t.lArc = la;
+            t.phi = ChiralSiteSystem.sitePhaseHost(k, la, half, twist, stair, rise, phaseGlobal);
+            double cph = Math.cos(t.phi), sph = Math.sin(t.phi);
+            t.nx = cph * yx + sph * zx; t.ny = cph * yy + sph * zy; t.nz = cph * yz + sph * zz;
+            double aOff = la - half;
+            t.x = f.coord.get(s) + aOff * ux + Ract * t.nx;
+            t.y = f.coord.get(nSeg + s) + aOff * uy + Ract * t.ny;
+            t.z = f.coord.get(2 * nSeg + s) + aOff * uz + Ract * t.nz;
+            out.add(t);
+        }
+        return out;
+    }
+    static double wrapDeg(double d) { d = d % 360.0; if (d > 180.0) d -= 360.0; if (d <= -180.0) d += 360.0; return d; }
+    static double dist(Site a, Site b) { double dx = a.x-b.x, dy = a.y-b.y, dz = a.z-b.z; return Math.sqrt(dx*dx+dy*dy+dz*dz); }
+
+    /** Nominal myosin-head diameter used ONLY as a comparison scale bar in the footprint analysis (Phase 5).
+     *  It is not a parameter of the model, nothing is fitted to it, and no exclusion law uses it. */
+    static final double HEAD_DIAM_NM = 7.0;
+
+    /**
+     * PHASES 1/5/8/9 — verify the effective binding-site lattice numerically, from the exact coordinates the
+     * capture kernels use, and write the figure data. Advances no trajectory and changes no physics.
+     */
+    static boolean runSiteGeometry() {
+        boolean ok = true;
+        int savedSegs = FIL_SEGS; boolean savedBrown = FIL_BROWN;
+        boolean savedSA = ExplicitCompleteMatHarness.SITE_AWARE;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        ExplicitCompleteMatHarness.SITE_AWARE = true;
+        System.out.printf("%n=== SPARSE LONG-PITCH EFFECTIVE SITE LATTICE — numeric geometry verification ===%n");
+        System.out.printf("  native actin constants (project values, nothing hard-coded here):%n"
+                + "    monomer axial rise  Constants.actinMonoRadius = %.4f nm%n"
+                + "    monomer twist       TWIST_PER_MON_DEG        = %+.4f deg  (13/6, LEFT-handed)%n"
+                + "    actin radius        Constants.radius          = %.4f nm%n",
+                Constants.actinMonoRadius * 1e3, ExplicitCompleteMatHarness.TWIST_PER_MON_DEG, Constants.radius * 1e3);
+
+        for (int mode : new int[]{ 2, 3 }) {
+            for (boolean glob : new boolean[]{ false, true }) {
+                if (mode == 2 && glob) continue;                       // legacy every3 is only ever segment-relative
+                PATH_B_SITE_MODE = mode; PATH_B_PHASE_GLOBAL = glob;
+                cfg(mode, true, 0.0, 0.0, 0.0, false, 1.0, true);
+                Glide2D G = build(SEED); FilamentStore f = G.fil; int nSeg = G.nSeg;
+                var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+                double rise = e.sbP.get(16), twist = e.sbP.get(17), stair = e.sbP.get(18);
+                double stepPhase = (stair != 0.0) ? stair : twist * rise;
+                java.util.List<Site> S = enumerateSites(G, e);
+                String tag = ExplicitCompleteMatHarness.siteModeName(mode) + (glob ? " / filament-global phase" : " / segment-relative phase (LEGACY)");
+                System.out.printf("%n----------------------------------------------------------------------------------%n");
+                System.out.printf("  LATTICE: %s%n", tag);
+                System.out.printf("    rise = %d x %.3f nm = %.4f nm   |   d(azimuth)/site = %+.4f deg (wrapped %+.4f deg)%n",
+                        (int) Math.round(rise / Constants.actinMonoRadius), Constants.actinMonoRadius * 1e3, rise * 1e3,
+                        Math.toDegrees(stepPhase), wrapDeg(Math.toDegrees(stepPhase)));
+                double turnNm = 360.0 / Math.abs(wrapDeg(Math.toDegrees(stepPhase))) * rise * 1e3;
+                System.out.printf("    long-pitch repeat (one 360 deg revolution) = %.3f sites = %.3f nm%n",
+                        360.0 / Math.abs(wrapDeg(Math.toDegrees(stepPhase))), turnNm);
+                System.out.printf("    filament: %d segments x %.4f nm = %.4f um contour; %d effective sites; surface radius %.3f nm%n",
+                        nSeg, f.segLength.get(0) * 1e3, nSeg * f.segLength.get(0), S.size(), e.sbP.get(19) * 1e3);
+
+                // ---- Phase 9 table --------------------------------------------------------------------
+                System.out.printf("%n    %3s %4s %12s %12s %11s %11s %10s %10s %10s %9s%n",
+                        "k", "seg", "gArc nm", "localArc nm", "azim deg", "d azim", "x um", "y nm", "z nm", "d(k-1) nm");
+                for (int i = 0; i < Math.min(14, S.size()); i++) {
+                    Site t = S.get(i);
+                    double dprev = i > 0 ? dist(t, S.get(i - 1)) * 1e3 : Double.NaN;
+                    double daz = i > 0 ? wrapDeg(Math.toDegrees(t.phi - S.get(i - 1).phi)) : Double.NaN;
+                    System.out.printf(Locale.US, "    %3d %4d %12.4f %12.4f %11.3f %11.3f %10.5f %10.4f %10.4f %9.4f%n",
+                            t.k, t.seg, t.gArc * 1e3, t.lArc * 1e3, wrapDeg(Math.toDegrees(t.phi)), daz,
+                            t.x, t.y * 1e3, t.z * 1e3, dprev);
+                }
+
+                // ---- acceptance criteria --------------------------------------------------------------
+                double dAxMin = 1e9, dAxMax = -1e9, dAzMin = 1e9, dAzMax = -1e9, d3Min = 1e9, d3Max = -1e9;
+                int boundaryJumps = 0; double maxBoundaryJump = 0;
+                for (int i = 1; i < S.size(); i++) {
+                    Site a = S.get(i - 1), b = S.get(i);
+                    if (b.k != a.k + 1) { ok = false; System.out.printf("    *** index gap at k=%d ***%n", b.k); }
+                    double dAx = (b.gArc - a.gArc) * 1e3, daz = wrapDeg(Math.toDegrees(b.phi - a.phi)), d3 = dist(a, b) * 1e3;
+                    dAxMin = Math.min(dAxMin, dAx); dAxMax = Math.max(dAxMax, dAx);
+                    dAzMin = Math.min(dAzMin, daz); dAzMax = Math.max(dAzMax, daz);
+                    d3Min = Math.min(d3Min, d3); d3Max = Math.max(d3Max, d3);
+                    if (b.seg != a.seg) {
+                        double jump = Math.abs(wrapDeg(daz - wrapDeg(Math.toDegrees(stepPhase))));
+                        maxBoundaryJump = Math.max(maxBoundaryJump, jump);
+                        if (jump > 1e-6) boundaryJumps++;
+                    }
+                }
+                System.out.printf(Locale.US, "%n    d(axial)   over all %d gaps : [%.6f, %.6f] nm%n", S.size() - 1, dAxMin, dAxMax);
+                System.out.printf(Locale.US, "    d(azimuth) over all %d gaps : [%+.6f, %+.6f] deg%n", S.size() - 1, dAzMin, dAzMax);
+                System.out.printf(Locale.US, "    3-D nearest-neighbour dist  : [%.4f, %.4f] nm%n", d3Min, d3Max);
+                System.out.printf("    segment boundaries crossed  : %d; azimuth DISCONTINUITIES: %d (max %.4f deg) ⇒ %s%n",
+                        nSeg - 1, boundaryJumps, maxBoundaryJump,
+                        boundaryJumps == 0 ? "ONE CONTINUOUS HELIX" : "*** phase restarts at each segment ***");
+
+                // ---- Phase 5 footprint ------------------------------------------------------------------
+                double nn2Min = 1e9; int inFootprint = 0;
+                for (int i = 0; i < S.size(); i++) {
+                    double best = 1e9, second = 1e9; int within = 0;
+                    for (int j = 0; j < S.size(); j++) {
+                        if (i == j) continue;
+                        double d = dist(S.get(i), S.get(j)) * 1e3;
+                        if (d < best) { second = best; best = d; } else if (d < second) second = d;
+                        if (d < HEAD_DIAM_NM) within++;
+                    }
+                    nn2Min = Math.min(nn2Min, second);
+                    inFootprint = Math.max(inFootprint, within);
+                }
+                System.out.printf(Locale.US, "%n    FOOTPRINT (nominal %.1f nm head diameter, comparison scale only — no exclusion law uses it):%n"
+                        + "      min 2nd-nearest site distance = %.4f nm%n"
+                        + "      max # OTHER sites within %.1f nm of any site = %d%n",
+                        HEAD_DIAM_NM, nn2Min, HEAD_DIAM_NM, inFootprint);
+
+                // ---- host twin vs the KERNEL's own latched azimuth --------------------------------------
+                double dHost = siteHostVsKernel(G, e, S);
+                boolean hOk = dHost == 0.0;
+                ok &= hOk;
+                System.out.printf(Locale.US, "    HOST-TWIN GATE: |bindAzim(kernel capture) - sitePhaseHost| = %.3e rad ⇒ %s%n",
+                        dHost, hOk ? "EXACT — the table IS the code's lattice" : "*** MISMATCH ***");
+
+                // ---- figure data ----------------------------------------------------------------------
+                String dir = SITE_GEOM_DIR;
+                String fn = ExplicitCompleteMatHarness.siteModeName(mode) + "_" + (glob ? "global" : "segment");
+                try {
+                    new java.io.File(dir).mkdirs();
+                    StringBuilder sb = new StringBuilder("k\tseg\tgArc_nm\tlocalArc_nm\tazim_deg\tx_um\ty_um\tz_um\tnx\tny\tnz\td_prev_nm\n");
+                    for (int i = 0; i < S.size(); i++) {
+                        Site t = S.get(i);
+                        sb.append(String.format(Locale.US, "%d\t%d\t%.6f\t%.6f\t%.6f\t%.8f\t%.8f\t%.8f\t%.6f\t%.6f\t%.6f\t%.6f%n",
+                                t.k, t.seg, t.gArc * 1e3, t.lArc * 1e3, wrapDeg(Math.toDegrees(t.phi)),
+                                t.x, t.y, t.z, t.nx, t.ny, t.nz, i > 0 ? dist(t, S.get(i - 1)) * 1e3 : Double.NaN));
+                    }
+                    java.nio.file.Files.writeString(java.nio.file.Path.of(dir, "sites_" + fn + ".tsv"), sb.toString());
+                    StringBuilder fb = new StringBuilder("seg\tcx_um\tcy_um\tcz_um\tux\tuy\tuz\tsegLen_um\tcumArc_um\n");
+                    for (int s = 0; s < nSeg; s++)
+                        fb.append(String.format(Locale.US, "%d\t%.8f\t%.8f\t%.8f\t%.6f\t%.6f\t%.6f\t%.8f\t%.8f%n", s,
+                                f.coord.get(s), f.coord.get(nSeg + s), f.coord.get(2 * nSeg + s),
+                                f.uVec.get(s), f.uVec.get(nSeg + s), f.uVec.get(2 * nSeg + s),
+                                f.segLength.get(s), e.segCumArc.get(s)));
+                    java.nio.file.Files.writeString(java.nio.file.Path.of(dir, "filament_" + fn + ".tsv"), fb.toString());
+                    StringBuilder mb = new StringBuilder();
+                    mb.append(String.format(Locale.US, "mode\t%s%nphase\t%s%nrise_nm\t%.6f%ndAzim_deg\t%.6f%n"
+                            + "longPitch_nm\t%.6f%nRactin_nm\t%.6f%nmonoRise_nm\t%.6f%ntwistPerMon_deg\t%.6f%n"
+                            + "nSeg\t%d%nsegLen_nm\t%.6f%nnSites\t%d%nheadDiam_nm\t%.3f%n",
+                            ExplicitCompleteMatHarness.siteModeName(mode), glob ? "global" : "segment",
+                            rise * 1e3, wrapDeg(Math.toDegrees(stepPhase)), turnNm, e.sbP.get(19) * 1e3,
+                            Constants.actinMonoRadius * 1e3, ExplicitCompleteMatHarness.TWIST_PER_MON_DEG,
+                            nSeg, f.segLength.get(0) * 1e3, S.size(), HEAD_DIAM_NM));
+                    java.nio.file.Files.writeString(java.nio.file.Path.of(dir, "meta_" + fn + ".tsv"), mb.toString());
+                } catch (java.io.IOException ex) { throw new RuntimeException(ex); }
+                System.out.printf("    figure data: %s/{sites,filament,meta}_%s.tsv%n", dir, fn);
+            }
+        }
+        PATH_B_SITE_MODE = 3; PATH_B_PHASE_GLOBAL = true;
+        FIL_SEGS = savedSegs; FIL_BROWN = savedBrown; ExplicitCompleteMatHarness.SITE_AWARE = savedSA; cfgOff();
+        System.out.printf("%n  SITE-GEOMETRY VERIFICATION: %s%n", ok ? "PASS" : "FAIL");
+        return ok;
+    }
+
+    /**
+     * Gate that the host site generator used for the table and the figures is the SAME lattice the capture
+     * kernel binds to: drive a head onto a real interior site, run the two capture kernels, and compare the
+     * latched {@code bindAzim} with {@link ChiralSiteSystem#sitePhaseHost}. Returns max |difference| (rad).
+     */
+    static double siteHostVsKernel(Glide2D G, ExplicitCompleteMatHarness.ExMat e, java.util.List<Site> S) {
+        FilamentStore f = G.fil; int N = G.N, nSeg = G.nSeg;
+        double worst = 0; int tested = 0;
+        for (Site t : S) {
+            if (tested >= 6) break;
+            if (t.lArc < 0.02 || t.lArc > f.segLength.get(t.seg) - 0.02) continue;   // keep clear of segment ends
+            for (int m = 0; m < N; m++) { e.active.set(m, 0); G.mot.boundSeg.set(m, -1); }
+            e.active.set(0, 1); e.noBind.set(0, 0); G.mot.nucleotideState.set(0, 2);
+            double off = 1.0e-3;                                                     // 1 nm outside, along the site normal
+            e.outGeom.set(6 * N, t.x + off * t.nx); e.outGeom.set(7 * N, t.y + off * t.ny); e.outGeom.set(8 * N, t.z + off * t.nz);
+            e.outGeom.set(3 * N, f.coord.get(t.seg)); e.outGeom.set(4 * N, f.coord.get(nSeg + t.seg));
+            e.outGeom.set(5 * N, f.coord.get(2 * nSeg + t.seg) - 0.02);
+            e.q.set(0, TwoBodyConverterMotor.PHI_PRE_3E); e.q.set(N, 0.0);
+            e.q.set(2 * N, -TwoBodyConverterMotor.PHI_PRE_3E); e.q.set(3 * N, 0.0);
+            ChiralSiteSystem.siteGateA(e.active, e.noBind, G.mot.boundSeg, G.mot.nucleotideState, e.outGeom,
+                    f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
+            ChiralSiteSystem.siteCommitB(G.mot.boundSeg, G.mot.nucleotideState, e.q, e.params, e.sbP,
+                    e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+            if (G.mot.boundSeg.get(0) < 0 || e.bindSite.get(0) != t.k) continue;
+            worst = Math.max(worst, Math.abs(e.candAzim.get(0) - t.phi));
+            tested++;
+        }
+        return tested > 0 ? worst : Double.NaN;
+    }
+
+    static final int SITE_SEARCH_SCAN = 6;
+    static boolean runSiteFixtures() {
+        System.out.println("\n=== SITE-AWARE CAPTURE — micro-fixtures (deterministic; no trajectory) ===");
+        boolean ok = true;
+        int savedSegs = FIL_SEGS; boolean savedBrown = FIL_BROWN;
+        boolean savedSA = ExplicitCompleteMatHarness.SITE_AWARE, savedSlab = ExplicitCompleteMatHarness.Z_SLAB;
+        ExplicitCompleteMatHarness.SITE_AWARE = true; ExplicitCompleteMatHarness.Z_SLAB = true;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        cfg(PATH_B_SITE_MODE, true, 0.0, 0.0, 0.0, false, 1.0, true);
+        System.out.printf("  lattice under test: %s, %s phase%n",
+                ExplicitCompleteMatHarness.siteModeName(PATH_B_SITE_MODE),
+                PATH_B_PHASE_GLOBAL ? "filament-global" : "segment-relative(LEGACY)");
+        Glide2D G = build(SEED); FilamentStore f = G.fil; int nSeg = G.nSeg, N = G.N;
+        var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+        // Pin segment 0's frame so site azimuths are exactly known: u=+x, y=+y ⇒ z=u×y=+z.
+        f.setUVec(0, 1f, 0f, 0f); f.setYVec(0, 0f, 1f, 0f);
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        double Ract = ExplicitCompleteMatHarness.R_ACTIN_NM * 1e-3, rise = e.sbP.get(16), twist = e.sbP.get(17);
+        double stair = e.sbP.get(18), pglob = e.sbP.get(25);
+        double half = 0.5 * f.segLength.get(0), cum = e.segCumArc.get(0);
+        double cx = f.coord.get(0), cy = f.coord.get(nSeg), cz = f.coord.get(2 * nSeg);
+
+        // Choose a real lattice site near mid-segment and drive the head to a controlled offset from it.
+        int k = (int) ((cum + half) / rise + 0.5);
+        double la = k * rise - cum, ph = ChiralSiteSystem.sitePhaseHost(k, la, half, twist, stair, rise, pglob);
+        double nx = 0, ny = Math.cos(ph), nz = Math.sin(ph);
+        double sx = cx + (la - half), sy = cy + Ract * ny, sz = cz + Ract * nz;
+        System.out.printf(Locale.US, "  reference site k=%d  arc=%.4f µm  azimuth=%+7.2f°  n=(%.3f, %+.3f, %+.3f)%n",
+                k, la, Math.toDegrees(ph), nx, ny, nz);
+
+        System.out.println("\n  A/C REACHABILITY + OUTSIDE-APPROACH (one reachable site; interior approach rejected)");
+        System.out.printf("%n  %-42s %10s %12s %10s %s%n", "fixture", "d_site nm", "aApp nm", "boundSeg", "verdict");
+        // driver: place motor 0's xF8 at (site + off·dir), make it eligible, run the two kernels
+        // The far-side test uses a REAL lattice site whose normal points AWAY from the lawn (largest n·eup in the
+        // search window) — negating a normal does not land on a lattice site, so it would be an ill-posed test.
+        int kFar = k; double bestUp = -2, laF = la, phF = ph;
+        for (int j = -SITE_SEARCH_SCAN; j <= SITE_SEARCH_SCAN; j++) {
+            int kk = k + j; double lk = kk * rise - cum;
+            if (lk < 0 || lk > 2 * half) continue;
+            double pk = ChiralSiteSystem.sitePhaseHost(kk, lk, half, twist, stair, rise, pglob), up = Math.sin(pk);
+            if (up > bestUp) { bestUp = up; kFar = kk; laF = lk; phF = pk; }
+        }
+        System.out.printf(Locale.US, "  far-side site  k=%d  arc=%.4f µm  azimuth=%+7.2f°  n·eup=%+.3f (points AWAY from the lawn)%n",
+                kFar, laF, Math.toDegrees(phF), bestUp);
+        String[] nm = { "A near-side site, head 1.0 nm OUTSIDE", "B near-side site, head 1.0 nm INSIDE",
+                        "C FAR-side site, head 1.0 nm INSIDE (must reach through actin)",
+                        "D FAR-side site, head 1.0 nm OUTSIDE (legal: rule is LOCAL)",
+                        "E near-side site, head 2.5 nm outside (beyond the 2 pN preload)" };
+        double[][] cases = {
+            { +1.0, 0 },   // outside a near-side site      -> accept
+            { -1.0, 0 },   // inside  -> rejected by g8
+            { -1.0, 1 },   // far-side site approached from the interior -> rejected by g8
+            { +1.0, 1 },   // far-side site approached from outside -> accepted (accessibility is local geometry)
+            { +2.5, 0 },   // outside but too far -> g4
+        };
+        for (int c = 0; c < cases.length; c++) {
+            boolean useFar = cases[c][1] > 0.5;
+            double pp = useFar ? phF : ph, ll = useFar ? laF : la;
+            double mnx = 0, mny = Math.cos(pp), mnz = Math.sin(pp);
+            double msx = cx + (ll - half), msy = cy + Ract * mny, msz = cz + Ract * mnz;
+            double off = cases[c][0] * 1e-3;
+            for (int m = 0; m < N; m++) { e.active.set(m, 0); G.mot.boundSeg.set(m, -1); }
+            e.active.set(0, 1); e.noBind.set(0, 0); G.mot.nucleotideState.set(0, 2);
+            e.outGeom.set(6 * N, msx + off * mnx); e.outGeom.set(7 * N, msy + off * mny); e.outGeom.set(8 * N, msz + off * mnz);
+            e.outGeom.set(3 * N, cx); e.outGeom.set(4 * N, cy); e.outGeom.set(5 * N, cz - 0.02);   // xH well below ⇒ g6 passes
+            e.q.set(0, TwoBodyConverterMotor.PHI_PRE_3E); e.q.set(N, 0.0);
+            e.q.set(2 * N, 0.0); e.q.set(3 * N, 0.0);                                              // θ=ψ−φ vs θs: within 20°? φ=30° ⇒ θ=−30°
+            e.q.set(2 * N, -TwoBodyConverterMotor.PHI_PRE_3E);                                     // θs = −φ ⇒ thetaErr = 0
+            ChiralSiteSystem.siteGateA(e.active, e.noBind, G.mot.boundSeg, G.mot.nucleotideState, e.outGeom,
+                    f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
+            ChiralSiteSystem.siteCommitB(G.mot.boundSeg, G.mot.nucleotideState, e.q, e.params, e.sbP,
+                    e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+            int bs = G.mot.boundSeg.get(0);
+            // how many of the ENUMERATED sites are geometrically acceptable from this pose (the honest
+            // candidate count; the kernel commits at most one, so "exactly one" is the fixture-A requirement)
+            double fxx = e.outGeom.get(6 * N), fyy = e.outGeom.get(7 * N), fzz = e.outGeom.get(8 * N);
+            int nReach = 0;
+            for (int j = -SITE_SEARCH_SCAN; j <= SITE_SEARCH_SCAN; j++) {
+                int kk = k + j; double lk = kk * rise - cum;
+                if (lk < 0 || lk > 2 * half) continue;
+                double pk = ChiralSiteSystem.sitePhaseHost(kk, lk, half, twist, stair, rise, pglob);
+                double qy = Math.cos(pk), qz = Math.sin(pk);
+                double vx = fxx - (cx + (lk - half)), vy = fyy - (cy + Ract * qy), vz = fzz - (cz + Ract * qz);
+                double d = Math.sqrt(vx * vx + vy * vy + vz * vz);
+                if ((vy * qy + vz * qz) > 0 && d * 1e3 < e.sbP.get(0) && e.sbP.get(24) * d * 1e12 < e.sbP.get(4)) nReach++;
+            }
+            boolean want = (c == 0 || c == 3);
+            if (want && nReach != 1) { ok = false; System.out.printf("    *** case %d: %d acceptable sites, expected exactly 1 ***%n", c, nReach); }
+            boolean pass = (bs >= 0) == want;
+            ok &= pass;
+            System.out.printf(Locale.US, "  %-42s %10.3f %12.3f %10d %s%n", nm[c], Math.abs(cases[c][0]), cases[c][0], bs,
+                    pass ? "PASS" : "*** FAIL ***");
+        }
+        // D — site identity retained under a rigid roll of the filament
+        System.out.println("\n  D ROLL — site identity + material-frame tracking under a rigid filament roll");
+        // re-establish the accepted near-side bond (case A) so there IS a bound site to track
+        for (int m = 0; m < N; m++) { e.active.set(m, 0); G.mot.boundSeg.set(m, -1); }
+        e.active.set(0, 1); e.noBind.set(0, 0); G.mot.nucleotideState.set(0, 2);
+        e.outGeom.set(6 * N, sx); e.outGeom.set(7 * N, sy + 0.001 * ny); e.outGeom.set(8 * N, sz + 0.001 * nz);
+        e.outGeom.set(3 * N, cx); e.outGeom.set(4 * N, cy); e.outGeom.set(5 * N, cz - 0.02);
+        e.q.set(0, TwoBodyConverterMotor.PHI_PRE_3E); e.q.set(N, 0.0);
+        e.q.set(2 * N, -TwoBodyConverterMotor.PHI_PRE_3E); e.q.set(3 * N, 0.0);
+        ChiralSiteSystem.siteGateA(e.active, e.noBind, G.mot.boundSeg, G.mot.nucleotideState, e.outGeom,
+                f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
+        ChiralSiteSystem.siteCommitB(G.mot.boundSeg, G.mot.nucleotideState, e.q, e.params, e.sbP,
+                e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+        int kBound = e.bindSite.get(0); float arc0 = G.mot.bindArc.get(0), az0 = G.mot.bindAzim.get(0);
+        double[] am = new double[5];
+        ChiralSiteSystem.accessMetrics(f.coord, f.uVec, f.yVec, f.segLength, G.mot.bindArc, G.mot.bindAzim,
+                G.mot.boundSeg, e.outGeom, true, N, 0, nSeg, Ract, G.eup[0], G.eup[1], G.eup[2], am);
+        double beta0 = am[1];
+        f.setYVec(0, 0f, (float) Math.cos(Math.PI / 2), (float) Math.sin(Math.PI / 2));   // roll the material frame by 90°
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        ChiralSiteSystem.accessMetrics(f.coord, f.uVec, f.yVec, f.segLength, G.mot.bindArc, G.mot.bindAzim,
+                G.mot.boundSeg, e.outGeom, true, N, 0, nSeg, Ract, G.eup[0], G.eup[1], G.eup[2], am);
+        double dBeta = Math.toDegrees(am[1] - beta0);
+        while (dBeta > 180) dBeta -= 360; while (dBeta < -180) dBeta += 360;
+        boolean eOk = kBound >= 0 && e.bindSite.get(0) == kBound && G.mot.bindArc.get(0) == arc0 && G.mot.bindAzim.get(0) == az0
+                && Math.abs(Math.abs(dBeta) - 90.0) < 1e-6;
+        ok &= eOk;
+        System.out.printf(Locale.US, "    site id %d retained, bindArc/bindAzim unchanged, lab-frame site azimuth rotated %+.4f° "
+                + "with the 90° material roll ⇒ %s%n", kBound, dBeta, eOk ? "PASS (material-frame tracking)" : "*** FAIL ***");
+
+        // restore segment 0's material frame for the remaining fixtures
+        f.setYVec(0, 0f, 1f, 0f);
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+
+        // ---- B: HALFWAY BETWEEN two axial sites ----------------------------------------------------------
+        // The head is placed at the surface radius, midway in ARC between sites k and k+1, on the local
+        // outward normal there. With the sparse lattice this position has NO site under it; the question the
+        // fixture answers is how many of the enumerated candidates are geometrically reachable from there.
+        System.out.println("\n  B BETWEEN SITES — how many effective sites does a head between two of them see?");
+        {
+            double laMid = la + 0.5 * rise;
+            double phMid = 0.5 * (ph + ChiralSiteSystem.sitePhaseHost(k + 1, la + rise, half, twist, stair, rise, pglob));
+            double mny = Math.cos(phMid), mnz = Math.sin(phMid);
+            double px = cx + (laMid - half), py = cy + Ract * mny, pz = cz + Ract * mnz;
+            for (int m = 0; m < N; m++) { e.active.set(m, 0); G.mot.boundSeg.set(m, -1); }
+            e.active.set(0, 1); e.noBind.set(0, 0); G.mot.nucleotideState.set(0, 2);
+            e.outGeom.set(6 * N, px + 0.001 * 0); e.outGeom.set(7 * N, py + 0.001 * mny); e.outGeom.set(8 * N, pz + 0.001 * mnz);
+            e.outGeom.set(3 * N, cx); e.outGeom.set(4 * N, cy); e.outGeom.set(5 * N, cz - 0.02);
+            e.q.set(0, TwoBodyConverterMotor.PHI_PRE_3E); e.q.set(N, 0.0);
+            e.q.set(2 * N, -TwoBodyConverterMotor.PHI_PRE_3E); e.q.set(3 * N, 0.0);
+            // count how many enumerated sites pass BOTH distance gates from this pose (the honest candidate count)
+            double fx = e.outGeom.get(6 * N), fy = e.outGeom.get(7 * N), fz = e.outGeom.get(8 * N);
+            int reach = 0; double dBest = 1e9;
+            for (int j = -SITE_SEARCH_SCAN; j <= SITE_SEARCH_SCAN; j++) {
+                int kk = k + j; double lk = kk * rise - cum;
+                if (lk < 0 || lk > 2 * half) continue;
+                double pk = ChiralSiteSystem.sitePhaseHost(kk, lk, half, twist, stair, rise, pglob);
+                double qy = Math.cos(pk), qz = Math.sin(pk);
+                double sxx = cx + (lk - half), syy = cy + Ract * qy, szz = cz + Ract * qz;
+                double vx = fx - sxx, vy = fy - syy, vz = fz - szz;
+                double d = Math.sqrt(vx * vx + vy * vy + vz * vz);
+                boolean outside = (vy * qy + vz * qz) > 0;
+                if (outside && d * 1e3 < e.sbP.get(0) && e.sbP.get(24) * d * 1e12 < e.sbP.get(4)) reach++;
+                dBest = Math.min(dBest, d * 1e3);
+            }
+            ChiralSiteSystem.siteGateA(e.active, e.noBind, G.mot.boundSeg, G.mot.nucleotideState, e.outGeom,
+                    f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
+            // the kernel returns AT MOST ONE winner; the gate is that it finds one exactly when one is reachable
+            boolean bOk = (e.candInt.get(0) < 0) == (reach == 0);
+            ok &= bOk;
+            System.out.printf(Locale.US, "    head midway between k=%d and k=%d (%.2f nm axially from each): "
+                    + "%d of %d enumerated sites geometrically reachable, nearest %.3f nm, kernel candidate = %s ⇒ %s%n",
+                    k, k + 1, 0.5 * rise * 1e3, reach, 2 * SITE_SEARCH_SCAN + 1, dBest,
+                    e.candInt.get(0) < 0 ? "none" : ("site " + e.candInt.get(N)), bOk ? "PASS" : "*** FAIL ***");
+        }
+
+        // ---- E: ONE HEAD PER SITE ------------------------------------------------------------------------
+        System.out.println("\n  E OCCUPANCY — one head per (filament, site id); k±1 are separate physical sites");
+        {
+            boolean eo = true;
+            for (int trial = 0; trial < 2; trial++) {
+                int k2 = k + trial;                                   // trial 0: SAME site; trial 1: the ADJACENT site
+                double l2 = k2 * rise - cum;
+                double p2 = ChiralSiteSystem.sitePhaseHost(k2, l2, half, twist, stair, rise, pglob);
+                for (int m = 0; m < N; m++) { e.active.set(m, 0); G.mot.boundSeg.set(m, -1); e.prevBound.set(m, -1); }
+                for (int h = 0; h < 2; h++) {
+                    int kk = h == 0 ? k : k2; double lk = h == 0 ? la : l2, pk = h == 0 ? ph : p2;
+                    double qy = Math.cos(pk), qz = Math.sin(pk);
+                    e.active.set(h, 1); e.noBind.set(h, 0); G.mot.nucleotideState.set(h, 2);
+                    e.outGeom.set(6 * N + h, cx + (lk - half));
+                    e.outGeom.set(7 * N + h, cy + (Ract + 0.001) * qy);
+                    e.outGeom.set(8 * N + h, cz + (Ract + 0.001) * qz);
+                    e.outGeom.set(3 * N + h, cx); e.outGeom.set(4 * N + h, cy); e.outGeom.set(5 * N + h, cz - 0.02);
+                    e.q.set(h, TwoBodyConverterMotor.PHI_PRE_3E); e.q.set(N + h, 0.0);
+                    e.q.set(2 * N + h, -TwoBodyConverterMotor.PHI_PRE_3E); e.q.set(3 * N + h, 0.0);
+                }
+                ChiralSiteSystem.siteGateA(e.active, e.noBind, G.mot.boundSeg, G.mot.nucleotideState, e.outGeom,
+                        f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
+                ChiralSiteSystem.siteCommitB(G.mot.boundSeg, G.mot.nucleotideState, e.q, e.params, e.sbP,
+                        e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+                int b0 = G.mot.boundSeg.get(0), b1 = G.mot.boundSeg.get(1);
+                int s0 = e.bindSite.get(0), s1 = e.bindSite.get(1);
+                ChiralSiteSystem.siteOccupancyResolve(G.mot.boundSeg, e.justBound, e.prevBound, e.bindSite,
+                        e.segFilId, e.siteStats, e.chiP, e.exCounts);
+                int a0 = G.mot.boundSeg.get(0), a1 = G.mot.boundSeg.get(1);
+                boolean want1 = trial != 0;                            // same site ⇒ head 1 must be released
+                boolean t = a0 >= 0 && (a1 >= 0) == want1 && b0 >= 0 && b1 >= 0;
+                eo &= t;
+                System.out.printf(Locale.US, "    heads at sites (%d, %d): both captured (%d,%d)→sites(%d,%d); after occupancy "
+                        + "head0=%s head1=%s ⇒ %s%n", k, k2, b0, b1, s0, s1,
+                        a0 >= 0 ? "BOUND" : "released", a1 >= 0 ? "BOUND" : "released", t ? "PASS" : "*** FAIL ***");
+            }
+            ok &= eo;
+        }
+
+        // ---- F: SEGMENT BOUNDARY -------------------------------------------------------------------------
+        System.out.println("\n  F SEGMENT BOUNDARY — the global sequence must be continuous, with no duplicate or missing site");
+        {
+            java.util.List<Site> S = enumerateSites(G, e);
+            int nBound = 0, dupes = 0, gaps = 0; double maxAxErr = 0, maxAzErr = 0;
+            double stepPhase = (stair != 0.0) ? stair : twist * rise;
+            java.util.Set<Integer> seen = new java.util.HashSet<>();
+            for (Site t : S) if (!seen.add(t.k)) dupes++;
+            for (int i = 1; i < S.size(); i++) {
+                Site a = S.get(i - 1), b = S.get(i);
+                if (b.k != a.k + 1) gaps++;
+                if (b.seg != a.seg) {
+                    nBound++;
+                    maxAxErr = Math.max(maxAxErr, Math.abs((b.gArc - a.gArc) - rise) * 1e3);
+                    maxAzErr = Math.max(maxAzErr, Math.abs(wrapDeg(Math.toDegrees(b.phi - a.phi) - Math.toDegrees(stepPhase))));
+                }
+            }
+            boolean fOk = dupes == 0 && gaps == 0 && maxAxErr < 1e-9 && (pglob == 0.0 || maxAzErr < 1e-6);
+            ok &= fOk;
+            System.out.printf(Locale.US, "    %d sites over %d segments; %d boundary-crossing pairs: duplicates=%d gaps=%d "
+                    + "max |d(axial)-rise| = %.3e nm, max azimuth deviation from the uniform advance = %.6f deg ⇒ %s%n",
+                    S.size(), nSeg, nBound, dupes, gaps, maxAxErr, maxAzErr, fOk ? "PASS" : "*** FAIL ***");
+            if (pglob == 0.0)
+                System.out.printf("    (segment-relative LEGACY phase: the %.4f deg azimuth deviation at each boundary is "
+                        + "the known phase restart and is NOT gated in this mode)%n", maxAzErr);
+        }
+
+        System.out.printf("%n  SITE-AWARE FIXTURES: %s%n", ok ? "PASS" : "FAIL");
+        FIL_SEGS = savedSegs; FIL_BROWN = savedBrown;
+        ExplicitCompleteMatHarness.SITE_AWARE = savedSA; ExplicitCompleteMatHarness.Z_SLAB = savedSlab; cfgOff();
+        return ok;
+    }
+
+    // ===========================================================================================================
+    //  BOUND-MOTOR HELICAL GEOMETRY VISUAL AUDIT
+    //  ---------------------------------------------------------------------------------------------------------
+    //  Read-only geometry/visualization audit. Adds NO force law, NO gate, NO physics and changes no default:
+    //  every number below is read back out of the SAME kernels the simulation runs
+    //  (ChiralSiteSystem.siteGateA / siteCommitB / siteOccupancyResolve for capture,
+    //   TwoBodyBeamAnalyticGpu.matBeamGeom / matPlaceHeadExplicit for the head pose,
+    //   CrossBridgeSystem.bondForcesSurface for the bond), on the CURRENT Path-B candidate lattice.
+    //
+    //  The DETERMINISTIC fixture places heads by RIGIDLY TRANSLATING a real reference-pose motor so that its own
+    //  F8 anchor sits a controlled distance outside a chosen effective site — the head's INTERNAL geometry
+    //  (the vector xF8 − xH, i.e. the head long axis and length) is the model's own, taken from matBeamGeom on
+    //  the built lawn. This is the standing `-site-fixtures` idiom (outGeom is written directly), extended so
+    //  the head pose is the motor's, not an invention.
+    // ===========================================================================================================
+    static String BV_DIR = "RUN_LOGS/attachment_audit/bound_motor_visual_audit";
+    static int    BV_STEPS = 400;      // §5 natural short-run snapshot length (CPU runner)
+    static int    BV_HEADS = 8;        // heads per deterministic fixture (A/B)
+    static int    BV_RING  = 12;       // heads in the full-ring radial-approach fixture (C): 12 x 54 deg = 1.8 turns
+    /** `-3js` output root (under ~/Code so `sim_server.py` serves it); one sub-directory per fixture. */
+    static String BV_JS = "threejs_bound_geometry";
+
+    /**
+     * Repo-viewer (`sim_viewer_boa.html`) frame for one fixture.
+     *
+     * <p><b>Schema note (this bit is load-bearing — the flat form silently hangs the viewer).</b> The unified
+     * viewer requires the ARRAY form: a `segments` entry is
+     * {@code {id, end1:[x,y,z], end2:[x,y,z], r, ...}} and a `myosins` entry is
+     * {@code {id, rod:{end1,end2,r,invisible}, lever:{end1,end2,r}, motor:{end1,end2,r,state}}}.
+     * The older flat {@code {x1,y1,z1,x2,y2,z2,r,c}} form (still emitted by the legacy
+     * {@code writeFrame} movie path) makes {@code applyFrameData} throw on {@code m.rod.invisible};
+     * {@code loadFrame}'s {@code .catch} swallows it and the HUD stays on "loading…" forever.
+     *
+     * <p>Channel map, chosen so the audit reads in the project viewer's fixed palette:
+     * <pre>
+     *   segments (actin radius 3.5 nm)  the filament
+     *   segments (motorSeg, thin)       every effective site, as a short outward radial stub
+     *   myosin A per bound head         rod = head axis xH->xF8 · lever = F8 bond xF8->x_site · motor = site marker (ADP, red)
+     *   myosin B per bound head         rod = n_site stick from the site · lever = h_perp stick from the head · motor = head marker (NONE, purple)
+     * </pre>
+     * The fully colour-coded version is {@code bound_motor_geometry_viewer.html}; this route exists so the
+     * same scene opens in the project's own viewer.
+     */
+    static void bvWriteViewerFrame(String dir, Glide2D G, ExplicitCompleteMatHarness.ExMat e,
+                                   java.util.List<Site> S, java.util.Set<Integer> occ, java.util.List<BHead> HS) {
+        FilamentStore f = G.fil; int nSeg = G.nSeg;
+        double L = 0.010;                                   // 10 nm vector sticks
+        StringBuilder b = new StringBuilder(1 << 16);
+        b.append("{\n  \"frame\": 0,\n  \"t\": 0.0,\n  \"segments\": [\n");
+        int sid = 0;
+        for (int s = 0; s < nSeg; s++) {
+            double half = 0.5 * f.segLength.get(s);
+            double cx = f.coord.get(s), cy = f.coord.get(nSeg + s), cz = f.coord.get(2 * nSeg + s);
+            double ux = f.uVec.get(s), uy = f.uVec.get(nSeg + s), uz = f.uVec.get(2 * nSeg + s);
+            b.append(String.format(Locale.US, "    {\"id\":%d,\"end1\":[%.6f,%.6f,%.6f],\"end2\":[%.6f,%.6f,%.6f],"
+                    + "\"r\":%.5f,\"motorSeg\":false,\"notADPRatio\":1.0,\"cofilinCount\":0},%n", sid++,
+                    cx - half * ux, cy - half * uy, cz - half * uz, cx + half * ux, cy + half * uy, cz + half * uz,
+                    e.sbP.get(19)));
+        }
+        for (int i = 0; i < S.size(); i++) {                // every effective site as a short radial stub
+            Site t = S.get(i);
+            boolean o = occ.contains(t.k);
+            double sl = o ? 0.0022 : 0.0011;
+            b.append(String.format(Locale.US, "    {\"id\":%d,\"end1\":[%.6f,%.6f,%.6f],\"end2\":[%.6f,%.6f,%.6f],"
+                    + "\"r\":%.5f,\"motorSeg\":true,\"notADPRatio\":1.0,\"cofilinCount\":0}%s%n", sid++,
+                    t.x, t.y, t.z, t.x + sl * t.nx, t.y + sl * t.ny, t.z + sl * t.nz,
+                    o ? 0.0009 : 0.0004, i < S.size() - 1 ? "," : ""));
+        }
+        b.append("  ],\n  \"myosins\": [\n");
+        int mid = 0;
+        for (int i = 0; i < HS.size(); i++) {
+            BHead H = HS.get(i);
+            // A — the motor itself: head axis, F8 bond, site marker
+            b.append(String.format(Locale.US,
+                    "    {\"id\":%d,\"rod\":{\"end1\":[%.6f,%.6f,%.6f],\"end2\":[%.6f,%.6f,%.6f],\"r\":0.0016,\"invisible\":false},"
+                    + "\"lever\":{\"end1\":[%.6f,%.6f,%.6f],\"end2\":[%.6f,%.6f,%.6f],\"r\":0.0008},"
+                    + "\"motor\":{\"end1\":[%.6f,%.6f,%.6f],\"end2\":[%.6f,%.6f,%.6f],\"r\":0.0016,\"state\":\"ADP\"}},%n",
+                    mid++, H.hx, H.hy, H.hz, H.f8x, H.f8y, H.f8z,
+                    H.f8x, H.f8y, H.f8z, H.sx, H.sy, H.sz,
+                    H.sx, H.sy, H.sz, H.sx, H.sy, H.sz));
+            // B — the audit vectors: n_site from the site, h_perp from the head, head marker
+            b.append(String.format(Locale.US,
+                    "    {\"id\":%d,\"rod\":{\"end1\":[%.6f,%.6f,%.6f],\"end2\":[%.6f,%.6f,%.6f],\"r\":0.0007,\"invisible\":false},"
+                    + "\"lever\":{\"end1\":[%.6f,%.6f,%.6f],\"end2\":[%.6f,%.6f,%.6f],\"r\":0.0007},"
+                    + "\"motor\":{\"end1\":[%.6f,%.6f,%.6f],\"end2\":[%.6f,%.6f,%.6f],\"r\":0.0010,\"state\":\"NONE\"}}%s%n",
+                    mid++, H.sx, H.sy, H.sz, H.sx + L * H.nx, H.sy + L * H.ny, H.sz + L * H.nz,
+                    H.hx, H.hy, H.hz, H.hx + L * H.hpx, H.hy + L * H.hpy, H.hz + L * H.hpz,
+                    H.hx, H.hy, H.hz, H.hx, H.hy, H.hz, i < HS.size() - 1 ? "," : ""));
+        }
+        b.append("  ]\n}\n");
+        try { new java.io.File(dir).mkdirs();
+              java.nio.file.Files.writeString(java.nio.file.Path.of(dir, "frame_000000.json"), b.toString()); }
+        catch (java.io.IOException ex) { throw new RuntimeException(ex); }
+    }
+
+    /** One bound head, with every vector the audit displays. Lengths µm, angles deg. */
+    static final class BHead {
+        int m, k, seg;
+        double gArc, phiSite;
+        double sx, sy, sz;          // x_site  (the material site the bond is actually tethered to)
+        double nx, ny, nz;          // n_site  (outward radial material normal AT that site)
+        double tx, ty, tz;          // t_site  (site tangential = mirror*(u x n))
+        double ux, uy, uz;          // u_site  (filament material tangent, pointed->barbed)
+        double f8x, f8y, f8z;       // xF8     (head's F8 anchor, from matBeamGeom)
+        double hx, hy, hz;          // xH      (head centre — the body point matPlaceHeadExplicit writes)
+        double ebx, eby, ebz;       // eBind   = normalize(xF8 - xH)  = the head body uVec
+        double hpx, hpy, hpz;       // h_perp  = the head body yVec   (the head's transverse/binding-face reference)
+        double dotNHp, angNHp, dotNEb, angNEb;
+        double psiH, psiEb, dPhaseH, dPhaseEb;   // azimuthal phases in the filament MATERIAL frame
+        double bondNm;              // |xF8 - x_site| at this pose (nm)
+    }
+
+    /**
+     * Reconstruct every audited vector for the currently-bound heads, using EXACTLY the site reconstruction
+     * {@code CrossBridgeSystem.bondForcesSurface} uses (bindArc + bindAzim against the live material frame), so
+     * the reported normal IS the bond's own moment arm — nothing is re-derived independently.
+     */
+    static java.util.List<BHead> bvCollect(Glide2D G, ExplicitCompleteMatHarness.ExMat e) {
+        FilamentStore f = G.fil; MotorStore mot = G.mot; RigidRodBody b = mot.body;
+        int N = G.N, nSeg = G.nSeg, nB = 3 * N;
+        double Ract = e.sbP.get(19), mirror = e.sbP.get(21), rise = e.sbP.get(16);
+        java.util.List<BHead> out = new java.util.ArrayList<>();
+        for (int m = 0; m < N; m++) {
+            int s = mot.boundSeg.get(m); if (s < 0) continue;
+            BHead H = new BHead(); H.m = m; H.seg = s; H.k = e.bindSite.get(m);
+            double ux = f.uVec.get(s), uy = f.uVec.get(nSeg + s), uz = f.uVec.get(2 * nSeg + s);
+            double yx = f.yVec.get(s), yy = f.yVec.get(nSeg + s), yz = f.yVec.get(2 * nSeg + s);
+            double zx = uy * yz - uz * yy, zy = uz * yx - ux * yz, zz = ux * yy - uy * yx;
+            double zl = Math.sqrt(zx * zx + zy * zy + zz * zz); if (zl > 1e-30) { zx /= zl; zy /= zl; zz /= zl; }
+            double az = mot.bindAzim.get(m), c = Math.cos(az), sn = Math.sin(az);
+            H.nx = c * yx + sn * zx; H.ny = c * yy + sn * zy; H.nz = c * yz + sn * zz;
+            H.tx = mirror * (uy * H.nz - uz * H.ny);
+            H.ty = mirror * (uz * H.nx - ux * H.nz);
+            H.tz = mirror * (ux * H.ny - uy * H.nx);
+            H.ux = ux; H.uy = uy; H.uz = uz;
+            double aOff = mot.bindArc.get(m) - 0.5 * f.segLength.get(s);
+            H.sx = f.coord.get(s) + aOff * ux + Ract * H.nx;
+            H.sy = f.coord.get(nSeg + s) + aOff * uy + Ract * H.ny;
+            H.sz = f.coord.get(2 * nSeg + s) + aOff * uz + Ract * H.nz;
+            H.gArc = (H.k >= 0 ? H.k * rise : (e.segCumArc.get(s) + mot.bindArc.get(m)));
+            H.f8x = e.outGeom.get(6 * N + m); H.f8y = e.outGeom.get(7 * N + m); H.f8z = e.outGeom.get(8 * N + m);
+            int h = 3 * m + 2;
+            H.hx = b.coord.get(h); H.hy = b.coord.get(nB + h); H.hz = b.coord.get(2 * nB + h);
+            H.ebx = b.uVec.get(h); H.eby = b.uVec.get(nB + h); H.ebz = b.uVec.get(2 * nB + h);
+            H.hpx = b.yVec.get(h); H.hpy = b.yVec.get(nB + h); H.hpz = b.yVec.get(2 * nB + h);
+            H.dotNHp = H.nx * H.hpx + H.ny * H.hpy + H.nz * H.hpz;
+            H.dotNEb = H.nx * H.ebx + H.ny * H.eby + H.nz * H.ebz;
+            H.angNHp = Math.toDegrees(Math.acos(Math.max(-1, Math.min(1, H.dotNHp))));
+            H.angNEb = Math.toDegrees(Math.acos(Math.max(-1, Math.min(1, H.dotNEb))));
+            // azimuthal phase of each vector in the filament's OWN material frame (segY, segZ)
+            H.phiSite = Math.toDegrees(Math.atan2(H.nx * zx + H.ny * zy + H.nz * zz, H.nx * yx + H.ny * yy + H.nz * yz));
+            H.psiH    = Math.toDegrees(Math.atan2(H.hpx * zx + H.hpy * zy + H.hpz * zz, H.hpx * yx + H.hpy * yy + H.hpz * yz));
+            H.psiEb   = Math.toDegrees(Math.atan2(H.ebx * zx + H.eby * zy + H.ebz * zz, H.ebx * yx + H.eby * yy + H.ebz * yz));
+            H.dPhaseH  = wrapDeg(H.psiH  - H.phiSite);
+            H.dPhaseEb = wrapDeg(H.psiEb - H.phiSite);
+            double dx = H.f8x - H.sx, dy = H.f8y - H.sy, dz = H.f8z - H.sz;
+            H.bondNm = Math.sqrt(dx * dx + dy * dy + dz * dz) * 1e3;
+            out.add(H);
+        }
+        out.sort((p, q) -> Integer.compare(p.k, q.k));
+        return out;
+    }
+
+    /** Print the Phase-6 numeric table for one head set, and return the phase-tracking summary. */
+    static double[] bvTable(String label, java.util.List<BHead> HS) {
+        System.out.printf("%n  %s — %d bound head(s)%n", label, HS.size());
+        System.out.printf("  %4s %5s %10s %9s %26s %20s %8s %9s %10s %10s %10s%n",
+                "head", "site", "gArc nm", "azim deg", "n_site (outward normal)", "h_perp (head yVec)",
+                "n.h_perp", "ang deg", "phase(hp)", "phase(n)", "d(phase)");
+        double dmin = 1e9, dmax = -1e9;
+        for (BHead H : HS) {
+            System.out.printf(Locale.US, "  %4d %5d %10.3f %+9.3f  (%+6.3f,%+6.3f,%+6.3f) (%+6.3f,%+6.3f,%+6.3f) %8.4f %9.3f %+10.3f %+10.3f %+10.3f%n",
+                    H.m, H.k, H.gArc * 1e3, H.phiSite, H.nx, H.ny, H.nz, H.hpx, H.hpy, H.hpz,
+                    H.dotNHp, H.angNHp, H.psiH, H.phiSite, H.dPhaseH);
+            dmin = Math.min(dmin, H.dPhaseH); dmax = Math.max(dmax, H.dPhaseH);
+        }
+        System.out.printf(Locale.US, "  %4s %5s %10s %9s %26s %20s%n", "head", "site", "|F8-site|nm", "", "eBind (head long axis)", "x_site (um)");
+        for (BHead H : HS)
+            System.out.printf(Locale.US, "  %4d %5d %10.4f %9s  (%+6.3f,%+6.3f,%+6.3f) (%+8.5f,%+8.5f,%+8.5f)  n.eBind=%+7.4f (%6.2f deg)%n",
+                    H.m, H.k, H.bondNm, "", H.ebx, H.eby, H.ebz, H.sx, H.sy, H.sz, H.dotNEb, H.angNEb);
+        return new double[]{ dmin, dmax, dmax - dmin };
+    }
+
+    static void bvWriteHeads(String dir, String tag, java.util.List<BHead> HS) {
+        StringBuilder sb = new StringBuilder("head\tsite_k\tseg\tgArc_nm\tazim_deg\t"
+                + "sx_um\tsy_um\tsz_um\tnx\tny\tnz\ttx\tty\ttz\tux\tuy\tuz\t"
+                + "f8x_um\tf8y_um\tf8z_um\thx_um\thy_um\thz_um\tebx\teby\tebz\thpx\thpy\thpz\t"
+                + "dot_n_hperp\tang_n_hperp_deg\tdot_n_ebind\tang_n_ebind_deg\t"
+                + "phase_hperp_deg\tphase_ebind_deg\tphase_site_deg\tdphase_hperp_deg\tdphase_ebind_deg\tbond_nm\n");
+        for (BHead H : HS)
+            sb.append(String.format(Locale.US,
+                "%d\t%d\t%d\t%.5f\t%.5f\t%.8f\t%.8f\t%.8f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t"
+                + "%.8f\t%.8f\t%.8f\t%.8f\t%.8f\t%.8f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t"
+                + "%.6f\t%.5f\t%.6f\t%.5f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.5f%n",
+                H.m, H.k, H.seg, H.gArc * 1e3, H.phiSite, H.sx, H.sy, H.sz, H.nx, H.ny, H.nz,
+                H.tx, H.ty, H.tz, H.ux, H.uy, H.uz, H.f8x, H.f8y, H.f8z, H.hx, H.hy, H.hz,
+                H.ebx, H.eby, H.ebz, H.hpx, H.hpy, H.hpz, H.dotNHp, H.angNHp, H.dotNEb, H.angNEb,
+                H.psiH, H.psiEb, H.phiSite, H.dPhaseH, H.dPhaseEb, H.bondNm));
+        bvWrite(dir, "heads_" + tag + ".tsv", sb.toString());
+    }
+
+    static void bvWriteSites(String dir, String tag, java.util.List<Site> S, java.util.Set<Integer> occ) {
+        StringBuilder sb = new StringBuilder("k\tseg\tgArc_nm\tazim_deg\tx_um\ty_um\tz_um\tnx\tny\tnz\tocc\n");
+        for (Site t : S)
+            sb.append(String.format(Locale.US, "%d\t%d\t%.5f\t%.5f\t%.8f\t%.8f\t%.8f\t%.6f\t%.6f\t%.6f\t%d%n",
+                    t.k, t.seg, t.gArc * 1e3, wrapDeg(Math.toDegrees(t.phi)), t.x, t.y, t.z,
+                    t.nx, t.ny, t.nz, occ.contains(t.k) ? 1 : 0));
+        bvWrite(dir, "sites_" + tag + ".tsv", sb.toString());
+    }
+
+    static void bvWriteFilament(String dir, String tag, Glide2D G, ExplicitCompleteMatHarness.ExMat e) {
+        FilamentStore f = G.fil; int nSeg = G.nSeg;
+        StringBuilder sb = new StringBuilder("seg\tcx_um\tcy_um\tcz_um\tux\tuy\tuz\tyx\tyy\tyz\tsegLen_um\tcumArc_um\n");
+        for (int s = 0; s < nSeg; s++)
+            sb.append(String.format(Locale.US, "%d\t%.8f\t%.8f\t%.8f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.8f\t%.8f%n", s,
+                    f.coord.get(s), f.coord.get(nSeg + s), f.coord.get(2 * nSeg + s),
+                    f.uVec.get(s), f.uVec.get(nSeg + s), f.uVec.get(2 * nSeg + s),
+                    f.yVec.get(s), f.yVec.get(nSeg + s), f.yVec.get(2 * nSeg + s),
+                    f.segLength.get(s), e.segCumArc.get(s)));
+        bvWrite(dir, "filament_" + tag + ".tsv", sb.toString());
+    }
+
+    /** Self-contained scene for the standalone interactive viewer (bound_motor_geometry_viewer.html). */
+    static void bvWriteScene(String dir, String tag, String title, Glide2D G, ExplicitCompleteMatHarness.ExMat e,
+                             java.util.List<Site> S, java.util.Set<Integer> occ, java.util.List<BHead> HS) {
+        FilamentStore f = G.fil; int nSeg = G.nSeg;
+        StringBuilder b = new StringBuilder(1 << 18);
+        b.append("{\n \"title\": \"").append(title).append("\",\n");
+        b.append(String.format(Locale.US, " \"meta\": {\"lattice\":\"%s\",\"phase\":\"%s\",\"rise_nm\":%.4f,"
+                + "\"dAzim_deg\":%.4f,\"pitch_nm\":%.3f,\"Ractin_nm\":%.3f,\"nSites\":%d,\"nHeads\":%d,"
+                + "\"bindPath\":\"%s\",\"regK\":%.3e,\"headRoll\":\"%s\",\"f9f10\":\"%s\"},\n",
+                ExplicitCompleteMatHarness.siteModeName(ExplicitCompleteMatHarness.SITE_MODE),
+                ExplicitCompleteMatHarness.SITE_PHASE_GLOBAL ? "filament-global" : "segment-relative(LEGACY)",
+                e.sbP.get(16) * 1e3, wrapDeg(Math.toDegrees(bvStepPhase(e))), bvPitchNm(e), e.sbP.get(19) * 1e3,
+                S.size(), HS.size(),
+                ExplicitCompleteMatHarness.siteAwareOn() ? "site-aware" : "centreline+snap(LEGACY)",
+                ExplicitCompleteMatHarness.REG_K, ExplicitCompleteMatHarness.HEAD_ROLL ? "ON" : "OFF",
+                e.xbParamsSurf.get(2) == 0f ? "OFF (j1FMT=0)" : "ON"));
+        b.append(" \"filament\": [\n");
+        for (int s = 0; s < nSeg; s++) {
+            double half = 0.5 * f.segLength.get(s);
+            double cx = f.coord.get(s), cy = f.coord.get(nSeg + s), cz = f.coord.get(2 * nSeg + s);
+            double ux = f.uVec.get(s), uy = f.uVec.get(nSeg + s), uz = f.uVec.get(2 * nSeg + s);
+            b.append(String.format(Locale.US, "  {\"x1\":%.7f,\"y1\":%.7f,\"z1\":%.7f,\"x2\":%.7f,\"y2\":%.7f,\"z2\":%.7f}%s%n",
+                    cx - half * ux, cy - half * uy, cz - half * uz, cx + half * ux, cy + half * uy, cz + half * uz,
+                    s < nSeg - 1 ? "," : ""));
+        }
+        b.append(" ],\n \"radius\": ").append(String.format(Locale.US, "%.6f", e.sbP.get(19))).append(",\n");
+        b.append(" \"sites\": [\n");
+        for (int i = 0; i < S.size(); i++) {
+            Site t = S.get(i);
+            b.append(String.format(Locale.US, "  {\"k\":%d,\"x\":%.7f,\"y\":%.7f,\"z\":%.7f,\"nx\":%.6f,\"ny\":%.6f,\"nz\":%.6f,\"az\":%.4f,\"occ\":%d}%s%n",
+                    t.k, t.x, t.y, t.z, t.nx, t.ny, t.nz, wrapDeg(Math.toDegrees(t.phi)),
+                    occ.contains(t.k) ? 1 : 0, i < S.size() - 1 ? "," : ""));
+        }
+        b.append(" ],\n \"heads\": [\n");
+        for (int i = 0; i < HS.size(); i++) {
+            BHead H = HS.get(i);
+            b.append(String.format(Locale.US, "  {\"m\":%d,\"k\":%d,\"site\":[%.7f,%.7f,%.7f],\"n\":[%.6f,%.6f,%.6f],"
+                    + "\"t\":[%.6f,%.6f,%.6f],\"u\":[%.6f,%.6f,%.6f],\"F8\":[%.7f,%.7f,%.7f],\"H\":[%.7f,%.7f,%.7f],"
+                    + "\"eb\":[%.6f,%.6f,%.6f],\"hp\":[%.6f,%.6f,%.6f],\"dotNHp\":%.5f,\"angNHp\":%.3f,"
+                    + "\"phaseHp\":%.3f,\"phaseSite\":%.3f,\"dPhase\":%.3f,\"bondNm\":%.4f}%s%n",
+                    H.m, H.k, H.sx, H.sy, H.sz, H.nx, H.ny, H.nz, H.tx, H.ty, H.tz, H.ux, H.uy, H.uz,
+                    H.f8x, H.f8y, H.f8z, H.hx, H.hy, H.hz, H.ebx, H.eby, H.ebz, H.hpx, H.hpy, H.hpz,
+                    H.dotNHp, H.angNHp, H.psiH, H.phiSite, H.dPhaseH, H.bondNm, i < HS.size() - 1 ? "," : ""));
+        }
+        b.append(" ]\n}\n");
+        bvWrite(dir, "scene_" + tag + ".json", b.toString());
+    }
+
+    static double bvStepPhase(ExplicitCompleteMatHarness.ExMat e) {
+        double stair = e.sbP.get(18);
+        return (stair != 0.0) ? stair : e.sbP.get(17) * e.sbP.get(16);
+    }
+    static double bvPitchNm(ExplicitCompleteMatHarness.ExMat e) {
+        double d = Math.abs(wrapDeg(Math.toDegrees(bvStepPhase(e))));
+        return d > 0 ? 360.0 / d * e.sbP.get(16) * 1e3 : Double.NaN;
+    }
+    static void bvWrite(String dir, String name, String s) {
+        try { new java.io.File(dir).mkdirs();
+              java.nio.file.Files.writeString(java.nio.file.Path.of(dir, name), s); }
+        catch (java.io.IOException ex) { throw new RuntimeException(ex); }
+    }
+
+    /**
+     * PHASES 0-9 of the bound-motor helical geometry visual audit. Deterministic fixture + a short natural
+     * Path-B snapshot; prints the numeric tables and writes the figure/scene data. No default is changed.
+     */
+    static boolean runBoundViz() {
+        boolean ok = true;
+        int savedSegs = FIL_SEGS; boolean savedBrown = FIL_BROWN;
+        boolean savedSA = ExplicitCompleteMatHarness.SITE_AWARE, savedSlab = ExplicitCompleteMatHarness.Z_SLAB;
+        // ---- PHASE 0: freeze the current Path-B candidate geometry -------------------------------------------
+        ExplicitCompleteMatHarness.SITE_AWARE = true; ExplicitCompleteMatHarness.Z_SLAB = true;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        cfg(PATH_B_SITE_MODE, false, 0.0, 0.0, 0.0, false, 1.0, true);   // production feature set: no head-roll DOF, eps = 0
+        Glide2D G = build(SEED); FilamentStore f = G.fil; MotorStore mot = G.mot; RigidRodBody body = mot.body;
+        int N = G.N, nSeg = G.nSeg;
+        var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+
+        double rise = e.sbP.get(16), Ract = e.sbP.get(19), stepPhase = bvStepPhase(e);
+        double dAzDeg = wrapDeg(Math.toDegrees(stepPhase)), pitchNm = bvPitchNm(e);
+        System.out.println("\n=== BOUND-MOTOR HELICAL GEOMETRY — VISUAL AUDIT (read-only; no physics changed) ===");
+        System.out.println("\n  PHASE 0 — ACTIVE LATTICE CONSTANTS + CAPTURE PATH (read back out of the packed run config)");
+        System.out.printf(Locale.US, "    lattice mode        : %s (SITE_MODE=%d)%n",
+                ExplicitCompleteMatHarness.siteModeName(ExplicitCompleteMatHarness.SITE_MODE), ExplicitCompleteMatHarness.SITE_MODE);
+        System.out.printf(Locale.US, "    axial rise          : %.4f nm  ( = %d x actinMonoRadius %.3f nm )%n",
+                rise * 1e3, (int) Math.round(rise / Constants.actinMonoRadius), Constants.actinMonoRadius * 1e3);
+        System.out.printf(Locale.US, "    azimuth per site    : %+.4f deg (raw %+.4f deg = %d x %.2f deg native twist)%n",
+                dAzDeg, Math.toDegrees(stepPhase), (int) Math.round(rise / Constants.actinMonoRadius),
+                ExplicitCompleteMatHarness.TWIST_PER_MON_DEG);
+        System.out.printf(Locale.US, "    long-pitch repeat   : %.3f nm (%.3f sites per 360 deg)%n", pitchNm, 360.0 / Math.abs(dAzDeg));
+        System.out.printf(Locale.US, "    site surface radius : %.4f nm  (Constants.radius = %.4f nm)%n", Ract * 1e3, Constants.radius * 1e3);
+        System.out.printf(Locale.US, "    site phase          : %s%n",
+                ExplicitCompleteMatHarness.SITE_PHASE_GLOBAL ? "FILAMENT-GLOBAL  phi(k) = k*(twistRate*rise)"
+                                                             : "segment-relative (LEGACY)");
+        System.out.printf(Locale.US, "    capture path        : %s%n",
+                ExplicitCompleteMatHarness.siteAwareOn() ? "SITE-AWARE (siteGateA -> siteCommitB; no post-hoc snap)"
+                                                         : "centreline + snap (LEGACY)");
+        System.out.printf(Locale.US, "    occupancy           : one head per (filament, site) = %s ; z slab = %s%n",
+                ExplicitCompleteMatHarness.SITE_EXCLUSIVE ? "ON" : "OFF", ExplicitCompleteMatHarness.Z_SLAB ? "ON" : "OFF");
+        System.out.printf(Locale.US, "    filament            : %d segments x %.4f nm = %.4f um contour%n",
+                nSeg, f.segLength.get(0) * 1e3, nSeg * f.segLength.get(0));
+        System.out.printf(Locale.US, "    g0 distance %.2f nm | g4 preload %.2f pN | g8 accessibility tol %.3e nm | searchHalf %d%n",
+                e.sbP.get(0), e.sbP.get(4), e.sbP.get(23) * 1e3, (int) e.sbP.get(22));
+
+        // HARD STOPS -------------------------------------------------------------------------------------------
+        boolean hs = true;
+        if (ExplicitCompleteMatHarness.SITE_MODE != 3) { hs = false; System.out.println("    *** HARD STOP: lattice is not every4 ***"); }
+        if (Math.abs(rise * 1e3 - 10.8) > 1e-6)        { hs = false; System.out.println("    *** HARD STOP: rise is not 10.8 nm ***"); }
+        if (Math.abs(dAzDeg - 54.0) > 1e-6)            { hs = false; System.out.println("    *** HARD STOP: azimuthal advance is not +54 deg ***"); }
+        if (Math.abs(pitchNm - 72.0) > 1e-4)           { hs = false; System.out.println("    *** HARD STOP: long-pitch repeat is not 72 nm ***"); }
+        if (!ExplicitCompleteMatHarness.SITE_PHASE_GLOBAL) { hs = false; System.out.println("    *** HARD STOP: site phase is not filament-global ***"); }
+        if (!ExplicitCompleteMatHarness.siteAwareOn())     { hs = false; System.out.println("    *** HARD STOP: site-aware capture is bypassed ***"); }
+        System.out.printf("    PHASE-0 HARD STOPS: %s%n", hs ? "all clear (this IS the current every4 sparse lattice)" : "*** TRIGGERED ***");
+        ok &= hs;
+        if (!hs) { FIL_SEGS = savedSegs; FIL_BROWN = savedBrown;
+                   ExplicitCompleteMatHarness.SITE_AWARE = savedSA; ExplicitCompleteMatHarness.Z_SLAB = savedSlab; cfgOff(); return false; }
+
+        // ---- PHASE 1: what defines the bound-head orientation, read out of the built scene --------------------
+        System.out.println("\n  PHASE 1 — BOUND-HEAD ORIENTATION: the vectors the model actually carries");
+        // pin segment 0's material frame so azimuths are exactly known (the standing -site-fixtures idiom)
+        f.setUVec(0, 1f, 0f, 0f); f.setYVec(0, 0f, 1f, 0f);
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        // reference binding pose for every motor (the pose the 8-gate bind certifies)
+        for (int m = 0; m < N; m++) {
+            e.q.set(m, TwoBodyConverterMotor.PHI_PRE_3E);
+            e.q.set(N + m, e.q.get(3 * N + m));                       // psi = psiActin  => the g1 reference
+            e.q.set(2 * N + m, TwoBodyConverterMotor.PRESTROKE_THETAS);
+        }
+        TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
+        double dX = e.outGeom.get(6 * N) - e.outGeom.get(3 * N);
+        double dY = e.outGeom.get(7 * N) - e.outGeom.get(4 * N);
+        double dZ = e.outGeom.get(8 * N) - e.outGeom.get(5 * N);
+        double dL = Math.sqrt(dX * dX + dY * dY + dZ * dZ), spread = 0;
+        for (int m = 1; m < N; m++) {
+            double ax = e.outGeom.get(6 * N + m) - e.outGeom.get(3 * N + m);
+            double ay = e.outGeom.get(7 * N + m) - e.outGeom.get(4 * N + m);
+            double az2 = e.outGeom.get(8 * N + m) - e.outGeom.get(5 * N + m);
+            spread = Math.max(spread, Math.sqrt((ax - dX) * (ax - dX) + (ay - dY) * (ay - dY) + (az2 - dZ) * (az2 - dZ)));
+        }
+        System.out.printf(Locale.US, "    reference-pose head vector  xF8 - xH = (%+.6f, %+.6f, %+.6f) um, |.| = %.4f nm%n", dX, dY, dZ, dL * 1e3);
+        System.out.printf(Locale.US, "    spread of that vector over all %d lawn motors = %.3e um (shared base triad => identical)%n", N, spread);
+        System.out.printf(Locale.US, "    head body point written by matPlaceHeadExplicit : coord = xH ; uVec = normalize(xF8 - xH) = eBind%n");
+        System.out.printf(Locale.US, "    head transverse reference (yVec = h_perp)       : Gram-Schmidt of a LAB-FIXED seed axis against eBind%n");
+        System.out.printf(Locale.US, "                                                      seed = xHat when |eBind.xHat| < 0.9, else yHat%n");
+        System.out.printf(Locale.US, "    bond (CrossBridgeSystem.bondForcesSurface)      : ZERO-REST spring xF8tip -> x_site, alignment j1FMT = %.3f%n",
+                e.xbParamsSurf.get(2));
+        System.out.printf(Locale.US, "                                                      => F9 (head-axis 90/120 deg) and F10 (yVec align) are %s%n",
+                e.xbParamsSurf.get(2) == 0f ? "IDENTICALLY ZERO on this path" : "ACTIVE");
+        System.out.printf(Locale.US, "    bound angular constraint in the solve           : 0.5*kbind*(psi - psiActin)^2, psiActin = %.4f rad (per-motor CONSTANT)%n",
+                e.q.get(3 * N));
+        System.out.printf(Locale.US, "    orientational REGISTRY to the site frame        : ChiralSiteSystem.headRollStep, kOmega = REG_K = %.3e N.m/rad, rollDof = %s%n",
+                ExplicitCompleteMatHarness.REG_K, ExplicitCompleteMatHarness.HEAD_ROLL ? "ON" : "OFF");
+        System.out.printf(Locale.US, "                                                      => %s%n",
+                (ExplicitCompleteMatHarness.REG_K == 0.0 || !ExplicitCompleteMatHarness.HEAD_ROLL)
+                        ? "EXACTLY INERT (the kernel returns before touching anything)" : "ACTIVE");
+
+        // ---- PHASE 2: the deterministic fixtures --------------------------------------------------------------
+        java.util.List<Site> all = enumerateSites(G, e);
+        int k0 = -1;
+        for (Site t : all) if (t.seg == 0 && t.lArc > 0.5 * rise) { k0 = t.k; break; }
+        if (k0 < 0) { System.out.println("    *** could not find an interior site to start from ***"); ok = false; k0 = 1; }
+
+        System.out.println("\n  PHASE 2 — DETERMINISTIC BOUND-MOTOR FIXTURES (real capture kernels; no trajectory advanced)");
+        System.out.printf(Locale.US,
+                  "    Heads are placed so their own F8 anchor sits %.2f nm outside the chosen effective site,%n"
+                + "    along that site's outward normal. Capture is then decided by the REAL kernels%n"
+                + "    ChiralSiteSystem.siteGateA -> siteCommitB -> siteOccupancyResolve, exactly as in a run;%n"
+                + "    the head body pose is written by the REAL TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit.%n"
+                + "    Head-pose rule per fixture:%n"
+                + "      A/B  REFERENCE-POSE  : a real lawn motor at its reference binding pose, rigidly translated%n"
+                + "                             (its own internal head vector xF8-xH = %.4f nm, shared by all motors)%n"
+                + "      C    RADIAL APPROACH : the head docks facing its own site (eBind = n_site), same head length%n",
+                BV_OFF_NM, dL * 1e3);
+        String[] tags  = { "fixtureA_contiguous", "fixtureB_alternate", "fixtureC_radial_ring" };
+        String[] descs = { "VERSION A - CONTIGUOUS sites, reference-pose head",
+                           "VERSION B - EVERY-OTHER site, reference-pose head",
+                           "VERSION C - CONTIGUOUS sites, radial-approach head (full ring)" };
+        int[] strides  = { 1, 2, 1 };
+        int[] counts   = { BV_HEADS, BV_HEADS, BV_RING };
+        boolean[] radial = { false, false, true };
+        double[][] track = new double[3][];
+        for (int v = 0; v < 3; v++) {
+            java.util.List<Integer> want = new java.util.ArrayList<>();
+            for (int h = 0; h < counts[v]; h++) want.add(k0 + h * strides[v]);
+            for (int m = 0; m < N; m++) { e.active.set(m, 0); mot.boundSeg.set(m, -1); e.prevBound.set(m, -1);
+                                          e.justBound.set(m, 0); e.bindSite.set(m, -1); }
+            java.util.Map<Integer,Integer> slot = new java.util.LinkedHashMap<>();
+            int m = 0;
+            for (int kk : want) {
+                Site t = null; for (Site q : all) if (q.k == kk) { t = q; break; }
+                if (t == null) continue;
+                double off = BV_OFF_NM * 1e-3;
+                double fx = t.x + off * t.nx, fy = t.y + off * t.ny, fz = t.z + off * t.nz;
+                double ax, ay, az2;                                     // head long axis (xF8 - xH), model's own length
+                if (radial[v]) { ax = dL * t.nx; ay = dL * t.ny; az2 = dL * t.nz; }
+                else           { ax = dX;        ay = dY;        az2 = dZ; }
+                e.outGeom.set(6 * N + m, fx);      e.outGeom.set(7 * N + m, fy);       e.outGeom.set(8 * N + m, fz);
+                e.outGeom.set(3 * N + m, fx - ax); e.outGeom.set(4 * N + m, fy - ay);  e.outGeom.set(5 * N + m, fz - az2);
+                e.active.set(m, 1); e.noBind.set(m, 0); mot.nucleotideState.set(m, MotorStore.NUC_ADPPI);
+                e.q.set(m, TwoBodyConverterMotor.PHI_PRE_3E); e.q.set(N + m, e.q.get(3 * N + m));
+                e.q.set(2 * N + m, (e.q.get(N + m) - TwoBodyConverterMotor.PHI_PRE_3E));   // thetaErr = 0 at the reference pose
+                slot.put(kk, m);
+                m++;
+            }
+            ChiralSiteSystem.siteGateA(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom,
+                    f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
+            ChiralSiteSystem.siteCommitB(mot.boundSeg, mot.nucleotideState, e.q, e.params, e.sbP,
+                    e.candInt, e.candArc, e.candAzim, mot.bindArc, mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+            ChiralSiteSystem.siteOccupancyResolve(mot.boundSeg, e.justBound, e.prevBound, e.bindSite,
+                    e.segFilId, e.siteStats, e.chiP, e.exCounts);
+            TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit(e.outGeom, mot.boundSeg, e.eupP, e.exCounts, body.coord, body.uVec, body.yVec);
+            CrossBridgeSystem.bondForcesSurface(body.coord, body.uVec, body.yVec, body.bRotGam, f.coord, f.uVec, f.yVec,
+                    f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, mot.nucleotideState, G.bondData, e.xbParamsSurf);
+            java.util.List<BHead> HS = bvCollect(G, e);
+            java.util.Set<Integer> got = new java.util.LinkedHashSet<>();
+            int wrong = 0;
+            for (BHead H : HS) { got.add(H.k); if (!want.contains(H.k)) wrong++; }
+            System.out.printf("%n  %s%n    requested %d sites k=%d..%d (stride %d), CAPTURED %d%n",
+                    descs[v], want.size(), want.get(0), want.get(want.size() - 1), strides[v], HS.size());
+            if (wrong > 0) { ok = false; System.out.printf("    *** %d head(s) bound a site that was not the intended one ***%n", wrong); }
+            // per-requested-site gate diagnosis (host reconstruction of the SAME gate expressions)
+            if (got.size() < want.size()) {
+                System.out.printf("    sites NOT captured — gate diagnosis (g6 head-side limit = %.3f nm above the segment centre):%n", e.sbP.get(8) * 1e3);
+                for (int kk : want) {
+                    if (got.contains(kk)) continue;
+                    Site t = null; for (Site q : all) if (q.k == kk) { t = q; break; }
+                    if (t == null) { System.out.printf("      k=%-4d : site does not exist on this filament%n", kk); continue; }
+                    int mm = slot.getOrDefault(kk, -1); if (mm < 0) continue;
+                    double hxx = e.outGeom.get(3 * N + mm), hyy = e.outGeom.get(4 * N + mm), hzz = e.outGeom.get(5 * N + mm);
+                    double ccx = f.coord.get(t.seg), ccy = f.coord.get(nSeg + t.seg), ccz = f.coord.get(2 * nSeg + t.seg);
+                    double hs6 = ((hxx - ccx) * G.eup[0] + (hyy - ccy) * G.eup[1] + (hzz - ccz) * G.eup[2]) * 1e3;
+                    System.out.printf(Locale.US, "      k=%-4d azim %+8.3f deg, n_z = %+6.3f : head centre sits %+7.3f nm above the segment centre"
+                            + " => g6 %s%n", kk, wrapDeg(Math.toDegrees(t.phi)), t.nz, hs6, hs6 < e.sbP.get(8) * 1e3 ? "PASSES (rejected elsewhere)" : "REJECTS");
+                }
+            }
+            track[v] = bvTable(descs[v], HS);
+            java.util.List<Site> win = new java.util.ArrayList<>();
+            for (Site t : all) if (t.k >= k0 - 2 && t.k <= k0 + (counts[v] - 1) * strides[v] + 2) win.add(t);
+            bvWriteSites(BV_DIR, tags[v], win, got);
+            bvWriteHeads(BV_DIR, tags[v], HS);
+            bvWriteFilament(BV_DIR, tags[v], G, e);
+            bvWriteScene(BV_DIR, tags[v], descs[v], G, e, win, got, HS);
+            bvWriteViewerFrame(BV_JS + "/" + tags[v], G, e, win, got, HS);
+        }
+
+        // ---- PHASE 5: natural short-run snapshot --------------------------------------------------------------
+        System.out.println("\n  PHASE 5 — NATURAL SHORT-RUN SNAPSHOT (CPU sequential runner, disclosed; the same kernels)");
+        cfg(PATH_B_SITE_MODE, false, 0.0, 0.0, 0.0, false, 1.0, true);
+        Glide2D Gn = build(SEED); var en = ExplicitCompleteMatHarness.packExMat(Gn, 1);
+        long t0 = System.nanoTime();
+        java.util.Map<Integer,Integer> visited = new java.util.TreeMap<>();   // site id -> bound-head-steps
+        java.util.List<BHead> HN = new java.util.ArrayList<>();
+        int bestStep = -1;
+        for (int t = 0; t < BV_STEPS; t++) {
+            ExplicitCompleteMatHarness.stepGlidingCPU(en, t, SEED);
+            int nb = 0;
+            for (int mm = 0; mm < Gn.N; mm++)
+                if (Gn.mot.boundSeg.get(mm) >= 0 && en.bindSite.get(mm) >= 0) { visited.merge(en.bindSite.get(mm), 1, Integer::sum); nb++; }
+            // keep the RICHEST frame of the run (most simultaneously bound heads) as the representative snapshot
+            if (t > BV_STEPS / 4 && nb > HN.size()) {
+                HN = bvCollect(Gn, en); bestStep = t;
+                java.util.List<Site> aS = enumerateSites(Gn, en);
+                java.util.Set<Integer> oS = new java.util.LinkedHashSet<>();
+                for (BHead H : HN) oS.add(H.k);
+                bvWriteSites(BV_DIR, "natural", aS, oS);
+                bvWriteHeads(BV_DIR, "natural", HN);
+                bvWriteFilament(BV_DIR, "natural", Gn, en);
+                bvWriteScene(BV_DIR, "natural", "NATURAL SNAPSHOT - real Path-B gliding run, step " + t, Gn, en, aS, oS, HN);
+                bvWriteViewerFrame(BV_JS + "/natural", Gn, en, aS, oS, HN);
+            }
+        }
+        double secs = (System.nanoTime() - t0) / 1e9;
+        System.out.printf(Locale.US, "    %d motors, %d steps (%.3f ms physical) on the CPU runner in %.1f s%n"
+                + "    representative frame = step %d, the richest frame after the first quarter: %d simultaneously bound heads%n",
+                Gn.N, BV_STEPS, BV_STEPS * DTR * 1e3, secs, bestStep, HN.size());
+        System.out.printf(Locale.US, "    %d DISTINCT effective sites were occupied at some point during the run (site-step total %d)%n",
+                visited.size(), visited.values().stream().mapToInt(Integer::intValue).sum());
+        {
+            StringBuilder vb = new StringBuilder("k\tgArc_nm\tazim_deg\tboundSteps\n");
+            java.util.List<Site> allV = enumerateSites(Gn, en);
+            for (var en2 : visited.entrySet()) {
+                Site t = null; for (Site q : allV) if (q.k == en2.getKey()) { t = q; break; }
+                vb.append(String.format(Locale.US, "%d\t%.4f\t%.4f\t%d%n", en2.getKey(),
+                        en2.getKey() * rise * 1e3, t != null ? wrapDeg(Math.toDegrees(t.phi)) : Double.NaN, en2.getValue()));
+            }
+            bvWrite(BV_DIR, "natural_visited_sites.tsv", vb.toString());
+        }
+        if (HN.isEmpty()) { System.out.println("    *** no bound heads in the snapshot — increase -bound-viz-steps ***"); ok = false; }
+        else {
+            double[] tn = bvTable("NATURAL SNAPSHOT (real Path-B gliding run, step " + bestStep + ")", HN);
+            System.out.printf(Locale.US, "    natural-snapshot d(phase) range = [%+.2f, %+.2f] deg (spread %.2f)%n", tn[0], tn[1], tn[2]);
+        }
+
+        // ---- PHASE 9: interpretation ------------------------------------------------------------------------
+        System.out.println("\n  PHASE 9 — DOES h_perp TRACK THE LOCAL SITE NORMAL?");
+        System.out.println("    Test: d(phase) = azimuth(h_perp) - azimuth(n_site), both in the filament's OWN material frame.");
+        System.out.println("      tracking  => d(phase) CONSTANT across sites (h_perp turns with the helix)");
+        System.out.println("      not tracking => d(phase) sweeps by -54 deg per site (h_perp is fixed while n_site rotates)");
+        for (int v = 0; v < 3; v++)
+            System.out.printf(Locale.US, "    %-58s d(phase) in [%+8.3f, %+8.3f] deg, spread %8.3f deg%n",
+                    descs[v], track[v][0], track[v][1], track[v][2]);
+        System.out.printf("%n    figure/scene data written to %s%n", BV_DIR);
+        System.out.printf("    repo-viewer (-3js) frames written to %s/{%s,%s,%s,natural}/frame_000000.json%n",
+                BV_JS, tags[0], tags[1], tags[2]);
+
+        FIL_SEGS = savedSegs; FIL_BROWN = savedBrown;
+        ExplicitCompleteMatHarness.SITE_AWARE = savedSA; ExplicitCompleteMatHarness.Z_SLAB = savedSlab; cfgOff();
+        System.out.printf("%n  BOUND-MOTOR GEOMETRY VISUAL AUDIT: %s%n", ok ? "COMPLETE" : "COMPLETE WITH FLAGS");
+        return ok;
+    }
+    /** Head offset outside the site along its own normal in the deterministic fixture (nm). Inside g0 (3 nm) and g4 (2 pN). */
+    static final double BV_OFF_NM = 1.0;
+
+    // ===========================================================================================================
+    //  HELICAL-SITE NORMAL BINDING — PHASE 0/1 PROVENANCE AUDIT
+    //  ---------------------------------------------------------------------------------------------------------
+    //  Read-only. Establishes, from the BUILT scene and the live kernels, (a) whether a historical
+    //  eBind-vs-actin-orientation capture gate exists and with what tolerance, (b) whether a historical bound
+    //  restoring angular elasticity for the SAME coordinate exists and with what stiffness, (c) whether either
+    //  carries a reaction on actin, and (d) the kinematic reachability of the site normals by the motor's own
+    //  degrees of freedom. Nothing is modified. No parameter is chosen here.
+    // ===========================================================================================================
+    static boolean runNormalAudit() {
+        int savedSegs = FIL_SEGS; boolean savedBrown = FIL_BROWN;
+        boolean savedSA = ExplicitCompleteMatHarness.SITE_AWARE, savedSlab = ExplicitCompleteMatHarness.Z_SLAB;
+        ExplicitCompleteMatHarness.SITE_AWARE = true; ExplicitCompleteMatHarness.Z_SLAB = true;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        cfg(PATH_B_SITE_MODE, false, 0.0, 0.0, 0.0, false, 1.0, true);
+        Glide2D G = build(SEED); FilamentStore f = G.fil; int N = G.N, nSeg = G.nSeg;
+        var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+        double rise = e.sbP.get(16), stepPhase = bvStepPhase(e);
+
+        System.out.println("\n=== HELICAL-SITE NORMAL BINDING — PHASE 0/1 PROVENANCE AUDIT (read-only) ===");
+
+        // ---- 1. eBind: what is it, and what does psi actually rotate? -----------------------------------------
+        // Analytic identity from TwoBodyConverterMotor.geomC/geom2D:
+        //   xF8 - xH = R_econv(psi) * ( bhat*rF8x + eup*rF8y )   =>  eBind = R_econv(psi) * p1hat
+        // Verified below against the REAL matBeamGeom output at two different psi.
+        double[] bh = G.bhat, up = G.eup, ec = G.econv;
+        double p1x = bh[0] * TwoBodyConverterMotor.R_F8[0] + up[0] * TwoBodyConverterMotor.R_F8[1];
+        double p1y = bh[1] * TwoBodyConverterMotor.R_F8[0] + up[1] * TwoBodyConverterMotor.R_F8[1];
+        double p1z = bh[2] * TwoBodyConverterMotor.R_F8[0] + up[2] * TwoBodyConverterMotor.R_F8[1];
+        double p1n = Math.sqrt(p1x * p1x + p1y * p1y + p1z * p1z); p1x /= p1n; p1y /= p1n; p1z /= p1n;
+        double p2x = ec[1] * p1z - ec[2] * p1y, p2y = ec[2] * p1x - ec[0] * p1z, p2z = ec[0] * p1y - ec[1] * p1x;
+        double worstId = 0, worstEc = 0;
+        for (double psi : new double[]{ 0.0, 0.37, -0.61 }) {
+            for (int m = 0; m < N; m++) { e.q.set(m, TwoBodyConverterMotor.PHI_PRE_3E); e.q.set(N + m, psi);
+                                          e.q.set(2 * N + m, TwoBodyConverterMotor.PRESTROKE_THETAS); }
+            TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
+            double bx = e.outGeom.get(6 * N) - e.outGeom.get(3 * N);
+            double by = e.outGeom.get(7 * N) - e.outGeom.get(4 * N);
+            double bz = e.outGeom.get(8 * N) - e.outGeom.get(5 * N);
+            double bn = Math.sqrt(bx * bx + by * by + bz * bz); bx /= bn; by /= bn; bz /= bn;
+            double cx = Math.cos(psi) * p1x + Math.sin(psi) * p2x;
+            double cy = Math.cos(psi) * p1y + Math.sin(psi) * p2y;
+            double cz = Math.cos(psi) * p1z + Math.sin(psi) * p2z;
+            worstId = Math.max(worstId, Math.sqrt((bx - cx) * (bx - cx) + (by - cy) * (by - cy) + (bz - cz) * (bz - cz)));
+            worstEc = Math.max(worstEc, Math.abs(bx * ec[0] + by * ec[1] + bz * ec[2]));
+        }
+        System.out.println("\n  [1] WHAT psi ROTATES  (analytic identity, gated against the live matBeamGeom)");
+        System.out.printf(Locale.US, "      eBind(psi) = R_econv(psi) . p1hat,  p1hat = normalize(bhat*rF8x + eup*rF8y) = (%+.4f, %+.4f, %+.4f)%n", p1x, p1y, p1z);
+        System.out.printf(Locale.US, "      max |eBind(kernel) - eBind(analytic)| over psi in {0, 0.37, -0.61} = %.3e  => %s%n",
+                worstId, worstId < 1e-9 ? "IDENTITY CONFIRMED" : "*** MISMATCH ***");
+        System.out.printf(Locale.US, "      base triad: bhat=(%+.3f,%+.3f,%+.3f)  eup=(%+.3f,%+.3f,%+.3f)  econv=(%+.3f,%+.3f,%+.3f)  [lab-fixed; RAND_BASE_AZ=%s]%n",
+                bh[0], bh[1], bh[2], up[0], up[1], up[2], ec[0], ec[1], ec[2], ExplicitCompleteMatHarness.RAND_BASE_AZ ? "ON" : "OFF");
+        System.out.printf(Locale.US, "      max |eBind . econv| = %.3e  =>  eBind is CONFINED to the plane perpendicular to econv%n", worstEc);
+        System.out.printf(Locale.US, "      ==> psi IS the in-plane orientation angle of eBind. g1 (|psi - psiActin|) IS an eBind ORIENTATION gate.%n");
+
+        // ---- 2. the historical capture gate ------------------------------------------------------------------
+        System.out.println("\n  [2] HISTORICAL CAPTURE ORIENTATION GATE");
+        System.out.printf(Locale.US, "      code            : TwoBodyConverterMotor.gateMetrics[2]/gatePasses g1, GATE_NAMES[1] = \"%s\"%n",
+                TwoBodyConverterMotor.GATE_NAMES[1]);
+        System.out.printf(Locale.US, "      expression      : psiErr = |psi - psiActin| (deg);  g1 = orientOn && psiErr < psiDeg%n");
+        System.out.printf(Locale.US, "      tolerance       : psiDeg = %.1f deg   (Tol default; packed as bindP[1] = %.1f)%n",
+                new TwoBodyConverterMotor.Tol().psiDeg, e.bindP.get(1));
+        System.out.printf(Locale.US, "      reference       : psiActin = %.4f rad for ALL %d lawn motors (buildGlide2D sets it to 0)%n",
+                e.q.get(3 * N), N);
+        System.out.printf(Locale.US, "      => PRESENT, constrains eBind, tolerance 25 deg, but referenced to a LAB-FIXED direction.%n");
+
+        // ---- 3. the historical bound restoring elasticity ----------------------------------------------------
+        double kbind = e.params.get(7 * N), kconv = e.params.get(6 * N);
+        System.out.println("\n  [3] HISTORICAL BOUND RESTORING ANGULAR ELASTICITY (same coordinate)");
+        System.out.printf(Locale.US, "      code            : MatSoaSlice.matS2SolveStep residual a45 = QpsiF8 - kconv*(theta-thetaS) - kbind*(psi - psiActin)%n");
+        System.out.printf(Locale.US, "      potential       : U = 0.5*kbind*(psi - psiActin)^2   [also gate g5's energy term]%n");
+        System.out.printf(Locale.US, "      stiffness       : kbind = %.4e N.m/rad^2  = %.1f pN.nm/rad^2   (build3core kbindPN=512 x KAPPA_CODE=%.1e)%n",
+                kbind, kbind / TwoBodyConverterMotor.KAPPA_CODE, TwoBodyConverterMotor.KAPPA_CODE);
+        System.out.printf(Locale.US, "      (companion kconv = %.4e N.m/rad^2 = %.1f pN.nm/rad^2)%n", kconv, kconv / TwoBodyConverterMotor.KAPPA_CODE);
+        System.out.printf(Locale.US, "      ACTIVE on Path B: %s%n", kbind > 0 ? "YES — it is running in every campaign to date" : "no");
+        System.out.printf(Locale.US, "      reaction on actin: NONE — psiActin is a constant, so U does not depend on the filament%n"
+                        + "                         orientation and no torque is returned to the segment. This is the defect.%n");
+        System.out.printf(Locale.US, "      F9/F10 (the OTHER historical alignment torques, CrossBridgeSystem.bondForcesSurface):%n"
+                        + "                         j1FMT = xbParams[2] = %.3f  =>  %s%n", e.xbParamsSurf.get(2),
+                e.xbParamsSurf.get(2) == 0f ? "IDENTICALLY ZERO on the explicit-S2 path" : "ACTIVE");
+
+        // ---- 4. reachability of the site normals by the motor's own DOF --------------------------------------
+        // eBind is confined to the plane perpendicular to econv, so for ANY psi
+        //     max_psi dot(eBind, n_site) = |n_site projected into that plane| = sqrt(1 - (n_site.econv)^2)
+        System.out.println("\n  [4] KINEMATIC REACHABILITY OF n_site BY THE MOTOR'S OWN DOF  (the load-bearing constraint)");
+        double tolDeg = e.bindP.get(1), cosTol = Math.cos(Math.toRadians(tolDeg));
+        java.util.List<Site> S = enumerateSites(G, e);
+        java.util.TreeMap<Long, int[]> byAz = new java.util.TreeMap<>();     // azimuth(0.001 deg) -> {count, reachable}
+        int reach = 0;
+        double bestAll = -1, worstAll = 2;
+        for (Site t : S) {
+            double dotEc = t.nx * ec[0] + t.ny * ec[1] + t.nz * ec[2];
+            double best = Math.sqrt(Math.max(0, 1.0 - dotEc * dotEc));       // max achievable dot(eBind, n_site)
+            boolean ok = best >= cosTol;
+            if (ok) reach++;
+            bestAll = Math.max(bestAll, best); worstAll = Math.min(worstAll, best);
+            long key = Math.round(wrapDeg(Math.toDegrees(t.phi)) * 1000);
+            byAz.computeIfAbsent(key, k -> new int[2])[0]++;
+            if (ok) byAz.get(key)[1]++;
+        }
+        System.out.printf(Locale.US, "      for any psi:  max dot(eBind, n_site) = sqrt(1 - (n_site.econv)^2) = |sin(site azimuth)| here%n");
+        System.out.printf(Locale.US, "      over the %d effective sites of the canonical filament, %d distinct azimuths:%n", S.size(), byAz.size());
+        System.out.printf(Locale.US, "        best achievable alignment  = %.4f  (%.2f deg)%n", bestAll, Math.toDegrees(Math.acos(Math.min(1, bestAll))));
+        System.out.printf(Locale.US, "        worst achievable alignment = %.4f  (%.2f deg)%n", worstAll, Math.toDegrees(Math.acos(Math.max(-1, worstAll))));
+        System.out.printf(Locale.US, "        sites that can EVER satisfy dot(eBind,n_site) >= cos(%.0f deg): %d of %d = %.1f %%%n",
+                tolDeg, reach, S.size(), 100.0 * reach / S.size());
+        System.out.printf("%n      %12s %10s %14s %s%n", "azimuth deg", "#sites", "max align deg", "within 25 deg?");
+        for (var en2 : byAz.entrySet()) {
+            double az = en2.getKey() / 1000.0;
+            double dotEc = Math.cos(Math.toRadians(az)) * 0 + 0;   // recomputed exactly below from a real site
+            Site rep = null; for (Site t : S) if (Math.round(wrapDeg(Math.toDegrees(t.phi)) * 1000) == en2.getKey()) { rep = t; break; }
+            dotEc = rep.nx * ec[0] + rep.ny * ec[1] + rep.nz * ec[2];
+            double best = Math.sqrt(Math.max(0, 1.0 - dotEc * dotEc));
+            System.out.printf(Locale.US, "      %+12.1f %10d %14.2f %s%n", az, en2.getValue()[0],
+                    Math.toDegrees(Math.acos(Math.min(1, best))), en2.getValue()[1] > 0 ? "YES" : "no  (unreachable by construction)");
+        }
+
+        // ---- PHASE 1 VERDICT ---------------------------------------------------------------------------------
+        System.out.println("\n  ============================ PHASE 1 VERDICT ============================");
+        System.out.println("  HISTORICAL CAPTURE NORMAL LAW:  PRESENT (as an eBind ORIENTATION law, not a site-normal law)");
+        System.out.println("      vector compared     : eBind = normalize(xF8 - xH), through the coordinate psi");
+        System.out.println("      normal construction : NONE — the reference is the constant psiActin about the lab-fixed econv;");
+        System.out.println("                            no actin normal, continuous-cylinder or otherwise, is ever constructed");
+        System.out.printf (Locale.US, "      angular tolerance   : %.0f deg  (Tol.psiDeg / bindP[1])%n", tolDeg);
+        System.out.println("      provenance          : Exp 3C/3D/3E stereospecific capture, TwoBodyConverterMotor.gateMetrics/");
+        System.out.println("                            gatePasses g1 \"binding-face orientation\"; ported verbatim into");
+        System.out.println("                            MatSoaSlice.matGeomGate and ChiralSiteSystem.siteCommitB");
+        System.out.println("  HISTORICAL BOUND NORMAL TORQUE: PRESENT and ACTIVE (same coordinate, same reference)");
+        System.out.println("      angular coordinate  : psi (the in-plane orientation of eBind about econv)");
+        System.out.printf (Locale.US, "      stiffness           : kbind = %.1f pN.nm/rad^2 = %.3e N.m/rad^2%n", kbind / TwoBodyConverterMotor.KAPPA_CODE, kbind);
+        System.out.println("      reaction path       : NONE — no torque is returned to the filament (psiActin is constant)");
+        System.out.println("      provenance          : build3core(..., kbindPN = 512, ...) via buildGlide2D; KAPPA_CODE = 1e-21");
+        System.out.println("  CURRENT PATH-B:");
+        System.out.println("      missing             : (i) the reference direction is a lab constant instead of the selected");
+        System.out.println("                            site's outward normal; (ii) there is no equal-and-opposite actin reaction");
+        System.out.println("      reusable unchanged  : the 25 deg tolerance, the kbind stiffness, the psi coordinate, the");
+        System.out.println("                            n_site reconstruction, and the bondData segment-torque return path");
+        System.out.println("      genuinely new       : NOTHING numeric — but see [4]: eBind cannot leave the plane perp to econv,");
+        System.out.println("                            so a STRICT dot(eBind,n_site) >= cos(25 deg) gate is UNSATISFIABLE for the");
+        System.out.println("                            majority of sites unless the lawn is given orientational disorder");
+        System.out.println("                            (RAND_BASE_AZ) or the head gains the missing out-of-plane DOF.");
+        System.out.println("  =========================================================================");
+
+        FIL_SEGS = savedSegs; FIL_BROWN = savedBrown;
+        ExplicitCompleteMatHarness.SITE_AWARE = savedSA; ExplicitCompleteMatHarness.Z_SLAB = savedSlab; cfgOff();
+        return true;
+    }
+
+    /** PHASE A0 + A2 — read every z-directed term out of the BUILT scene and size the walls from it. */
+    static boolean runZAudit() {
+        System.out.println("\n=== FILAMENT z BOUNDARY — PHASE A0 (trace) + A2 (wall sizing). No trajectory advanced. ===");
+        int savedSegs = FIL_SEGS; boolean savedBrown = FIL_BROWN;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        cfg(2, true, 0.0, 0.0, 0.0, false, 1.0, true);
+        Glide2D G = build(SEED);
+        FilamentStore f = G.fil; int nSeg = G.nSeg, N = G.N;
+
+        System.out.println("\n  -- A0.1 FILAMENT interior potential (the term this task replaces) --");
+        System.out.printf(Locale.US, "    MatSoaSlice.matZConfine : Fz = -kz * z_com, kz = G4_KZ = %.1f pN/nm (kzCode %.4e N/µm), applied PER SEGMENT at the CENTRE%n",
+                TwoBodyConverterMotor.G4_KZ, G.kzCode);
+        double kSI = TwoBodyConverterMotor.G4_KZ * 1e-12 / 1e-9;           // pN/nm -> N/m
+        System.out.printf(Locale.US, "    ⇒ z = 0 is an energetic MINIMUM; thermal pin RMS z = sqrt(kT/kz) = %.3f nm (actin radius is %.2f nm)%n",
+                Math.sqrt(Constants.kT / kSI) * 1e9, Constants.radius * 1e3);
+
+        System.out.println("\n  -- A0.2 MOTOR-SIDE terms (must be PRESERVED; this task does not touch them) --");
+        double eZ = 0, aZ = 0, flZ = 0;
+        for (int m = 0; m < N; m++) { eZ += G.g4E[m][2]; aZ += G.A[m][2]; }
+        eZ /= N; aZ /= N; flZ = G.g4floorZ;
+        System.out.printf(Locale.US, "    S2 emergence plane  <z(g4E)>   = %+8.4f µm (%+7.2f nm)   [the LAWN plane: motors project from here]%n", eZ, eZ*1e3);
+        System.out.printf(Locale.US, "    pivot/anchor plane  <z(A)>     = %+8.4f µm (%+7.2f nm)%n", aZ, aZ*1e3);
+        System.out.printf(Locale.US, "    motor-body assembly z          = %+8.4f µm (%+7.2f nm)   [MotorStore.assembleArticulated, LaserTrapHarness.MANCHOR_Z]%n",
+                LaserTrapHarness.MANCHOR_Z, LaserTrapHarness.MANCHOR_Z*1e3);
+        System.out.printf(Locale.US, "    S2 beam-node floor  g4floorZ   = %+8.4f µm (%+7.2f nm), k = %.1f pN/nm — one-sided, on the BEAM NODES only%n",
+                flZ, flZ*1e3, G.g4kfloor*1e3);
+        System.out.println("    anchors are FIXED (never integrated); the reference F8 plane is at z = 0 by construction. NEITHER is changed here.");
+
+        System.out.println("\n  -- A0.3 FILAMENT geometry + drag (measured) --");
+        double gPerp = f.bTransGam.get(nSeg), gPar = f.bTransGam.get(0);
+        System.out.printf(Locale.US, "    nSeg=%d  segLength=%.4f µm  R_actin=%.4f µm (%.2f nm)  z_centreline(init)=%+.4f µm%n",
+                nSeg, f.segLength.get(0), Constants.radius, Constants.radius*1e3, f.coord.get(2*nSeg));
+        System.out.printf(Locale.US, "    gammaTrans_par=%.4e  gammaTrans_perp=%.4e N·s/m   (eta = %.4g Pa·s, dt = %.3e s)%n", gPar, gPerp, ETA, DTR);
+        double mob = 1e6 * DTR / gPerp;                                    // µm displacement per N per step
+        System.out.printf(Locale.US, "    per-step z displacement per pN of force = %.5f nm%n", mob*1e-12*1e3);
+        double Dz = Constants.kT / gPerp;                                  // m²/s
+        System.out.printf(Locale.US, "    free vertical diffusion D_z = kT/gamma_perp = %.4e m²/s ⇒ RMS z over 20 ms = %.1f nm (ONE segment, untethered)%n",
+                Dz, Math.sqrt(2*Dz*0.020)*1e9);
+
+        System.out.println("\n  -- A2 WALL SIZING (from the numbers above; NOT chosen to obtain any occupancy result) --");
+        double kEff = ExplicitCompleteMatHarness.Z_SLAB_FRAC * gPerp / (1e6 * DTR);   // N/µm
+        System.out.printf(Locale.US, "    wall law: F = frac·pen·gamma_perp/(1e6·dt), frac = %.2f ⇒ equivalent k_eff = %.2f pN/nm%n",
+                ExplicitCompleteMatHarness.Z_SLAB_FRAC, kEff*1e12/1e3);
+        System.out.printf(Locale.US, "    per-step penetration removal = %.0f %% ⇒ unconditionally stable (no overshoot, factor < 1)%n",
+                100*ExplicitCompleteMatHarness.Z_SLAB_FRAC);
+        for (double Fpn : new double[]{ 1, 5, 10, 20 })
+            System.out.printf(Locale.US, "      steady penetration under a constant %4.0f pN push = %.4f nm%n",
+                    Fpn, Fpn*1e-12*1e6*DTR/(ExplicitCompleteMatHarness.Z_SLAB_FRAC*gPerp)*1e3);
+        double lo = eZ + ExplicitCompleteMatHarness.Z_SLAB_LO_NM*1e-3, hi = eZ + ExplicitCompleteMatHarness.Z_SLAB_HI_NM*1e-3;
+        System.out.printf(Locale.US, "    LOWER wall (surface limit) = lawn %+.2f nm + %.1f nm = %+.2f nm  ⇒ centreline floor %+.2f nm%n",
+                eZ*1e3, ExplicitCompleteMatHarness.Z_SLAB_LO_NM, lo*1e3, (lo+Constants.radius)*1e3);
+        System.out.printf(Locale.US, "    UPPER wall (surface limit) = lawn %+.2f nm + %.1f nm = %+.2f nm  ⇒ centreline ceiling %+.2f nm%n",
+                eZ*1e3, ExplicitCompleteMatHarness.Z_SLAB_HI_NM, hi*1e3, (hi-Constants.radius)*1e3);
+        System.out.printf(Locale.US, "    free centreline travel = %.2f nm; the filament starts at %+.2f nm, i.e. %.2f nm above the centreline floor%n",
+                (hi-lo-2*Constants.radius)*1e3, 0.0, (0.0-(lo+Constants.radius))*1e3);
+        System.out.printf(Locale.US, "    reference: free S2 contour L = 40 nm; motor vertical reach from the lawn is of that order, so an upper wall%n"
+                        + "    at %.0f nm sits well above the engageable band while still bounding escape.%n", ExplicitCompleteMatHarness.Z_SLAB_HI_NM);
+        FIL_SEGS = savedSegs; FIL_BROWN = savedBrown; cfgOff();
+        return true;
+    }
+
+    /** PHASE A5 — free-filament validation of the slab: interior flatness, unbiased diffusion, wall
+     *  non-penetration, tilt/bend safety, dt robustness. Motors present but binding DISABLED. */
+    static boolean runZFree() {
+        System.out.println("\n=== FILAMENT z SLAB — PHASE A5 free-filament validation (binding OFF) ===");
+        boolean ok = true;
+        int savedSegs = FIL_SEGS; boolean savedBrown = FIL_BROWN;
+        boolean savedSlab = ExplicitCompleteMatHarness.Z_SLAB;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG;
+        ExplicitCompleteMatHarness.Z_SLAB = true;
+
+        // ---- A5.7 interior force flatness: the kernel must not touch the accumulator anywhere inside ----
+        System.out.println("\n  -- A5.1/A5.7 INTERIOR FLATNESS (deterministic kernel probe) --");
+        FIL_BROWN = false; cfg(2, true, 0.0, 0.0, 0.0, false, 1.0, true);
+        Glide2D Gz = build(SEED); FilamentStore fz = Gz.fil; int nS = Gz.nSeg;
+        var ez = ExplicitCompleteMatHarness.packExMat(Gz, 1);
+        double lawn = ExplicitCompleteMatHarness.Z_LAWN_UM;
+        double loS = lawn + ExplicitCompleteMatHarness.Z_SLAB_LO_NM*1e-3, hiS = lawn + ExplicitCompleteMatHarness.Z_SLAB_HI_NM*1e-3;
+        double maxInterior = 0; int nProbe = 0;
+        for (double zc = loS + Constants.radius + 0.0005; zc < hiS - Constants.radius - 0.0005; zc += 0.002) {
+            for (int s = 0; s < nS; s++) { fz.forceSum.set(s, 0f); fz.forceSum.set(nS+s, 0f); fz.forceSum.set(2*nS+s, 0f);
+                                          fz.coord.set(2*nS+s, (float) zc); }
+            MatSoaSlice.matZSlab(fz.coord, fz.uVec, fz.segLength, fz.bTransGam, fz.forceSum, ez.zsP, ez.exCounts);
+            for (int s = 0; s < nS; s++) maxInterior = Math.max(maxInterior, Math.abs(fz.forceSum.get(2*nS+s)));
+            nProbe++;
+        }
+        boolean flat = maxInterior == 0.0;
+        ok &= flat;
+        System.out.printf(Locale.US, "    %d interior heights probed over [%.2f, %.2f] nm: max |Fz| = %.3e N ⇒ %s%n",
+                nProbe, (loS+Constants.radius)*1e3, (hiS-Constants.radius)*1e3, maxInterior, flat ? "EXACTLY ZERO — PASS" : "*** NONZERO — FAIL ***");
+
+        // ---- A5.4/A5.5 wall reaction sign + magnitude, A5.6 tilt ----
+        System.out.println("\n  -- A5.4/A5.5/A5.6 WALL CONTACT (sign, magnitude, tilt-aware surface rule) --");
+        System.out.printf("    %-34s %12s %14s %14s%n", "configuration", "pen (nm)", "Fz (N)", "verdict");
+        double[][] cases = {
+            { loS + Constants.radius - 0.002, 0.0 },   // 2 nm below the centreline floor, horizontal
+            { hiS - Constants.radius + 0.002, 0.0 },   // 2 nm above the centreline ceiling, horizontal
+            { loS + Constants.radius + 0.001, 0.0 },   // 1 nm inside the floor, horizontal
+        };
+        String[] cn = { "2 nm INTO the lower wall", "2 nm INTO the upper wall", "1 nm inside (no contact)" };
+        for (int c = 0; c < cases.length; c++) {
+            for (int s = 0; s < nS; s++) { fz.forceSum.set(2*nS+s, 0f); fz.coord.set(2*nS+s, (float) cases[c][0]);
+                                          fz.setUVec(s, 1f, 0f, 0f); }
+            DerivedGeometrySystem.derive(fz.coord, fz.uVec, fz.yVec, fz.zVec, fz.end1, fz.end2, fz.segLength, fz.counts);
+            MatSoaSlice.matZSlab(fz.coord, fz.uVec, fz.segLength, fz.bTransGam, fz.forceSum, ez.zsP, ez.exCounts);
+            double F = fz.forceSum.get(2*nS);
+            boolean want = c == 0 ? F > 0 : (c == 1 ? F < 0 : F == 0.0);
+            ok &= want;
+            System.out.printf(Locale.US, "    %-34s %12.3f %14.4e %14s%n", cn[c], c==2?0.0:2.0, F, want ? "PASS" : "*** FAIL ***");
+        }
+        // tilt: a 45-degree segment whose CENTRE is legal but whose surface would clip
+        double zTilt = loS + Constants.radius + 0.001;     // centre 1 nm above the horizontal floor ⇒ legal when flat
+        double c45 = Math.sqrt(0.5);
+        for (int s = 0; s < nS; s++) { fz.forceSum.set(2*nS+s, 0f); fz.coord.set(2*nS+s, (float) zTilt);
+                                      fz.setUVec(s, (float) c45, 0f, (float) c45); fz.setYVec(s, 0f, 1f, 0f); }
+        DerivedGeometrySystem.derive(fz.coord, fz.uVec, fz.yVec, fz.zVec, fz.end1, fz.end2, fz.segLength, fz.counts);
+        MatSoaSlice.matZSlab(fz.coord, fz.uVec, fz.segLength, fz.bTransGam, fz.forceSum, ez.zsP, ez.exCounts);
+        double Ft = fz.forceSum.get(2*nS);
+        double half = 0.5*fz.segLength.get(0);
+        double extT = half*c45 + Constants.radius*Math.sqrt(1-0.5);
+        boolean tiltOk = Ft > 0;
+        ok &= tiltOk;
+        System.out.printf(Locale.US, "    %-34s %12.3f %14.4e %14s   (45° tilt: z half-extent %.2f nm vs %.2f nm flat ⇒ the SURFACE rule catches it)%n",
+                "45° tilt, centre legal-if-flat", (loS-(zTilt-extT))*1e3, Ft, tiltOk ? "PASS" : "*** FAIL ***", extT*1e3, Constants.radius*1e3);
+
+        // ---- A5.2/A5.3 Brownian z diffusion ------------------------------------------------------------
+        // The correct test for "no interior restoring force" is a walk started at the slab CENTRE: an unbiased
+        // confined walk started OFF-centre must relax toward the midpoint, so a nonzero drift from an off-centre
+        // start is expected reflecting-boundary behaviour and is NOT evidence of a potential. Both are measured:
+        // (a) centre start  -> mean drift must be consistent with ZERO   (the gate)
+        // (b) z = 0 start   -> drift toward the midpoint                 (documented control, not a gate)
+        System.out.println("\n  -- A5.2/A5.3 BROWNIAN z DIFFUSION (binding OFF; motors exert zero force) --");
+        FIL_BROWN = true;
+        // Binding is DISABLED for this gate, so every motor exerts exactly zero force on the filament and the
+        // motor density is a pure cost multiplier with no effect on the measured filament z dynamics. Run it at a
+        // low density so the gate is affordable; the filament physics is identical.
+        double savedDensity = DENSITY; DENSITY = 10.0;
+        int nSeed = 6, steps = 20000;
+        double zMid = 0.5*(loS + Constants.radius + hiS - Constants.radius);
+        double[] penLoMax = new double[1], penHiMax = new double[1];
+        java.util.List<Double> pens = new java.util.ArrayList<>();
+        for (int mode = 0; mode < 2; mode++) {
+            double sumDz = 0, sumDz2 = 0; long loHit = 0, hiHit = 0; long tot = 0;
+            for (int i = 0; i < nSeed; i++) {
+                cfg(2, true, 0.0, 0.0, 0.0, false, 1.0, true);
+                Glide2D Gf = build(SEED + i); FilamentStore ff = Gf.fil; int n2 = Gf.nSeg;
+                var ef = ExplicitCompleteMatHarness.packExMat(Gf, 1);
+                for (int m = 0; m < Gf.N; m++) { Gf.noBind[m] = true; ef.noBind.set(m, 1); }
+                if (mode == 0) for (int s = 0; s < n2; s++) ff.coord.set(2*n2+s, (float) zMid);   // centre start
+                double z0 = 0; for (int s = 0; s < n2; s++) z0 += ff.coord.get(2*n2+s); z0 /= n2;
+                for (int t = 0; t < steps; t++) {
+                    ExplicitCompleteMatHarness.stepGlidingCPU(ef, t, SEED + i);
+                    for (int s = 0; s < n2; s++) {
+                        double uz = ff.uVec.get(2*n2+s), h = 0.5*ff.segLength.get(s);
+                        double ext = h*Math.abs(uz) + Constants.radius*Math.sqrt(Math.max(0,1-uz*uz));
+                        double zl = ff.coord.get(2*n2+s) - ext, zh = ff.coord.get(2*n2+s) + ext;
+                        tot++;
+                        if (zl < loS) { loHit++; double d=(loS-zl)*1e3; pens.add(d); penLoMax[0]=Math.max(penLoMax[0],d); }
+                        if (zh > hiS) { hiHit++; double d=(zh-hiS)*1e3; pens.add(d); penHiMax[0]=Math.max(penHiMax[0],d); }
+                    }
+                }
+                double z1 = 0; for (int s = 0; s < n2; s++) z1 += ff.coord.get(2*n2+s); z1 /= n2;
+                sumDz += (z1 - z0); sumDz2 += (z1 - z0)*(z1 - z0);
+            }
+            double meanDz = sumDz/nSeed, sdDz = Math.sqrt(Math.max(0, sumDz2/nSeed - meanDz*meanDz));
+            double semDz = sdDz/Math.sqrt(nSeed);
+            if (mode == 0) {
+                boolean unbiased = Math.abs(meanDz) < 2.5*semDz + 1e-9;
+                ok &= unbiased;
+                System.out.printf(Locale.US, "    (a) CENTRE start (%.1f nm): %d seeds × %d steps (%.3f ms) mean drift = %+7.2f nm ± %.2f nm ⇒ %s%n",
+                        zMid*1e3, nSeed, steps, steps*DTR*1e3, meanDz*1e3, semDz*1e3,
+                        unbiased ? "ZERO within 2.5 SEM — PASS (flat interior, no restoring force)" : "*** BIASED — FAIL ***");
+                System.out.printf(Locale.US, "        single-seed RMS displacement = %6.2f nm; a kz = 2 pN/nm harmonic well would PIN RMS z to %.2f nm%n",
+                        sdDz*1e3, Math.sqrt(Constants.kT/2e-3)*1e9);
+                System.out.printf(Locale.US, "        wall contacts: lower %d, upper %d of %d segment-steps (%.3f %% / %.3f %%)%n",
+                        loHit, hiHit, tot, 100.0*loHit/tot, 100.0*hiHit/tot);
+            } else {
+                System.out.printf(Locale.US, "    (b) z = 0 start (control, NOT a gate): mean drift = %+7.2f nm ± %.2f nm toward the slab midpoint %.1f nm%n",
+                        meanDz*1e3, semDz*1e3, zMid*1e3);
+                System.out.println("        an unbiased confined walk started 6.4 nm above the floor and 66.6 nm below the ceiling MUST relax");
+                System.out.println("        upward; this is reflecting-boundary relaxation, NOT a potential (the interior force is exactly 0).");
+            }
+        }
+        java.util.Collections.sort(pens);
+        double p50 = pens.isEmpty()?0:pens.get(pens.size()/2), p99 = pens.isEmpty()?0:pens.get((int)(0.99*(pens.size()-1)));
+        double brownStep = Math.sqrt(2*(Constants.kT/fz.bTransGam.get(nS))*DTR)*1e9;
+        boolean penOk = p99 < 3.0*brownStep;
+        ok &= penOk;
+        System.out.printf(Locale.US, "    PENETRATION depth when in contact: median %.3f nm, p99 %.3f nm, max lower %.3f nm / upper %.3f nm%n",
+                p50, p99, penLoMax[0], penHiMax[0]);
+        System.out.printf(Locale.US, "        tolerance: one Brownian z step at this dt is %.3f nm — an explicit soft wall cannot correct a kick%n"
+                        + "        until the NEXT step, so a transient penetration of order one thermal step is intrinsic, not a defect.%n"
+                        + "        p99 < 3 thermal steps ⇒ %s%n", brownStep, penOk ? "PASS" : "*** FAIL ***");
+        DENSITY = savedDensity;
+
+        // ---- A5.8 dt robustness at wall contact: halve dt and re-measure the steady penetration ----
+        System.out.println("\n  -- A5.8 dt ROBUSTNESS at wall contact --");
+        double savedDtr = DTR;
+        for (int hd = 0; hd < 2; hd++) {
+            DTR = savedDtr / (hd == 0 ? 1.0 : 2.0);
+            cfg(2, true, 0.0, 0.0, 0.0, false, 1.0, true);
+            Glide2D Gd = build(SEED); FilamentStore fd = Gd.fil; int n3 = Gd.nSeg;
+            var ed = ExplicitCompleteMatHarness.packExMat(Gd, 1);
+            double lo2 = ExplicitCompleteMatHarness.Z_LAWN_UM + ExplicitCompleteMatHarness.Z_SLAB_LO_NM*1e-3;
+            // drive the filament into the lower wall with a constant 10 pN and iterate to steady state
+            double zc = lo2 + Constants.radius - 0.001;
+            for (int t = 0; t < 4000; t++) {
+                for (int s = 0; s < n3; s++) { fd.forceSum.set(2*n3+s, -10.0e-12f); fd.coord.set(2*n3+s, (float) zc); }
+                MatSoaSlice.matZSlab(fd.coord, fd.uVec, fd.segLength, fd.bTransGam, fd.forceSum, ed.zsP, ed.exCounts);
+                double Fnet = fd.forceSum.get(2*n3);
+                zc += 1e6 * Fnet * DTR / fd.bTransGam.get(n3);
+            }
+            double pen = (lo2 - (zc - Constants.radius)) * 1e3;
+            System.out.printf(Locale.US, "    dt = %.3e s : steady penetration under a constant 10 pN push = %.4f nm%n", DTR, pen);
+            if (hd == 0) zDtPen[0] = pen; else zDtPen[1] = pen;
+        }
+        DTR = savedDtr;
+        boolean dtOk = Math.abs(zDtPen[0] - zDtPen[1]) / Math.max(1e-9, Math.abs(zDtPen[0])) < 0.55;
+        ok &= dtOk;
+        System.out.printf(Locale.US, "    penetration scales as dt (the fracMove law is a fixed FRACTION per step, so a halved dt halves it): %s%n",
+                dtOk ? "PASS — the wall stiffens with refinement, never softens" : "*** FAIL ***");
+
+        System.out.printf("%n  PHASE A5: %s%n", ok ? "PASS" : "FAIL");
+        FIL_SEGS = savedSegs; FIL_BROWN = savedBrown; ExplicitCompleteMatHarness.Z_SLAB = savedSlab; cfgOff();
+        return ok;
+    }
+
+    /** PHASE 0 + PHASE 3 — verify the substrate-side sign from the built scene, then check the classifier on
+     *  three known site orientations. Deterministic; builds a scene but advances NO trajectory. */
+    static boolean runAccessStatic() {
+        System.out.println("\n=== PATH-B ACCESSIBILITY — PHASE 0/3: geometry sign + classifier fixtures (no trajectory) ===");
+        boolean ok = true;
+        int savedSegs = FIL_SEGS; boolean savedBrown = FIL_BROWN;
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        cfg(2, true, 0.0, 0.0, 0.0, false, 1.0, true);
+        Glide2D G = build(SEED);
+        FilamentStore f = G.fil; int nSeg = G.nSeg, N = G.N;
+
+        // ---- PHASE 0: which side of the filament is the lawn on? Measured, not assumed. ----
+        double zAnchor = 0, zSite = 0, zFil = 0;
+        for (int m = 0; m < N; m++) { zAnchor += G.A[m][2]; zSite += 0.0; }
+        zAnchor /= Math.max(1, N);
+        for (int s = 0; s < nSeg; s++) zFil += f.coord.get(2 * nSeg + s);
+        zFil /= nSeg;
+        double zBody = G.mot.body.coord.get(2 * (G.mot.body.coord.getSize() / 3) + 0);
+        System.out.printf(Locale.US, "  eup (assay substrate normal, from the scene) = (%.3f, %.3f, %.3f)%n", G.eup[0], G.eup[1], G.eup[2]);
+        System.out.printf(Locale.US, "  mean motor anchor z = %+.4f µm | motor body slot-0 z = %+.4f µm | MANCHOR_Z = %+.4f µm%n",
+                zAnchor, zBody, LaserTrapHarness.MANCHOR_Z);
+        System.out.printf(Locale.US, "  ideal head-site plane z = %+.4f µm | mean filament centreline z = %+.4f µm | actin radius = %.4f µm%n",
+                zSite, zFil, Constants.radius);
+        boolean lawnBelow = zAnchor < zFil && G.eup[2] > 0;
+        System.out.printf(Locale.US, "  ⇒ motors sit %s the filament and eup points %s ⇒ a site normal with n·eup < 0 faces the LAWN (NEAR): %s%n",
+                zAnchor < zFil ? "BELOW" : "ABOVE", G.eup[2] > 0 ? "AWAY from the lawn" : "TOWARD the lawn",
+                lawnBelow ? "CONFIRMED" : "*** SIGN NOT AS ASSUMED ***");
+        ok &= lawnBelow;
+
+        // ---- PHASE 3: classifier fixtures on three known site orientations ----
+        // Pin segment 0's material frame to u=+x, y=+y ⇒ z = u×y = +z, then set bindAzim so the site normal is
+        // known exactly: n = cos(psi)*y + sin(psi)*z ⇒ psi=+90° ⇒ n=+z (FAR), −90° ⇒ −z (NEAR), 0 ⇒ +y (SIDE).
+        f.setUVec(0, 1f, 0f, 0f); f.setYVec(0, 0f, 1f, 0f);
+        DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        double Ract = ExplicitCompleteMatHarness.R_ACTIN_NM * 1e-3;
+        double half = 0.5 * f.segLength.get(0);
+        double[] am = new double[5];
+        System.out.printf("%n  %-26s %10s %9s %6s %12s %10s%n", "fixture", "cosBeta", "beta(deg)", "class", "n·eup(raw)", "aApp(nm)");
+        String[] names = { "site faces AWAY (+z)", "site faces SIDE (+y)", "site faces LAWN (−z)", "SIDE (−y)" };
+        double[] psis = { Math.PI / 2, 0.0, -Math.PI / 2, Math.PI };
+        int[] want = { AccessTel.FAR, AccessTel.SIDE, AccessTel.NEAR, AccessTel.SIDE };
+        for (int k = 0; k < psis.length; k++) {
+            G.mot.boundSeg.set(0, 0); G.mot.bindArc.set(0, (float) half); G.mot.bindAzim.set(0, (float) psis[k]);
+            // place xF8 radially OUTSIDE the site by 1 nm along the site normal ⇒ aApp must be +1 nm
+            double nx = 0, ny = Math.cos(psis[k]), nz = Math.sin(psis[k]);
+            double sx = f.coord.get(0), sy = f.coord.get(nSeg) + Ract * ny, sz = f.coord.get(2 * nSeg) + Ract * nz;
+            DoubleArray og = new DoubleArray(9 * G.N); og.init(0.0);
+            og.set(6 * G.N, sx + 0.001 * nx); og.set(7 * G.N, sy + 0.001 * ny); og.set(8 * G.N, sz + 0.001 * nz);
+            boolean got = ChiralSiteSystem.accessMetrics(f.coord, f.uVec, f.yVec, f.segLength, G.mot.bindArc,
+                    G.mot.bindAzim, G.mot.boundSeg, og, true, G.N, 0, nSeg, Ract, G.eup[0], G.eup[1], G.eup[2], am);
+            int c = AccessTel.cls(am[0]);
+            boolean pass = got && c == want[k] && Math.abs(am[2] - 1.0) < 1e-6;
+            ok &= pass;
+            System.out.printf(Locale.US, "  %-26s %+10.6f %+9.2f %6s %+12.6f %+10.4f  %s%n",
+                    names[k], am[0], Math.toDegrees(am[1]), AccessTel.clsName(c), am[4], am[2], pass ? "PASS" : "FAIL");
+        }
+        // approach-sign fixture: head placed radially INSIDE the site surface must give aApp < 0
+        G.mot.bindAzim.set(0, (float) (-Math.PI / 2));
+        DoubleArray og = new DoubleArray(9 * G.N); og.init(0.0);
+        og.set(6 * G.N, f.coord.get(0)); og.set(7 * G.N, f.coord.get(nSeg)); og.set(8 * G.N, f.coord.get(2 * nSeg));  // on the AXIS
+        ChiralSiteSystem.accessMetrics(f.coord, f.uVec, f.yVec, f.segLength, G.mot.bindArc, G.mot.bindAzim,
+                G.mot.boundSeg, og, true, G.N, 0, nSeg, Ract, G.eup[0], G.eup[1], G.eup[2], am);
+        boolean appOk = Math.abs(am[2] + Constants.radius * 1e3) < 1e-6;   // head on the axis ⇒ aApp = −R
+        ok &= appOk;
+        System.out.printf(Locale.US, "  %-26s %10s %9s %6s %12s %+10.4f  %s   (head ON the filament axis ⇒ aApp must be −R = %.4f nm)%n",
+                "approach sign (interior)", "-", "-", "-", "-", am[2], appOk ? "PASS" : "FAIL", -Constants.radius * 1e3);
+        System.out.println("\n  SIGN CONVENTION CONFIRMED: aApp = n_site·(xF8 − x_site) is POSITIVE when the head approaches");
+        System.out.println("  the site from OUTSIDE the filament (the accessible direction) and NEGATIVE when the head is on");
+        System.out.println("  the interior side of the site's tangent plane. An accessibility gate would therefore require");
+        System.out.println("  aApp > 0, NOT < 0 — the sign written in CANONICAL_ACTIN_ATTACHMENT_AUDIT.md §13 item 3 is wrong.");
+        System.out.printf("%n  PHASE 0/3: %s%n", ok ? "PASS" : "FAIL");
+        FIL_SEGS = savedSegs; FIL_BROWN = savedBrown; cfgOff();
+        return ok;
+    }
+
+    /** PHASE 2 — trajectory inertness. The SAME arm and seed with telemetry OFF then ON; every pre-existing
+     *  output must be bit-identical. Any difference is a HARD STOP. */
+    static boolean runAccessInert() {
+        int steps = STEPS > 0 ? STEPS : 4000;
+        System.out.printf(Locale.US, "%n=== PATH-B ACCESSIBILITY — PHASE 2: telemetry inertness (runner %s, %d steps, seed %d) ===%n",
+                GPU ? "GPU device-resident" : "CPU sequential", steps, SEED);
+        accScene();
+        TArm A = new TArm("inert", 0.0, false, +1, true, TwoBodyConverterMotor.G4_NSEG).conv(15.0);
+        boolean saved = ACCESS_TELEM;
+        ACCESS_TELEM = false; TRes off = runTwirlArm(A, SEED, steps);
+        ACCESS_TELEM = true;  TRes on  = runTwirlArm(A, SEED, steps);
+        ACCESS_TELEM = saved;
+        String[] nm = { "avgBound", "glide", "omegaFit", "tau", "tauAbs*", "turns", "cancel", "tauPerHead",
+                        "ft", "fax", "misAbs", "coherence", "rollR2", "bindsPerStep", "detachPerStep",
+                        "strokesPerStep", "tauPos", "tauNeg", "nTauPos", "nTauNeg", "tauPull", "tauDrag",
+                        "vFilMean", "omegaLegacy", "meanResidenceSteps" };
+        double[] vo = accVec(off), vn = accVec(on);
+        int bad = 0;
+        System.out.printf("%n  %-20s %24s %24s  %s%n", "field", "telemetry OFF", "telemetry ON", "identical?");
+        for (int i = 0; i < nm.length; i++) {
+            boolean same = Double.compare(vo[i], vn[i]) == 0 || (Double.isNaN(vo[i]) && Double.isNaN(vn[i]));
+            if (!same) bad++;
+            System.out.printf(Locale.US, "  %-20s %24.17g %24.17g  %s%n", nm[i], vo[i], vn[i], same ? "yes" : "*** NO ***");
+        }
+        boolean blkSame = true;
+        for (int b = 0; b < off.blkTau.length; b++)
+            blkSame &= Double.compare(off.blkTau[b], on.blkTau[b]) == 0 && Double.compare(off.blkOmega[b], on.blkOmega[b]) == 0
+                    && Double.compare(off.blkGlide[b], on.blkGlide[b]) == 0 && Double.compare(off.blkBound[b], on.blkBound[b]) == 0;
+        boolean cnt = off.invalid == on.invalid && off.solverFail == on.solverFail
+                && off.detachAtp == on.detachAtp && off.detachRigor == on.detachRigor && off.detachOther == on.detachOther;
+        System.out.printf("  %-20s %24s %24s  %s%n", "per-block arrays", "-", "-", blkSame ? "yes" : "*** NO ***");
+        System.out.printf(Locale.US, "  %-20s %24d %24d  %s%n", "invalid", off.invalid, on.invalid, off.invalid == on.invalid ? "yes" : "*** NO ***");
+        System.out.printf(Locale.US, "  %-20s %24d %24d  %s%n", "solverFail", off.solverFail, on.solverFail, off.solverFail == on.solverFail ? "yes" : "*** NO ***");
+        boolean ok = bad == 0 && blkSame && cnt;
+        // cross-check: the telemetry's own bind-event count must equal the pre-existing bindsPerStep total
+        if (on.acc != null) {
+            double telBinds = on.acc.bindEv[0] + on.acc.bindEv[1] + on.acc.bindEv[2];
+            double preBinds = on.bindsPerStep * on.acc.nMeasSteps;
+            System.out.printf(Locale.US, "%n  cross-check: telemetry bind events = %.0f vs pre-existing binds = %.0f (%s)%n",
+                    telBinds, preBinds, Math.abs(telBinds - preBinds) < 0.5 ? "consistent" : "*** MISMATCH ***");
+            ok &= Math.abs(telBinds - preBinds) < 0.5;
+        }
+        System.out.printf("%n  PHASE 2 INERTNESS: %s%n", ok ? "PASS — telemetry is trajectory-inert" : "FAIL — HARD STOP");
+        cfgOff();
+        return ok;
+    }
+    static double[] accVec(TRes r) {
+        return new double[]{ r.avgBound, r.glide, r.omegaFit, r.tau, r.tauPerStroke, r.turns, r.cancel, r.tauPerHead,
+                r.ft, r.fax, r.misAbs, r.coherence, r.rollR2, r.bindsPerStep, r.detachPerStep, r.strokesPerStep,
+                r.tauPos, r.tauNeg, r.nTauPos, r.nTauNeg, r.tauPull, r.tauDrag, r.vFilMean, r.omegaLegacy,
+                r.meanResidenceSteps };
+    }
+    /** The production Path-B ladder scene: 12-segment chain, filament Brownian ON, linear converter-skew ramp,
+     *  episode telemetry on — i.e. exactly what the viscosity / low-[ATP] campaigns ran. */
+    static void accScene() {
+        FIL_SEGS = TwoBodyConverterMotor.G4_NSEG; FIL_BROWN = true;
+        CONV_RAMP_ARM = ChiralSiteSystem.RAMP_LINEAR;
+        ExplicitCompleteMatHarness.EPISODE_TELEM = true;
+    }
+
+    /** PHASE 5/6 — short measurement arms in the current validated Path-B configuration. */
+    static void runAccessAudit() {
+        int steps = STEPS > 0 ? STEPS : 80000;
+        double eps = EPS_CONV_DEG != 0 ? EPS_CONV_DEG : 15.0;
+        accScene();
+        System.out.printf(Locale.US, "%n=== PATH-B ACCESSIBILITY AUDIT — %d seeds × {eps=0, +%.0f°, −%.0f°}, %d steps "
+                + "(dt=%.3e ⇒ %.2f ms), density %.0f heads/µm², eta=%.4g Pa·s, runner %s ===%n",
+                SEEDS, eps, eps, steps, DTR, steps * DTR * 1e3, DENSITY, ETA, GPU ? "GPU device-resident" : "CPU sequential");
+        // Resolve the per-arm feature configuration BEFORE printing it: cfg() is otherwise first called inside
+        // runTwirlArm, so an earlier banner would report the reset (all-off) state rather than the arm's.
+        cfg(2, true, 0.0, 0.0, 0.0, false, 1.0, true);
+        System.out.println("  scene: " + ExplicitCompleteMatHarness.chiralConfigString());
+        System.out.println("  telemetry is a host-side reduction over already-transferred buffers — no kernel, no device work, no RNG.");
+        boolean saved = ACCESS_TELEM; ACCESS_TELEM = true;
+        double[] epsList = { 0.0, +eps, -eps };
+        String[] tags = { "eps0", "epsP", "epsM" };
+        AccessTel[] pooled = new AccessTel[epsList.length];
+        java.util.List<String> rows = new java.util.ArrayList<>();
+        int invTot = 0, solTot = 0;
+        for (int k = 0; k < epsList.length; k++) {
+            pooled[k] = new AccessTel();
+            for (int i = 0; i < SEEDS; i++) {
+                int seed = SEED + i;
+                TArm A = new TArm(tags[k], 0.0, false, +1, true, TwoBodyConverterMotor.G4_NSEG).conv(epsList[k]);
+                long t0 = System.currentTimeMillis();
+                TRes r = runTwirlArm(A, seed, steps);
+                invTot += r.invalid; solTot += r.solverFail;
+                pooled[k].add(r.acc);
+                System.out.printf(Locale.US, "    %-6s seed %d: glide=%+7.3f µm/s  Omega=%+8.2f rad/s  avgB=%6.2f  tau=%+.4e  inv=%d sol=%d  (%.0f s)%n",
+                        tags[k], seed, r.glide, r.omegaFit, r.avgBound, r.tau, r.invalid, r.solverFail, (System.currentTimeMillis()-t0)/1000.0);
+                rows.add(accRow(tags[k], epsList[k], seed, r));
+            }
+            accReport(tags[k], epsList[k], pooled[k]);
+        }
+        accCounterfactual(pooled, epsList, tags);
+        accWrite(rows, pooled, epsList, tags, steps);
+        System.out.printf(Locale.US, "%n  HEALTH: invalid=%d solverFail=%d (both must be 0)%n", invTot, solTot);
+        ACCESS_TELEM = saved; cfgOff(); EPS_CONV_ARM = 0;
+    }
+
+    static String accRow(String tag, double eps, int seed, TRes r) {
+        AccessTel a = r.acc; StringBuilder s = new StringBuilder();
+        s.append(tag).append('\t').append(eps).append('\t').append(seed).append('\t');
+        s.append(r.glide).append('\t').append(r.omegaFit).append('\t').append(r.avgBound).append('\t').append(r.tau).append('\t');
+        for (int c = 0; c < 3; c++) s.append(a.occ[c]).append('\t');
+        for (int c = 0; c < 3; c++) s.append(a.bindEv[c]).append('\t');
+        for (int c = 0; c < 3; c++) s.append(a.tau[c]).append('\t');
+        for (int c = 0; c < 3; c++) s.append(a.detEv[c]).append('\t');
+        for (int c = 0; c < 3; c++) s.append(a.resid[c]).append('\t');
+        for (int c = 0; c < 3; c++) s.append(a.fax[c]).append('\t');
+        s.append(r.invalid).append('\t').append(r.solverFail);
+        return s.toString();
+    }
+
+    static void accReport(String tag, double eps, AccessTel a) {
+        double occT = a.occ[0] + a.occ[1] + a.occ[2], bT = a.bindEv[0] + a.bindEv[1] + a.bindEv[2];
+        System.out.printf(Locale.US, "%n  ---- arm %s (eps = %+.1f°) : pooled over %d seeds, %d bound-head samples ----%n",
+                tag, eps, SEEDS, a.nBoundSamp);
+        System.out.printf("    %-6s %11s %11s %14s %14s %11s %11s %11s%n",
+                "class", "bind frac", "occ frac", "tau sum (N·m)", "tau/bound", "tau share", "mean fax(N)", "resid(ms)");
+        for (int c = 0; c < 3; c++)
+            System.out.printf(Locale.US, "    %-6s %11.4f %11.4f %+14.5e %+14.5e %11.4f %+11.3e %11.4f%n",
+                    AccessTel.clsName(c), bT > 0 ? a.bindEv[c]/bT : Double.NaN, occT > 0 ? a.occ[c]/occT : Double.NaN,
+                    a.tau[c], a.tauPerBound(c), a.tauTotal() != 0 ? a.tau[c]/a.tauTotal() : Double.NaN,
+                    a.occ[c] > 0 ? a.fax[c]/a.occ[c] : Double.NaN,
+                    a.detEv[c] > 0 ? a.resid[c]/a.detEv[c]*1e3 : Double.NaN);
+        System.out.printf(Locale.US, "    TOTAL  %11.4f %11.4f %+14.5e%n", 1.0, 1.0, a.tauTotal());
+        System.out.printf(Locale.US, "    approach metric aApp = n·(xF8−x_site): mean %+.3f nm, range [%+.3f, %+.3f], "
+                + "fraction NEGATIVE (head on the interior side) = %.4f of %d samples%n",
+                a.appN > 0 ? a.appSum/a.appN : Double.NaN, a.appMin, a.appMax,
+                a.appN > 0 ? (double) a.appNeg/a.appN : Double.NaN, a.appN);
+        System.out.print("    beta histogram (18 × 20°, occupancy fraction; beta=0 ⇒ points AWAY from lawn):\n     ");
+        for (int b = 0; b < AccessTel.NB; b++) System.out.printf(Locale.US, "%.4f ", occT > 0 ? a.hBeta[b]/occT : Double.NaN);
+        System.out.println();
+        System.out.print("    beta histogram (torque share of |total|):\n     ");
+        double tt = Math.abs(a.tauTotal());
+        for (int b = 0; b < AccessTel.NB; b++) System.out.printf(Locale.US, "%+.4f ", tt > 0 ? a.hBetaTau[b]/tt : Double.NaN);
+        System.out.println();
+        System.out.printf("    puller / dragger cross-tab (count frac of class, mean fax N, mean tau N·m):%n");
+        for (int c = 0; c < 3; c++) {
+            double n0 = a.roleN[c][0], n1 = a.roleN[c][1], ns = n0 + n1;
+            System.out.printf(Locale.US, "      %-5s pull %.4f (fax %+.3e, tau %+.3e) | drag %.4f (fax %+.3e, tau %+.3e)%n",
+                    AccessTel.clsName(c), ns > 0 ? n0/ns : Double.NaN, n0 > 0 ? a.roleFax[c][0]/n0 : Double.NaN,
+                    n0 > 0 ? a.roleTau[c][0]/n0 : Double.NaN, ns > 0 ? n1/ns : Double.NaN,
+                    n1 > 0 ? a.roleFax[c][1]/n1 : Double.NaN, n1 > 0 ? a.roleTau[c][1]/n1 : Double.NaN);
+        }
+        // ---- §Z-SLAB height + vertical force balance (PHASE A6/A7, PHASE B2) --------------------------
+        if (a.zN > 0) {
+            double lawn = ExplicitCompleteMatHarness.Z_LAWN_UM;
+            System.out.printf(Locale.US, "    FILAMENT HEIGHT (%s): mean z_COM %+8.3f nm  SD %6.3f nm  range [%+.3f, %+.3f] nm%n",
+                    a.slabOn ? "SLAB, flat interior" : "LEGACY harmonic well",
+                    a.zMean()*1e3, a.zSD()*1e3, a.zMin*1e3, a.zMax*1e3);
+            System.out.printf(Locale.US, "      relative to the LAWN plane (%+.2f nm): mean surface-to-lawn clearance = %+.3f nm%n",
+                    lawn*1e3, (a.zMean() - Constants.radius - lawn)*1e3);
+            double mSeg = a.segZN > 0 ? a.segZSum/a.segZN : Double.NaN;
+            System.out.printf(Locale.US, "      per-segment z: mean %+8.3f nm  SD %6.3f nm%n", mSeg*1e3,
+                    Math.sqrt(Math.max(0, a.segZSum2/a.segZN - mSeg*mSeg))*1e3);
+            System.out.printf(Locale.US, "      WALL CONTACT: lower %.4f %% of segment-steps (mean reaction %.4e N, mean pen %.4f nm, max %.3f nm)%n",
+                    100.0*a.wallLoN/a.wallTot, a.wallLoN > 0 ? a.wallLoF/a.wallLoN : 0.0,
+                    a.wallLoN > 0 ? a.penLoSum/a.wallLoN : 0.0, a.penLoMax);
+            System.out.printf(Locale.US, "                    upper %.4f %% of segment-steps (mean reaction %.4e N, mean pen %.4f nm, max %.3f nm)%n",
+                    100.0*a.wallHiN/a.wallTot, a.wallHiN > 0 ? a.wallHiF/a.wallHiN : 0.0,
+                    a.wallHiN > 0 ? a.penHiSum/a.wallHiN : 0.0, a.penHiMax);
+            System.out.printf(Locale.US, "      VERTICAL FORCE BALANCE: mean motor Fz on the filament = %+.4e N (%+.4f pN); "
+                    + "mean wall reaction = %+.4e N (lower %+.3e, upper %+.3e)%n",
+                    a.motFzN > 0 ? a.motFzSum/a.motFzN : Double.NaN, a.motFzN > 0 ? a.motFzSum/a.motFzN*1e12 : Double.NaN,
+                    (a.wallLoF - a.wallHiF)/Math.max(1, a.zN), a.wallLoF/Math.max(1,a.zN), a.wallHiF/Math.max(1,a.zN));
+            System.out.print("      z_COM histogram (16 bins across the slab, occupancy fraction):\n       ");
+            for (int b = 0; b < AccessTel.NZ; b++) System.out.printf(Locale.US, "%.4f ", (double) a.zHist[b]/a.zN);
+            System.out.println();
+            System.out.println("      accessibility class fraction by z_COM bin (bin centre nm | n | NEAR SIDE FAR):");
+            for (int b = 0; b < AccessTel.NZ; b++) {
+                double sC = a.zCls[b][0] + a.zCls[b][1] + a.zCls[b][2];
+                if (a.zHist[b] == 0) continue;
+                double zcb = (a.zLo + (a.zHi - a.zLo)*(b + 0.5)/AccessTel.NZ)*1e3;
+                System.out.printf(Locale.US, "        %+8.2f | %8d | %.4f %.4f %.4f%n", zcb, a.zHist[b],
+                        sC > 0 ? a.zCls[b][0]/sC : Double.NaN, sC > 0 ? a.zCls[b][1]/sC : Double.NaN, sC > 0 ? a.zCls[b][2]/sC : Double.NaN);
+            }
+        }
+        System.out.println("    class occupancy fraction by FILAMENT ROLL PHASE (8 × 45° bins):");
+        for (int b = 0; b < AccessTel.NR; b++) {
+            double s = a.rollOcc[b][0] + a.rollOcc[b][1] + a.rollOcc[b][2];
+            System.out.printf(Locale.US, "      roll bin %d: n=%9d  NEAR %.4f SIDE %.4f FAR %.4f | tau %+.3e%n", b, a.rollN[b],
+                    s > 0 ? a.rollOcc[b][0]/s : Double.NaN, s > 0 ? a.rollOcc[b][1]/s : Double.NaN,
+                    s > 0 ? a.rollOcc[b][2]/s : Double.NaN, a.rollTau[b][0] + a.rollTau[b][1] + a.rollTau[b][2]);
+        }
+    }
+
+    /** PHASE 7 — instantaneous-contribution accounting ONLY. These are NOT reruns with altered accessibility. */
+    static void accCounterfactual(AccessTel[] p, double[] eps, String[] tags) {
+        System.out.println("\n  ======== PHASE 7: OFFLINE COUNTERFACTUAL TORQUE ACCOUNTING ========");
+        System.out.println("  BOOKKEEPING ONLY — the sums below remove a class's INSTANTANEOUS contribution from the");
+        System.out.println("  measured trajectory. They do NOT predict what the dynamics would have been had those bonds");
+        System.out.println("  never formed (the freed heads would have rebound elsewhere, and the filament would have");
+        System.out.println("  followed a different trajectory). Read them as attribution, not as a prediction.");
+        System.out.printf("%n  %-6s %14s %14s %14s %14s %12s%n", "arm", "tau_all", "tau_no_far", "tau_near_only", "tau_near+side", "no_far/all");
+        for (int k = 0; k < p.length; k++) {
+            AccessTel a = p[k];
+            double all = a.tauTotal(), noFar = a.tau[0] + a.tau[1], nearOnly = a.tau[0];
+            System.out.printf(Locale.US, "  %-6s %+14.5e %+14.5e %+14.5e %+14.5e %12.4f%n",
+                    tags[k], all, noFar, nearOnly, noFar, all != 0 ? noFar/all : Double.NaN);
+        }
+        // the eps-ODD (chiral) component is the quantity every twirling claim rests on
+        if (p.length >= 3) {
+            double[] all = new double[3], noFar = new double[3];
+            for (int k = 0; k < 3; k++) { all[k] = p[k].tauTotal(); noFar[k] = p[k].tau[0] + p[k].tau[1]; }
+            double oddAll = 0.5 * (all[1] - all[2]), oddNoFar = 0.5 * (noFar[1] - noFar[2]);
+            double evenAll = 0.5 * (all[1] + all[2]), evenNoFar = 0.5 * (noFar[1] + noFar[2]);
+            System.out.printf(Locale.US, "%n  eps-ODD (chiral) axial torque   : all = %+.5e   far-removed = %+.5e   ratio %.4f%n",
+                    oddAll, oddNoFar, oddAll != 0 ? oddNoFar/oddAll : Double.NaN);
+            System.out.printf(Locale.US, "  eps-EVEN (achiral) axial torque : all = %+.5e   far-removed = %+.5e%n", evenAll, evenNoFar);
+            System.out.printf(Locale.US, "  FAR-class eps-ODD contribution  : %+.5e  (%.2f %% of the total odd torque)%n",
+                    0.5 * (p[1].tau[2] - p[2].tau[2]), oddAll != 0 ? 100.0 * 0.5 * (p[1].tau[2] - p[2].tau[2]) / oddAll : Double.NaN);
+        }
+    }
+
+    static void accWrite(java.util.List<String> rows, AccessTel[] p, double[] eps, String[] tags, int steps) {
+        try {
+            java.nio.file.Path dir = java.nio.file.Paths.get(ACC_DIR);
+            java.nio.file.Files.createDirectories(dir);
+            StringBuilder s = new StringBuilder();
+            s.append("# ").append(powProvenance()).append(" eta=").append(ETA).append(" steps=").append(steps)
+             .append(" runner=").append(GPU ? "gpu" : "cpu").append('\n');
+            s.append("# ").append(ExplicitCompleteMatHarness.chiralConfigString()).append('\n');
+            s.append("arm\teps\tseed\tglide\tomegaFit\tavgBound\ttau"
+                   + "\toccNEAR\toccSIDE\toccFAR\tbindNEAR\tbindSIDE\tbindFAR\ttauNEAR\ttauSIDE\ttauFAR"
+                   + "\tdetNEAR\tdetSIDE\tdetFAR\tresidNEAR\tresidSIDE\tresidFAR\tfaxNEAR\tfaxSIDE\tfaxFAR"
+                   + "\tinvalid\tsolverFail\n");
+            for (String r : rows) s.append(r).append('\n');
+            java.nio.file.Files.writeString(dir.resolve("per_seed.tsv"), s.toString());
+            StringBuilder h = new StringBuilder();
+            h.append("# beta bin centre (deg, 0 = site normal points AWAY from the lawn); occ = bound-head samples; tau in N·m\n");
+            h.append("arm\tbetaDeg\tocc\ttau\tbind\n");
+            for (int k = 0; k < p.length; k++)
+                for (int b = 0; b < AccessTel.NB; b++)
+                    h.append(tags[k]).append('\t').append(String.format(Locale.US, "%.1f", -180.0 + 360.0 * (b + 0.5) / AccessTel.NB))
+                     .append('\t').append(p[k].hBeta[b]).append('\t').append(p[k].hBetaTau[b]).append('\t').append(p[k].hBetaBind[b]).append('\n');
+            java.nio.file.Files.writeString(dir.resolve("beta_histogram.tsv"), h.toString());
+            StringBuilder q = new StringBuilder();
+            q.append("# approach metric aApp = n_site·(xF8 − x_site) in nm; POSITIVE = head outside the filament surface\n");
+            q.append("arm\taAppNm\tcount\n");
+            for (int k = 0; k < p.length; k++)
+                for (int b = 0; b < AccessTel.NA; b++)
+                    q.append(tags[k]).append('\t').append(String.format(Locale.US, "%.3f",
+                            AccessTel.APP_LO + (AccessTel.APP_HI - AccessTel.APP_LO) * (b + 0.5) / AccessTel.NA))
+                     .append('\t').append(p[k].hApp[b]).append('\n');
+            java.nio.file.Files.writeString(dir.resolve("approach_histogram.tsv"), q.toString());
+            System.out.println("\n  raw telemetry written to " + ACC_DIR + "/{per_seed,beta_histogram,approach_histogram}.tsv");
+        } catch (java.io.IOException e) { throw new RuntimeException("accessibility telemetry write failed", e); }
     }
 }

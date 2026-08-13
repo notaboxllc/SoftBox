@@ -1,5 +1,61 @@
 # Soft Box Project Journal
 
+### 2026-08-12 (later) — MECHANICS REPAIR: the F8 virtual-work axis and the S2→lever moment transfer
+
+**What was done.** Repaired both hard findings the 3-D-head work surfaced, default-on, and re-baselined the
+core motor honestly. **F8 remains a purely translational spring; no stiffness was fitted or tuned.** Report:
+`docs/motor/RESTORED_3D_HEAD_TILT_DOF.md` §13–§15. Raw: `RUN_LOGS/motor_audit/mechanics_repair/`.
+
+**Fix 1 — the F8 generalized-force axis was ORTHOGONAL to the true one.** The explicit-S2 solvers projected the
+translational F8 spring onto φ/ψ about `eup`, but the geometry rotates about `econv`. With the converter
+geometry planar this is not an approximation — it is orthogonal, so **an in-plane bond force fed exactly ZERO
+generalized load into φ and ψ**, and the only load the legacy axis felt (out-of-plane) is the one the true
+geometry ignores. Present since `1b227c0` (2026-07-15). Corrected on all eight assemblies (production kernel +
+tilt kernel + `beamRelaxAnalytic` + the two scalar twins + the two replicas + the harness mirror), carried by
+one switch (`matc[4]` / `TwoBodyConverterMotor.F8_AXIS_LEGACY`). Gates: FD-vs-column **4e−08**; virtual-work
+closure **3.5e−07**; in-plane load matches the FD ground truth to ~1e−07 where legacy gave exactly 0; and a
+fixed-site relaxation is now **stationary under the true potential gradient (rel 1.0e−08)** vs legacy's
+**1.9e−01** — legacy was converging to the fixed point of the wrong variational problem.
+
+**Fix 2 — the S2 ended at the lever as an exact ZERO-MOMENT PIN.** The beam's bending energy stops at node M;
+the lever entered only as a translation, so once the head's rest pose became neck-relative **nothing at all
+constrained φ**. **Archaeology found no historical joint to restore** — the direct counterpart, the sphere-head
+J2 rod↔lever joint, has `myoJ2FracMoveTorq = 0.00` in the frozen v1 oracle, i.e. it is *itself* an exact free
+hinge, so Option B would have restored the defect. **Option A taken:** the lever is the terminal orientation of
+the S2 chain, held by the beam's **OWN** `kbend` (EI/l₀ = 7.2e−20 N·m/rad², AMK 2008) against a rest angle read
+off the as-built geometry — the same kind of build-time constant as the clamped joint 0's `g4Tan`. **No new
+parameter.** Gates: the zero-energy `(φ+δ, ψ+δ)` mode is gone; rigid covariance 4e−14; bending the distal S2
+shifts the lever's rest angle **1:1**; joint compliant (13.7° thermal play, τ = 8.55 µs > dt).
+
+**What was learned.**
+- **The lever wander is NOT joint slack.** Gate E's repaired arm still shows SD(φ) = 119.8° in the lab frame
+  (down 8.1× from the 976° free rotor, which independently reproduced §B's 810–1077°). The follow-up settles
+  it: the joint holds **θ_joint = angle(ŝ,uB) to SD 10.81°, below its own 13.70° thermal amplitude**, mean on
+  its rest angle to 0.07°, while the distal S2 tangent itself swings 26.7°. The residual is **inherited S2
+  orientation** — the honest consequence of anchoring the lever to a floppy beam instead of a lab frame.
+- **`k_ext` moved TOWARD an independent reference without being tuned.** 0.9906 (pre-repair) → **0.6093** (axis
+  fix) → **0.7211** (both). The axis fix lands inside the `Cmot` fixed-anchor band 0.60–0.64 pN/nm — a path
+  that has always used `econv` and was never touched. **Stroke and polarity survive**: −8.000 → −8.381 nm,
+  pointed-first throughout. The 4E trap did not fire — the joint *removes* a compliant mode.
+- **A negative result, kept on the record:** the first-cut `k_ext` estimator used a 1 pN/nm probe spring far
+  softer than the motor and returned ≈105 pN/nm. Badly conditioned, not a result; the validated Phase-11
+  estimator is used instead and the bad one is retained behind a printed warning.
+- **A pre-existing device condition, proven not ours:** `matS2SolveStep` fails PTX compilation with FMA fusion
+  on (`PTXFMANode` NPE). The **pristine pre-repair kernel fails identically**, and `run_chiral_sites.sh`
+  already carried `-Dtornado.enable.fma=false`.
+
+**Validation.** CPU/GPU parity **PASS** on a real device TaskGraph (`ExplicitMatSolveHarness`, monitored):
+lowers + executes, 0 NaN, GPU vs CPU-mirror **9.75e−10 µm**, CPU-mirror vs the scalar twin **1.16e−09 µm**.
+Production smoke (`-conv-pilot`, monitored): glide −2.009 µm/s, avgBound 2.25, **0 invalid / 0 solver**.
+
+**What's open.** Bound explicit-S2 results on every `eup` path re-baseline — including the standing
+load-insensitivity / V₀-over-drive / Outcome-C observations, which must be **re-examined** (not explained away)
+now that the load actually reaches the converter. The lever joint is in the production solvers only; the `Cmot`
+`s2Solve` path and the beam replicas keep the free hinge (stated limitation, keeps their gates valid).
+`LiveNeckHeadProbe` Phase-11 arm *labels* are now stale — read by configuration. **Site-normal binding and
+twirling remain OUT OF SCOPE and were not started.**
+
+
 ### 2026-07-28 (later) — n=4 EXTENSION: the low-ATP torque plateau is REAL, and its mechanism is near-total cancellation
 
 **What was done.** Executed the pilot's own recommendation (option 2): added the per-head signed-torque and

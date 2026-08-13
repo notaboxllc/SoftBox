@@ -169,7 +169,7 @@ public final class ExplicitBeamGpuHarness {
         // F8 block
         int pB=3*(Mm-1),iPhi=nF,iPsi=nF+1;
         double cpx=Cx-Px,cpy=Cy-Py,cpz=Cz-Pz,fcx=xF8x-Cx,fcy=xF8y-Cy,fcz=xF8z-Cz;
-        double Jphix=uy*cpz-uz*cpy,Jphiy=uz*cpx-ux*cpz,Jphiz=ux*cpy-uy*cpx,Jpsix=uy*fcz-uz*fcy,Jpsiy=uz*fcx-ux*fcz,Jpsiz=ux*fcy-uy*fcx;
+        double Jphix=ey*cpz-ez*cpy,Jphiy=ez*cpx-ex*cpz,Jphiz=ex*cpy-ey*cpx,Jpsix=ey*fcz-ez*fcy,Jpsiy=ez*fcx-ex*fcz,Jpsiz=ex*fcy-ey*fcx;   // E = econv (repaired)
         double J03=Jphix*1e-6,J04=Jpsix*1e-6,J13=Jphiy*1e-6,J14=Jpsiy*1e-6,J23=Jphiz*1e-6,J24=Jpsiz*1e-6,kfSI=kF8Code*1e6;
         for(int i=0;i<5;i++){ double Ji0=(i==0)?1:0,Ji1=(i==1)?1:0,Ji2=(i==2)?1:0; if(i==3){Ji0=J03;Ji1=J13;Ji2=J23;} if(i==4){Ji0=J04;Ji1=J14;Ji2=J24;} int di=(i<3)?(pB+i):(i==3?iPhi:iPsi);
             for(int jj=0;jj<5;jj++){ double Jj0=(jj==0)?1:0,Jj1=(jj==1)?1:0,Jj2=(jj==2)?1:0; if(jj==3){Jj0=J03;Jj1=J13;Jj2=J23;} if(jj==4){Jj0=J04;Jj1=J14;Jj2=J24;} int dj=(jj<3)?(pB+jj):(jj==3?iPhi:iPsi);
@@ -177,7 +177,7 @@ public final class ExplicitBeamGpuHarness {
         aK(Kout,n,iPhi,iPhi,kc);aK(Kout,n,iPhi,iPsi,-kc);aK(Kout,n,iPsi,iPhi,-kc);aK(Kout,n,iPsi,iPsi,kc+kbnd);aK(Kout,n,iPhi,iPhi,aphi);aK(Kout,n,iPsi,iPsi,apsi);
         double th=psi-phi;
         double caFx=cpy*f8z-cpz*f8y,caFy=cpz*f8x-cpx*f8z,caFz=cpx*f8y-cpy*f8x,fcFx=fcy*f8z-fcz*f8y,fcFy=fcz*f8x-fcx*f8z,fcFz=fcx*f8y-fcy*f8x;
-        double QphiF8=(ux*caFx+uy*caFy+uz*caFz)*1e-6,QpsiF8=(ux*fcFx+uy*fcFy+uz*fcFz)*1e-6;
+        double QphiF8=(ex*caFx+ey*caFy+ez*caFz)*1e-6,QpsiF8=(ex*fcFx+ey*fcFy+ez*fcFz)*1e-6;
         aF(Fout,n,pB+0,f8x);aF(Fout,n,pB+1,f8y);aF(Fout,n,pB+2,f8z);
         aF(Fout,n,iPhi,QphiF8+kc*(th-thetaS));aF(Fout,n,iPsi,QpsiF8-kc*(th-thetaS)-kbnd*(psi-psiActin));
     }

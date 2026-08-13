@@ -629,11 +629,560 @@ for any low-ATP chirality claim.
 
 ---
 
+## 9d. Canonical actin-attachment architecture (audit, 2026-08-11)
+
+> **SUPERSEDED IN PART by §9f (2026-08-12).** This section's description of Path B — an `every3` lattice
+> (8.10 nm rise) reached by centreline acceptance followed by a post-hoc snap — is an accurate record of the
+> configuration that produced every campaign result listed here, and stays valid as such. It is **no longer
+> the current Path-B model**: the lattice is now sparse long-pitch `every4` (10.8 nm rise, +54°/site,
+> filament-global phase) and capture is **site-first**. See §9f.
+
+**Read-only audit; nothing changed.** Full report: `docs/attachment/CANONICAL_ACTIN_ATTACHMENT_AUDIT.md`
+(branch `gpu-mat-bottlenecks-explicit-singlehead`, commit `3119000`). It supersedes three headline statements
+of `docs/helical_binding/ACTIN_HELICAL_BINDING_AUDIT.md` (2026-07-23) — see that report's §14.4 — while that
+document remains authoritative for the azimuth/roll infrastructure inventory and git provenance.
+
+**Two canonical attachment architectures are simultaneously live and must never be conflated.**
+
+- **Path A — frozen production gliding** (`ExplicitCompleteMatHarness -production-cell` /
+  `ExplicitHmmDimerGlidingHarness -production-cell`). Actin is a **continuous, azimuth-symmetric centerline
+  cylinder** of radius `FIL_R = 3.5 nm`. The attachment coordinate is the single scalar `bindArc` and the bond
+  acts **on the axis**. No monomer, no helix, no azimuth, no site identity. Occupancy: **none** for
+  single-head; **sister-head-only 5.4 nm axial** for the HMM dimer. This produced every density-saturation,
+  L40/L60, rigor-rupture-impact and force-balance result.
+- **Path B — chiral-site twirling campaign** (`ChiralSiteHarness`: `-eta-map`, `-atp-map`,
+  `-atp-density-map`, `-twirl*`, `-conv-*`). Actin is a **discrete helical lattice of material-frame sites**
+  (`every3`, rise 8.10 nm, twist −166.5°/monomer left-handed) on the actin **surface** at `R = 3.5 nm`, with a
+  latched filament-global site id and **exclusive one-head-per-site occupancy**. This produced the viscosity
+  campaign + mirror control, the low-[ATP] transfer, the density-occupancy screen and all twirling work.
+
+**The load-bearing structural fact:** in BOTH paths the **capture gate is the same azimuth-blind 8-gate
+contract** (`matBindExplicit`, a device port of the single-molecule `gateMetrics`/`gatePasses`) — so the motor
+validated in the blind tweezers challenge attaches under **identical geometric rules** in the gliding assay.
+In Path B the lattice enters only **after** acceptance, as a snap + 12 nm capture veto + occupancy filter.
+**Filament roll therefore cannot change whether a head may bind, on either path.**
+
+**Classification: R4** (two materially different actin representations across the current result set),
+decomposing into **R2** for Path A (stereospecific motor capture, simplified actin) and **R1** for Path B
+(helical off-axis geometry present, accessibility selection incomplete). **Urgency: high-value but not
+publication-blocking** — with one **disclosure obligation**: the saturation results and the twirling results
+use different actin-side representations, and the manuscript must say so.
+
+**Path-B far-side accessibility — QUANTIFIED (2026-08-11).** Report:
+`docs/attachment/PATH_B_SITE_ACCESSIBILITY_TELEMETRY.md`; telemetry `RUN_LOGS/attachment_audit/path_b_accessibility/`.
+Default-off, bit-identical-when-off host-side telemetry; 8 seeds × 20 ms at a parameter-exact replica of the
+production η = 0.01 ladder cell; 24 arms, 0 invalid / 0 solver. **Verdict A1 — present but mostly inert for
+torque, material for occupancy.**
+- **Attachment is statistically uniform around the filament circumference** (every class within ~1.4 SEM of
+  1/3); **far-side sites hold 32.1 % of bound-head time**; the lawn-facing hemisphere is preferred by only
+  **1.12–1.15×**. Occupancy peaks LATERALLY and is depressed at BOTH poles.
+- **Cause is scene geometry, not the gate:** each motor's reference-pose F8 point is placed at z = 0, the
+  filament **centreline**, so the head approaches at axis height and top/bottom are equidistant.
+- **Far-side bonds carry the SAME-signed chiral torque** (local-frame skew, by design), contributing **17.7 %**
+  of τ_odd at **0.55×** per-head productivity and ~zero mean axial force. Removing their instantaneous
+  contribution retains **82.4 %** of τ_odd — inside the total's own 2.53 σ uncertainty.
+- **This REFUTES the earlier H1 guess** that far-side bonds dilute the torque and that τ_odd is a lower bound;
+  τ_odd is if anything a mild over-estimate. Twirling sign/mechanism/mirror results are unaffected;
+  **occupancy claims (incl. the Vilfan bracket comparison) must state the ~32 % far-side population** — note
+  removing it moves N_b further BELOW the bracket, strengthening D1.
+- Not a blocker for further twirling mechanism work; fix before any quantitative occupancy claim.
+
+**Filament z BOUNDARY — hard slab implemented, validated, DEFAULT-OFF (2026-08-12).** Report:
+`docs/attachment/FILAMENT_Z_SLAB_AND_ACCESSIBILITY_RERUN.md`; data `RUN_LOGS/attachment_audit/z_slab/`.
+- **Old (still the DEFAULT):** `MatSoaSlice.matZConfine`, a harmonic well `Fz = −kz·z_com` at kz = 2 pN/nm ⇒
+  z = 0 is an energetic minimum pinning the filament to **RMS z = 1.44 nm**, *less than half the actin radius*.
+- **New (`-z-slab on`):** `MatSoaSlice.matZSlab` — exactly flat interior (accumulator untouched), one-sided
+  walls on the **segment SURFACE** via the exact cylinder z half-extent, pure z force (no torque ⇒ cannot inject
+  tangential/angular momentum), fracMove law ⇒ dt/η-consistent, k_eff = 19.6 pN/nm anchored on the existing
+  20 pN/nm S2-beam substrate floor. Walls: lawn plane (−9.93 nm) to lawn+80 nm. **PASS** on interior flatness
+  (exactly 0 N), unbiased centre-start diffusion, wall signs, tilt-aware surface rule, penetration (p99 1.72 nm
+  < 3 thermal steps), dt (penetration halves with dt), and **CPU≡GPU to printed precision on every channel**.
+- **EMERGENT HEIGHT (the Part-A result):** with no prescribed height the motors select **z_COM = +11.1 nm**
+  (SD 11.4 nm) — vs the old 0 ± 1.4 nm pin and vs +30 nm for a *free* filament in the same slab. Motors pull
+  actin DOWN at **−0.33 pN**, balanced by the lower wall; **lower wall acts on 0.33 %, upper wall on 0.016 %**
+  of segment-steps ⇒ motor-selected, not wall-imposed. **Z1–Z2, not Z3/Z4.** (+11 nm is still relaxing at
+  20 ms ⇒ read as a lower bound.)
+- **ACCESSIBILITY RERUN (n = 8, paired seeds, everything else identical):** far-side **bound occupancy 0.321 →
+  0.270 (−16 %, 5.26 σ)**, NEAR 0.262 → 0.344 (+31 %, 5.38 σ); lawn-hemisphere preference sharpens **1.14× →
+  1.61×** and the old lateral bimodality weakens. **But far-side ATTACHMENT EVENTS do not move at all**
+  (0.331 → 0.338, 0.50 σ) — attachment stays statistically uniform around the circumference.
+- **τ_odd is NOT materially changed** (−1.64e−17 → −1.27e−17, −22 %, 0.55 σ) but is **better resolved**
+  (2.53 σ → **3.85 σ**, 7/8 sign) because the pin's variance is gone. **Engagement IS changed**: avgBound
+  −14 %, attachment flux −15 %, glide −21 % — so the slab re-baselines occupancy/velocity observables.
+- **VERDICT: the harmonic pin was NOT the primary cause of near/far symmetry** (it bought 5 points of occupancy
+  and nothing at capture). **Accessibility stays A1, and an explicit site-level rule is STILL REQUIRED** — the
+  8-gate capture test is evaluated against the clamped CENTRELINE and never sees a site, so vertical freedom
+  cannot make capture azimuth-aware. Smallest fix (proposal only): move site selection inside the gate + the
+  geometry-derived `n̂_site·(x_F8 − x_site) > 0` **at capture**.
+- **Path A: NEEDS TEST, default unchanged.** The slab is physically at least as appropriate, but Path A binds
+  on the centreline (no accessibility gain) and its frozen density sweep would be re-baselined by the −14/−15/
+  −21 % engagement shift. No Path-A sweep was run.
+
+**Other documented hazards (not fixed):** the 3-D surface steric is disabled in campaign arms
+in favour of site exclusivity; the single-head lawn has **no orientational disorder** (`RAND_BASE_AZ=false` ⇒
+every motor shares the lab triad); the HMM dimer CPU/GPU bind logics are hand-maintained twins (equivalent
+only in D0 with `-occupancy-global` off); `ψ_actin` is a per-motor constant and carries no actin information.
+
+---
+
+## 9f. Sparse long-pitch actin site lattice — the Path-B geometry correction (2026-08-12)
+
+**Report: `docs/attachment/SPARSE_LONG_PITCH_ACTIN_SITE_LATTICE.md`.** Actin-side geometry only — no motor
+parameter retuned, no chemistry changed, no fitted angular parameter introduced, no new steric law.
+
+**The Path-B effective binding-site lattice is now the sparse long-pitch `every4` geometry, verified
+numerically and visually from the exact coordinates the capture kernels use:** one effective site every
+**10.800 nm** axially, advancing **+54.000 deg** per site (= the native twist `4 × −166.5°` evaluated four
+monomer rises later), one revolution every **72.000 nm**, on the actin surface at `R = 3.500 nm`; 196 sites
+on the canonical 2.106 µm filament, **one continuous helix with 0 azimuth discontinuities across all 11
+segment boundaries and 0 missing or duplicated sites**. Nearest-neighbour 3-D site separation **11.258 nm**
+= **1.61× a nominal 7 nm head diameter**, so a head footprint contains **exactly one** effective site
+(max other sites within 7 nm of any site = **0**) ⇒ **no additional steric law is needed and none was added.**
+
+**Two real defects were found in the pre-existing `every4` mode and fixed** (the rise and per-site twist were
+already right; the mode was reused, not rebuilt):
+
+1. **The site azimuth was referenced to each segment's own centre**, so the helical phase restarted at every
+   segment boundary — a **+22.5°** step, 11 times along the canonical filament. New **filament-global**
+   convention `φ(k) = k·(twistRate·rise)`, `ExplicitCompleteMatHarness.SITE_PHASE_GLOBAL` (`-site-phase
+   global|segment`), **default false** ⇒ every pre-2026-08-12 configuration is byte-identical by construction.
+2. **A site whose global arc landed exactly on a segment junction vanished** — float32 rounding of
+   `segCumArc`/`segLength` put it outside *both* neighbours (3 of 195 `every4` sites). Fixed in the
+   **site-aware path only** with a float32-robust membership tolerance + clamp (`SITE_SEG_TOL_UM = 1e-5 µm`;
+   a numerical tolerance, not physics). The legacy `siteSnap` retains the fragility deliberately.
+
+**Capture is now site-first** (`ChiralSiteSystem.siteGateA/siteCommitB`, from the preceding task, reused
+unchanged): enumerate the sparse sites → reject interior approaches (`g8`, pure geometry) → apply `g0`/`g4`
+**against the actual site** → select one → bind → latch identity. **No centreline acceptance + post-hoc snap
+in this mode.** g0 (3 nm) and g4 (2 pN) keep their values but now measure head-to-surface separation and the
+real F8 bond extension; g1/g2/g3/g5/g6 are untouched.
+
+**Verification.** 10 static fixtures PASS (one reachable site — exactly 1 acceptable candidate; between-sites
+— 0 of 13 reachable; interior-approach rejection; 90° roll with site id + `bindAzim` retained and the lab
+azimuth rotating exactly +90°; one-head-per-site with k±1 separate; whole-filament boundary continuity).
+**CPU/GPU exact** on site ids, bind decisions and `bindAzim` (`max|dAzim| = 0`) at 1 and 12 segments, plus a
+legacy-path regression guard — all device-resident.
+
+**Bounded `every3`→`every4` compatibility panel** (GPU, 12 arms, 2 seeds, 8000 steps, ε ∈ {0, ±15°}, identical
+capture and slab in both arms; `invalid = solverFail = 0`): recruitment **0.82×**, avgBound **0.85×**, glide
+**0.84×** (the sparser lattice presents 25 % fewer sites); site occupancy **1.14×**; NEAR/SIDE/FAR bind and
+bound fractions and filament mean z all **within SEM**; τ_odd **0.84×** and Ω_odd **0.60×**, same signs.
+Nothing changed qualitatively.
+
+**Zero-skew (ε = 0), measured without a prior.** τ, Ω and turns are negative in 4/4 seed-arms. The mirror
+control (`-lattice-mirror`, a reflection of the lattice — with ε = 0 the only chirality left in the model):
+**τ reverses sign in 2/2 matched seeds for `every4`** (−2.85e−22 → +4.45e−22 N·m), but **Ω does NOT reverse**
+(stays negative in the mean, 1/2 seeds) and at ε = 0 |Ω| exceeds the ε-odd half-difference of the skewed arms
+⇒ the rotation signal is thermal-dominated at this sample size. **n = 2 is far too small to conclude
+anything** (the viscosity campaign needed n = 24 and still found Ω_odd unresolved at canonical η).
+**⇒ Realistic binding geometry alone has NOT been shown to generate twirling, and no physics was added to try
+to make it.** The τ sign reversal is a lead; the recommended next step is the same ε = 0 native-vs-mirror pair
+at **n = 16–24**, gated on per-seed sign reversal of τ.
+
+**Historical-result status (do not rewrite).** Every previous Path-B campaign — viscosity map + mirror
+control, low-[ATP] transfer, density-occupancy screen, all twirling/converter-skew arms — ran **`every3`,
+segment-relative phase, legacy centreline+snap capture**, and **remains valid for that model**. Quantitative
+twirling values must be **regenerated** before being attributed to the sparse geometry; the panel above
+establishes compatibility, not replacement values. `-legacy-lattice` reproduces the historical lattice
+exactly; `-path-b-candidate` selects the whole new geometry in one switch.
+
+```
+./scripts/run_chiral_sites.sh -site-geometry     # numeric table + acceptance criteria + figure data
+python3 scripts/plot_sparse_sites.py             # figures, straight from those coordinates
+./scripts/run_chiral_sites.sh -site-fixtures     # static capture fixtures A–F
+./scripts/run_gpu_monitored.sh ./scripts/run_chiral_sites.sh -lattice-compare -gpu -steps 8000 -seeds 2
+```
+
+---
+
+## 9g. Powered zero-skew native-vs-mirror study — the sparse lattice does NOT generate chiral torque (2026-08-12)
+
+**Report: `docs/twirling/ZERO_SKEW_SPARSE_LATTICE_MIRROR_GPU.md`.** Mechanistic screen; no physics changed,
+no parameter tuned, no new chirality, no new device kernel. n = 24 matched native/mirror seed pairs (7001–7024),
+**eps = 0 in every arm**, GPU device-resident, 24.4 min, `invalid = solverFail = 0`.
+
+**CLASSIFICATION: M0 — no mirror-odd torque.** With the corrected sparse long-pitch geometry frozen (`every4`
+10.8 nm / +54° per site / filament-global phase / site-aware capture / one head per site / z slab / free
+filament height), reflecting the actin lattice (`MIRROR_SIGN = −1`) leaves the deterministic axial torque
+**unchanged within noise**:
+
+- **tau_mirror_odd = −1.602e−23 ± 8.500e−23 N·m · |mean|/SEM = 0.19 · 95 % CI [−1.92e−22, +1.60e−22] includes
+  zero · signs exactly 12−/12+ · sign-test p = 1.0000.**
+- Secondary rotation also null: Ω_odd −1.79 ± 2.67 rad/s (0.67σ), turns_odd 0.18σ. **Not required to resolve.**
+- Mirror-EVEN control tau_even = −9.25e−23 ± 6.10e−23 (1.52σ): what little mean torque the native arm carries
+  is predominantly **achiral background**, and is itself unresolved.
+
+**The n = 2 pilot (§9f) is REFUTED, not merely unresolved.** Its apparent effect was −3.65e−22 N·m; the
+measured per-seed SD (4.16e−22) gives this design >80 % power against ≈2.4e−22, and the 95 % CI **excludes the
+pilot value**. **Standing bound: |tau_mirror_odd| < 1.92e−22 N·m (95 %)** at zero imposed skew — below the
+≈2.7e−22 N·m the ±15° converter-skew arms carry.
+
+**MECHANISM (why there is nothing to find):** the episode telemetry (695 native + 700 mirror episodes) shows
+**S2 axial extension flat at ≈38.5 nm and the bend proxy flat across every binding-site azimuth bin in both
+arms**. The helical geometry changes *where* the head attaches but, at this motor's compliance, **the
+attachment azimuth does not measurably bias the strain the motor develops** — so there is no handed strain
+channel for the lattice to drive. Age-resolved torque is null in every bin (max 0.65σ) — nothing at capture,
+during the stroke, or in post-stroke drag; puller/dragger channels null; NEAR/SIDE/FAR sub-totals (1.0–1.6σ)
+cancel. Azimuth occupancy is bimodal (lawn-facing preference, inherited from the z-slab study) and **identical
+in the two arms**, as a reflected lattice requires.
+
+**Pre-launch gates all PASS**, notably: mirror is an **EXACT reflection** (max|φ_nat + φ_mir| = 0.00°,
+z exactly negated, every non-chiral quantity bit-identical) and the RNG streams are **bit-identical** across
+the pair (counter-based, keyed on (entity, step, seed); the mirror changes only `chiP`/`sbP`), so the pair is
+matched at the RNG source. Telemetry is **exactly trajectory-inert** (all deltas 0.000e+00).
+
+**ONE SANITY FLAG, investigated, not dismissed:** mean glide differs native (−1.912) vs mirror (−1.605 µm/s),
+odd channel 2.10σ **uncorrected**. It fails Bonferroni over the six sanity channels (threshold |t| > 2.81),
+sign-test p = 0.15, is **uncorrelated with the torque channel** (r = −0.09) and tracks engagement noise
+(r = −0.60 with the avgBound difference, while avgBound and attachment flux themselves match at 0.39σ/0.02σ).
+It does not undermine the torque null; it is the one channel a follow-up should re-check.
+
+**MAY NOT be concluded:** that twirling is impossible in this model, that motor skew is necessary in vivo, or
+that the helical geometry is unimportant — it remains the physically correct actin representation (§9f) and it
+does change recruitment and glide. This says only that it is **not by itself a twirling generator at this
+operating point** (η = 0.1 Pa·s, 400 heads/µm², 20 ms, `REG_K` = 0, no lawn orientational disorder).
+
+**NEXT (do NOT just add seeds — the channel is at zero with even signs):** (1) repeat the same zero-skew
+native/mirror pair at **η = 0.01 Pa·s**, where the viscosity campaign showed rotation is drag-limited and
+Ω_odd rose 22.8× — that is where a geometric torque would become visible; (2) exercise **`REG_K` > 0**, the
+registry couple that would convert site azimuth into a head-orientation constraint, i.e. supply the coupling
+§9g shows is absent; (3) only if either resolves, the seconds-long accumulation experiment.
+
+```
+./scripts/run_gpu_monitored.sh ./scripts/run_chiral_sites.sh -zsm-gates -gpu
+./scripts/run_gpu_monitored.sh ./scripts/run_chiral_sites.sh -zsm-campaign -gpu -seeds 24 -steps 8000 -zsm-seed0 7001
+./scripts/run_chiral_sites.sh -zsm-report -seeds 24 -steps 8000 -zsm-seed0 7001   # re-report from records
+python3 scripts/plot_zero_skew_mirror.py
+```
+
+**Statistical hygiene (repo-wide):** the shared `T95_TWO_SIDED` table clamped to the normal approximation
+1.960 above df = 20; it was **extended to df = 40** (t_23 = 2.069), so n = 24 confidence intervals are now
+slightly wider (conservative). A lookup constant — no conclusion depends on the third digit, but previously
+printed n = 24 intervals were marginally narrow.
+
+---
+
+## 9h. Bound-motor helical geometry — visual audit (2026-08-12)
+
+**Report: `docs/attachment/BOUND_MOTOR_HELICAL_GEOMETRY_VISUAL_AUDIT.md`.** Geometry/visualization audit only.
+No force law, gate, threshold or default changed; nothing tuned; new files plus one additive read-only harness
+mode (`-bound-viz`). `-site-fixtures` **PASS** and the 24-fixture suite **24 PASS / 0 FAIL** re-run green.
+
+**The actin side is what we intended; the motor side is not.** Verified from the coordinates the capture
+kernels themselves use, with real bound motors placed by the real
+`siteGateA → siteCommitB → siteOccupancyResolve` and posed by the real `matPlaceHeadExplicit`:
+
+- **Sites form ONE sparse long-pitch helical track** — 10.800 nm rise, +54.000°/site, 72.000 nm repeat,
+  R = 3.500 nm, filament-global phase, site-aware capture, one head per site. **Multiple bound motors occupy
+  it as expected**: 12 heads on 12 consecutive sites marching around the whole circumference; a natural
+  3000-step CPU gliding run uses 25 distinct sites over the full length *and* circumference.
+- **The bound head does NOT face its own site normal.** In the decisive fixture, 12 heads each docked
+  perfectly facing their site (`n̂_site·êBind = +1.0000`, 0.00°) at 12 azimuths spanning 1.8 turns all carry
+  the **identical** transverse reference `h_perp = (+1, 0, 0)`. Its azimuth in the filament's own material
+  frame is **flat to 0.000°** while `n̂_site` advances +54.000°/site. Same in the natural run (all 5 bound
+  heads: `h_perp = (0, 1, 0)`).
+- **The reference is a LAB axis.** `TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit` builds the head `yVec` by
+  Gram–Schmidt of a hard-coded `x̂` (or `ŷ`) seed against the head long axis. Actin never enters.
+- **No angular actin↔motor channel exists on this path at all:** `xbParams[2] = j1FMT = 0` ⇒ **F9 and F10 are
+  identically zero**; the only bound angular constraint is `½k_bind(ψ − ψ_actin)²` with `ψ_actin = 0`, a
+  per-motor constant about the lab-fixed `ê_conv`; and the orientational registry `headRollStep` is exactly
+  inert (`REG_K = 0`, `HEAD_ROLL = false`) — and even when enabled prefers the site **tangential/axial**
+  direction, not `n̂_site`. **The actin azimuth reaches the motor only through the position of one point.**
+  That is the geometric reason §9g's M0 null was inevitable at this operating point.
+- **Viewer-schema hazard surfaced and fixed for this writer:** `sim_viewer_boa.html` requires the **array**
+  frame form (`segments[].end1/end2`, `myosins[].rod/lever/motor`). The older **flat** `{x1,y1,z1,x2,…}` form —
+  still emitted by the legacy `ChiralSiteHarness.writeFrame` `-3js` movie path — makes `applyFrameData` throw
+  on `m.rod.invisible`; `loadFrame`'s `.catch` swallows it and **the HUD hangs on "loading…"** instead of
+  erroring. The audit writer emits the array form and is field-validated. The legacy movie path is untouched
+  and remains a standing hazard.
+- Secondary item surfaced (not hunted, not fixed): **`g6` is evaluated against the segment CENTRE**, so a
+  rigidly-posed reference motor is refused at top-of-filament sites purely on head-centre height (3 of 16
+  requested sites across fixtures A/B).
+
+**Next code change (focused, default-off, two gated steps):** (1) seed the bound head's Gram–Schmidt with the
+site's own material direction instead of `x̂` — provably trajectory-inert today (`j1FMT = 0`, `REG_K = 0`), and
+**gate** that inertness rather than assume it; (2) only then exercise `REG_K > 0`, first deciding explicitly
+whether the preferred direction should involve `n̂_site` (a change of law, not a parameter) and what `k_Ω` is
+based on. Step (2) is exactly follow-up (2) of §9g. **Not recommended:** changing g6/g0/g4, adding a steric
+law, or enabling `REG_K` in production before (1) lands.
+
+```
+./scripts/run_chiral_sites.sh -bound-viz -bound-viz-steps 3000   # audit + TSV/JSON scenes + -3js frames
+python3 scripts/plot_bound_motor_audit.py                        # figures 1-8
+cd ~/Code && python3 SoftBox/sim_server.py 8000
+#   audit viewer   http://localhost:8000/SoftBox/bound_motor_geometry_viewer.html
+#   project viewer http://localhost:8000/SoftBox/sim_viewer_boa.html -> threejs_bound_geometry/<fixture>
+```
+
+---
+
+## 9i. Myosin head orientational DOF — lost 2026-07-14, and it explains the 30 % site mask (2026-08-12)
+
+**Report: `docs/motor/MYOSIN_HEAD_ORIENTATION_DOF_HISTORY.md`.** Archaeology only; no physics, default, kernel
+or parameter changed. New read-only probe `softbox/HeadOrientationDofProbe.java` + `scripts/plot_head_orientation_dof.py`.
+
+**The older motor genuinely had 3-D head orientational freedom, and it was lost in the deliberate 2026-07-14
+two-body topology replacement (`e17b5a4`) — not in the GPU port (three commits downstream, which merely
+inherits it) and not in a solver reduction (the implicit solver *gained* 14 DOF, all positional).** What is
+undocumented is the consequence: no report states that the replacement collapsed the head's orientational
+manifold from a 2-sphere to one lab-fixed great circle.
+
+Measured for ONE fixed motor (`HeadOrientationDofProbe`):
+
+| | historical SPHEREHEAD (still live in the tree) | current explicit-S2 |
+|---|---|---|
+| head | integrated `RigidRodBody` sub-body | algebraic slave of (φ, ψ) |
+| orientation DOF | 3, dynamic, Brownian + Stokes-sphere drag | 1 (ψ), no Brownian, no drag in the EOM |
+| eBind reachable set | **2-sphere — 97.8 % of 4π**, covariance rank 3 | **one great circle — 2.9 %**, rank 2, `max\|eBind·êconv\| = 0` exactly |
+| every4 site azimuths facable within 25° | **20/20 = 100 %** (worst 2.19°) | **6/20 = 30 %** (worst 90°) |
+
+**⇒ The 30.1 % site-normal mask in §9h's decision brief is an artifact of that topology change, not a property
+of myosin or of the helical lattice.** The historical head reaches every site normal to ~2° from a fixed
+anchor with no lawn disorder.
+
+**Parameter provenance for the missing DOF EXISTS** — Stokes-sphere rotational drag `8πηR³` (`HEAD_R` = 10 nm),
+FDT Brownian torque, `BRotCoeff` = 0.5, and the bound F9 alignment torque `j1FMT` = 0.4 (currently **0** on the
+explicit-S2 path). There was **no** detached stereospecific orientational stiffness and **no** actin-normal
+restoring torque: F9's reference is the filament **axis**, never a site normal.
+
+**`RAND_BASE_AZ` classified R3 — a workaround for this restriction**, not biological lawn disorder: introduced
+2026-07-24 (ten days *after* the loss), its own comment calls it "a SCENE control for the shared-base-frame
+artifact, not physics", and it has **never been used in a campaign**. It should not be used to hide the
+missing internal DOF.
+
+**Key structural finding (§11):** the explicit S2 beam gives the head genuine 3-D *positional* freedom, but
+`matBeamGeom` builds the head from the **static base triad** and takes the beam only as a translation of the
+pivot — so the S2 can bend anywhere and `eBind` still cannot leave its plane. That is the coupling the
+analytic reduction lost.
+
+**Restoration is a core-motor revalidation, not a local repair.** Recommended: Option B — add ONE dynamic
+per-motor coordinate χ rotating the converter plane about `ê_up` (χ = 0 byte-identical to today), drag derived
+by the same construction as `γ_φ`/`γ_ψ`, gate FDT first, then stroke → `k_ext` → capture. **Stop if `k_ext`
+moves** (the 4E trap). Do not re-open the site-normal law (§9h) until this lands.
+
+```
+java @$TORNADOVM_HOME/tornado-argfile --enable-preview -cp "$TDIR/tornado-api-4.0.1-dev.jar:." softbox.HeadOrientationDofProbe
+python3 scripts/plot_head_orientation_dof.py
+```
+
+---
+
+## 9j. Neck–head tilt DOF χ — kinematics restored and gated; dynamics NOT yet done (2026-08-12)
+
+**Report: `docs/motor/RESTORED_3D_HEAD_TILT_DOF.md`.** DEFAULT-OFF, χ ≡ 0 **byte-identical**
+(`max |matBeamGeomTilt − matBeamGeom| = 0.000e+00`), Path A and Path B unaffected. The original
+`matBeamGeom` is NOT modified; `matBeamGeomTilt` is an additive kernel.
+
+**One extra neck–head coordinate fully restores 3-D `eBind` freedom.** χ rotates the head — and only the head —
+rigidly about the neck–head joint C about `t̂ = e0 × ê_conv`, giving
+`eBind(ψ,χ) = cos χ·e0(ψ) + sin χ·ê_conv`, i.e. (ψ, χ) are spherical coordinates of the head axis with
+`ê_conv` as the pole. C, the lever/neck, the converter plane, the S2 beam, the base triad and the anchors are
+untouched; `θ = ψ − φ` and the stroke plane are unchanged.
+
+For ONE fixed motor, no base rotation, **no `RAND_BASE_AZ`**, measured through the real kernel:
+
+| | current | **restored (ψ, χ)** | historical sphere-head |
+|---|---|---|---|
+| eBind manifold | rank 2 (plane), 1-D locus | **rank 3** | rank 3 |
+| solid angle | 2.9 % of 4π | **99.8 %** | 97.8 % |
+| every4 azimuths facable within 25° | 6/20 = 30 % | **20/20 = 100 %** (worst 0.80°) | 20/20 (worst 2.19°) |
+
+**Rotational drag is DERIVED, not fitted:** χ rotates the same rigid sphere-head about the same pivot with the
+same lever arm as ψ, so `γ_χ = γ_ψ = 3.7036e-25 N·m·s/rad` by the identical `build3core` construction
+(cross-check vs `8πηR³` = 2.4463e-25; ratio 1.514 = the head-centre translation term). **No new stiffness and
+no new tolerance were introduced.**
+
+**Phase-0 blocker RESOLVED (2026-08-12): the strong actin spring is now BINDING-STATE GATED.** New additive
+`MatSoaSlice.matKbindGate` writes the already-per-motor stiffness slot `params[7N+m]` from `boundSeg`
+(bound → the historical `k_bind` = 512 pN·nm/rad², unchanged; detached → a separate weak `k_det`). **Data-only
+— no solver edit, no buffer resize, no TaskGraph change** (the `applyS2Lawn`/`-eta` precedent); flag
+`KBIND_BOUND_ONLY`, default off ⇒ byte-identical. **Frame note: `ψ` is measured about `ê_conv` in the motor's
+OWN base triad, so `ψ = ψ_actin` was ALREADY a neck-relative rest pose** — it only looked lab-fixed because all
+motors share one triad — so no new frame machinery was needed. **k_det ladder** (12 detached motors, real
+solver): SD(ψ) = **1043° / 74° / 46.6° / 32.6° / 22.8° / 3.23°** at k_det = **0 / 2 / 5 / 10 / 20 / 512**
+pN·nm/rad²; measured SD tracks `sqrt(kT/k_det)` at 0.88–0.90× (`k_conv` also restrains ψ). **k_det = 0 tumbles
+without bound** (range 3324°). **Carried forward: k_det ∈ [5, 10] pN·nm/rad², ~100× weaker than k_bind,
+DIAGNOSTIC and NOT calibrated** — it has no historical provenance and was chosen from detached search
+behaviour alone, with no torque/glide/recruitment quantity consulted. Caveat: ψ is the in-plane angle and χ is
+still not dynamic, so this fixes the *stiffness scale*, not yet the 3-D envelope.
+
+**Earlier finding (now fixed, kept for the record) — the DETACHED ψ spring.** The `k_bind(ψ − ψ_actin)` term is **structurally ungated**:
+`boundSeg >= 0` gates the F8 *force* only, not the spring or its Jacobian entry. Measured on 12 fully detached
+motors with the real solver: **mean ψ = +0.139°, SD(ψ) = 3.229°** (vs `sqrt(kT/k_bind)` = 5.137°; tighter
+because `k_conv` also holds ψ). **The detached head wanders ±3.2° along a 360° circle — it does not
+orientationally search at all**, which also explains the standing "recruitment is reach-limited, not
+angle-limited" result (ψ is pinned inside a 25° gate). **χ alone would not fix this**: χ has no spring, so the
+detached manifold would be a narrow band around a meridian — still 1-D. Provenance is *partial* (Exp 3E's head
+searched in φ with ψ held as a deliberate stereospecific pre-orientation, calibrated on a single filament at
+one azimuth where a lab-fixed `ψ_actin` was equivalent to a site-referenced one), so this is the task's
+**CASE B hard stop**. Options B1 retarget the rest orientation to the candidate site (recommended, reuses
+`k_bind` unchanged) · B2 make the spring bound-only (closest to the sphere-head oracle, but changes every
+campaign's detached mechanics) · B3 accept no orientational search.
+
+**NOT DONE — χ is kinematic only.** It is not integrated, has no Brownian torque, is not wired into the step
+loop or the device graph, and none of the core-motor gates were run (stroke, `k_ext`, axial-compliance
+decomposition, FDT, CPU/GPU), nor the site-normal capture gate, the 3-D bound potential, the actin reaction,
+the viewer scene or the η = 0.01 compatibility run. **The 4E trap — recruitment gain paid for by stroke loss
+through a shared compliance — is untested and is the governing risk.** Next: measure τ_χ, wire the overdamped
+update + FDT, then regress stroke and `k_ext` and **stop if `k_ext` collapses**.
+
+---
+
+## 9k. Explicit-S2 motor mechanics repair — F8 virtual-work axis + S2→lever moment transfer (2026-08-12)
+
+**Both hard findings raised by the 3-D-head work (§9j) are REPAIRED and DEFAULT-ON. F8 remains a purely
+translational spring; the lever joint introduces no fitted stiffness. Report:
+`docs/motor/RESTORED_3D_HEAD_TILT_DOF.md` §13–§15.**
+
+**Repair 1 — the F8 generalized-force axis was orthogonal to the true one.** The explicit-S2 solvers projected
+the translational F8 spring onto the converter coordinates about `eup`, but the geometry rotates about `econv`
+(`uB = R_econv(φ)·eup`, `xF8 − C = R_econv(ψ)·d0`). With the converter geometry planar, `eup × (in-plane)` is
+**orthogonal** to the true Jacobian column, so **an in-plane bond force fed exactly ZERO generalized load into
+φ and ψ** — and the only load the legacy axis did respond to (out-of-plane) is the one the true geometry
+ignores. Present since the explicit-S2 model was introduced (`1b227c0`, 2026-07-15). Fixed on every path
+(`matS2SolveStep`, `matS2SolveStepTilt`, `beamRelaxAnalytic`, `s2SolveM`, `s2Solve`, `ExplicitBeamSolver`,
+`TwoBodyGpuKernels.explicitBeamStep`, and the `ExplicitBeamGpuHarness` mirror). Gates: FD-vs-column rel
+**4e−08**; virtual-work closure rel **3.5e−07**; in-plane load matches the FD ground truth to ~1e−07 where the
+legacy axis gave exactly 0; and a fixed-site relaxation is now **stationary under the true potential gradient
+(rel 1.0e−08)** where legacy stopped at **1.9e−01** — i.e. it was converging to the fixed point of the wrong
+variational problem.
+
+**Repair 2 — the S2 terminated at the lever as an exact zero-moment pin.** The beam's bending energy ends at
+node M; the lever entered only as a translation of the attachment point, so **nothing constrained the lever
+angle φ** once the head's rest pose became neck-relative (`k_conv` ties ψ to φ and the head potential is
+neck-relative — both purely *relative*). **Archaeology found no historical joint to restore**: the direct
+structural counterpart in the sphere-head motor, the J2 rod↔lever joint, has **`myoJ2FracMoveTorq = 0.00`** in
+the frozen v1 oracle — itself an exact free hinge. **Option A was therefore taken: the lever is the terminal
+orientation of the S2 chain, held by the beam's OWN `kbend` (= EI/l₀ = 7.2e−20 N·m/rad², AMK 2008) against an
+unstrained angle read off the as-built geometry** — the same kind of build-time geometric constant as the
+clamped joint 0's rest tangent `g4Tan`. **No new stiffness, no fit.** Gates: the `(φ,ψ)→(φ+δ,ψ+δ)` zero-energy
+mode is gone; rigid-body covariance to 4e−14; bending the distal S2 shifts the lever's rest angle **1:1**
+(+5.00° per 5°, +10.00° per 10°); and the joint stays **compliant** (13.7° thermal play, τ = 8.55 µs > dt).
+
+**CPU/GPU parity (the triggered confirmation for a structural hot-kernel change): PASS** — device `TaskGraph`
+lowers and executes, 0 NaN, GPU vs CPU-mirror **9.75e−10 µm**, CPU-mirror vs the scalar twin `s2SolveM`
+**1.16e−09 µm**. *(Unrelated pre-existing device condition, verified against the pristine pre-repair kernel:
+`matS2SolveStep` fails PTX compilation with FMA fusion on — `run_chiral_sites.sh` already carries the
+documented `-Dtornado.enable.fma=false` workaround.)*
+
+**Re-baseline scope.** Detached mechanics are unaffected (`F8 = 0`). **Bound explicit-S2 mechanics change on
+every path that used `eup`** — the production mat gliding path *and* the `Cmot` `explicit-s2-l40` model, whose
+tweezers/stroke fixtures must be re-quoted. **`fixed-anchor` and `calibrated-s2-l40` are untouched** (they
+always used `econv`), so those frozen `MOTOR_MODELS.md` calibrations stand. Legacy escapes: `-legacy-f8axis`,
+`-legacy-freehinge`, `-legacy-mechanics`.
+
+**Visual gate re-run on the repaired motor (§16).** Both arms bind naturally onto the same site; three §9b
+flags are resolved (arm B's 1.06 nm capture-step S2 jump → 0.17 nm; its anomalous head jump 1.68× → 1.01×; the
+free lever mode is visibly gone), ∠(eBind, n_site) at capture improves 68° → 61° in both arms, and S2 bending
+during detached search is now visible because moment continuity finally carries the head's torque to the beam.
+**NEW FLAG:** bond persistence in the recorded window fell in BOTH arms (280 → 78 and 204 → 104 frames). ONE
+event per arm, so NOT a lifetime measurement — but the sign is consistent and the mechanism is plausible (load
+now reaches the converter). **An ensemble lifetime/duty measurement on the repaired motor is REQUIRED before
+bound lifetime, duty ratio or `avgBound` are re-used from gliding/density/viscosity work.** Still unchanged:
+~61° actin-blind orientation gate, head/actin steric overlap, diffusive-coarse search at production dt.
+
+**Not done:** the lever joint is implemented in the production explicit-S2 solvers only — the `Cmot` `s2Solve`
+path and the beam-replica assemblies keep the free hinge (a stated limitation that preserves every beam-solver
+replica gate). Site-normal binding and twirling remain OUT OF SCOPE and unstarted.
+
+---
+
+## 9l. Post-head-freedom geometric validation — lever OK, sterics REAL, 25° gate NOT reachable (2026-08-13)
+
+**Diagnostic only; nothing changed. Report: `docs/motor/POST_HEAD_FREEDOM_VALIDATION.md`. Raw:
+`RUN_LOGS/motor_audit/post_head_freedom_validation/`.; viewer runs `threejs_posthead_{lever,sterics,eventC}` at the repo root.**
+
+**(A) The repaired S2→lever junction is mechanically sound.** 200 000 detached steps: mean θ_joint 81.825° vs
+rest 81.732° (offset 0.09°), SD 10.75° — *below* its own thermal amplitude 13.70°; **0 of 199 999** single
+timesteps exceed 3× that SD; autocorrelation → 0 by lag-100 with no drift; mean |θ−θ₀| = 8.59° vs mean
+**interior** beam bend 12.40°, so the terminal joint is **less** strained than the beam's own joints — no
+terminal kink, no lever spin.
+
+**(B) Head/actin overlap is REAL, and it is not a projection.** Head ellipsoid (4.5 × 2.75 × 2.25 nm) vs the
+3.5 nm actin cylinder, radial clearance: **bound — inside the actin in 99 of 105 frames (94.3 %), mean
+−3.09 nm**; detached — through the filament 40.1 % of the time. Deepest **−6.54 nm** with the head centre
+**0.21 nm from the filament axis**. Only the F8 *point* is constrained; the head *body* is sterically absent
+from actin on this path.
+
+**(C) THE LOAD-BEARING RESULT — the capture path is judging the wrong head, and the 25° site-normal gate is
+not reachable as things stand.** Over 134 696 detached candidate evaluations the capture geometry (recomputed
+from φ,ψ with χ ignored) differs from the integrated χ-aware head by **mean 4.97 nm / 39.2°** (max 10.7 nm /
+89°) — against a 3 nm spatial gate. Ignoring χ flips the spatial decision in 0.72 % of evaluations. Of **20
+natural production captures, 0 would pass** a ≤25° site-normal gate: all 20 sit **43.6–64.3° (mean 53.9°)**
+from n_site, while their true xF8 is inside 3 nm at every one — **the disagreement is entirely orientational,
+not spatial**. Binding-compatible poses (true reach AND ≤25°) occur in **15 of 134 696 steps = 0.011 %**, so
+adopting the gate unchanged would cut capture by ~3 orders of magnitude.
+
+**No pre-steering** (trend −0.03 deg/frame, range 75°, 0/20 monotonic) — the head arrives thermally; there is
+no candidate-derived torque in the code path. **Snap prediction:** gating at ≤25° cuts the initial bound
+strain 4.7× (55.0 → 11.8 kT) but 11.8 kT is still substantial, and τ/dt = 0.29 means the bound orientational
+relaxation is **not resolved** at production dt (the standing sub-step issue).
+
+**Before any binding-law change:** close the ~39°/~5 nm gap between the capture geometry and the integrated
+head first — the gate should at minimum evaluate the head the solver is actually moving. Whether the residual
+mismatch is then a tolerance, rest-orientation or site-normal-definition question is the open decision.
+*(Caveat on record: four flaws in the probe itself were found and fixed before these numbers were
+trustworthy; earlier "50 % B / 50 % C" and "100 % B" passes were artifacts — see the report §8.)*
+
+---
+
+## 9m. χ-aware capture audit — a RETRACTION, and the orientation mismatch diagnosed as CASE C (2026-08-13)
+
+**Report: `docs/motor/CHI_AWARE_CAPTURE_ORIENTATION_AUDIT.md`. Diagnostic only; nothing changed.**
+
+**RETRACTION (load-bearing).** The claim that the binding gates "recompute the head pose from (φ, ψ) and
+ignore χ" — in `RESTORED_3D_HEAD_TILT_DOF.md` §10.5 and repeated as the headline of
+`POST_HEAD_FREEDOM_VALIDATION.md` §3/§4 — is **WRONG**. `siteGateA` reads xF8/xH from `outGeom` **only** (0 `q`
+reads) and `matBindExplicit` likewise; `stepGlidingCPU` writes `outGeom` with `matBeamGeomTilt`, so **the
+capture path already evaluates the exact χ-aware head the solver moves** (verified 0.000e+00 over 200
+randomised states). `siteCommitB` computes **no head geometry at all** — it gates ψ/φ/θ and an energy budget —
+so **there is no `eBind` in the capture path to make χ-aware**. The earlier "capture is judging a head ~5 nm /
+~39° away" compared `outGeom` against a χ=0 recomputation that nothing uses; those numbers are real but
+measure **the size of the χ coordinate**, not a capture inconsistency. Both prior reports now carry
+retraction notes. **No code change was required or made.**
+
+**DIAGNOSIS — the ~54° site-normal mismatch is CASE C** (native rest orientation), with D and E contributing:
+- **CASE A excluded, exactly:** `|n_site|`=1, `n_site·r̂_outward`=1.000000000 at every site, sites exactly on
+  the 3.5 nm surface, +54.000°/site, rigid-rotation covariance 3.2e−08.
+- **CASE B excluded as a sign error:** at capture ∠(eBind,+n_site)=61.0°, ∠(eBind,−n_site)=119.0° — neither
+  convention is the target, because **the rest orientation was never defined against a site normal**.
+  `eBind_rest` derives from `ψ_actin`, a base-frame angle predating discrete sites by ten days (`3769ff6`).
+- **CASE C, the cause:** conditioned on true spatial reach, **∠(eBind_rest, n_site) = 47.9° mean / 46.0°
+  median, within 25° only 0.89 % of the time** — the potential aims ~48° off the site normal whenever the head
+  is in reach, and the head sits only ~21° from that rest pose.
+- **Conditional distribution given `|xF8−x_site| < 3 nm`** (559 of 116 814 detached steps = 0.479 %): mean
+  **82.8°**, median 83.8°, p10/p25/p75/p90 = 49/59/101/119°; **≤25° only 2.68 %** (≤15° 1.07 %, ≤45° 6.44 %).
+- **Selection effect worth knowing:** at real captures the mean is 53.9°, not 82.8° — today's `|ψ−ψ_actin|<25°`
+  gate incidentally selects poses near the rest orientation and so acts as a weak, accidental proxy for site
+  alignment without ever referring to a site.
+- **CASE D contributing:** the head centre is *inside* the site's tangent plane on **63 %** of reachable steps
+  (the same geometry as the 94 % bound steric overlap), and **only side azimuths (0–120°) are ever reached** —
+  lower and upper sites get zero encounters. Azimuth matters strongly: the 0–60° band reaches **10.6 % within
+  25° (best 5.07°)** while 60–120° never gets below 33.8°. **Binding-compatible orientations do occur; they are
+  rare and confined to one band.**
+
+**Implication for the binding law (reported, not actioned):** the fix is not to loosen 25° but to decide what
+the bound orientation should be *relative to the site frame* — retargeting the rest/bound orientation to the
+site normal is the only option that addresses the root cause. The model currently has **no stated answer** to
+"what angle should eBind make to n_site in a correctly bound head?"; the historical sphere-head stereospecific
+pose is the natural oracle and was not consulted.
+
+**k_det CONTROL — the sharpest evidence for CASE C.** Doubling the detached stiffness (k_det 5 → 10) holds the
+head closer to its own rest pose, and because that pose is ~48–51° off `n_site` the distribution concentrates
+there: ≤60° 26.7 % → **49.3 %**, ≤45° 6.4 % → **14.2 %**, **but ≤25° gets WORSE, 2.68 % → 1.54 %** (mean 82.8°
+→ 65.6°; head centre inside the site plane 63 % → 80 %). **Tightening the potential pins the head more firmly
+at the wrong angle** — neither the tolerance nor `k_det` can rescue a rest pose that is ~50° off.
+*(This comparison initially ran as two identical arms — `scene()`'s `resetChiral()` clobbered `K_DET_PNNM`;
+fixed and now asserted, so the arms above are real.)*
+
+---
+
 ## 10. Load-bearing reports
 
 Read these before revisiting the associated topic:
 
 - `docs/TWOBODY_BLIND_TWEEZERS_SYNTHESIS.md` · `docs/TWOBODY_BIOCHEMICAL_CYCLE.md` · `docs/TWOBODY_SPARSE_MULTIMOTOR.md` · `docs/TWOBODY_LOWDENSITY_GLIDING.md` · `docs/TWOBODY_FLEXIBLE_MAT_GLIDING.md` · `docs/TWOBODY_FULLCOVERAGE_MAT.md` · `docs/TWOBODY_TAIL_RECRUITMENT.md` · `docs/TWOBODY_SUPPORTED_S2_TAIL.md` · `docs/TWOBODY_MD_INFORMED_S2.md` (two-body replacement-motor arc; §9b)
+- `docs/attachment/CANONICAL_ACTIN_ATTACHMENT_AUDIT.md` · `docs/attachment/PATH_B_SITE_ACCESSIBILITY_TELEMETRY.md` · `docs/attachment/FILAMENT_Z_SLAB_AND_ACCESSIBILITY_RERUN.md` (attachment architecture, accessibility telemetry, z-boundary; §9d) · `docs/attachment/SPARSE_LONG_PITCH_ACTIN_SITE_LATTICE.md` (**the current Path-B site geometry**; §9f) · `docs/attachment/BOUND_MOTOR_HELICAL_GEOMETRY_VISUAL_AUDIT.md` (**bound-head orientation is lab-referenced, not site-referenced**; §9h) · `docs/motor/MYOSIN_HEAD_ORIENTATION_DOF_HISTORY.md` (**the head's 3-D orientational DOF was lost at the 2026-07-14 two-body replacement; it explains the 30 % site mask**; §9i) · `docs/motor/RESTORED_3D_HEAD_TILT_DOF.md` (**neck–head tilt χ restores it kinematically, 20/20 site normals, no RAND_BASE_AZ; dynamics not yet done**; §9j)
 - `docs/FINE_DT_V0_REFERENCE.md`
 - `docs/TIMESTEP_SERVO_AUDIT.md`
 - `docs/CANONICAL_STROKE_DISAMBIGUATION.md`
@@ -643,6 +1192,7 @@ Read these before revisiting the associated topic:
 - `docs/MOTOR_PARAMETER_PROVENANCE_25C.md`
 - `docs/GLIDING_TARGET_25C.md`
 - `docs/twirling/LOW_ATP_GLIDING_TWIRLING_FINDINGS.md` (low-[ATP] condition transfer; §9c)
+- `docs/twirling/ZERO_SKEW_SPARSE_LATTICE_MIRROR_GPU.md` (**M0**: the sparse helical lattice alone generates no chiral torque at eps = 0; §9g)
 - `docs/VISCOSITY_SENSITIVITY_FINDINGS.md` (viscosity campaign + mirror control)
 - `J2_CONFORMATION_ARCHITECTURE.md`
 - `J2_NATIVE_ANGLE_AUDIT.md`

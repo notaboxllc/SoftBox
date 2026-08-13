@@ -217,11 +217,13 @@ public final class TwoBodyBeamAnalyticGpu {
                 // ---------- node drag diagonal ----------
                 for (int r=0;r<nF;r++) addK(sys,base,W, r, r, aN);
 
-                // ---------- F8 / converter / bind block (E = eup axis, matches s2Solve) ----------
+                // ---------- F8 / converter / bind block (E = econv, the EXACT geometry axis) ----------
+                // REPAIRED 2026-08-12: was E = eup, orthogonal to the true Jacobian for planar converter geometry.
+                // See matS2SolveStep's axis note and docs/motor/RESTORED_3D_HEAD_TILT_DOF.md.
                 int pB = 3*(M-1), iPhi = nF, iPsi = nF+1;
                 double cpx=Cx-Px, cpy=Cy-Py, cpz=Cz-Pz, fcx=xF8x-Cx, fcy=xF8y-Cy, fcz=xF8z-Cz;
-                double Jphix=uy*cpz-uz*cpy, Jphiy=uz*cpx-ux*cpz, Jphiz=ux*cpy-uy*cpx;
-                double Jpsix=uy*fcz-uz*fcy, Jpsiy=uz*fcx-ux*fcz, Jpsiz=ux*fcy-uy*fcx;
+                double Jphix=ey*cpz-ez*cpy, Jphiy=ez*cpx-ex*cpz, Jphiz=ex*cpy-ey*cpx;
+                double Jpsix=ey*fcz-ez*fcy, Jpsiy=ez*fcx-ex*fcz, Jpsiz=ex*fcy-ey*fcx;
                 double J03=Jphix*1e-6,J04=Jpsix*1e-6,J13=Jphiy*1e-6,J14=Jpsiy*1e-6,J23=Jphiz*1e-6,J24=Jpsiz*1e-6;
                 double kfSI=kF8Code*1e6;
                 // J columns: col0=(1,0,0),col1=(0,1,0),col2=(0,0,1),col3=(J03,J13,J23),col4=(J04,J14,J24)
@@ -245,7 +247,7 @@ public final class TwoBodyBeamAnalyticGpu {
                 double th = psi - phi;
                 double caFx=cpy*f8z-cpz*f8y, caFy=cpz*f8x-cpx*f8z, caFz=cpx*f8y-cpy*f8x;
                 double fcFx=fcy*f8z-fcz*f8y, fcFy=fcz*f8x-fcx*f8z, fcFz=fcx*f8y-fcy*f8x;
-                double QphiF8=(ux*caFx+uy*caFy+uz*caFz)*1e-6, QpsiF8=(ux*fcFx+uy*fcFy+uz*fcFz)*1e-6;
+                double QphiF8=(ex*caFx+ey*caFy+ez*caFz)*1e-6, QpsiF8=(ex*fcFx+ey*fcFy+ez*fcFz)*1e-6;   // E = econv (repaired)
                 addF(sys,base,W,n, pB+0, f8x); addF(sys,base,W,n, pB+1, f8y); addF(sys,base,W,n, pB+2, f8z);
                 addF(sys,base,W,n, iPhi, QphiF8 + kc*(th-thetaS));
                 addF(sys,base,W,n, iPsi, QpsiF8 - kc*(th-thetaS) - kbnd*(psi-psiActin));
@@ -386,6 +388,109 @@ public final class TwoBodyBeamAnalyticGpu {
                 xF8x=Cx+(d0x*cpsi+(ce1*d0z-ce2*d0y)*spsi); xF8y=Cy+(d0y*cpsi+(ce2*d0x-ce0*d0z)*spsi); xF8z=Cz+(d0z*cpsi+(ce0*d0y-ce1*d0x)*spsi);
                 double rcx=cb0*rCx+cu0*rCy, rcy=cb1*rCx+cu1*rCy, rcz=cb2*rCx+cu2*rCy;
                 xHx=Cx-(rcx*cpsi+(ce1*rcz-ce2*rcy)*spsi); xHy=Cy-(rcy*cpsi+(ce2*rcx-ce0*rcz)*spsi); xHz=Cz-(rcz*cpsi+(ce0*rcy-ce1*rcx)*spsi);
+            }
+            outGeom.set(m,Cx); outGeom.set(nM+m,Cy); outGeom.set(2*nM+m,Cz);
+            outGeom.set(3*nM+m,xHx); outGeom.set(4*nM+m,xHy); outGeom.set(5*nM+m,xHz);
+            outGeom.set(6*nM+m,xF8x); outGeom.set(7*nM+m,xF8y); outGeom.set(8*nM+m,xF8z);
+        }
+    }
+
+    /**
+     * NECK–HEAD TILT (noncanonical, DEFAULT-OFF): {@link #matBeamGeom} plus ONE additional orientational
+     * coordinate {@code chi} that rotates the HEAD — and only the head — about the neck–head joint C.
+     *
+     * <h3>Why it exists</h3>
+     * The two-body head's long axis is {@code eBind = R_econv(psi)·p1}, so {@code eBind · econv = 0} for every
+     * psi: one fixed motor can only face directions on a single lab-fixed great circle (2.9 % of 4pi measured).
+     * The sphere-head motor this topology replaced explored 97.8 % of 4pi. Report:
+     * {@code docs/motor/MYOSIN_HEAD_ORIENTATION_DOF_HISTORY.md}.
+     *
+     * <h3>The coordinate</h3>
+     * <pre>
+     *   e0   = normalize(xF8 - xH)        the CURRENT (psi-only) head long axis;  e0 . econv = 0
+     *   that = e0 x econv                 unit by construction (e0 ⊥ econv), lies IN the psi plane, ⊥ e0
+     *   head rotates rigidly about C by chi around that
+     *     =>  eBind(psi, chi) = cos(chi)·e0(psi) + sin(chi)·econv
+     * </pre>
+     * so {@code (psi, chi)} are spherical coordinates of the head axis with {@code econv} as the pole:
+     * psi is the azimuth (the existing in-plane swing, i.e. the stroke plane) and chi the polar tilt out of it.
+     * The sign follows from the natural axis {@code e0 x econv}; nothing is hard-coded against it.
+     *
+     * <h3>What rotates and what does NOT</h3>
+     * Only the two head-side offsets {@code (xF8 - C)} and {@code (xH - C)} are rotated, rigidly and about the
+     * SAME axis, so the head moves as one rigid body about the neck–head joint. C itself, the lever/neck
+     * ({@code phi}, {@code uB}), the converter plane, the S2 beam nodes, the base triad and the anchors are
+     * untouched — this is a neck–head DOF, not a base rotation. {@code theta = psi - phi} therefore keeps its
+     * meaning and the stroke plane is unchanged; chi is orthogonal to it.
+     *
+     * <h3>Byte identity</h3>
+     * {@code chi == 0} skips the rotation branch entirely, so the emitted geometry is bit-for-bit the 7-argument
+     * {@link #matBeamGeom}. The original kernel is NOT modified and remains the wired default.
+     */
+    public static void matBeamGeomTilt(DoubleArray nodes, DoubleArray frame, DoubleArray params, DoubleArray q,
+                                       IntArray counts, DoubleArray outGeom, DoubleArray convF, DoubleArray chiHead) {
+        int nM = counts.get(0), M = counts.get(2);
+        for (@Parallel int m = 0; m < nM; m++) {
+            double bx=frame.get(m), by=frame.get(nM+m), bz=frame.get(2*nM+m);
+            double ex=frame.get(3*nM+m), ey=frame.get(4*nM+m), ez=frame.get(5*nM+m);
+            double ux=frame.get(6*nM+m), uy=frame.get(7*nM+m), uz=frame.get(8*nM+m);
+            double lb=params.get(m), rF8x=params.get(nM+m), rF8y=params.get(2*nM+m), rCx=params.get(3*nM+m), rCy=params.get(4*nM+m);
+            double phi=q.get(m), psi=q.get(nM+m);
+            double Px=nodes.get((3*M)*nM+m), Py=nodes.get((3*M+1)*nM+m), Pz=nodes.get((3*M+2)*nM+m);
+            double cphi=Math.cos(phi), sphi=Math.sin(phi);
+            double cpsi=Math.cos(psi), spsi=Math.sin(psi);
+            double Cx, Cy, Cz, xF8x, xF8y, xF8z, xHx, xHy, xHz;
+            double ecx, ecy, ecz;                       // the converter axis this motor actually uses
+            if (convF.get(12*nM+m) == 0.0) {            // CANONICAL branch — VERBATIM from matBeamGeom
+                double uBx=ux*cphi+bx*sphi, uBy=uy*cphi+by*sphi, uBz=uz*cphi+bz*sphi;
+                Cx=Px+uBx*lb; Cy=Py+uBy*lb; Cz=Pz+uBz*lb;
+                double d0x=bx*(rF8x-rCx)+ux*(rF8y-rCy), d0y=by*(rF8x-rCx)+uy*(rF8y-rCy), d0z=bz*(rF8x-rCx)+uz*(rF8y-rCy);
+                xF8x=Cx+(d0x*cpsi+(ey*d0z-ez*d0y)*spsi); xF8y=Cy+(d0y*cpsi+(ez*d0x-ex*d0z)*spsi); xF8z=Cz+(d0z*cpsi+(ex*d0y-ey*d0x)*spsi);
+                double rcx=bx*rCx+ux*rCy, rcy=by*rCx+uy*rCy, rcz=bz*rCx+uz*rCy;
+                xHx=Cx-(rcx*cpsi+(ey*rcz-ez*rcy)*spsi); xHy=Cy-(rcy*cpsi+(ez*rcx-ex*rcz)*spsi); xHz=Cz-(rcz*cpsi+(ex*rcy-ey*rcx)*spsi);
+                ecx=ex; ecy=ey; ecz=ez;
+            } else {                                    // ROTATED CONVERTER FRAME — VERBATIM from matBeamGeom
+                double cb0=convF.get(m), cb1=convF.get(nM+m), cb2=convF.get(2*nM+m);
+                double ce0=convF.get(3*nM+m), ce1=convF.get(4*nM+m), ce2=convF.get(5*nM+m);
+                double cu0=convF.get(6*nM+m), cu1=convF.get(7*nM+m), cu2=convF.get(8*nM+m);
+                double of0=convF.get(9*nM+m), of1=convF.get(10*nM+m), of2=convF.get(11*nM+m);
+                double uBx=cu0*cphi+cb0*sphi, uBy=cu1*cphi+cb1*sphi, uBz=cu2*cphi+cb2*sphi;
+                Cx=Px+of0+uBx*lb; Cy=Py+of1+uBy*lb; Cz=Pz+of2+uBz*lb;
+                double d0x=cb0*(rF8x-rCx)+cu0*(rF8y-rCy), d0y=cb1*(rF8x-rCx)+cu1*(rF8y-rCy), d0z=cb2*(rF8x-rCx)+cu2*(rF8y-rCy);
+                xF8x=Cx+(d0x*cpsi+(ce1*d0z-ce2*d0y)*spsi); xF8y=Cy+(d0y*cpsi+(ce2*d0x-ce0*d0z)*spsi); xF8z=Cz+(d0z*cpsi+(ce0*d0y-ce1*d0x)*spsi);
+                double rcx=cb0*rCx+cu0*rCy, rcy=cb1*rCx+cu1*rCy, rcz=cb2*rCx+cu2*rCy;
+                xHx=Cx-(rcx*cpsi+(ce1*rcz-ce2*rcy)*spsi); xHy=Cy-(rcy*cpsi+(ce2*rcx-ce0*rcz)*spsi); xHz=Cz-(rcz*cpsi+(ce0*rcy-ce1*rcx)*spsi);
+                ecx=ce0; ecy=ce1; ecz=ce2;
+            }
+            // ---- NECK–HEAD TILT: rotate the head rigidly about C. chi == 0 ⇒ exactly matBeamGeom. ----------
+            double chi = chiHead.get(m);
+            if (chi != 0.0) {
+                double e0x = xF8x - xHx, e0y = xF8y - xHy, e0z = xF8z - xHz;
+                double el = Math.sqrt(e0x*e0x + e0y*e0y + e0z*e0z);
+                if (el > 1.0e-20) {
+                    double ie = 1.0 / el; e0x*=ie; e0y*=ie; e0z*=ie;
+                    // tilt axis t = e0 x econv (unit: e0 ⊥ econv by construction of the psi rotation)
+                    double tx = e0y*ecz - e0z*ecy, ty = e0z*ecx - e0x*ecz, tz = e0x*ecy - e0y*ecx;
+                    double tl = Math.sqrt(tx*tx + ty*ty + tz*tz);
+                    if (tl > 1.0e-20) {
+                        double it = 1.0 / tl; tx*=it; ty*=it; tz*=it;
+                        double c = Math.cos(chi), s = Math.sin(chi), omc = 1.0 - c;
+                        // Rodrigues on the F8-side offset
+                        double ax = xF8x - Cx, ay = xF8y - Cy, az = xF8z - Cz;
+                        double da = tx*ax + ty*ay + tz*az;
+                        double rax = ax*c + (ty*az - tz*ay)*s + tx*da*omc;
+                        double ray = ay*c + (tz*ax - tx*az)*s + ty*da*omc;
+                        double raz = az*c + (tx*ay - ty*ax)*s + tz*da*omc;
+                        // Rodrigues on the head-centre offset — SAME axis, SAME angle ⇒ rigid head rotation
+                        double hx = xHx - Cx, hy = xHy - Cy, hz = xHz - Cz;
+                        double dh = tx*hx + ty*hy + tz*hz;
+                        double rhx = hx*c + (ty*hz - tz*hy)*s + tx*dh*omc;
+                        double rhy = hy*c + (tz*hx - tx*hz)*s + ty*dh*omc;
+                        double rhz = hz*c + (tx*hy - ty*hx)*s + tz*dh*omc;
+                        xF8x = Cx + rax; xF8y = Cy + ray; xF8z = Cz + raz;
+                        xHx  = Cx + rhx; xHy  = Cy + rhy; xHz  = Cz + rhz;
+                    }
+                }
             }
             outGeom.set(m,Cx); outGeom.set(nM+m,Cy); outGeom.set(2*nM+m,Cz);
             outGeom.set(3*nM+m,xHx); outGeom.set(4*nM+m,xHy); outGeom.set(5*nM+m,xHz);
@@ -936,6 +1041,15 @@ public final class TwoBodyBeamAnalyticGpu {
         // writeback are untouched, so a masked bound motor still relaxes elastically, strokes, bears load and
         // detaches. matc[3] == 0 ⇒ brownM == brownOn ⇒ arithmetic bit-identical to the canonical path.
         int mPolicy = matc.get(3);
+        // F8 GENERALIZED-FORCE AXIS (matc[4]): 1 = econv (DEFAULT — the geometry's own rotation axis, i.e. the
+        // EXACT Jacobian), 0 = the legacy eup convention retained for byte-reproducing pre-repair runs.
+        // The converter geometry is uB = R_econv(phi)*eup and xF8 - C = R_econv(psi)*d0, so the exact columns are
+        // d C /d phi = econv x (C - P) and d xF8/d psi = econv x (xF8 - C). Projecting the (purely TRANSLATIONAL)
+        // F8 spring onto phi/psi about eup instead put the generalized force along an axis ORTHOGONAL to the true
+        // one whenever the converter geometry is planar, so an in-plane bond force produced exactly ZERO phi/psi
+        // load. F8's stiffness and rest length are untouched; only the chain-rule projection is corrected.
+        // Report: docs/motor/RESTORED_3D_HEAD_TILT_DOF.md, "F8 VIRTUAL-WORK AXIS REPAIR".
+        int axMode = matc.get(4);
         for (@Parallel int m = 0; m < nM; m++) {
             double bx = frame.get(m), by = frame.get(nM + m), bz = frame.get(2 * nM + m);
             double ex = frame.get(3 * nM + m), ey = frame.get(4 * nM + m), ez = frame.get(5 * nM + m);
@@ -978,8 +1092,10 @@ public final class TwoBodyBeamAnalyticGpu {
                 double cphi = Math.cos(phi), sphi = Math.sin(phi);
                 double cpsi = Math.cos(psi), spsi = Math.sin(psi);
                 double Cx, Cy, Cz, xF8x, xF8y, xF8z;
-                // the phi ARM (C−P without the gauge offset) and the generalized-force axis, set per branch
-                double cpx, cpy, cpz, gux, guy, guz;
+                // the phi ARM (C−P without the gauge offset) and the generalized-force axis, set per branch.
+                // aex/aey/aez is the TRUE converter rotation axis regardless of the legacy-axis toggle — the
+                // S2->lever joint below always differentiates the real geometry, never the legacy convention.
+                double cpx, cpy, cpz, gux, guy, guz, aex, aey, aez;
                 if (skewF == 0.0) {
                     double uBx = ux * cphi + bx * sphi, uBy = uy * cphi + by * sphi, uBz = uz * cphi + bz * sphi;
                     Cx = Px + uBx * lb; Cy = Py + uBy * lb; Cz = Pz + uBz * lb;
@@ -988,7 +1104,9 @@ public final class TwoBodyBeamAnalyticGpu {
                     xF8y = Cy + (d0y * cpsi + (ez * d0x - ex * d0z) * spsi);
                     xF8z = Cz + (d0z * cpsi + (ex * d0y - ey * d0x) * spsi);
                     cpx = Cx - Px; cpy = Cy - Py; cpz = Cz - Pz;
-                    gux = ux; guy = uy; guz = uz;
+                    if (axMode != 0) { gux = ex; guy = ey; guz = ez; }   // EXACT: the geometry rotates about econv
+                    else             { gux = ux; guy = uy; guz = uz; }   // LEGACY eup convention
+                    aex = ex; aey = ey; aez = ez;
                 } else {
                     double uBx = cu0 * cphi + cb0 * sphi, uBy = cu1 * cphi + cb1 * sphi, uBz = cu2 * cphi + cb2 * sphi;
                     Cx = Px + of0 + uBx * lb; Cy = Py + of1 + uBy * lb; Cz = Pz + of2 + uBz * lb;
@@ -998,7 +1116,10 @@ public final class TwoBodyBeamAnalyticGpu {
                     xF8z = Cz + (d0z * cpsi + (ce0 * d0y - ce1 * d0x) * spsi);
                     // the gauge offset is a constant rest-geometry translation ⇒ it must NOT enter ∂xF8/∂phi
                     cpx = uBx * lb; cpy = uBy * lb; cpz = uBz * lb;
-                    gux = cu0; guy = cu1; guz = cu2;   // the generalized-force axis rotates WITH the geometry
+                    // the generalized-force axis rotates WITH the geometry (the site-frame-conjugated converter axis)
+                    if (axMode != 0) { gux = ce0; guy = ce1; guz = ce2; }   // EXACT
+                    else             { gux = cu0; guy = cu1; guz = cu2; }   // LEGACY
+                    aex = ce0; aey = ce1; aez = ce2;
                 }
                 // STRETCH
                 for (int i = 0; i < M; i++) {
@@ -1128,6 +1249,64 @@ public final class TwoBodyBeamAnalyticGpu {
                 addF(sys,base,W,n, iPsi, QpsiF8 - kc*(th2-thetaS) - kbnd*(psi-psiActin));
                 if (brownM != 0) { addF(sys,base,W,n, iPhi, brownTorqueD(gPhi, dt, seed, tt, 0x4841L + (long)m*7919L));
                                     addF(sys,base,W,n, iPsi, brownTorqueD(gPsi, dt, seed, tt, 0x4842L + (long)m*7919L)); }
+                // ================= S2 -> LEVER TERMINAL BEND JOINT (moment continuity at the distal node) ======
+                // The lever P->C is the TERMINAL ORIENTATION of the S2 mechanical chain, so the joint at the
+                // distal beam node carries a bending moment exactly like every interior joint of the beam. It
+                // reuses the beam's OWN kbend (= EI/l0, AMK 2008) — NO new stiffness is introduced — and an
+                // unstrained angle theta0 read off the as-built geometry (params[17N+m]), which is the same kind
+                // of build-time geometric constant as the CLAMPED joint 0's rest tangent g4Tan. theta0 < 0
+                // disables the joint (the legacy zero-moment pin). Without it nothing at all constrains the lever
+                // angle phi: k_conv ties psi to phi and the head potential is neck-relative, both PURELY
+                // RELATIVE, so (phi,psi) -> (phi+d, psi+d) was an exact zero-energy free rotation.
+                //   E = 1/2 kbend (theta - theta0)^2 ,  cos theta = sHat . uB
+                //   sHat = (node M - node M-1)/|.|      uB = (C - P)/lb      d uB/d phi = econv x uB
+                // Both arms are LIVE geometry, so the joint is frame-covariant by construction and contains no
+                // lab reference. Residual AND exact Hessian (nodes M-1, M and phi) are assembled, so it is
+                // treated implicitly like the rest of the beam.
+                double thL0 = params.get(17 * nM + m);
+                if (thL0 >= 0.0 && M >= 2) {
+                    double ilb = 1.0 / lb;
+                    double uBx = cpx * ilb, uBy = cpy * ilb, uBz = cpz * ilb;
+                    double aLx = nodes.get((3*M)*nM+m)     - nodes.get((3*(M-1))*nM+m);
+                    double aLy = nodes.get((3*M+1)*nM+m)   - nodes.get((3*(M-1)+1)*nM+m);
+                    double aLz = nodes.get((3*M+2)*nM+m)   - nodes.get((3*(M-1)+2)*nM+m);
+                    double La = Math.sqrt(aLx*aLx + aLy*aLy + aLz*aLz);
+                    if (La > 1e-12) {
+                        double iL = 1.0/La, sxL = aLx*iL, syL = aLy*iL, szL = aLz*iL;
+                        double cL = sxL*uBx + syL*uBy + szL*uBz; if (cL > 1) cL = 1; if (cL < -1) cL = -1;
+                        double thJ = dacos(cL), snJ = Math.sin(thJ);
+                        if (snJ > 1e-6) {
+                            double dth = thJ - thL0;
+                            double A1L = dth/snJ, A2L = (1.0 - dth*cL/snJ)/(snJ*snJ);
+                            double gxL = (uBx - cL*sxL)*iL, gyL = (uBy - cL*syL)*iL, gzL = (uBz - cL*szL)*iL;
+                            double wxL = aey*uBz - aez*uBy, wyL = aez*uBx - aex*uBz, wzL = aex*uBy - aey*uBx;
+                            double cphL = sxL*wxL + syL*wyL + szL*wzL;          // dc/d phi
+                            int rM = (M-1)*3, rMm = (M-2)*3;
+                            addF(sys,base,W,n, rM+0,  kbend*A1L*1e6*gxL); addF(sys,base,W,n, rM+1,  kbend*A1L*1e6*gyL); addF(sys,base,W,n, rM+2,  kbend*A1L*1e6*gzL);
+                            addF(sys,base,W,n, rMm+0,-kbend*A1L*1e6*gxL); addF(sys,base,W,n, rMm+1,-kbend*A1L*1e6*gyL); addF(sys,base,W,n, rMm+2,-kbend*A1L*1e6*gzL);
+                            addF(sys,base,W,n, iPhi,  kbend*A1L*cphL);
+                            double iL2 = iL*iL;
+                            for (int p=0;p<3;p++){
+                                double upL=(p==0)?uBx:((p==1)?uBy:uBz), spL=(p==0)?sxL:((p==1)?syL:szL);
+                                double gpL=(p==0)?gxL:((p==1)?gyL:gzL), wpL=(p==0)?wxL:((p==1)?wyL:wzL);
+                                for (int qq=0;qq<3;qq++){
+                                    double uqL=(qq==0)?uBx:((qq==1)?uBy:uBz), sqL=(qq==0)?sxL:((qq==1)?syL:szL);
+                                    double gqL=(qq==0)?gxL:((qq==1)?gyL:gzL);
+                                    double idL=(p==qq)?1.0:0.0;
+                                    double HcL = (-(upL*sqL + spL*uqL) + 3.0*cL*spL*sqL - cL*idL)*iL2;
+                                    double kv = 1e12*kbend*(A2L*gpL*gqL - A1L*HcL);
+                                    addK(sys,base,W, rM+p,  rM+qq,  kv);  addK(sys,base,W, rMm+p, rMm+qq, kv);
+                                    addK(sys,base,W, rM+p,  rMm+qq,-kv);  addK(sys,base,W, rMm+p, rM+qq, -kv);
+                                }
+                                double HmL = (wpL - cphL*spL)*iL;
+                                double kmix = 1e6*kbend*(A2L*gpL*cphL - A1L*HmL);
+                                addK(sys,base,W, rM+p,  iPhi,  kmix); addK(sys,base,W, iPhi, rM+p,   kmix);
+                                addK(sys,base,W, rMm+p, iPhi, -kmix); addK(sys,base,W, iPhi, rMm+p, -kmix);
+                            }
+                            addK(sys,base,W, iPhi, iPhi, kbend*(A2L*cphL*cphL + A1L*cL));
+                        }
+                    }
+                }
                 // solve (Gauss–Jordan)
                 for (int c=0;c<n;c++){
                     int p=c; double bestv=sys.get(base+c*W+c); if(bestv<0)bestv=-bestv;
@@ -1173,6 +1352,456 @@ public final class TwoBodyBeamAnalyticGpu {
             outGeom.set(3*nM+m,xHx); outGeom.set(4*nM+m,xHy); outGeom.set(5*nM+m,xHz);
             outGeom.set(6*nM+m,xF8x); outGeom.set(7*nM+m,xF8y); outGeom.set(8*nM+m,xF8z);
             q.set(m,phi); q.set(nM+m,psi);
+            forceDotFil.set(m, bnd ? bondData.get(dB + 12) : 0.0f);
+            forceMag.set(m, bnd ? (float) Math.sqrt(f8x*f8x + f8y*f8y + f8z*f8z) : 0.0f);
+        }
+    }
+
+    // ===============================================================================================
+    // DYNAMIC 3-D HEAD ORIENTATION (noncanonical, DEFAULT-OFF). Report: docs/motor/RESTORED_3D_HEAD_TILT_DOF.md
+    //
+    // matS2SolveStepTilt = matS2SolveStep with ONE extra generalized coordinate, the neck-head tilt chi,
+    // solved in the SAME implicit block (n = 3M+2 -> 3M+3). The ORIGINAL kernel is untouched and remains
+    // the wired default; this one is only built when the feature is on.
+    //
+    //   HEAD KINEMATICS.  The head pose is the rotation Q(psi,chi) = R(econv, psi) . R(t0, chi) applied to the
+    //   fixed head-frame offsets, with t0 = p1hat x econv. (Rotating about the psi-DEPENDENT axis
+    //   that = e0(psi) x econv AFTER the psi rotation is identical to rotating about the FIXED t0 BEFORE it —
+    //   conjugation — which is why the two-angle parameterisation is exact and gimbal-free away from
+    //   chi = +-pi/2.)  Consequences used below, all exact for every chi:
+    //       eBind      = cos(chi)*e0(psi) + sin(chi)*econv        e0(psi) = R(econv,psi).p1hat
+    //       omega_psi  = econv        (unit)          d xF8/d psi = econv x (xF8 - C)
+    //       omega_chi  = that(psi)    (unit)          d xF8/d chi = that  x (xF8 - C)
+    //   omega_psi . omega_chi = 0 EXACTLY, everywhere.
+    //
+    //   MOBILITY (derived, not fitted).  The head is a sphere of rotational drag gamma_r = 8*pi*eta*R^3 and
+    //   translational drag gamma_t = 6*pi*eta*R; its centre offset from the pivot is rho = xH - C, and because
+    //   r_conv = -r_F8 exactly in this motor, rho = |r_conv| * eBind — PARALLEL to the head axis. Hence
+    //       Gamma_ij = gamma_r (w_i.w_j) + gamma_t (w_i x rho).(w_j x rho)
+    //       Gamma_chichi = gamma_r + gamma_t|rho|^2                    = the existing gamma_psi, EXACTLY
+    //       Gamma_psipsi = gamma_r + gamma_t|rho|^2 cos^2(chi)         = gamma_r + (gamma_psi - gamma_r) cos^2 chi
+    //       Gamma_psichi = 0                                            EXACTLY, everywhere
+    //   so the 2x2 metric IS diagonal but Gamma_psipsi is configuration-dependent. Because Gamma_psipsi depends
+    //   on chi and NOT on psi (and Gamma_chichi is constant), the mobility divergence kT*grad.M vanishes
+    //   identically, so the plain Ito update with FDT amplitudes sqrt(2 kT Gamma_ii/dt) is Boltzmann-consistent
+    //   with no spurious-drift correction. At chi = 0, Gamma_psipsi = gamma_psi ⇒ byte-identical forcing.
+    //
+    //   HEAD ORIENTATION POTENTIAL.  ONE functional form for both binding states:
+    //       U = 1/2 * k * theta^2 ,   theta = angle(eBind, eTarget)
+    //       DETACHED : k = k_det   , eTarget = c1*n1 + c2*n2 + c3*n3   — the LIVE NECK/CONVERTER FRAME (below)
+    //       BOUND    : k = k_bind  , eTarget = e0(psiActin)            — the HISTORICAL base-frame target,
+    //                  i.e. the minimal 3-D extension of today's 1/2 k_bind (psi - psiActin)^2, to which it
+    //                  reduces EXACTLY at chi = 0. No retarget to the site normal (that is the next task).
+    //   Both generalized head torques come from the SAME U (no independent hand-chosen springs):
+    //       lambda   = k * theta / sin(theta)            (-> k as theta -> 0)
+    //       Q_psi    = lambda * (d eBind/d psi . eTarget) = lambda * cos(chi) * ((econv x e0) . eTarget)
+    //       Q_chi    = lambda * (d eBind/d chi . eTarget) = lambda * ((cos(chi) econv - sin(chi) e0) . eTarget)
+    //   and, DETACHED only, the equal-and-opposite reaction on the frame carriers (phi and the distal beam
+    //   element), also from the same U — so the detached potential is CONSERVATIVE, not a one-sided spring:
+    //       Q_phi    = lambda * (eBind . d eTarget/d phi)
+    //       F_(node M) = -F_(node M-1) = lambda * beta * n3 / |s| ,  beta = eBind.(c2 n3 - c3 n2)/|g|
+    //   (the bound target is base-frame, so it has no carriers and no reaction, exactly as today).
+    //   Jacobian: the exact small-angle Hessian in these coordinates, k cos^2(chi) on (psi,psi) and k on
+    //   (chi,chi), with NO cross term (d eBind/d psi . d eBind/d chi = 0). At chi = 0 this is the legacy
+    //   `kbnd` entry. The weak detached reaction terms are carried in the residual only (explicit): they are
+    //   ~2 orders below the beam/drag diagonal, and the residual — not the Jacobian — fixes the physics.
+    //
+    //   LIVE NECK/CONVERTER FRAME (the point of the whole exercise). Built from LIVE mechanical geometry only:
+    //       n1 = uB = (C - P)/lb                     the lever/neck axis entering the head at the pivot C
+    //       shat = (node M - node M-1)/|.|           the distal S2 tangent — the only live roll reference
+    //       n2 = normalize(shat - (shat.n1) n1)      roll about the neck, set by the S2-lever plane
+    //       n3 = n1 x n2
+    //   No lab axis and no stored base triad enters. It rotates with a rigid rotation of the whole motor, with
+    //   the lever (phi), and — the coupling the analytic reduction had lost — with S2 BENDING, which rolls the
+    //   frame about n1. (c1,c2,c3) are the native head pose resolved in THIS frame at build time, so the rest
+    //   direction co-rotates with the neck and generates no torque from rigid motion of the motor.
+    //
+    //   matc[4] = F8 generalized-force axis: 1 = econv (the geometry's own rotation axis, i.e. the exact
+    //   Jacobian), 0 = eup (the LEGACY convention of matS2SolveStep / s2SolveM — retained ONLY so the chi
+    //   increment can be measured against an otherwise identical baseline; see the report's AXIS section).
+    //   params[17N+m] = gamma_r (the head's sphere-only rotational drag). restC[m],[N+m],[2N+m] = c1,c2,c3.
+    // ===============================================================================================
+    public static void matS2SolveStepTilt(DoubleArray nodes, DoubleArray frame, DoubleArray q, FloatArray bondData,
+                                          IntArray boundSeg, DoubleArray params, DoubleArray sys, DoubleArray outGeom,
+                                          FloatArray forceDotFil, FloatArray forceMag, IntArray matc, IntArray counts,
+                                          DoubleArray convF, DoubleArray chiHead, DoubleArray restC) {
+        int nM = counts.get(0), maxIt = counts.get(1), M = counts.get(2);
+        int STRIDE = 13;
+        int nF = 3 * M, n = nF + 3, W = n + 1;
+        double tol = 3e-7;
+        long tt = matc.get(0), seed = matc.get(1); int brownOn = matc.get(2);
+        int mPolicy = matc.get(3); int axMode = matc.get(4);
+        for (@Parallel int m = 0; m < nM; m++) {
+            double bx = frame.get(m), by = frame.get(nM + m), bz = frame.get(2 * nM + m);
+            double ex = frame.get(3 * nM + m), ey = frame.get(4 * nM + m), ez = frame.get(5 * nM + m);
+            double ux = frame.get(6 * nM + m), uy = frame.get(7 * nM + m), uz = frame.get(8 * nM + m);
+            double gEx = frame.get(9 * nM + m), gEy = frame.get(10 * nM + m), gEz = frame.get(11 * nM + m);
+            double gTx = frame.get(12 * nM + m), gTy = frame.get(13 * nM + m), gTz = frame.get(14 * nM + m);
+            double lb = params.get(m), rF8x = params.get(nM + m), rF8y = params.get(2 * nM + m);
+            double rCx = params.get(3 * nM + m), rCy = params.get(4 * nM + m);
+            double kF8Code = params.get(5 * nM + m), kc = params.get(6 * nM + m), kbnd = params.get(7 * nM + m);
+            double gPhi = params.get(8 * nM + m), gPsi = params.get(9 * nM + m), dt = params.get(10 * nM + m);
+            double ks = params.get(11 * nM + m), l0um = params.get(12 * nM + m), kbend = params.get(13 * nM + m);
+            double floorZ = params.get(14 * nM + m), kfloor = params.get(15 * nM + m), gNode = params.get(16 * nM + m);
+            double gRot = params.get(18 * nM + m);   // row 17 is now the S2->lever rest angle
+            double l0m = l0um * 1e-6, aN = gNode / dt, aphi = gPhi / dt;
+            int bs = boundSeg.get(m); boolean bnd = bs >= 0; int dB = m * STRIDE;
+            int brownM = brownOn;
+            if (bnd) { if ((mPolicy & 1) != 0) brownM = 0; }
+            else     { if ((mPolicy & 2) != 0) brownM = 0; }
+            double f8x = bnd ? bondData.get(dB) : 0.0, f8y = bnd ? bondData.get(dB + 1) : 0.0, f8z = bnd ? bondData.get(dB + 2) : 0.0;
+            double phi = q.get(m), psi = q.get(nM + m), thetaS = q.get(2 * nM + m), psiActin = q.get(3 * nM + m);
+            double chi = chiHead.get(m);
+            double c1 = restC.get(m), c2 = restC.get(nM + m), c3 = restC.get(2 * nM + m);
+            double skewF = convF.get(12 * nM + m);
+            double cb0 = 0, cb1 = 0, cb2 = 0, ce0 = 0, ce1 = 0, ce2 = 0, cu0 = 0, cu1 = 0, cu2 = 0, of0 = 0, of1 = 0, of2 = 0;
+            if (skewF != 0.0) {
+                cb0 = convF.get(m);          cb1 = convF.get(nM + m);      cb2 = convF.get(2 * nM + m);
+                ce0 = convF.get(3 * nM + m); ce1 = convF.get(4 * nM + m);  ce2 = convF.get(5 * nM + m);
+                cu0 = convF.get(6 * nM + m); cu1 = convF.get(7 * nM + m);  cu2 = convF.get(8 * nM + m);
+                of0 = convF.get(9 * nM + m); of1 = convF.get(10 * nM + m); of2 = convF.get(11 * nM + m);
+            }
+            int base = m * (n * W);
+            int st = 0;
+            for (int it = 0; it < maxIt; it++) {
+                for (int i = 0; i < n; i++) for (int j = 0; j < W; j++) sys.set(base + i * W + j, 0.0);
+                double Px = nodes.get((3 * M) * nM + m), Py = nodes.get((3 * M + 1) * nM + m), Pz = nodes.get((3 * M + 2) * nM + m);
+                double cphi = Math.cos(phi), sphi = Math.sin(phi);
+                double cpsi = Math.cos(psi), spsi = Math.sin(psi);
+                double cchi = Math.cos(chi), schi = Math.sin(chi);
+                // ---- branch geometry: base vectors, lever, head basis ----------------------------------
+                double abx, aby, abz, aex, aey, aez, aux, auy, auz, ofx, ofy, ofz;
+                if (skewF == 0.0) { abx=bx; aby=by; abz=bz; aex=ex; aey=ey; aez=ez; aux=ux; auy=uy; auz=uz; ofx=0; ofy=0; ofz=0; }
+                else              { abx=cb0; aby=cb1; abz=cb2; aex=ce0; aey=ce1; aez=ce2; aux=cu0; auy=cu1; auz=cu2; ofx=of0; ofy=of1; ofz=of2; }
+                double uBx = aux*cphi + abx*sphi, uBy = auy*cphi + aby*sphi, uBz = auz*cphi + abz*sphi;
+                double Cx = Px + ofx + uBx*lb, Cy = Py + ofy + uBy*lb, Cz = Pz + ofz + uBz*lb;
+                // p1hat = normalize(b*rF8x + u*rF8y) ; e0 = R(econv, psi) p1hat ; that = e0 x econv
+                double p1x = abx*rF8x + aux*rF8y, p1y = aby*rF8x + auy*rF8y, p1z = abz*rF8x + auz*rF8y;
+                double pn = Math.sqrt(p1x*p1x + p1y*p1y + p1z*p1z); double ipn = 1.0/pn; p1x*=ipn; p1y*=ipn; p1z*=ipn;
+                double q1x = aey*p1z - aez*p1y, q1y = aez*p1x - aex*p1z, q1z = aex*p1y - aey*p1x;   // econv x p1hat
+                double e0x = cpsi*p1x + spsi*q1x, e0y = cpsi*p1y + spsi*q1y, e0z = cpsi*p1z + spsi*q1z;
+                double thx = e0y*aez - e0z*aey, thy = e0z*aex - e0x*aez, thz = e0x*aey - e0y*aex;   // that = e0 x econv
+                // eBind = cos(chi) e0 + sin(chi) econv
+                double ebx = cchi*e0x + schi*aex, eby = cchi*e0y + schi*aey, ebz = cchi*e0z + schi*aez;
+                // head-side offsets: R(that, chi) applied to the psi-rotated rest offsets
+                double d0x = abx*(rF8x-rCx) + aux*(rF8y-rCy), d0y = aby*(rF8x-rCx) + auy*(rF8y-rCy), d0z = abz*(rF8x-rCx) + auz*(rF8y-rCy);
+                double pd0x = d0x*cpsi + (aey*d0z - aez*d0y)*spsi, pd0y = d0y*cpsi + (aez*d0x - aex*d0z)*spsi, pd0z = d0z*cpsi + (aex*d0y - aey*d0x)*spsi;
+                double rcx0 = abx*rCx + aux*rCy, rcy0 = aby*rCx + auy*rCy, rcz0 = abz*rCx + auz*rCy;
+                double prcx = rcx0*cpsi + (aey*rcz0 - aez*rcy0)*spsi, prcy = rcy0*cpsi + (aez*rcx0 - aex*rcz0)*spsi, prcz = rcz0*cpsi + (aex*rcy0 - aey*rcx0)*spsi;
+                double omc = 1.0 - cchi;
+                double dd1 = thx*pd0x + thy*pd0y + thz*pd0z;
+                double fcx = pd0x*cchi + (thy*pd0z - thz*pd0y)*schi + thx*dd1*omc;
+                double fcy = pd0y*cchi + (thz*pd0x - thx*pd0z)*schi + thy*dd1*omc;
+                double fcz = pd0z*cchi + (thx*pd0y - thy*pd0x)*schi + thz*dd1*omc;
+                double dd2 = thx*prcx + thy*prcy + thz*prcz;
+                double hcx = prcx*cchi + (thy*prcz - thz*prcy)*schi + thx*dd2*omc;
+                double hcy = prcy*cchi + (thz*prcx - thx*prcz)*schi + thy*dd2*omc;
+                double hcz = prcz*cchi + (thx*prcy - thy*prcx)*schi + thz*dd2*omc;
+                double xF8x = Cx + fcx, xF8y = Cy + fcy, xF8z = Cz + fcz;
+                // the phi arm (C-P without the gauge offset) and the F8 generalized-force axis
+                double cpx = uBx*lb, cpy = uBy*lb, cpz = uBz*lb;
+                double gux, guy, guz;
+                if (axMode != 0) { gux = aex; guy = aey; guz = aez; }     // exact: the geometry's own axis
+                else             { gux = aux; guy = auy; guz = auz; }     // legacy matS2SolveStep convention
+                // STRETCH
+                for (int i = 0; i < M; i++) {
+                    double ax = nodes.get((3*(i+1))*nM+m) - nodes.get((3*i)*nM+m);
+                    double ay = nodes.get((3*(i+1)+1)*nM+m) - nodes.get((3*i+1)*nM+m);
+                    double az = nodes.get((3*(i+1)+2)*nM+m) - nodes.get((3*i+2)*nM+m);
+                    double len = Math.sqrt(ax*ax+ay*ay+az*az); if (len < 1e-15) continue;
+                    double s = 1.0/len, uxx = ax*s, uyy = ay*s, uzz = az*s;
+                    double lenM = len*1e-6, tS = ks*(lenM - l0m), tL = tS/lenM;
+                    int ri = (i>=1)?(i-1)*3:-1000, rj = i*3;
+                    addF(sys,base,W,n, ri+0, tS*uxx); addF(sys,base,W,n, ri+1, tS*uyy); addF(sys,base,W,n, ri+2, tS*uzz);
+                    addF(sys,base,W,n, rj+0,-tS*uxx); addF(sys,base,W,n, rj+1,-tS*uyy); addF(sys,base,W,n, rj+2,-tS*uzz);
+                    for (int p=0;p<3;p++) for(int qq=0;qq<3;qq++){
+                        double up = (p==0)?uxx:((p==1)?uyy:uzz), uq=(qq==0)?uxx:((qq==1)?uyy:uzz);
+                        double id=(p==qq)?1.0:0.0; double kb2 = ks*up*uq + tL*(id-up*uq);
+                        addK(sys,base,W, ri+p, ri+qq, kb2); addK(sys,base,W, rj+p, rj+qq, kb2);
+                        addK(sys,base,W, ri+p, rj+qq,-kb2); addK(sys,base,W, rj+p, ri+qq,-kb2);
+                    }
+                }
+                // BEND clamped joint 0
+                {
+                    double b0x = nodes.get(3*nM+m)-nodes.get(m), b0y = nodes.get((4)*nM+m)-nodes.get(nM+m), b0z = nodes.get(5*nM+m)-nodes.get(2*nM+m);
+                    double lbb = Math.sqrt(b0x*b0x+b0y*b0y+b0z*b0z);
+                    if (lbb > 1e-12) {
+                        double ilb=1.0/lbb, c = gTx*b0x+gTy*b0y+gTz*b0z; c*=ilb; if(c>1)c=1; if(c<-1)c=-1;
+                        double th = dacos(c), A1=a1(th), A2=a2(th); double clb2=c*ilb*ilb;
+                        double g0x=gTx*ilb-clb2*b0x, g0y=gTy*ilb-clb2*b0y, g0z=gTz*ilb-clb2*b0z;
+                        int r1=0;
+                        addF(sys,base,W,n, r1+0, kbend*A1*1e6*g0x); addF(sys,base,W,n, r1+1, kbend*A1*1e6*g0y); addF(sys,base,W,n, r1+2, kbend*A1*1e6*g0z);
+                        double ilb2=ilb*ilb, ilb3=ilb2*ilb, ilb4=ilb2*ilb2;
+                        for (int p=0;p<3;p++) for(int qq=0;qq<3;qq++){
+                            double b0p=(p==0)?b0x:((p==1)?b0y:b0z), b0q=(qq==0)?b0x:((qq==1)?b0y:b0z);
+                            double tp=(p==0)?gTx:((p==1)?gTy:gTz), tq=(qq==0)?gTx:((qq==1)?gTy:gTz);
+                            double id=(p==qq)?1.0:0.0;
+                            double Hc = -(b0p*tq+tp*b0q)*ilb3 - c*id*ilb2 + 3.0*c*b0p*b0q*ilb4;
+                            double gp=(p==0)?g0x:((p==1)?g0y:g0z), gq=(qq==0)?g0x:((qq==1)?g0y:g0z);
+                            addK(sys,base,W, r1+p, r1+qq, 1e12*kbend*(A2*gp*gq - A1*Hc));
+                        }
+                    }
+                }
+                // BEND interior joints
+                for (int j=1;j<M;j++){
+                    double ax = nodes.get((3*j)*nM+m)-nodes.get((3*(j-1))*nM+m);
+                    double ay = nodes.get((3*j+1)*nM+m)-nodes.get((3*(j-1)+1)*nM+m);
+                    double az = nodes.get((3*j+2)*nM+m)-nodes.get((3*(j-1)+2)*nM+m);
+                    double bxx = nodes.get((3*(j+1))*nM+m)-nodes.get((3*j)*nM+m);
+                    double byy = nodes.get((3*(j+1)+1)*nM+m)-nodes.get((3*j+1)*nM+m);
+                    double bzz = nodes.get((3*(j+1)+2)*nM+m)-nodes.get((3*j+2)*nM+m);
+                    double la = Math.sqrt(ax*ax+ay*ay+az*az), lbn = Math.sqrt(bxx*bxx+byy*byy+bzz*bzz);
+                    if (la<1e-12 || lbn<1e-12) continue;
+                    double ila=1.0/la, ilb=1.0/lbn, iab=ila*ilb;
+                    double c = (ax*bxx+ay*byy+az*bzz)*iab; if(c>1)c=1; if(c<-1)c=-1;
+                    double th=dacos(c), A1=a1(th), A2=a2(th);
+                    double cla2=c*ila*ila, clb2=c*ilb*ilb;
+                    double Dx=bxx*iab-cla2*ax, Dy=byy*iab-cla2*ay, Dz=bzz*iab-cla2*az;
+                    double Ex=ax*iab-clb2*bxx, Ey=ay*iab-clb2*byy, Ez=az*iab-clb2*bzz;
+                    double gc0x=-Dx,gc0y=-Dy,gc0z=-Dz, gc1x=Dx-Ex,gc1y=Dy-Ey,gc1z=Dz-Ez, gc2x=Ex,gc2y=Ey,gc2z=Ez;
+                    int rJm1=(j-1>=1)?(j-2)*3:-1000, rJ=(j-1)*3, rJp1=j*3;
+                    addF(sys,base,W,n, rJm1+0,kbend*A1*1e6*gc0x); addF(sys,base,W,n, rJm1+1,kbend*A1*1e6*gc0y); addF(sys,base,W,n, rJm1+2,kbend*A1*1e6*gc0z);
+                    addF(sys,base,W,n, rJ+0,  kbend*A1*1e6*gc1x); addF(sys,base,W,n, rJ+1,  kbend*A1*1e6*gc1y); addF(sys,base,W,n, rJ+2,  kbend*A1*1e6*gc1z);
+                    addF(sys,base,W,n, rJp1+0,kbend*A1*1e6*gc2x); addF(sys,base,W,n, rJp1+1,kbend*A1*1e6*gc2y); addF(sys,base,W,n, rJp1+2,kbend*A1*1e6*gc2z);
+                    double ila2=ila*ila, ila3=ila2*ila, ila4=ila2*ila2, ilb2=ilb*ilb, ilb3=ilb2*ilb, ilb4=ilb2*ilb2;
+                    for (int ai=0; ai<3; ai++){
+                        int rA = (ai==0)?rJm1:((ai==1)?rJ:rJp1);
+                        double saA=(ai==0)?-1.0:((ai==1)?1.0:0.0), sbA=(ai==0)?0.0:((ai==1)?-1.0:1.0);
+                        for (int bi=0; bi<3; bi++){
+                            int rB = (bi==0)?rJm1:((bi==1)?rJ:rJp1);
+                            double saB=(bi==0)?-1.0:((bi==1)?1.0:0.0), sbB=(bi==0)?0.0:((bi==1)?-1.0:1.0);
+                            for (int p=0;p<3;p++){
+                                double ap=(p==0)?ax:((p==1)?ay:az), bp=(p==0)?bxx:((p==1)?byy:bzz);
+                                double gAp=(p==0)?((ai==0)?gc0x:((ai==1)?gc1x:gc2x)):((p==1)?((ai==0)?gc0y:((ai==1)?gc1y:gc2y)):((ai==0)?gc0z:((ai==1)?gc1z:gc2z)));
+                                for (int qq=0;qq<3;qq++){
+                                    double aq=(qq==0)?ax:((qq==1)?ay:az), bq=(qq==0)?bxx:((qq==1)?byy:bzz);
+                                    double id=(p==qq)?1.0:0.0;
+                                    double Haa=-(ap*bq+bp*aq)*ila3*ilb - c*id*ila2 + 3.0*c*ap*aq*ila4;
+                                    double Hbb=-(bp*aq+ap*bq)*ilb3*ila - c*id*ilb2 + 3.0*c*bp*bq*ilb4;
+                                    double Hab_pq= id*iab - bp*bq*ila*ilb3 - ap*aq*ila3*ilb + c*ap*bq*ila2*ilb2;
+                                    double Hab_qp= id*iab - bq*bp*ila*ilb3 - aq*ap*ila3*ilb + c*aq*bp*ila2*ilb2;
+                                    double Hc = saA*saB*Haa + sbA*sbB*Hbb + saA*sbB*Hab_pq + sbA*saB*Hab_qp;
+                                    double gBq=(qq==0)?((bi==0)?gc0x:((bi==1)?gc1x:gc2x)):((qq==1)?((bi==0)?gc0y:((bi==1)?gc1y:gc2y)):((bi==0)?gc0z:((bi==1)?gc1z:gc2z)));
+                                    addK(sys,base,W, rA+p, rB+qq, 1e12*kbend*(A2*gAp*gBq - A1*Hc));
+                                }
+                            }
+                        }
+                    }
+                }
+                // FLOOR
+                for (int j=1;j<=M;j++){
+                    double z = nodes.get((3*j)*nM+m)*ux + nodes.get((3*j+1)*nM+m)*uy + nodes.get((3*j+2)*nM+m)*uz;
+                    if (z < floorZ){ double fk = kfloor*(floorZ - z)*1e-6; int r=(j-1)*3;
+                        addF(sys,base,W,n, r+0, fk*ux); addF(sys,base,W,n, r+1, fk*uy); addF(sys,base,W,n, r+2, fk*uz);
+                        for(int p=0;p<3;p++){ double ep=(p==0)?ux:((p==1)?uy:uz);
+                            for(int qq=0;qq<3;qq++){ double eq=(qq==0)?ux:((qq==1)?uy:uz); addK(sys,base,W, r+p, r+qq, kfloor*ep*eq); } }
+                    }
+                }
+                // node drag diagonal + node Brownian RHS
+                for (int r=0;r<nF;r++) addK(sys,base,W, r, r, aN);
+                if (brownM != 0) for (int j=1;j<=M;j++){ int fb=(j-1)*3;
+                    for (int k=0;k<3;k++){ long salt = 0x4811L + ((long)m*1009 + (long)j*131 + k)*7919L;
+                        addF(sys,base,W,n, fb+k, brownTorqueD(gNode, dt, seed, tt, salt)); } }
+                // ---- F8 / converter block over the THREE angular coordinates -----------------------------
+                int pB = 3*(M-1), iPhi = nF, iPsi = nF+1, iChi = nF+2;
+                double Jphix=guy*cpz-guz*cpy, Jphiy=guz*cpx-gux*cpz, Jphiz=gux*cpy-guy*cpx;
+                double Jpsix, Jpsiy, Jpsiz;
+                if (axMode != 0) { Jpsix=aey*fcz-aez*fcy; Jpsiy=aez*fcx-aex*fcz; Jpsiz=aex*fcy-aey*fcx; }
+                else             { Jpsix=guy*fcz-guz*fcy; Jpsiy=guz*fcx-gux*fcz; Jpsiz=gux*fcy-guy*fcx; }
+                double Jchix=thy*fcz-thz*fcy, Jchiy=thz*fcx-thx*fcz, Jchiz=thx*fcy-thy*fcx;
+                double J03=Jphix*1e-6,J04=Jpsix*1e-6,J05=Jchix*1e-6;
+                double J13=Jphiy*1e-6,J14=Jpsiy*1e-6,J15=Jchiy*1e-6;
+                double J23=Jphiz*1e-6,J24=Jpsiz*1e-6,J25=Jchiz*1e-6;
+                double kfSI=kF8Code*1e6;
+                for (int i=0;i<6;i++){
+                    double Ji0=(i==0)?1:0, Ji1=(i==1)?1:0, Ji2=(i==2)?1:0;
+                    if(i==3){Ji0=J03;Ji1=J13;Ji2=J23;} if(i==4){Ji0=J04;Ji1=J14;Ji2=J24;} if(i==5){Ji0=J05;Ji1=J15;Ji2=J25;}
+                    int di=(i<3)?(pB+i):(i==3?iPhi:(i==4?iPsi:iChi));
+                    for (int jj=0;jj<6;jj++){
+                        double Jj0=(jj==0)?1:0, Jj1=(jj==1)?1:0, Jj2=(jj==2)?1:0;
+                        if(jj==3){Jj0=J03;Jj1=J13;Jj2=J23;} if(jj==4){Jj0=J04;Jj1=J14;Jj2=J24;} if(jj==5){Jj0=J05;Jj1=J15;Jj2=J25;}
+                        int dj=(jj<3)?(pB+jj):(jj==3?iPhi:(jj==4?iPsi:iChi));
+                        addK(sys,base,W, di, dj, kfSI*(Ji0*Jj0+Ji1*Jj1+Ji2*Jj2));
+                    }
+                }
+                // ---- head-orientation potential: ONE form, target chosen by binding state ----------------
+                double etx, ety, etz;
+                double n1x=uBx, n1y=uBy, n1z=uBz;                 // the lever/neck axis (unit by construction)
+                double n2x=0,n2y=0,n2z=0, n3x=0,n3y=0,n3z=0, gN=1.0, sLen=1.0, n1px=0,n1py=0,n1pz=0;
+                if (bnd) {
+                    double ca = Math.cos(psiActin), sa = Math.sin(psiActin);
+                    etx = ca*p1x + sa*q1x; ety = ca*p1y + sa*q1y; etz = ca*p1z + sa*q1z;
+                } else {
+                    // LIVE NECK FRAME from the distal S2 element
+                    int jm = (M >= 2) ? (M-1) : 0;
+                    double sx = Px - nodes.get((3*jm)*nM+m), sy = Py - nodes.get((3*jm+1)*nM+m), sz = Pz - nodes.get((3*jm+2)*nM+m);
+                    sLen = Math.sqrt(sx*sx + sy*sy + sz*sz); if (sLen < 1e-18) sLen = 1e-18;
+                    double isl = 1.0/sLen; sx*=isl; sy*=isl; sz*=isl;
+                    double pn1 = sx*n1x + sy*n1y + sz*n1z;
+                    double gx = sx - pn1*n1x, gy = sy - pn1*n1y, gz = sz - pn1*n1z;
+                    gN = Math.sqrt(gx*gx + gy*gy + gz*gz);
+                    if (gN < 1e-9) {   // degenerate (S2 tangent parallel to the lever): documented fallback
+                        gx = aex - (aex*n1x+aey*n1y+aez*n1z)*n1x; gy = aey - (aex*n1x+aey*n1y+aez*n1z)*n1y; gz = aez - (aex*n1x+aey*n1y+aez*n1z)*n1z;
+                        gN = Math.sqrt(gx*gx + gy*gy + gz*gz); if (gN < 1e-18) gN = 1e-18;
+                    }
+                    double ig = 1.0/gN; n2x = gx*ig; n2y = gy*ig; n2z = gz*ig;
+                    n3x = n1y*n2z - n1z*n2y; n3y = n1z*n2x - n1x*n2z; n3z = n1x*n2y - n1y*n2x;
+                    etx = c1*n1x + c2*n2x + c3*n3x; ety = c1*n1y + c2*n2y + c3*n3y; etz = c1*n1z + c2*n2z + c3*n3z;
+                    n1px = -aux*sphi + abx*cphi; n1py = -auy*sphi + aby*cphi; n1pz = -auz*sphi + abz*cphi;
+                }
+                double dOri = ebx*etx + eby*ety + ebz*etz; if (dOri > 1.0) dOri = 1.0; if (dOri < -1.0) dOri = -1.0;
+                double thOri = dacos(dOri);
+                // lambda = k*theta/sin(theta): finite at theta -> 0 (series), floored near theta -> pi so the
+                // 0/0 at the antipodal saddle cannot amplify round-off (the TORQUE lambda*sin(theta) stays <= k*pi).
+                double sOri = Math.sin(thOri); if (sOri < 1.0e-6) sOri = 1.0e-6;
+                double lam = (thOri < 1.0e-3) ? kbnd * (1.0 + thOri * thOri / 6.0) : kbnd * thOri / sOri;
+                // d eBind/d psi = cos(chi) (econv x e0) ; d eBind/d chi = cos(chi) econv - sin(chi) e0
+                double dEpx = aey*e0z - aez*e0y, dEpy = aez*e0x - aex*e0z, dEpz = aex*e0y - aey*e0x;
+                double QpsiOri = lam * cchi * (dEpx*etx + dEpy*ety + dEpz*etz);
+                double dEcx = cchi*aex - schi*e0x, dEcy = cchi*aey - schi*e0y, dEcz = cchi*aez - schi*e0z;
+                double QchiOri = lam * (dEcx*etx + dEcy*ety + dEcz*etz);
+                double QphiOri = 0.0;
+                if (!bnd) {
+                    // d eTarget/d phi through n1(phi) and the Gram-Schmidt slip of n2, n3
+                    int jm2 = (M >= 2) ? (M-1) : 0;
+                    double isl2 = 1.0/sLen;
+                    double shx = (Px - nodes.get((3*jm2)*nM+m))*isl2;
+                    double shy = (Py - nodes.get((3*jm2+1)*nM+m))*isl2;
+                    double shz = (Pz - nodes.get((3*jm2+2)*nM+m))*isl2;
+                    double dpn1 = shx*n1px + shy*n1py + shz*n1pz;   // d(shat.n1)/dphi = shat . n1'
+                    double pn1 = shx*n1x + shy*n1y + shz*n1z;
+                    double dgx = -dpn1*n1x - pn1*n1px, dgy = -dpn1*n1y - pn1*n1py, dgz = -dpn1*n1z - pn1*n1pz;
+                    double proj = n2x*dgx + n2y*dgy + n2z*dgz;
+                    double dn2x = (dgx - n2x*proj)/gN, dn2y = (dgy - n2y*proj)/gN, dn2z = (dgz - n2z*proj)/gN;
+                    double dn3x = (n1py*n2z - n1pz*n2y) + (n1y*dn2z - n1z*dn2y);
+                    double dn3y = (n1pz*n2x - n1px*n2z) + (n1z*dn2x - n1x*dn2z);
+                    double dn3z = (n1px*n2y - n1py*n2x) + (n1x*dn2y - n1y*dn2x);
+                    double dtx = c1*n1px + c2*dn2x + c3*dn3x, dty = c1*n1py + c2*dn2y + c3*dn3y, dtz = c1*n1pz + c2*dn2z + c3*dn3z;
+                    QphiOri = lam * (ebx*dtx + eby*dty + ebz*dtz);
+                    // the equal-and-opposite reaction on the distal S2 element (a transverse force couple)
+                    double beta = (ebx*(c2*n3x - c3*n2x) + eby*(c2*n3y - c3*n2y) + ebz*(c2*n3z - c3*n2z)) / gN;
+                    double fN = lam * beta / (sLen * 1e-6);
+                    int rP = 3*(M-1), rPm = (M >= 2) ? 3*(M-2) : -1000;
+                    addF(sys,base,W,n, rP+0, fN*n3x); addF(sys,base,W,n, rP+1, fN*n3y); addF(sys,base,W,n, rP+2, fN*n3z);
+                    addF(sys,base,W,n, rPm+0,-fN*n3x); addF(sys,base,W,n, rPm+1,-fN*n3y); addF(sys,base,W,n, rPm+2,-fN*n3z);
+                }
+                // converter spring + orientation Hessian + drag diagonal
+                addK(sys,base,W, iPhi,iPhi, kc); addK(sys,base,W, iPhi,iPsi,-kc); addK(sys,base,W, iPsi,iPhi,-kc); addK(sys,base,W, iPsi,iPsi, kc);
+                addK(sys,base,W, iPsi,iPsi, kbnd*cchi*cchi); addK(sys,base,W, iChi,iChi, kbnd);
+                double gPsiChi = gRot + (gPsi - gRot)*cchi*cchi;     // Gamma_psipsi(chi)
+                addK(sys,base,W, iPhi,iPhi, aphi); addK(sys,base,W, iPsi,iPsi, gPsiChi/dt); addK(sys,base,W, iChi,iChi, gPsi/dt);
+                double th2 = psi - phi;
+                double caFx=cpy*f8z-cpz*f8y, caFy=cpz*f8x-cpx*f8z, caFz=cpx*f8y-cpy*f8x;
+                double fcFx=fcy*f8z-fcz*f8y, fcFy=fcz*f8x-fcx*f8z, fcFz=fcx*f8y-fcy*f8x;
+                double QphiF8=(gux*caFx+guy*caFy+guz*caFz)*1e-6;
+                double QpsiF8 = (axMode != 0 ? (aex*fcFx+aey*fcFy+aez*fcFz) : (gux*fcFx+guy*fcFy+guz*fcFz))*1e-6;
+                double QchiF8=(thx*fcFx+thy*fcFy+thz*fcFz)*1e-6;
+                addF(sys,base,W,n, pB+0, f8x); addF(sys,base,W,n, pB+1, f8y); addF(sys,base,W,n, pB+2, f8z);
+                addF(sys,base,W,n, iPhi, QphiF8 + kc*(th2-thetaS) + QphiOri);
+                addF(sys,base,W,n, iPsi, QpsiF8 - kc*(th2-thetaS) + QpsiOri);
+                addF(sys,base,W,n, iChi, QchiF8 + QchiOri);
+                if (brownM != 0) { addF(sys,base,W,n, iPhi, brownTorqueD(gPhi, dt, seed, tt, 0x4841L + (long)m*7919L));
+                                    addF(sys,base,W,n, iPsi, brownTorqueD(gPsiChi, dt, seed, tt, 0x4842L + (long)m*7919L));
+                                    addF(sys,base,W,n, iChi, brownTorqueD(gPsi, dt, seed, tt, 0x4843L + (long)m*7919L)); }
+                // ===== S2 -> LEVER TERMINAL BEND JOINT — identical to matS2SolveStep's block (see there) =====
+                double thL0 = params.get(17 * nM + m);
+                if (thL0 >= 0.0 && M >= 2) {
+                    double aLx = nodes.get((3*M)*nM+m)   - nodes.get((3*(M-1))*nM+m);
+                    double aLy = nodes.get((3*M+1)*nM+m) - nodes.get((3*(M-1)+1)*nM+m);
+                    double aLz = nodes.get((3*M+2)*nM+m) - nodes.get((3*(M-1)+2)*nM+m);
+                    double La = Math.sqrt(aLx*aLx + aLy*aLy + aLz*aLz);
+                    if (La > 1e-12) {
+                        double iL = 1.0/La, sxL = aLx*iL, syL = aLy*iL, szL = aLz*iL;
+                        double cL = sxL*uBx + syL*uBy + szL*uBz; if (cL > 1) cL = 1; if (cL < -1) cL = -1;
+                        double thJ = dacos(cL), snJ = Math.sin(thJ);
+                        if (snJ > 1e-6) {
+                            double dth = thJ - thL0;
+                            double A1L = dth/snJ, A2L = (1.0 - dth*cL/snJ)/(snJ*snJ);
+                            double gxL = (uBx - cL*sxL)*iL, gyL = (uBy - cL*syL)*iL, gzL = (uBz - cL*szL)*iL;
+                            double wxL = aey*uBz - aez*uBy, wyL = aez*uBx - aex*uBz, wzL = aex*uBy - aey*uBx;
+                            double cphL = sxL*wxL + syL*wyL + szL*wzL;
+                            int rM = (M-1)*3, rMm = (M-2)*3;
+                            addF(sys,base,W,n, rM+0,  kbend*A1L*1e6*gxL); addF(sys,base,W,n, rM+1,  kbend*A1L*1e6*gyL); addF(sys,base,W,n, rM+2,  kbend*A1L*1e6*gzL);
+                            addF(sys,base,W,n, rMm+0,-kbend*A1L*1e6*gxL); addF(sys,base,W,n, rMm+1,-kbend*A1L*1e6*gyL); addF(sys,base,W,n, rMm+2,-kbend*A1L*1e6*gzL);
+                            addF(sys,base,W,n, iPhi,  kbend*A1L*cphL);
+                            double iL2 = iL*iL;
+                            for (int p=0;p<3;p++){
+                                double upL=(p==0)?uBx:((p==1)?uBy:uBz), spL=(p==0)?sxL:((p==1)?syL:szL);
+                                double gpL=(p==0)?gxL:((p==1)?gyL:gzL), wpL=(p==0)?wxL:((p==1)?wyL:wzL);
+                                for (int qq=0;qq<3;qq++){
+                                    double uqL=(qq==0)?uBx:((qq==1)?uBy:uBz), sqL=(qq==0)?sxL:((qq==1)?syL:szL);
+                                    double gqL=(qq==0)?gxL:((qq==1)?gyL:gzL);
+                                    double idL=(p==qq)?1.0:0.0;
+                                    double HcL = (-(upL*sqL + spL*uqL) + 3.0*cL*spL*sqL - cL*idL)*iL2;
+                                    double kv = 1e12*kbend*(A2L*gpL*gqL - A1L*HcL);
+                                    addK(sys,base,W, rM+p,  rM+qq,  kv);  addK(sys,base,W, rMm+p, rMm+qq, kv);
+                                    addK(sys,base,W, rM+p,  rMm+qq,-kv);  addK(sys,base,W, rMm+p, rM+qq, -kv);
+                                }
+                                double HmL = (wpL - cphL*spL)*iL;
+                                double kmix = 1e6*kbend*(A2L*gpL*cphL - A1L*HmL);
+                                addK(sys,base,W, rM+p,  iPhi,  kmix); addK(sys,base,W, iPhi, rM+p,   kmix);
+                                addK(sys,base,W, rMm+p, iPhi, -kmix); addK(sys,base,W, iPhi, rMm+p, -kmix);
+                            }
+                            addK(sys,base,W, iPhi, iPhi, kbend*(A2L*cphL*cphL + A1L*cL));
+                        }
+                    }
+                }
+                // solve (Gauss–Jordan)
+                for (int c=0;c<n;c++){
+                    int p=c; double bestv=sys.get(base+c*W+c); if(bestv<0)bestv=-bestv;
+                    for(int r=c+1;r<n;r++){ double v=sys.get(base+r*W+c); if(v<0)v=-v; if(v>bestv){bestv=v;p=r;} }
+                    if(p!=c){ for(int k=0;k<W;k++){ double tmp=sys.get(base+c*W+k); sys.set(base+c*W+k, sys.get(base+p*W+k)); sys.set(base+p*W+k, tmp); } }
+                    double piv=sys.get(base+c*W+c); double apiv=piv<0?-piv:piv;
+                    if(!(apiv>1e-300)) st=1;
+                    for(int r=0;r<n;r++){ if(r==c) continue; double fac=sys.get(base+r*W+c)/piv;
+                        for(int k=c;k<W;k++) sys.set(base+r*W+k, sys.get(base+r*W+k)-fac*sys.get(base+c*W+k)); }
+                }
+                double mv=0;
+                for (int j=1;j<=M;j++){ int fb=(j-1)*3;
+                    for(int k=0;k<3;k++){ double dqm=sys.get(base+(fb+k)*W+n)/sys.get(base+(fb+k)*W+(fb+k));
+                        double dnode=dqm*1e6; nodes.set((3*j+k)*nM+m, nodes.get((3*j+k)*nM+m)+dnode);
+                        double amv=dnode<0?-dnode:dnode; if(amv>mv) mv=amv; } }
+                double dphi=sys.get(base+iPhi*W+n)/sys.get(base+iPhi*W+iPhi);
+                double dpsi=sys.get(base+iPsi*W+n)/sys.get(base+iPsi*W+iPsi);
+                double dchi=sys.get(base+iChi*W+n)/sys.get(base+iChi*W+iChi);
+                phi+=dphi; psi+=dpsi; chi+=dchi;
+                if (chi >  1.5533430342749532) chi =  1.5533430342749532;   // |chi| <= 89 deg: keep away from the
+                if (chi < -1.5533430342749532) chi = -1.5533430342749532;   // spherical-coordinate pole
+                nodes.set(m, gEx); nodes.set(nM+m, gEy); nodes.set(2*nM+m, gEz);
+                if (mv < tol) break;
+            }
+            // final geometry (chi-aware) → outGeom + reaction writeback
+            double Px2=nodes.get((3*M)*nM+m), Py2=nodes.get((3*M+1)*nM+m), Pz2=nodes.get((3*M+2)*nM+m);
+            double cphi=Math.cos(phi), sphi=Math.sin(phi);
+            double cpsi=Math.cos(psi), spsi=Math.sin(psi);
+            double cchi=Math.cos(chi), schi=Math.sin(chi);
+            double abx, aby, abz, aex, aey, aez, aux, auy, auz, ofx, ofy, ofz;
+            if (skewF == 0.0) { abx=bx; aby=by; abz=bz; aex=ex; aey=ey; aez=ez; aux=ux; auy=uy; auz=uz; ofx=0; ofy=0; ofz=0; }
+            else              { abx=cb0; aby=cb1; abz=cb2; aex=ce0; aey=ce1; aez=ce2; aux=cu0; auy=cu1; auz=cu2; ofx=of0; ofy=of1; ofz=of2; }
+            double uBx=aux*cphi+abx*sphi, uBy=auy*cphi+aby*sphi, uBz=auz*cphi+abz*sphi;
+            double Cx=Px2+ofx+uBx*lb, Cy=Py2+ofy+uBy*lb, Cz=Pz2+ofz+uBz*lb;
+            double p1x = abx*rF8x + aux*rF8y, p1y = aby*rF8x + auy*rF8y, p1z = abz*rF8x + auz*rF8y;
+            double pn = Math.sqrt(p1x*p1x + p1y*p1y + p1z*p1z); double ipn = 1.0/pn; p1x*=ipn; p1y*=ipn; p1z*=ipn;
+            double q1x = aey*p1z - aez*p1y, q1y = aez*p1x - aex*p1z, q1z = aex*p1y - aey*p1x;
+            double e0x = cpsi*p1x + spsi*q1x, e0y = cpsi*p1y + spsi*q1y, e0z = cpsi*p1z + spsi*q1z;
+            double thx = e0y*aez - e0z*aey, thy = e0z*aex - e0x*aez, thz = e0x*aey - e0y*aex;
+            double d0x = abx*(rF8x-rCx) + aux*(rF8y-rCy), d0y = aby*(rF8x-rCx) + auy*(rF8y-rCy), d0z = abz*(rF8x-rCx) + auz*(rF8y-rCy);
+            double pd0x = d0x*cpsi + (aey*d0z - aez*d0y)*spsi, pd0y = d0y*cpsi + (aez*d0x - aex*d0z)*spsi, pd0z = d0z*cpsi + (aex*d0y - aey*d0x)*spsi;
+            double rcx0 = abx*rCx + aux*rCy, rcy0 = aby*rCx + auy*rCy, rcz0 = abz*rCx + auz*rCy;
+            double prcx = rcx0*cpsi + (aey*rcz0 - aez*rcy0)*spsi, prcy = rcy0*cpsi + (aez*rcx0 - aex*rcz0)*spsi, prcz = rcz0*cpsi + (aex*rcy0 - aey*rcx0)*spsi;
+            double omc = 1.0 - cchi;
+            double dd1 = thx*pd0x + thy*pd0y + thz*pd0z;
+            double fcx = pd0x*cchi + (thy*pd0z - thz*pd0y)*schi + thx*dd1*omc;
+            double fcy = pd0y*cchi + (thz*pd0x - thx*pd0z)*schi + thy*dd1*omc;
+            double fcz = pd0z*cchi + (thx*pd0y - thy*pd0x)*schi + thz*dd1*omc;
+            double dd2 = thx*prcx + thy*prcy + thz*prcz;
+            double hcx = prcx*cchi + (thy*prcz - thz*prcy)*schi + thx*dd2*omc;
+            double hcy = prcy*cchi + (thz*prcx - thx*prcz)*schi + thy*dd2*omc;
+            double hcz = prcz*cchi + (thx*prcy - thy*prcx)*schi + thz*dd2*omc;
+            outGeom.set(m,Cx); outGeom.set(nM+m,Cy); outGeom.set(2*nM+m,Cz);
+            outGeom.set(3*nM+m,Cx-hcx); outGeom.set(4*nM+m,Cy-hcy); outGeom.set(5*nM+m,Cz-hcz);
+            outGeom.set(6*nM+m,Cx+fcx); outGeom.set(7*nM+m,Cy+fcy); outGeom.set(8*nM+m,Cz+fcz);
+            q.set(m,phi); q.set(nM+m,psi); chiHead.set(m,chi);
             forceDotFil.set(m, bnd ? bondData.get(dB + 12) : 0.0f);
             forceMag.set(m, bnd ? (float) Math.sqrt(f8x*f8x + f8y*f8y + f8z*f8z) : 0.0f);
         }

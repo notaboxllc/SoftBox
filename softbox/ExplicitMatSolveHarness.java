@@ -67,11 +67,11 @@ public final class ExplicitMatSolveHarness {
         }
 
         // ---- pack the explicit mat SoA (pre-state) ----
-        DoubleArray nodes = new DoubleArray(15 * K), frame = new DoubleArray(15 * K), q = new DoubleArray(4 * K), params = new DoubleArray(17 * K);
+        DoubleArray nodes = new DoubleArray(15 * K), frame = new DoubleArray(15 * K), q = new DoubleArray(4 * K), params = new DoubleArray(18 * K);   // row 17 = S2->lever rest angle
         DoubleArray sys = new DoubleArray(TwoBodyBeamAnalyticGpu.SYS_STRIDE * K), outGeom = new DoubleArray(9 * K);
         FloatArray bond = new FloatArray(13 * K), forceDotFil = new FloatArray(K), forceMag = new FloatArray(K);
         IntArray boundSeg = new IntArray(K), status = new IntArray(K), iters = new IntArray(K);
-        IntArray matc = IntArray.fromElements(t, seed, 1, 0), counts = IntArray.fromElements(K, 1, M, 0);   // matc[3]=motor-Brownian policy (0 = canonical)
+        IntArray matc = IntArray.fromElements(t, seed, 1, 0, TwoBodyConverterMotor.F8_AXIS_LEGACY ? 0 : 1), counts = IntArray.fromElements(K, 1, M, 0);   // [3]=motor-Brownian policy (0=canonical), [4]=F8 axis (1=econv)
         // zeroed converter frame (flag 0 for every motor) ⇒ matS2SolveStep takes the VERBATIM canonical branch
         DoubleArray convId = TwoBodyBeamAnalyticGpu.identityConvFrame(K);
         sys.init(0.0);
@@ -80,6 +80,7 @@ public final class ExplicitMatSolveHarness {
             for (int j = 0; j <= M; j++) for (int k = 0; k < 3; k++) nodes.set((3 * j + k) * K + m, G.g4Node[m][j][k]);
             double[] fr = frameArr(G, m); for (int c = 0; c < 15; c++) frame.set(c * K + m, fr[c]);
             for (int c = 0; c < 17; c++) params.set(c * K + m, pr[c]);
+            params.set(17 * K + m, leverRest0(G, m));   // S2->lever joint rest angle (<0 = joint off)
             q.set(m, G.phi[m]); q.set(K + m, G.psi[m]); q.set(2 * K + m, G.thetaS[m]); q.set(3 * K + m, G.psiActin[m]);
             boundSeg.set(m, G.mot.boundSeg.get(m));
             for (int c = 0; c < 13; c++) bond.set(m * 13 + c, G.bondData.get(m * 13 + c));
@@ -151,6 +152,12 @@ public final class ExplicitMatSolveHarness {
     static int nearestSegSafe(Glide2D G, int m) { try { TwoBodyConverterMotor.geom2D(G, m); return TwoBodyConverterMotor.nearestSeg2D(G, m); } catch (Throwable e) { return 0; } }
     static double[] frameArr(Glide2D G, int m) { return new double[]{ G.bhat[0], G.bhat[1], G.bhat[2], G.econv[0], G.econv[1], G.econv[2],
         G.eup[0], G.eup[1], G.eup[2], G.g4E[m][0], G.g4E[m][1], G.g4E[m][2], G.g4Tan[0], G.g4Tan[1], G.g4Tan[2] }; }
+    /** The S2->lever terminal-joint rest angle for motor m, from the AS-BUILT beam at the native lever angle
+     *  PHI_PRE_3E (mirrors ExplicitCompleteMatHarness.calibrateLeverRest). Negative ⇒ the joint is off. */
+    static double leverRest0(TwoBodyConverterMotor.Glide2D G, int m) {
+        return (ExplicitCompleteMatHarness.leverJointOn() && G.leverRest0 != null) ? G.leverRest0[m] : -1.0;
+    }
+
     static double[] paramArr(Glide2D G) { return new double[]{ G.lb, G.rF8[0], G.rF8[1], G.rConv[0], G.rConv[1],
         G.kF8Code, G.kconvCode, G.kbindCode, G.gammaPhi, G.gammaPsi, G.dt, G.g4ks, G.g4l0, G.g4kb, G.g4floorZ, G.g4kfloor, G.g4gammaNode }; }
     static double[][] clone(double[][] a) { double[][] c = new double[a.length][]; for (int i = 0; i < a.length; i++) c[i] = a[i].clone(); return c; }
