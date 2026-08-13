@@ -1,5 +1,20 @@
 # χ-aware capture geometry + site-normal orientation diagnosis
 
+> **SUPERSEDED IN PART, 2026-08-13 — the target relation is now SPECIFIED, and this report used the WRONG
+> VECTOR for it.** `docs/motor/SITE_NORMAL_HEAD_BINDING.md` establishes the canonical bound pose:
+> **`xHeadHat = −n_site`**, where `xHeadHat` is the head's own local **+x** axis (its ellipsoid LONG axis).
+> `xHeadHat` is **NEITHER `eBind` NOR `−eBind`**: `eBind = normalize(xF8 − xH)` is the direction of the
+> material point `r_F8 = (+3.5, +1.5) nm`, which sits a FIXED **δ = 23.19859°** off the head's long axis
+> (`δ = atan2(rF8y, rF8x)`, verified constant to 2.3e−12° over a full (ψ, χ) sweep). Every angle in §3, §4 and
+> §5 below is measured on `eBind`, so it is off the head axis by that fixed 23.2°, and §3(a)'s conclusion
+> *"neither +n_site nor −n_site is the model's target … the question has no good answer"* is **withdrawn**:
+> the question now has an answer, it is **−n_site**, and it is measured on `xHeadHat`.
+>
+> **What still stands, unchanged:** §1 (the capture path was already χ-aware — the retraction below), §2
+> (`n_site` is exactly the outward radial material normal, carried by the filament), §3(b) and §5 CASE C (the
+> mismatch is inherited from the base-frame native rest orientation, which has no relation to a site normal),
+> §4's rarity measurement as a statement about `eBind`, and §6's option 1 — which is what was implemented.
+
 **STATUS: DIAGNOSTIC, COMPLETE. Two results, one of them a RETRACTION.**
 
 **(1) There was nothing to repair in Phase 1.** Every production capture kernel *already* reads the exact
@@ -94,7 +109,8 @@ head centre toward the F8 bond point. Measured on a natural capture (`phase67_eb
 
 Two things follow, and they are the core of this report.
 
-**(a) Neither +n_site nor −n_site is the model's target.** 61° from the outward normal, 119° from the inward
+**(a) Neither +n_site nor −n_site is the model's target.** *(WITHDRAWN 2026-08-13 — see the banner. The
+target is −n_site, and it is measured on `xHeadHat`, not on `eBind`.)* 61° from the outward normal, 119° from the inward
 one. A head binding face-on from outside would give ~180°; a head whose axis pointed straight out would give
 ~0°. The model does neither, so **CASE B in its simple form is excluded**: the eBind *definition* is confirmed
 and unambiguous, but the question "should it be +n_site or −n_site?" has no good answer because **the model's

@@ -1183,8 +1183,41 @@ public final class TwoBodyConverterMotor {
     // =====================================================================================
     static final double[] A_SEMI={0.0045,0.00275,0.00225};   // ellipsoid semi-axes µm (9×5.5×4.5 nm)
     static final double LB_3C=0.008, RHEAD_3C=0.0046;
-    static final double[] R_F8 ={ 0.0035, 0.0015};   // F8/actin-binding material point (head frame {â=+b̂, n̂=+ê_up}), µm
-    static final double[] R_CONV={-0.0035,-0.0015};  // converter material point (opposite corner), µm  (|r_F8−r_conv|≈7.6 nm)
+    // ===================================================================================================
+    // F8 LONG-AXIS GEOMETRY (corrected 2026-08-13; see docs/motor/SITE_NORMAL_HEAD_BINDING.md §F8).
+    //
+    // The simplified head is the ellipsoid A_SEMI = {4.5, 2.75, 2.25} nm. Its LONG axis is the head-local
+    // +x axis â. The two material points are:
+    //
+    //     r_F8   = (+3.5, 0) nm   ON the long axis, 1.0 nm inboard of the +x tip  (actin-binding point)
+    //     r_conv = (-3.5, 0) nm   ON the long axis, the diametrically opposite point (converter joint C)
+    //
+    // WHY r_conv MUST stay exactly -r_F8 (audited, not assumed):
+    //   (a) x_H = C - R(psi) r_conv and x_F8 = C + R(psi)(r_F8 - r_conv), so x_F8 - x_H = R(psi) r_F8
+    //       ALWAYS — r_conv never enters the head axis. The head axis identity is set by r_F8 alone.
+    //   (b) But rho = x_H - C = R(psi) r_F8 only when r_conv = -r_F8. That parallel-to-the-head-axis rho is
+    //       what makes the chi mobility metric EXACTLY diagonal (Gamma_psichi = 0 everywhere) in
+    //       matS2SolveStepTilt; an off-axis r_conv reintroduces a cross term and moves the head centre off
+    //       the F8 axis, so C, x_H, x_F8 would no longer be collinear — a different topology from the one
+    //       documented in docs/TWOBODY_TOPOLOGY_CORRECTION.md §1.
+    //   (c) It also keeps x_H the exact midpoint of C and x_F8, which every viewer/steric read-out assumes.
+    //
+    // WHAT CHANGED NUMERICALLY, and it is NOT tuned back: the transverse +-1.5 nm is REMOVED, so
+    //   |r_F8|                 3.8079 -> 3.5000 nm
+    //   converter arm |r_F8-r_conv|  7.6158 -> 7.0000 nm   (-8.1 %; the inventory's "approx 7.6 nm")
+    //   gamma_psi translational term  scales by (3.5/3.8079)^2 = 0.8447  => gamma_psi -5.3 %
+    // The transverse component had NO provenance: introduced with the Exp-3C topology (e17b5a4,
+    // 2026-07-14) as "opposite corner", graded "geometric construction, no citation" in
+    // docs/canonical_freeze/CANONICAL_MOTOR_PARAMETER_INVENTORY.md, and Exp 3D measured the kinematics to
+    // be insensitive to it ("flatterPts" scored within noise of the refined best). It was never a
+    // deliberate physical property; it silently put the F8 point 23.19859 deg off the ellipsoid long axis.
+    // ===================================================================================================
+    static final double[] R_F8 ={ 0.0035, 0.0};   // F8/actin-binding material point (head frame {â=+b̂, n̂=+ê_up}), µm
+    static final double[] R_CONV={-0.0035, 0.0};  // converter material point (antipodal ON the long axis), µm  (|r_F8−r_conv|=7.0 nm)
+    static {   // ONE source of truth: the canonical head points are axial and antipodal. Fail loudly on drift.
+        if (R_F8[1] != 0.0 || R_CONV[1] != 0.0 || R_CONV[0] != -R_F8[0])
+            throw new IllegalStateException("R_F8/R_CONV must be axial and antipodal (see the F8 long-axis note)");
+    }
     static final double PHI_PRE=Math.toRadians(-30);      // pre-stroke neck-lever lean (stereospecific binding pose)
     static double DTHETA_MOTOR=Math.toRadians(-60);       // FIXED motor-frame stroke: θ_s decreases 60° (NOT from b̂; flippable only as an Outcome-B correction)
     static final double[] KCONV_3C={32,64,128,256,576,1000};

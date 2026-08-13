@@ -103,6 +103,20 @@ public final class ExplicitCompleteMatHarness {
     // SURFACE sites directly. Requires the discrete lattice (SITE_MODE>0) and the surface bond (SURFACE_ON).
     // OFF ⇒ every task, buffer and transfer is exactly as before ⇒ byte-identical to the legacy Path-B path.
     static boolean SITE_AWARE = false;                 // -site-aware on|off
+    // ---- CANONICAL SITE-NORMAL HEAD BINDING (noncanonical, DEFAULT-OFF, byte-identical when off) ----
+    // xHeadHat = -n_site is the specified bound pose. ON: the capture orientation gate tests the head's
+    // own +x axis against the ACTUAL candidate site's normal, and the bound orientation potential is
+    // site-relative with an exact equal-and-opposite filament reaction.
+    // Report: docs/motor/SITE_NORMAL_HEAD_BINDING.md
+    static boolean SITE_NORMAL_BIND = false;
+    static double  SITE_NORMAL_TOL_DEG = 25.0;
+    static boolean siteNormalOn() { return SITE_NORMAL_BIND && siteAwareOn() && headTiltOn(); }
+    // LEGACY GATE RETIREMENT (site-normal mode only). g6 (head side) is structurally incompatible with a
+    // radially outward head and g2 (|phi - phi_pre|) is a historical pre-stroke lever-angle gate; both are
+    // RETIRED when SITE_NORMAL_BIND is on. These two switches re-apply them for the explanatory ablation ONLY
+    // and are never set on a production path. Report: docs/motor/SITE_NORMAL_HEAD_BINDING.md.
+    static boolean SITE_NORMAL_KEEP_G6 = false;
+    static boolean SITE_NORMAL_KEEP_G2 = false;
     static boolean siteAwareOn() { return SITE_AWARE && SITE_MODE > 0; }
 
     static boolean SURFACE_ON = false;                 // -helical-surface-bind
@@ -512,6 +526,7 @@ public final class ExplicitCompleteMatHarness {
         DoubleArray chiHead; double gammaChi;
         DoubleArray restC;   // native head pose resolved in the LIVE neck frame: [m],[N+m],[2N+m] = c1,c2,c3
         DoubleArray gateP;   // [0] kBind [1] kDet — the binding-state stiffness gate
+        DoubleArray snP;     // site-normal bound coupling: [0] Ractin [1] mirror [2] epsBind [3] on [4] kBind
     }
     static ExMat packExMat(Glide2D G, int brownOn) {
         ExMat e = new ExMat(); e.G = G; int N = G.N, M = G.g4M, nSeg = G.nSeg; e.N = N; e.M = M; e.nSeg = nSeg;
@@ -523,7 +538,11 @@ public final class ExplicitCompleteMatHarness {
         int sysStride = headTiltOn() ? (3 * M + 3) * (3 * M + 4) : (3 * M + 2) * (3 * M + 3);
         int nParam = headTiltOn() ? 19 : 18;   // row 17 = S2->lever rest angle; row 18 = head gamma_r (tilt only)
         e.nodes = new DoubleArray(nodeStride * N); e.frame = new DoubleArray(15 * N); e.params = new DoubleArray(nParam * N);
-        e.sys = new DoubleArray(sysStride * N); e.outGeom = new DoubleArray(9 * N); e.q = new DoubleArray(4 * N); e.sys.init(0.0);
+        e.sys = new DoubleArray(sysStride * N); e.q = new DoubleArray(4 * N); e.sys.init(0.0);
+        // outGeom rows 0..8 = C / xH / xF8 (canonical). Rows 9..11 carry the HEAD-LOCAL +x AXIS xHeadHat,
+        // written by SiteNormalBindSystem.headAxisStep right after the geometry kernel; nothing on the
+        // default path reads them, so the extra rows are inert when the site-normal feature is off.
+        e.outGeom = new DoubleArray(12 * N); e.outGeom.init(0.0);
         e.boundSeg = new IntArray(N); e.active = new IntArray(N);
         double[] pr = ExplicitMatSolveHarness.paramArr(G);
         for (int m = 0; m < N; m++) {
@@ -567,7 +586,7 @@ public final class ExplicitCompleteMatHarness {
         e.redP = IntArray.fromElements(RED_BLK, e.numRedBlk); e.redBlk = new DoubleArray(3 * e.numRedBlk); e.redBlk.init(0.0);
         e.redOut = new DoubleArray(6);
         // occupancy-exclusion scratch + static material maps + telemetry (allocated always; wired only when occOn()).
-        e.candInt = new IntArray(2 * N); e.candInt.init(0); e.candArc = new DoubleArray(N); e.candArc.init(0.0);
+        e.candInt = new IntArray(2 * N); e.candInt.init(0); e.candArc = new DoubleArray(2 * N); e.candArc.init(0.0);
         e.segCumArc = new FloatArray(nSeg); e.segFilId = new IntArray(nSeg);
         TwoBodyBeamAnalyticGpu.computeMaterialMaps(G.fil, nSeg, e.segCumArc, e.segFilId);
         e.occP = DoubleArray.fromElements(OCC_EXCL_NM, OCC_TOL_NM);   // exclusion + tol in nm (kernel converts sep µm→nm)
@@ -618,7 +637,7 @@ public final class ExplicitCompleteMatHarness {
         double kF8u = e.params.get(5 * N);
         for (int m = 1; m < N; m++) if (e.params.get(5 * N + m) != kF8u)
             throw new IllegalStateException("site-aware capture requires a scene-uniform kF8 (motor " + m + " differs)");
-        e.sbP = new DoubleArray(27);
+        e.sbP = new DoubleArray(32);
         for (int i = 0; i < 13; i++) e.sbP.set(i, e.bindP.get(i));
         e.sbP.set(13, G.eup[0]); e.sbP.set(14, G.eup[1]); e.sbP.set(15, G.eup[2]);
         e.sbP.set(16, siteRise(SITE_MODE)); e.sbP.set(17, chiTwist); e.sbP.set(18, chiStair); e.sbP.set(19, Ract);
@@ -628,6 +647,12 @@ public final class ExplicitCompleteMatHarness {
         e.sbP.set(24, kF8u);
         e.sbP.set(25, SITE_PHASE_GLOBAL ? 1.0 : 0.0);
         e.sbP.set(26, SITE_SEG_TOL_UM);   // float32-robust segment-membership tolerance (see siteGateA)
+        // CANONICAL SITE-NORMAL capture gate: [27] enable, [28] cos(tolerance), [29] k_bind.
+        e.sbP.set(27, SITE_NORMAL_BIND ? 1.0 : 0.0);
+        e.sbP.set(28, Math.cos(Math.toRadians(SITE_NORMAL_TOL_DEG)));
+        e.sbP.set(29, e.params.get(7 * N));   // the historical bound orientation stiffness, UNCHANGED
+        e.sbP.set(30, SITE_NORMAL_KEEP_G6 ? 1.0 : 0.0);   // ablation only; 0 = g6 RETIRED in site-normal mode
+        e.sbP.set(31, SITE_NORMAL_KEEP_G2 ? 1.0 : 0.0);   // ablation only; 0 = g2 RETIRED in site-normal mode
         e.candAzim = new DoubleArray(N); e.candAzim.init(0.0);
         // Per-motor CONVERTER FRAME (stride 13, planar): [0..2] b*, [3..5] econv*, [6..8] eup*, [9..11] gauge
         // offset (µm), [12] flag. ALL ZERO ⇒ flag 0 ⇒ matBeamGeom / matS2SolveStep take the VERBATIM canonical
@@ -649,7 +674,8 @@ public final class ExplicitCompleteMatHarness {
         // it inherits any viscosity rescaling (-eta) automatically instead of re-reading Constants.aeta.
         double Rh = TwoBodyConverterMotor.RHEAD_3C, rc2 = G.rConv[0] * G.rConv[0] + G.rConv[1] * G.rConv[1];
         double rotFrac = (8.0 * Rh * Rh * Rh) / (8.0 * Rh * Rh * Rh + 6.0 * Rh * rc2);
-        e.restC = new DoubleArray(3 * N); e.restC.init(0.0);
+        e.restC = new DoubleArray(8 * N); e.restC.init(0.0);   // rows 3..7: the site-normal bound target/flag/theta
+                                                       // (SiteNormalBindSystem.R_TGT/R_FLAG/R_THETA)
         if (headTiltOn()) for (int m = 0; m < N; m++) e.params.set(18 * N + m, e.params.get(9 * N + m) * rotFrac);
         // restC is DIAGNOSTIC DATA when the feature is off: no kernel on the default path reads it, so filling
         // it unconditionally keeps OFF byte-identical while letting an OFF-arm probe display the live-frame
@@ -658,6 +684,11 @@ public final class ExplicitCompleteMatHarness {
         calibrateLeverRest(e);
         // binding-state stiffness gate: kBind is the value the pack already carries (historical, unchanged)
         e.gateP = DoubleArray.fromElements(e.params.get(7 * N), K_DET_PNNM * TwoBodyConverterMotor.KAPPA_CODE);
+        // CANONICAL SITE-NORMAL bound coupling pack (SiteNormalBindSystem.siteCoupleStep). k_bind is the
+        // value the pack already carries — the historical 512 pN.nm/rad^2 — read here rather than from
+        // params[7N+m], because matKbindGate has not yet run when the couple kernel fires on a CAPTURE step.
+        e.snP = DoubleArray.fromElements(Ract, MIRROR_SIGN, EPS_BIND_DEG * Math.PI / 180.0,
+                SITE_NORMAL_BIND ? 1.0 : 0.0, e.params.get(7 * N));
         e.bindSite = new IntArray(N); e.bindSite.init(-1);
         e.prevNuc = new IntArray(N); for (int m = 0; m < N; m++) e.prevNuc.set(m, G.mot.nucleotideState.get(m));
         e.siteStats = new IntArray(4); e.siteStats.init(0);
@@ -982,6 +1013,8 @@ public final class ExplicitCompleteMatHarness {
             TwoBodyBeamAnalyticGpu.matBeamGeomTilt(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF, e.chiHead);
         else
             TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
+        if (siteNormalOn())   // the head-local +x axis into outGeom rows 9..11 — ONE axis for gate, solve and viewer
+            SiteNormalBindSystem.headAxisStep(e.frame, e.params, e.q, e.chiHead, e.convF, e.outGeom, e.exCounts);
         if (occOn()) {   // continuous local actin co-occupancy exclusion (gate-only → serial resolve); OFF path below is byte-identical
             TwoBodyBeamAnalyticGpu.matBindGateOnly(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, e.candInt, e.candArc, e.exCounts);
             TwoBodyBeamAnalyticGpu.matOccupancyResolve(e.candInt, e.candArc, mot.boundSeg, mot.bindArc, e.segCumArc, e.segFilId, e.occP, e.occStats, e.exCounts);
@@ -1020,6 +1053,9 @@ public final class ExplicitCompleteMatHarness {
             CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams);
         if (chiralOn())   // head rotational DOF + bound orientational registry (equal-and-opposite into bondData)
             ChiralSiteSystem.headRollStep(mot.boundSeg, e.outGeom, f.uVec, f.yVec, b.bRotGam, mot.bindAzim, e.headRef, e.headOmega, e.headTau, e.headMis, G.bondData, e.chiP, e.matc, e.exCounts);
+        if (siteNormalOn())   // U_bind against the LATCHED site normal: motor target -> restC, EXACT reaction -> bondData
+            SiteNormalBindSystem.siteCoupleStep(mot.boundSeg, mot.bindArc, mot.bindAzim, f.coord, f.uVec, f.yVec,
+                    f.segLength, e.outGeom, G.bondData, e.restC, e.snP, e.exCounts);
         ChainBendingForceSystem.zeroAccumulators(f.forceSum, f.torqueSum, f.counts);
         CrossBridgeSystem.csrChunkZero(e.csrChunkParams, mot.counts, e.csrMatrix);
         CrossBridgeSystem.csrChunkHistogram(mot.boundSeg, mot.counts, e.csrChunkParams, e.csrMatrix);
@@ -1048,6 +1084,13 @@ public final class ExplicitCompleteMatHarness {
     static GridScheduler glSched;
     static TornadoExecutionPlan buildGlidingGraph(ExMat e, boolean prod) {
         Glide2D G = e.G; FilamentStore f = G.fil; MotorStore mot = G.mot; RigidRodBody b = mot.body; int N = e.N, nSeg = e.nSeg;
+        // PER-ASSAY-CLASS PRODUCTION GATE (CLAUDE.md): the canonical site-normal binding law has been
+        // developed and validated on the CPU sequential runner ONLY. Its two kernels are ordinary @Parallel
+        // kernels of the same shape as their neighbours and are expected to lower, but no device run has been
+        // made, so the device path REFUSES rather than silently running an unvalidated physics variant.
+        if (siteNormalOn()) throw new IllegalStateException(
+                "site-normal head binding has no validated device path yet (CPU runner only); "
+                + "see docs/motor/SITE_NORMAL_HEAD_BINDING.md");
         for (int m = 0; m < N; m++) e.active.set(m, 1);
         TaskGraph tg = new TaskGraph("glide");
         tg.transferToDevice(DataTransferMode.FIRST_EXECUTION,

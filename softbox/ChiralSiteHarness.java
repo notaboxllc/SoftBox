@@ -145,6 +145,11 @@ public final class ChiralSiteHarness {
      */
     static String   ATP_DENS_SIGNS = "plus";
     static double  EQUIL_FRAC = 0.25;                           // -equil-frac: startup transient discarded
+    // ---- CANONICAL SITE-NORMAL MOTOR (run-level, like SITE_AWARE: a mode, not a per-arm feature) ----------
+    // `cfg()` calls resetChiral(), which clears HEAD_TILT_3D / KBIND_BOUND_ONLY, so these must be re-applied
+    // after it — exactly the savedSiteAware pattern. Report: docs/motor/SITE_NORMAL_HEAD_BINDING.md.
+    static boolean SITE_NORMAL = false;                         // -site-normal on|off
+    static boolean HEAD_TILT   = false;                         // implied by -site-normal; also settable alone
     static int     NBLK      = 5;                               // measurement blocks for the block-SEM
     static int     NTRACE    = 60;                              // stationarity trace samples in the measure window
     static double  EPS_TWIRL_DEG = 5.0;                         // -twirl-skew-deg (primary assay angle)
@@ -171,6 +176,7 @@ public final class ChiralSiteHarness {
         TornadoCrashDiagnostic.init("chiral-actin-sites", args);
         boolean fixtures = false, equiv = false, campaign = false, lattice = false, mechanism = false, all = false; String jsDir = null;
         boolean twirl = false, twirlAudit = false, twirlEquiv = false, twirlPilot = false, dtCheck = false;
+        boolean glideCompat = false;
         boolean etaAudit = false, etaControls = false, etaMap = false, etaReport = false, etaMirrorRep = false;
         boolean atpFix = false, atpPilot = false, atpMap = false, atpReport = false, atpMirrorRep = false, atpNull = false;
         boolean atpDensRep = false;
@@ -270,6 +276,10 @@ public final class ChiralSiteHarness {
                 case "-eta-fixed-dt" -> ETA_FIXED_DT = true;
                 case "-access-telemetry" -> ACCESS_TELEM = true;
                 case "-site-aware" -> ExplicitCompleteMatHarness.SITE_AWARE = args[++i].equals("on");
+                case "-head-tilt-3d" -> HEAD_TILT = args[++i].equals("on");
+                case "-site-normal" -> { SITE_NORMAL = args[++i].equals("on");
+                    if (SITE_NORMAL) { HEAD_TILT = true; ExplicitCompleteMatHarness.SITE_AWARE = true; } }
+                case "-glide-compat" -> glideCompat = true;
                 case "-site-fixtures" -> siteFix = true;
                 case "-site-dump" -> siteDump = args[++i];
                 // ---- SPARSE LONG-PITCH LATTICE (2026-08-12) ----
@@ -422,6 +432,7 @@ public final class ChiralSiteHarness {
         else if (studyBRep)  reportStudyB();
         else if (twirlAudit)      ok = runTwirlAudit();
         else if (twirlEquiv) ok = runTwirlEquiv();
+        else if (glideCompat) runGlideCompat();
         else if (twirlPilot) runTwirlPilot();
         else if (dtCheck)    runTwirlDtCheck();
         else if (twirl)      runTwirlCampaign();
@@ -486,6 +497,10 @@ public final class ChiralSiteHarness {
         ExplicitCompleteMatHarness.CONV_SKEW_RAMP_ONSET = CONV_RAMP_ONSET;
         ExplicitCompleteMatHarness.checkConvSkewModes();
         ExplicitCompleteMatHarness.RAND_BASE_AZ = randBase;
+        // run-level canonical site-normal motor (re-applied because resetChiral() above cleared them)
+        if (HEAD_TILT) { ExplicitCompleteMatHarness.HEAD_TILT_3D = true;
+                         ExplicitCompleteMatHarness.KBIND_BOUND_ONLY = true; }
+        ExplicitCompleteMatHarness.SITE_NORMAL_BIND = SITE_NORMAL;
         ExplicitCompleteMatHarness.MIRROR_SIGN = mirror;
         // the off-axis actin SURFACE bond is what makes an azimuth mechanically meaningful; sites imply it.
         boolean surf = siteMode > 0;
@@ -2041,6 +2056,72 @@ public final class ChiralSiteHarness {
     }
 
     // ------------------------------------------------------------------------------------ one arm, one seed
+    // ===========================================================================================================
+    // GLIDING COMPATIBILITY SMOKE TEST for the canonical site-normal motor (NOT a gliding campaign).
+    //
+    // One question only: with the axial F8, the 3-D head, site-normal capture, the site-normal bound
+    // orientation and the legacy g6/g2 gates RETIRED, does the filament still translate directionally?
+    // Nothing is tuned — density, kinetics, chemistry, thresholds and the detached rest pose are all as
+    // configured. Rotation is recorded as a DIAGNOSTIC only and is NOT a twirling result.
+    // Report: docs/motor/SITE_NORMAL_HEAD_BINDING.md.
+    // ===========================================================================================================
+    static void runGlideCompat() {
+        System.out.printf(Locale.US, "%n=== GLIDING COMPATIBILITY — canonical site-normal motor (smoke test, NOT a campaign) ===%n");
+        System.out.printf(Locale.US, "  site-normal %s | 3-D head %s | g6 %s | g2 %s | eta %.4f Pa.s | density %.0f | %d segs | filBrown %s%n",
+                SITE_NORMAL ? "ON" : "off", HEAD_TILT ? "ON" : "off",
+                (SITE_NORMAL && !ExplicitCompleteMatHarness.SITE_NORMAL_KEEP_G6) ? "RETIRED" : "active",
+                (SITE_NORMAL && !ExplicitCompleteMatHarness.SITE_NORMAL_KEEP_G2) ? "RETIRED" : "active",
+                ETA, DENSITY, FIL_SEGS, FIL_BROWN ? "on" : "off");
+        System.out.printf(Locale.US, "  %d seeds x %d steps (dt %.2e s, %.2f ms each), equilibration %.0f %%%n",
+                SEEDS, STEPS, DT, STEPS*DT*1e3, EQUIL_FRAC*100);
+        TArm arm = new TArm("site-normal glide", 0.0, false, +1.0, FIL_BROWN, FIL_SEGS);
+        System.out.printf(Locale.US, "%n    %5s %11s %10s %9s %9s %10s %10s %8s %8s%n",
+                "seed", "glide um/s", "avgBound", "nPull", "nDrag", "omegaFit", "turns", "invalid", "solverF");
+        double[] gl = new double[SEEDS], ab = new double[SEEDS], om = new double[SEEDS], tu = new double[SEEDS];
+        double[] fx = new double[SEEDS];
+        double sPull = 0, sDrag = 0, sFaxP = 0, sFaxD = 0; int badInv = 0, badSolver = 0;
+        StringBuilder tsv = new StringBuilder("seed\tglide_um_s\tavgBound\tfax_N\tnPull\tnDrag\tfAxPull\tfAxDrag\tomegaFit\tturns\tinvalid\tsolverFail\tvFilMean\n");
+        for (int i = 0; i < SEEDS; i++) {
+            TRes r = runTwirlArm(arm, SEED + i, STEPS);
+            gl[i] = r.glide; ab[i] = r.avgBound; om[i] = r.omegaFit; tu[i] = r.turns; fx[i] = r.fax;
+            sPull += r.nPull; sDrag += r.nDrag; sFaxP += r.fAxPull; sFaxD += r.fAxDrag;
+            badInv += r.invalid; badSolver += r.solverFail;
+            System.out.printf(Locale.US, "    %5d %11.4f %10.4f %9.4f %9.4f %10.4f %10.5f %8d %8d%n",
+                    SEED + i, r.glide, r.avgBound, r.nPull, r.nDrag, r.omegaFit, r.turns, r.invalid, r.solverFail);
+            tsv.append(String.format(Locale.US, "%d\t%.6f\t%.6f\t%.6e\t%.6f\t%.6f\t%.6e\t%.6e\t%.6f\t%.6f\t%d\t%d\t%.6f%n",
+                    SEED + i, r.glide, r.avgBound, r.fax, r.nPull, r.nDrag, r.fAxPull, r.fAxDrag, r.omegaFit, r.turns,
+                    r.invalid, r.solverFail, r.vFilMean));
+        }
+        double[] mg = ConvBudget.msn(gl), mb = ConvBudget.msn(ab), mo = ConvBudget.msn(om);
+        System.out.printf(Locale.US, "%n    GLIDE      %+.4f +- %.4f um/s (SEM, n=%d)   %s%n", mg[0], mg[1], SEEDS,
+                Math.abs(mg[0]) > 2*Math.max(mg[1],1e-9) ? "DIRECTED (|mean| > 2 SEM)" : "not resolved above noise");
+        System.out.printf(Locale.US, "    POLARITY   %s%n", mg[0] < 0
+                ? "NEGATIVE glide = pointed-end leading = the expected gliding-assay polarity"
+                : "POSITIVE — NOT the expected polarity, report and investigate");
+        System.out.printf(Locale.US, "    avgBound   %.4f +- %.4f%n", mb[0], mb[1]);
+        // THE POLARITY OBSERVABLE. r.fax is the signed mean axial force ON THE FILAMENT per bound sample;
+        // NEGATIVE = toward pointed = productive. nPull/nDrag below are a MECHANICAL-POWER classification
+        // (fax * vFil) against the instantaneous filament velocity — when vFil is Brownian-dominated their
+        // ratio tends to 50/50 whatever the sign of fax, so they must NOT be read as a polarity statement.
+        double[] mf = ConvBudget.msn(fx);
+        System.out.printf(Locale.US, "    NET AXIAL FORCE on the filament (THE polarity observable):%n");
+        System.out.printf(Locale.US, "      mean per bound sample  %+.4e +- %.4e N (SEM, n=%d)  ⇒ %s%n", mf[0], mf[1], SEEDS,
+                Math.abs(mf[0]) > 2*Math.max(mf[1],1e-30)
+                        ? (mf[0] < 0 ? "RESOLVED and NEGATIVE = toward pointed = PRODUCTIVE" : "RESOLVED but POSITIVE = toward barbed = REVERSED")
+                        : "NOT resolved above the seed-to-seed spread");
+        System.out.printf(Locale.US, "    PULLING vs RESISTING bound heads [POWER classification, NOT polarity]: nPull %.4f / nDrag %.4f (%.1f %% pulling)%n",
+                sPull/SEEDS, sDrag/SEEDS, 100.0*sPull/Math.max(1e-12, sPull+sDrag));
+        System.out.printf(Locale.US, "               mean axial force  pull %+.4e N   drag %+.4e N%n", sFaxP/SEEDS, sFaxD/SEEDS);
+        System.out.printf(Locale.US, "    SOLVER     invalid %d, solverFail %d over %d seeds  ⇒ %s%n",
+                badInv, badSolver, SEEDS, (badInv == 0 && badSolver == 0) ? "CLEAN" : "REVIEW");
+        System.out.printf(Locale.US, "    ROTATION   omegaFit %+.4f +- %.4f rad/s ; turns %+.5f  [DIAGNOSTIC ONLY —%n"
+                + "               this is NOT a twirling result and is not interpreted]%n", mo[0], mo[1], tu[0]);
+        try { java.nio.file.Path d = java.nio.file.Path.of("RUN_LOGS/motor_audit/site_normal_gate_retirement");
+              java.nio.file.Files.createDirectories(d);
+              java.nio.file.Files.writeString(d.resolve("glide_compat.tsv"), tsv.toString()); }
+        catch (java.io.IOException ex) { System.out.println("  (could not write glide_compat.tsv: " + ex + ")"); }
+    }
+
     static TRes runTwirlArm(TArm a, int seed, int steps) {
         int savedSegs = FIL_SEGS; boolean savedBrown = FIL_BROWN; double savedR = R_NM; double savedConv = EPS_CONV_ARM;
         FIL_SEGS = a.segs; FIL_BROWN = a.filBrown; R_NM = a.rNm; EPS_CONV_ARM = a.convSkew;

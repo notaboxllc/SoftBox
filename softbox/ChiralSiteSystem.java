@@ -677,7 +677,8 @@ public final class ChiralSiteSystem {
      *       measured to the real site instead of to an idealized cylinder surface.</li>
      *   <li><b>g4 preload</b>: {@code kF8·|xF8 − xSite| < preloadPn} — the legacy threshold (2 pN) unchanged,
      *       now the real F8 bond extension at capture instead of the distance to the axis.</li>
-     *   <li><b>g6 head side</b>: unchanged, verbatim from the legacy gate.</li>
+     *   <li><b>g6 head side</b>: verbatim from the legacy gate — but <b>RETIRED when {@code sbP[27] != 0}</b>
+     *       (site-normal mode), because it is structurally incompatible with a radially outward head.</li>
      *   <li><b>g7 in-segment arc</b>: unchanged in form, evaluated at the SITE's axial coordinate.</li>
      * </ul>
      * Writes {@code candInt[m]} = segment (−1 none), {@code candInt[N+m]} = global site index,
@@ -696,11 +697,26 @@ public final class ChiralSiteSystem {
         double accTol = sbP.get(23);
         double phaseGlobal = sbP.get(25), stepPhase = (stairPhase != 0.0) ? stairPhase : (twistRate * rise);
         double segTol = sbP.get(26);
+        // CANONICAL SITE-NORMAL CAPTURE ORIENTATION GATE (noncanonical, flag-gated, default 0 ⇒ byte-identical).
+        // sbP[27] = 1 enables it; sbP[28] = cos(tolerance). It REPLACES the actin-blind |psi - psiActin| gate
+        // (evaluated in siteCommitB) with a test against the ACTUAL candidate site:
+        //     angle( xHeadHat , -n_site[k] )  <=  tol      i.e.   dot( xHeadHat , -n_site[k] ) >= cos(tol)
+        // where xHeadHat is the head-local +x axis written into outGeom rows 9..11 by
+        // SiteNormalBindSystem.headAxisStep from the SAME (psi, chi) the solver moves. It is a BOOLEAN
+        // ACCEPTANCE TEST ONLY: nothing here exerts a torque, an attraction or a retarget on the detached head.
+        // Report: docs/motor/SITE_NORMAL_HEAD_BINDING.md.
+        int orientSite = (int) sbP.get(27);
+        double cosTolBind = sbP.get(28);
+        // ABLATION CONTROLS (explanatory only; both default 0 = the gate stays RETIRED in site-normal mode).
+        // sbP[30] = 1 re-applies g6, sbP[31] = 1 re-applies g2, so a matched A/B/C/D comparison can quantify
+        // which retired gate was dominant. They are NEVER set on any production path.
+        int keepG6 = (int) sbP.get(30);
         for (@Parallel int m = 0; m < N; m++) {
-            candInt.set(m, -1); candInt.set(N + m, -1);
+            candInt.set(m, -1); candInt.set(N + m, -1); candArc.set(N + m, 0.0);
             if (active.get(m) != 1 || noBind.get(m) == 1 || boundSeg.get(m) != -1 || nuc.get(m) != 2) continue;
             double fx = outGeom.get(6 * N + m), fy = outGeom.get(7 * N + m), fz = outGeom.get(8 * N + m);   // xF8
             double hx = outGeom.get(3 * N + m), hy = outGeom.get(4 * N + m), hz = outGeom.get(5 * N + m);   // xH
+            double xhx = outGeom.get(9 * N + m), xhy = outGeom.get(10 * N + m), xhz = outGeom.get(11 * N + m);
             // --- nearest segment: the EXISTING clamped-closest-point ownership rule, unchanged ---
             int best = -1; double bd = 1e9;
             for (int s = 0; s < nSeg; s++) {
@@ -723,15 +739,23 @@ public final class ChiralSiteSystem {
             double zx = uy * yz - uz * yy, zy = uz * yx - ux * yz, zz = ux * yy - uy * yx;
             double zl = zx * zx + zy * zy + zz * zz;
             if (zl > 1e-30) { double iz = 1.0 / Math.sqrt(zl); zx *= iz; zy *= iz; zz *= iz; }
-            // head-side gate g6 (verbatim from the legacy gate; actin enters only through the segment centre)
+            // g6 HEAD-SIDE. RETIRED in site-normal mode (sbP[27] != 0), evaluated verbatim otherwise.
+            //
+            // g6 requires the head centre to sit less than A_SEMI[2] = 2.25 nm above the segment centre along
+            // eup. It was written for a head approaching from the lawn side and sitting at or below the
+            // filament. The canonical site-normal pose REQUIRES the opposite: xHeadHat = -n_site puts the head
+            // centre |r_F8| = 3.5 nm radially OUTWARD of the site, i.e. R_actin + 3.5 = 7.0 nm from the axis,
+            // measured at +6.414 nm mean head side against g6's own 2.25 nm threshold — 2.85x. The two are
+            // structurally incompatible, and the audit measured g6 rejecting 9 of the 10 candidates that were
+            // simultaneously in reach and correctly oriented. Report: docs/motor/SITE_NORMAL_HEAD_BINDING.md.
             double headSide = ((hx - cx) * eupx + (hy - cy) * eupy + (hz - cz) * eupz) * 1e3;
-            if (!(headSide < aSemiZ * 1e3)) continue;
+            if ((orientSite == 0 || keepG6 != 0) && !(headSide < aSemiZ * 1e3)) continue;
             double dxx = fx - cx, dyy = fy - cy, dzz = fz - cz;
             double foot = dxx * ux + dyy * uy + dzz * uz;
             double footC = foot < -half ? -half : (foot > half ? half : foot);
             double cum = segCumArc.get(s);
             int k0 = (int) ((cum + footC + half) / rise + 0.5);
-            int bestK = -1; double bestD2 = 1e9, bestArc = 0, bestPhi = 0;
+            int bestK = -1; double bestD2 = 1e9, bestArc = 0, bestPhi = 0, bestTh = 0;
             for (int j = -halfSearch; j <= halfSearch; j++) {
                 int k = k0 + j;
                 if (k < 0) continue;
@@ -764,18 +788,26 @@ public final class ChiralSiteSystem {
                 double d = Math.sqrt(d2);
                 if (!(d * 1e3 < dBindNm)) continue;               // g0, to the ACTUAL site
                 if (!(sbP.get(24) * d * 1e12 < preloadPn)) continue;   // g4, real F8 bond extension
-                if (d2 < bestD2) { bestD2 = d2; bestK = k; bestArc = la; bestPhi = ph; }
+                double thB = 0.0;
+                if (orientSite != 0) {                            // g1' CANONICAL SITE-NORMAL ORIENTATION
+                    double dh = -(xhx * nx + xhy * ny + xhz * nz);   // dot(xHeadHat, -n_site)
+                    if (!(dh >= cosTolBind)) continue;
+                    if (dh > 1.0) dh = 1.0;
+                    thB = cacos(dh);
+                }
+                if (d2 < bestD2) { bestD2 = d2; bestK = k; bestArc = la; bestPhi = ph; bestTh = thB; }
             }
             if (bestK < 0) continue;
             candInt.set(m, s); candInt.set(N + m, bestK);
             candArc.set(m, bestArc);
+            candArc.set(N + m, bestTh);   // theta_bind of the winning candidate (site mode); 0 in legacy mode
             candAzim.set(m, bestPhi + mirror * epsBind);
         }
     }
 
     /**
-     * SITE-AWARE CAPTURE, motor-side pass. Applies the UNCHANGED motor-pose gates g1/g2/g3/g5 (which never
-     * referenced actin geometry) to the candidate chosen by {@link #siteGateA}, then commits the bond and
+     * SITE-AWARE CAPTURE, motor-side pass. Applies the motor-pose gates g1/g2/g3/g5 (which never referenced
+     * actin geometry) to the candidate chosen by {@link #siteGateA}, then commits the bond and
      * performs the {@code siteSnap} bind bookkeeping ({@code prevBound}/{@code justBound}) that the downstream
      * occupancy resolve consumes. {@code params}: the per-motor planar array (kF8 at 5N, kconv 6N, kbind 7N).
      */
@@ -787,6 +819,16 @@ public final class ChiralSiteSystem {
         double psiDeg = sbP.get(1), phiDeg = sbP.get(2), thetaDeg = sbP.get(3), energyKt = sbP.get(5);
         double PHI_PRE = sbP.get(7), kT = sbP.get(9);
         int orientOn = (int) sbP.get(11);
+        // sbP[27] = 1 ⇒ the CANONICAL SITE-NORMAL capture orientation gate. Two consequences here:
+        //   g1  the actin-blind |psi - psiActin| test is REMOVED — it is REPLACED, in siteGateA, by
+        //       angle(xHeadHat, -n_site[k]) <= tol against the ACTUAL candidate site.
+        //   g5  the orientation term of the energy budget becomes 1/2 k_bind theta_bind^2 — the energy the
+        //       bond will ACTUALLY carry under the new bound potential — instead of the superseded
+        //       base-frame 1/2 k_bind (psi - psiActin)^2. The converter term and the threshold are unchanged.
+        // sbP[29] = k_bind (N.m/rad^2); theta_bind of the winning candidate arrives in candArc[N+m].
+        int orientSite = (int) sbP.get(27);
+        double kBindP = sbP.get(29);
+        int keepG2 = (int) sbP.get(31);   // ablation control; 0 = g2 stays RETIRED in site-normal mode
         double DEG = 180.0 / Math.PI;
         for (@Parallel int m = 0; m < N; m++) {
             int bs = boundSeg.get(m);
@@ -797,9 +839,17 @@ public final class ChiralSiteSystem {
                 double thetaErr = dabs((psi - phi) - thetaS) * DEG;
                 double kconv = params.get(6 * N + m), kbind = params.get(7 * N + m);
                 double dth = (psi - phi) - thetaS, dpa = psi - psiActin;
-                double eKt = (0.5 * kconv * dth * dth + 0.5 * kbind * dpa * dpa) / kT;
-                boolean g1 = orientOn == 0 || psiErr < psiDeg;
-                boolean g2 = orientOn == 0 || phiErr < phiDeg;
+                double thB = candArc.get(N + m);
+                double eOri = (orientSite != 0) ? (0.5 * kBindP * thB * thB) : (0.5 * kbind * dpa * dpa);
+                double eKt = (0.5 * kconv * dth * dth + eOri) / kT;
+                boolean g1 = orientOn == 0 || orientSite != 0 || psiErr < psiDeg;
+                // g2 LEVER ANGLE |phi - PHI_PRE| < 25 deg. RETIRED in site-normal mode, verbatim otherwise.
+                // It is a historical PRE-STROKE lever-angle gate, not a stereospecific head/site geometric
+                // requirement: once the articulated motor can place F8 at the real site with the head long
+                // axis along -n_site and the preload in range, there is no physical reason to ALSO demand that
+                // the lever stay near its pre-stroke angle. The audit measured g2 rejecting 10 of 10 such
+                // candidates.
+                boolean g2 = orientOn == 0 || (orientSite != 0 && keepG2 == 0) || phiErr < phiDeg;
                 boolean g3 = orientOn == 0 || thetaErr < thetaDeg;
                 boolean g5 = orientOn == 0 || eKt < energyKt;
                 if (g1 && g2 && g3 && g5) {

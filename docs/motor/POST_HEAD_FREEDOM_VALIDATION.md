@@ -1,5 +1,14 @@
 # Post-head-freedom validation — S2→lever coupling, head/actin sterics, and a SHADOW site-normal capture gate
 
+> **§5's shadow gate measured the WRONG VECTOR, 2026-08-13.** It scored `angle(eBind, n_site)` against a 25°
+> tolerance. The canonical law (`docs/motor/SITE_NORMAL_HEAD_BINDING.md`) gates
+> `angle(xHeadHat, −n_site) ≤ 25°`, where `xHeadHat` is the head-local **+x** axis — a FIXED **23.19859°**
+> from `eBind`, and referenced to the **INWARD** normal, not the outward one. §5's "0 of 20 captures qualify"
+> therefore describes a different quantity; the corrected census is in the new report. **§1, §2 and §6 stand
+> unchanged.** §2's overlap measurement in particular remains the reference number the canonical orientation
+> is compared against (bound mean −3.09 nm, worst −6.54 nm, inside the actin 94.3 % of the time), and §2's
+> ellipsoid was drawn with its long axis along `eBind` — also now corrected.
+
 **STATUS: DIAGNOSTIC, COMPLETE. Three questions answered. (A) The repaired S2→lever junction is mechanically
 sound. (B) The head/actin overlap is REAL — the bound head is inside the actin cylinder 94 % of the time. (C)
 The true χ-aware head does NOT reach helical sites in orientations the proposed 25° site-normal gate would

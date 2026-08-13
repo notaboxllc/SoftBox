@@ -1625,12 +1625,23 @@ public final class TwoBodyBeamAnalyticGpu {
                     }
                 }
                 // ---- head-orientation potential: ONE form, target chosen by binding state ----------------
+                // CANONICAL SITE-NORMAL BOUND TARGET (noncanonical, flag-gated per motor by restC[6N+m]).
+                // When the flag is set the bound branch uses eTarget = -n_boundSite (written by
+                // SiteNormalBindSystem.siteCoupleStep from the LATCHED site's live material frame) and the
+                // orientation coordinate becomes the head-local +x axis xHeadHat instead of eBind. When the
+                // flag is 0 every expression below is the VERBATIM legacy arithmetic (delta = 0 ⇒ the two
+                // coincide algebraically, but the legacy branch is retained literally so OFF is byte-identical).
+                // Report: docs/motor/SITE_NORMAL_HEAD_BINDING.md.
                 double etx, ety, etz;
                 double n1x=uBx, n1y=uBy, n1z=uBz;                 // the lever/neck axis (unit by construction)
                 double n2x=0,n2y=0,n2z=0, n3x=0,n3y=0,n3z=0, gN=1.0, sLen=1.0, n1px=0,n1py=0,n1pz=0;
                 if (bnd) {
-                    double ca = Math.cos(psiActin), sa = Math.sin(psiActin);
-                    etx = ca*p1x + sa*q1x; ety = ca*p1y + sa*q1y; etz = ca*p1z + sa*q1z;
+                    if (restC.get(6*nM+m) != 0.0) {
+                        etx = restC.get(3*nM+m); ety = restC.get(4*nM+m); etz = restC.get(5*nM+m);
+                    } else {
+                        double ca = Math.cos(psiActin), sa = Math.sin(psiActin);
+                        etx = ca*p1x + sa*q1x; ety = ca*p1y + sa*q1y; etz = ca*p1z + sa*q1z;
+                    }
                 } else {
                     // LIVE NECK FRAME from the distal S2 element
                     int jm = (M >= 2) ? (M-1) : 0;
@@ -1649,6 +1660,12 @@ public final class TwoBodyBeamAnalyticGpu {
                     etx = c1*n1x + c2*n2x + c3*n3x; ety = c1*n1y + c2*n2y + c3*n3y; etz = c1*n1z + c2*n2z + c3*n3z;
                     n1px = -aux*sphi + abx*cphi; n1py = -auy*sphi + aby*cphi; n1pz = -auz*sphi + abz*cphi;
                 }
+                // ORIENTATION COORDINATE — ONE convention for every branch.
+                // r_F8 lies ON the head's long axis (r_F8 = (+3.5, 0) nm), so
+                //     eBind = normalize(xF8 - xH) = R(psi,chi) a_hat = xHeadHat
+                // identically, for every psi and chi. There is no second head direction and no fixed
+                // eBind->xHeadHat rotation. (The 23.19859 deg offset that used to exist was an artefact of the
+                // unintended transverse F8 component; see the F8 long-axis note in TwoBodyConverterMotor.)
                 double dOri = ebx*etx + eby*ety + ebz*etz; if (dOri > 1.0) dOri = 1.0; if (dOri < -1.0) dOri = -1.0;
                 double thOri = dacos(dOri);
                 // lambda = k*theta/sin(theta): finite at theta -> 0 (series), floored near theta -> pi so the
@@ -1656,9 +1673,12 @@ public final class TwoBodyBeamAnalyticGpu {
                 double sOri = Math.sin(thOri); if (sOri < 1.0e-6) sOri = 1.0e-6;
                 double lam = (thOri < 1.0e-3) ? kbnd * (1.0 + thOri * thOri / 6.0) : kbnd * thOri / sOri;
                 // d eBind/d psi = cos(chi) (econv x e0) ; d eBind/d chi = cos(chi) econv - sin(chi) e0
+                // psi and chi rotate the head RIGIDLY about econv and about that, so for the head-fixed head
+                // axis:  d/dpsi = econv x eBind = cos(chi)(econv x e0) ,  d/dchi = that x eBind =
+                // cos(chi) econv - sin(chi) e0.
+                double dEcx = cchi*aex - schi*e0x, dEcy = cchi*aey - schi*e0y, dEcz = cchi*aez - schi*e0z;
                 double dEpx = aey*e0z - aez*e0y, dEpy = aez*e0x - aex*e0z, dEpz = aex*e0y - aey*e0x;
                 double QpsiOri = lam * cchi * (dEpx*etx + dEpy*ety + dEpz*etz);
-                double dEcx = cchi*aex - schi*e0x, dEcy = cchi*aey - schi*e0y, dEcz = cchi*aez - schi*e0z;
                 double QchiOri = lam * (dEcx*etx + dEcy*ety + dEcz*etz);
                 double QphiOri = 0.0;
                 if (!bnd) {
@@ -1687,6 +1707,8 @@ public final class TwoBodyBeamAnalyticGpu {
                 }
                 // converter spring + orientation Hessian + drag diagonal
                 addK(sys,base,W, iPhi,iPhi, kc); addK(sys,base,W, iPhi,iPsi,-kc); addK(sys,base,W, iPsi,iPhi,-kc); addK(sys,base,W, iPsi,iPsi, kc);
+                // orientation Hessian = the exact Gauss-Newton form k * (d eBind/d qi . d eBind/d qj) at the
+                // minimum. The (psi,chi) directions are orthogonal for every chi, so there is NO cross term.
                 addK(sys,base,W, iPsi,iPsi, kbnd*cchi*cchi); addK(sys,base,W, iChi,iChi, kbnd);
                 double gPsiChi = gRot + (gPsi - gRot)*cchi*cchi;     // Gamma_psipsi(chi)
                 addK(sys,base,W, iPhi,iPhi, aphi); addK(sys,base,W, iPsi,iPsi, gPsiChi/dt); addK(sys,base,W, iChi,iChi, gPsi/dt);

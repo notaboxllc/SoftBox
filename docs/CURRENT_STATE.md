@@ -1177,12 +1177,320 @@ fixed and now asserted, so the arms above are real.)*
 
 ---
 
+## 9n. Canonical site-normal head binding — `xHeadHat = -n_site` IMPLEMENTED (2026-08-13)
+
+**Report: `docs/motor/SITE_NORMAL_HEAD_BINDING.md`. Flag-gated, DEFAULT-OFF, byte-identical when off
+(`ExplicitCompleteMatHarness.SITE_NORMAL_BIND`). CPU runner only — the device path REFUSES.**
+
+**The bound pose is now SPECIFIED and implemented:** the head-local **+x** axis (its ellipsoid LONG axis)
+points antiparallel to the helically informed outward site normal, `xHeadHat = -n_site`, so F8 faces the
+filament and the head body extends radially outward.
+
+**PHASE-0 RESULT, load-bearing and previously unstated: `xHeadHat` is NEITHER `eBind` NOR `-eBind`.**
+`eBind = normalize(xF8 - xH)` is the direction of the material POINT `r_F8 = (+3.5, +1.5) nm`, which sits a
+FIXED **d = atan2(rF8y,rF8x) = 23.19859 deg** off the head's long axis; `dot(xHeadHat, eBind) = cos d =
+0.919145` constant to **2.3e-12 deg** across 400 randomised (psi, chi) states, and at `chi = 0` `xHeadHat`
+reproduces the head's material `a_hat` axis to 3.3e-16. **Every angle in sections 9l and 9m was measured on
+`eBind`, i.e. 23.2 deg off the head axis and referenced to the OUTWARD normal**; both reports now carry
+correction banners. Two visualization defects fall out and are fixed: the ellipsoid was drawn along `eBind`
+and centred on the midpoint of `xH..xF8` rather than on `xH`.
+
+**What changed (all additive):** `SiteNormalBindSystem.headAxisStep` writes `xHeadHat` into `outGeom` rows
+9..11 — ONE axis read by the gate, the solver's target, the steric read-out and the viewer ellipsoid.
+`siteGateA` gains `angle(xHeadHat, -n_site[k]) <= 25 deg` against the ACTUAL candidate site, replacing the
+actin-blind `|psi - psiActin| < 25 deg`; `g5`'s orientation energy becomes `1/2 k_bind theta_bind^2` (the
+energy the bond will actually carry) instead of the superseded base-frame term. `siteCoupleStep` rebuilds
+`eTarget = -n_boundSite` each step from the LATCHED site's live material frame and applies the EXACT
+equal-and-opposite reaction through the byte-unchanged `bondData[d+9..11]` / `segGather` channel.
+`matS2SolveStepTilt` carries the term implicitly with the exact Gauss-Newton Hessian, which now has a
+genuine psi-chi CROSS term `k_bind sin(d) cos(d) sin(chi)` (identically 0 at `d = 0`). **`k_bind` = 512
+pN.nm/rad^2 unchanged and NOT tuned. The detached rest potential, `k_det`, chemistry and `xCatch` are
+untouched. No pre-capture steering: the site exerts zero torque, zero attraction, zero retargeting before
+the latch.**
+
+**Gates, all PASS.** A target (`|xHeadHat - (-n_site)| = 5.6e-17`, `Q_psi/Q_chi ~ 1e-35 N.m`); B rigid
+covariance (`max |dU| = 2.6e-06 kT` over 9 rotations); C site material frame (`|n(R.fil) - R n| = 1.8e-08`);
+D reaction closure (`|T_head + T_fil|/|T_head| = 9.8e-09`, the float32 precision of the shared bond channel;
+FD virtual work sums to zero to 4-6e-09 on three axes); E helical azimuths (`dot = 1.000000000000` at every
+reachable one); Phase-6 finite differences (3e-11 relative at 15/25 deg); Phase-6b implicit stability
+(`tau/dt = 0.289`, bounded, relaxes to the 5.1 deg thermal amplitude); and DETACHED OFF == ON
+**bit-identical** over 12 motors x 5000 steps.
+
+**GEOMETRY — the specification is realised.** At the canonical pose the head centre sits
+`|r_F8| cos d = +3.500 nm` OUTWARD of the site (exactly `R_actin`), i.e. 7.0 nm from the filament axis, F8 on
+the filament-facing end. **The head/actin overlap falls from mean -3.09 nm / worst -6.54 nm (section 9l) to
+-0.92 .. -1.00 nm — roughly 3x on the mean and 6.6x on the worst case — with NO steric force added.** The
+residual ~1 nm is arithmetic: a 2.75 nm transverse semi-axis at 7.0 nm from the axis still reaches ~1 nm
+inside a 3.5 nm cylinder.
+
+**BLOCKING RESULT — ZERO natural captures across three horizons (up to 2.4e6 motor-steps), and it is NOT a
+tolerance problem.** Capture funnel over 200 000 steps: `g6` 79.6 %, `g8` 77.8 %, `g0` (< 3 nm) 0.123 %, `g4`
+(preload, < 2 nm) 0.0405 % -> **81 candidates pass every spatial gate, and NOT ONE is within 25 deg**:
+`angle(xHeadHat, -n_site)` mean **106.8 deg**, BEST **41.4 deg**. 1 motor x 600 000 steps: 0 events. **12
+motors x 200 000 steps = 2.4e6 motor-steps: 0 events.** A 180-deg control also yields 0, because the rewritten
+`g5` budget then binds at 28.1 deg — the two agree, which is itself a consistency check.
+**THE PRECISE FAILURE is an ANTI-CORRELATION, not a rate:** orientation-compatible poses DO occur (2.1-3.6 % of
+loose-reach steps, best **2.34 deg**) and spatially-qualified candidates DO occur (0.04 % of steps), but their
+intersection is empty in every run — the head poses that bring `xF8` within 2 nm of a real site are precisely
+the ones whose long axis is not radial. A longer run does not fix this. **The cause is section 9m's CASE C measured on the correct
+vector: the native detached rest orientation and the canonical bound pose are on OPPOSITE SIDES of the
+sphere.** Phase 8 of the task forbade retargeting the detached potential, so this is NOT closed here. Options
+in the report; **recommended: re-derive `(c1, c2, c3)` — the native head pose in the live neck frame — from the
+canonical bound geometry instead of the historical `psi_actin`.** That is a separate task: it re-baselines
+every capture statistic on record. **Do not proceed to gliding or twirling.** The only viewer trajectory that
+exists is the deterministic canonical-pose fixture `threejs_sitenormal_canonical` (NOT a natural capture).
+
+**NEW STRUCTURAL CONSTRAINT — a 23.2 deg dead cone.** `xHeadHat`'s component along `econv` is
+`cos d sin chi`, bounded by `cos d`, so the head's +x axis **cannot point within 23.2 deg of +-econv** and the
+canonical pose is geometrically UNREACHABLE at those sites: **2 of 7 consecutive every4 azimuths**. This is a
+property of the (psi, chi) parameterisation, not of the new law — `chi` gave `eBind` the full sphere, but
+`xHeadHat`, being `d` off it, inherits a polar cap. About `1 - cos d ~ 8 %` of site normals admit no
+canonical bound pose at all.
+
+---
+
+## 9o. F8 long-axis geometry correction — the 23.2 deg head-axis offset was a COORDINATE BUG (2026-08-13)
+
+**Report: `docs/motor/SITE_NORMAL_HEAD_BINDING.md` section "F8 LONG-AXIS GEOMETRY CORRECTION".
+Raw: `RUN_LOGS/motor_audit/f8_long_axis_correction/`.**
+
+**RETRACTION of section 9n's headline interpretation.** 9n reported that the head-local +x axis is "`eBind`
+rotated by a FIXED 23.19859 deg" and called it "a RIGID property of the head body". The *measurement* was
+right; the *interpretation* was wrong. The head's F8 material point carried an unintended transverse
+component — `R_F8 = (+3.5, +1.5) nm` instead of `(+3.5, 0)` — which put the actin-binding point 23.2 deg off
+the ellipsoid's own long axis. **Corrected:**
+
+```
+    R_F8 = (+3.5, 0) nm   ON the long axis, 1.0 nm inboard of the +x tip (a = 4.5 nm)
+    R_CONV = (-3.5, 0) nm antipodal, also on the long axis
+    eBind = normalize(xF8 - xH) = xHeadHat = the ellipsoid long axis    ONE vector, three names
+```
+
+**Provenance (archaeology).** Introduced 2026-07-14, commit `e17b5a4`, with the Exp-3C topology; annotated
+"opposite **corner**" with `|r_F8 - r_conv| ~ 7.6 nm` named as the design quantity; graded "geometric
+construction, **no citation**" in the canonical-freeze inventory, which inventories only the SEPARATION, not
+the transverse split; and Exp 3D measured the kinematics to be insensitive to it (its deliberately flatter
+`(3.7, 1.0)` candidate scored within noise). **Never intended, never cited, never calibrated.**
+
+**`R_CONV` audited separately and DID have to move.** It does not enter the head axis at all
+(`xF8 - xH = R(r_F8)` for any `r_conv`), but it must stay antiparallel to `r_F8` because (a) the chi mobility
+derivation in `matS2SolveStepTilt` gets `Gamma_psichi = 0` EXACTLY from `rho = xH - C` being parallel to the
+head axis, and (b) `C`, `xH`, `xF8` must remain collinear with `xH` the midpoint — the recorded Exp-3C
+topology. **Consequences, stated and NOT tuned back:** converter arm `7.6158 -> 7.0000 nm` (-8.1 %);
+`gamma_psi` **-5.3 %**; `tau = gamma_psi/k_bind` `0.7234 -> 0.6853 us`. The opt-in `CONV_ECC_SCALE`
+(`-converter-f8-eccentricity-scale`) knob is now **inert** — it scales a component that is identically zero.
+
+**Gates after the correction (CPU runner):**
+- **Head-axis identity:** `max |xHeadHat - eBind| = 1.9e-16` over 400 randomised (psi, chi); `chi = 0`
+  reproduces the material `a_hat` axis to 0.0e+00. The delta machinery is REMOVED from the solver — one
+  orientation convention, no cross term in the Hessian (`H_pc = 0` exactly).
+- **`d xF8/dq` through the REAL kernel** (`matBeamGeomTilt`, central differences): worst relative error
+  **1.2e-07** over 12 random (phi, psi, chi) x {phi, psi, chi}.
+- **`U_bind` generalized forces vs FD**, now swept over 4 tilt AZIMUTHS as well as 4 misalignments so both
+  coordinates are loaded: PASS.
+- **THE DEAD CONE IS GONE:** the head axis now reaches **100.00 % of 4pi** (2000 equal-area bins), **0**
+  bins unreachable beyond the `|chi| <= 89 deg` pole clamp, Jacobian rank 2 everywhere (min singular value
+  0.0175 = cos 89 deg at the clamp). The old geometry excluded **8.09 %** of the sphere around `+-econv`.
+  **All 7 consecutive every4 site azimuths are now canonically reachable (was 5 of 7).**
+- **Gates A/B/C/D/E all PASS**; head centre `+3.500 nm` outward at EVERY azimuth; clearance uniformly
+  **-1.000 nm**.
+- **PHASE-7 MECHANICS REBASELINE (validated estimator `LiveNeckHeadProbe -reg`, nothing tuned):** stroke
+  `-8.381 -> -8.458 nm` (**+0.9 %**), **polarity pointed-first unchanged**, `k_ext` `0.7211 -> 0.7566 pN/nm`
+  (**+4.9 %**, slightly AWAY from the `Cmot` reference band 0.60-0.64 — reported, not corrected), theta
+  `-24.972 -> -24.853 deg`, S2 extension and contour conservation unaffected (contour within 2e-5 of unity),
+  every arm stable, fixed-site relaxation stationary (`rel = 4.1e-09`). The `k_det` 5/10 arms are numerically
+  identical, correctly — `k_det` only applies while detached. *(The `MechanicsRepairProbe -reg` estimator
+  disagrees at stroke -3.972 / `k_ext` 2.099; that probe prints its own warning that its 1 pN/nm probe spring
+  makes the measurement badly conditioned, and the codebase already labels it superseded.)*
+- **Monitored CPU/GPU parity on the corrected geometry: PASS** (`ExplicitMatSolveHarness` via
+  `scripts/run_gpu_monitored.sh scripts/run_mats2solve_gate.sh`) — port-vs-`s2SolveM` **1.2e-09 um**,
+  GPU-vs-mirror **9.7e-10 um**, recorder running, no crash.
+- **Viewer acceptance, measured on the emitted frames:** `min dot(normalize(xF8-xH), xHeadHat) =
+  0.99999998`, `max |cross| = 6.3e-04 nm` — i.e. exact to the frame file's own print precision. There is no
+  longer any visual offset between the ellipsoid and its F8 point.
+
+**GPU note (structural, not a validation gap):** the site-normal law still refuses the device path, and the
+reason is a PREREQUISITE, not this feature — the device gliding graph wires `beamGeom` + `s2solve`, the
+**non-tilt** kernels. **The chi-dynamic 3-D head has never been on the device graph at all**, so porting it is
+a separate piece of work.
+
+**PHASE-9 RETRACTION — section 9n's "anti-correlation" is WITHDRAWN.** 9n concluded from "0 of 81
+spatially-qualified candidates within 25 deg" that spatial proximity and correct orientation are
+anti-correlated. Measured directly on 5 809 (old) / 7 751 (new) candidate evaluations with `d < 6 nm`, matched
+seed, head long axis taken analytically in both arms: **Pearson r(d, theta) = -0.004 (old) and +0.068 (new)**,
+i.e. **no correlation in either geometry**, with the conditional mean theta flat across distance bins. The
+conjunction `d < 2 nm AND theta <= 25 deg` is **4 in BOTH arms**, against **5.8 / 3.2 expected at
+independence**. The earlier "0 of 81" was a small-sample artefact (expected count 1-4). **The F8 correction did
+not need to break an anti-correlation, because there was none.**
+
+**BOTTLENECK IDENTIFIED — and section 9n's "CASE C is the cause" is SUPERSEDED.** Evaluating all eight gates
+INDEPENDENTLY on the same 1 373 candidates with `d < 3 nm` (the ordered funnel answers "which gate stopped the
+survivors", which is a different question from "which gate is incompatible with the law"): marginal pass rates
+`g0` 100 % · `g3` 99.4 % · `g8` 46.9 % · `g6` 44.6 % · `g4` 29.9 % · **`g2` phi 13.0 %** · `g5` 3.2 % ·
+**`g1'` orientation 2.6 %**. **Of the 10 candidates that are BOTH in reach (`g0` and `g4`) AND correctly
+oriented (`g1'`): `g2` (lever angle) rejects 10/10, `g6` (head side) rejects 9/10, `g8` rejects 6/10, and
+`g3`/`g5` reject NONE.** **`g6` is STRUCTURALLY incompatible with the canonical pose**: it allows the head
+centre `A_SEMI[2] = 2.25 nm` above the segment centre, and the canonical bound pose puts it **6.414 nm**
+there (measured at the same sites) — 2.85x the threshold. `g6` was written for a head approaching from the
+lawn side; the site-normal law requires a head standing off the surface. **The rewritten `g5` energy budget
+rejects none of them, so that rewrite is sound.** ⇒ **The next decision is `g6`/`g2`, NOT recalibrating
+`(c1,c2,c3)`** — with those gates as they stand, fixing the detached rest pose alone would still give zero
+captures.
+
+**CAPTURE IS STILL ZERO, and the bottleneck is now cleanly stated.** Same assay, detached rest pose untouched:
+0 natural captures in 200 000 single-motor steps. Two independent scarcities multiply, neither of them the
+orientation law: (i) **spatial reach is rare and got rarer** — `g0` (< 3 nm) `0.123 % -> 0.037 %` and `g4`
+(preload, < 2 nm) `0.041 % -> 0.012 %`, because `|r_F8|` shrank 3.808 -> 3.500 nm; (ii) the detached native
+rest orientation is still ~100 deg from the canonical target — **section 9m's CASE C, untouched by this
+correction and out of scope by instruction**. Conditioned on the full spatial chain the orientation DID improve
+(mean `106.8 -> 90.9 deg`, best `41.4 -> 35.0 deg`) and the distribution **split into two identifiable modes**
+— "approaching from outside" (12 of 23 in `[30,80) deg`) and "threaded through the actin" (11 of 23 in
+`[100,170) deg`, the known steric defect) — where the off-axis geometry had smeared them into one lump at
+107 deg.
+
+---
+
+## 9p. Legacy g6/g2 RETIRED for the site-normal motor — it now binds NATURALLY (2026-08-13)
+
+**Report: `docs/motor/SITE_NORMAL_HEAD_BINDING.md` sections 14b-14h. Raw:
+`RUN_LOGS/motor_audit/site_normal_gate_retirement/`. CPU sequential runner; one monitored GPU parity gate
+(the geometry, not the tilt path).**
+
+**DECISION (jba): `g6` (head side) and `g2` (`|phi - phi_pre| < 25 deg`) are RETIRED — ONLY when
+`SITE_NORMAL_BIND = true`.** Explicit branches, never faked as "pass = true": the funnel and the marginal
+diagnostic print them as `[RETIRED]`. `SITE_NORMAL_KEEP_G6/G2` re-apply them for the ablation control only.
+**The OFF path is BIT-IDENTICAL** — the two guard lines were reverted in a scratch tree, rebuilt, and both
+binaries ran the legacy path over 12 motors x 150 000 steps with a fingerprint covering capture decisions,
+bound-step count, final `(phi, psi, chi)` and every beam node to 17 digits: `diff -> IDENTICAL`. *(Scope: that
+scene yields 0 legacy captures, so the capture-decision part is verified trivially plus by construction; the
+trajectory/geometry equality is a full bit-for-bit match.)*
+
+**THE MOTOR NOW BINDS NATURALLY.** Funnel over 200 000 single-motor steps, same seed and scene:
+
+| gate | g6/g2 ACTIVE | **RETIRED** |
+|---|---:|---:|
+| `g8` accessibility | 66.86 % | 97.53 % |
+| `g0` `< 3 nm` | 74 (0.037 %) | **626 (0.317 %)** — 8.5x |
+| `g4` preload `< 2 pN` | 23 (0.012 %) | **185 (0.094 %)** — 8.0x |
+| `g1'` orientation `<= 25 deg` | 0 | **2** |
+| **captures** | **0** | **2** |
+
+**Retiring `g6` did not merely stop one rejection — it multiplied the spatially-qualified candidate supply
+~8x**, because `g6` was cutting precisely the outward-standing poses that both reach a site and satisfy the
+canonical orientation. **The rate-limiting gate is now `g1'` itself** (2 of 185 spatially-qualified = 1.08 %;
+mean 100.43 deg, best 14.34 deg); `g3` and `g5` reject none of the survivors.
+
+**CAPTURES ARE MECHANICALLY CLEAN.** 3 events in 400 000 steps x 12 motors. `theta_bind` at capture
+24.2 / 11.4 / 20.3 deg, relaxing to 3.9 / 2.1 / 9.1 deg in ONE step and settling near the 5.1 deg thermal
+amplitude. **NO SNAP:** per-step motion at the capture step is **1.08x** (head centre) and **1.16x** (F8) the
+ordinary detached thermal step, and the S2 extension change is **0.61x** it; `|d chi| = 13.86 deg` is exactly
+the free-head thermal increment. **Azimuth: all 3 "upper"** (normal pointing away from the lawn) — the band has
+MOVED to where the canonical geometry says a radially standing head must bind (the legacy path reached only
+side azimuths, section 9m), but it is still ONE band, and 3 events cannot distinguish preference from scene.
+**Yield is 3, not the requested 20** (~1 per 1.6e6 motor-steps).
+
+**ABLATION (explanatory; neither gate reintroduced), 12 motors x 150 000 steps:** A both live **0** | B g6
+retired **0** | C g2 retired **0** | D both retired **1**. **Neither gate alone is "the" blocker — they had to
+go together**, exactly as the marginal measurement predicted (`g2` rejected 10/10 of qualified candidates,
+`g6` 9/10). Counts are small; the pattern is clear, the ratio is not quantified.
+
+**VIEWER — the acceptance condition holds, measured ON the frames.** `threejs_sitenormal_bound_capture`,
+**801 frames, one per timestep**, capture at frame 400 (sim step 35 996). Over its 197 bound frames:
+`dot(xHeadHat, -n_site)` **mean +0.9921**, best +1.0000, worst +0.9120 ⇒ **mean theta_bind 7.20 deg**; head
+centre **+4.6 .. +8.4 nm outward** throughout. The bound ellipsoid stands radially out with F8 on the
+filament-facing end.
+
+**BOND LIFETIME / DUTY (Phase 7), 1.8e6 steps x 12 motors = 2.16e7 motor-steps, 5 captures all resolved:**
+mean lifetime **264.4 steps = 661.0 us**, median 89.0, p10 17 / p90 197; **duty 0.00612 %**; **every release in
+state NONE** (the ordinary ATP-binding terminus, not mechanical rupture); F8 extension at release 4.316 nm;
+**mean orientation error while bound 6.68 deg** against a 5.14 deg thermal amplitude — the site-normal
+potential holds the head at its thermal floor and is not fighting the mechanics. **No evidence that the new
+orientation mechanics altered bond persistence** (same order as the repaired motor's ~350 us), but **n = 5 is a
+sanity check, not a distribution measurement**. **Duty, not the bond, is what keeps `avgBound` low.**
+
+**MECHANICS UNCHANGED (Phase 8).** `LiveNeckHeadProbe -reg` reproduces the axial-F8 baseline digit for digit
+(stroke **-8.458 nm** pointed, `k_ext` **0.7566**, theta -24.853, contour 0.999981, stable) — as it must,
+since the retirement touches only capture ELIGIBILITY, never a force, torque or stiffness.
+
+**GLIDING COMPATIBILITY — NOT DEMONSTRATED, and the resolvable half says why.** Smoke test (NOT a campaign):
+3 seeds x 5000 steps, density 400, 12 segments, filament Brownian on, `eta = 0.01 Pa.s`, nothing tuned.
+**glide `+2.08 +- 5.25 um/s` (SEM, n=3), sign FLIPPING across seeds (+1.65 / +11.39 / -6.79) ⇒ NOT RESOLVED.**
+That is an underpowered estimator, quantitatively: the filament's own diffusion gives an apparent-velocity
+floor `sqrt(2D/T) = 6.41 um/s` for this 9.375 ms window (`D_par = 0.1929 um^2/s`), and the observed seed SD is
+9.1 um/s — the same scale. **A 2 um/s glide could not have been detected here even if present**; resolving it
+needs **~38 600 steps/seed** (8x longer). *That is a limitation of the smoke test, not of the motor.*
+**What IS resolvable — the pull/drag decomposition, a time-average over bound samples rather than a
+displacement slope — says there is NO net thrust: 51.2 % pulling, mean axial force pull `+3.8546e-14 N` vs
+drag `+3.8452e-14 N`, equal to 3 significant figures.** **What DID work: the motor RECRUITS in a many-motor
+scene (`avgBound = 0.72 +- 0.30`, structurally 0 before the retirement) and the solver is CLEAN (0 invalid,
+0 solverFail).** Rotation `omegaFit = +9.8 +- 129.7 rad/s`, sign-flipping — **DIAGNOSTIC ONLY, not a twirling
+result.** **Phase 10 (density) NOT run** — its precondition ("only if the initial glide test works") failed.
+**Phase 11 (ATP control) launched then CANCELLED** — with the powered velocity unresolvable an ATP-depleted arm
+cannot resolve a velocity difference either, and at `[ATP]=0` heads cannot detach so its noise floor is not even
+matched; ~2 h for an uninterpretable comparison. **The right next experiment is a LONGER WINDOW, not a bigger
+scene.**
+
+**GPU — STOPPED AT CPU, deliberately and per instruction.** The device graph has no `beamGeomTilt`, no
+`s2solveTilt` and no `kbindGate`: **the entire chi-dynamic 3-D head stack has never been on the device**.
+Wiring it is **5 kernels** (`matKbindGate` 4 args, `matBeamGeomTilt` 8, `headAxisStep` 7, `siteCoupleStep` 12,
+`matS2SolveStepTilt` **15 — exactly at TornadoVM's task() cap**, replacing the graph's largest kernel) plus 4
+new transfers, with an unquantified lowering risk (15x16 Gauss-Jordan vs 14x15, scratch 240 vs 210 doubles, on
+a backend where the smaller version already needs `-Dtornado.enable.fma=false`). That is a port, not a wiring
+step. `buildGlidingGraph` still throws when `siteNormalOn()`.
+
+---
+
+## 9q. Site-frame power-stroke polarity audit — the 50/50 was MY MEASUREMENT ARTEFACT (2026-08-13)
+
+**Report: `docs/motor/SITE_FRAME_POWER_STROKE_AUDIT.md`. Raw:
+`RUN_LOGS/motor_audit/site_frame_power_stroke/`. AUDIT ONLY — nothing tuned. CPU runner; no GPU work.**
+
+**RETRACTION of section 9p's gliding reading.** 9p reported "the bound population is a 50/50 tug-of-war with
+no net axial bias ... mean axial force pull `+3.8546e-14` vs drag `+3.8452e-14 N`, equal to 3 significant
+figures ... a resolved statement". **Both halves are withdrawn.** (i) `nPull`/`nDrag` classify by
+`fax * vFil` (`ChiralSiteHarness:2290`) — **mechanical POWER against the instantaneous filament velocity**, not
+polarity. With a 6.41 um/s Brownian noise floor `sign(vFil)` is a coin flip, so the split tends to **50/50 BY
+CONSTRUCTION for any force polarity**. (ii) `fAxPull`/`fAxDrag` are summed forces *within* the power-defined
+subgroups; their near-equality is arithmetically meaningless as a bias measure. The correct quantity is their
+SUM, the net axial force: per seed **-0.068 / +0.497 / -0.198 pN**, mean **+0.077 +- 0.213 pN**,
+`|mean|/SEM = 0.36` ⇒ **not distinguishable from zero — unresolved, NOT zero thrust.**
+
+**SIGN CONVENTION PINNED (measured, not assumed):** `dot(b_hat, u_fil) = +1`, `dot(end2-end1, u_fil) > 0`,
+`bindArc` increases toward `+u_fil` ⇒ **`+u_fil` = BARBED (end2), `-u_fil` = POINTED (end1)**. Productive signs:
+**force on the FILAMENT `fax < 0`** (toward pointed), **motor reaction `> 0`** (toward barbed), **glide `< 0`**
+(pointed-first).
+
+**THE STROKE POLARITY IS CORRECT AND AZIMUTH-INVARIANT.** Deterministic fixture: motor Brownian off, real
+`ADP.Pi -> ADP` transition (F8 never translated by hand), azimuth swept by **rotating the filament's material
+frame** so the site's AXIAL coordinate is held fixed (all 8 arms bind site 155). Under an **isometric** clamp
+`fax_post` is **NEGATIVE at 8 of 8 azimuths** (-3.24 to -10.38 pN) and the stroke's own increment is
+`d fax = -1.39 pN` mean (6/8 negative) — **force on the filament toward POINTED everywhere on the helical
+circle.** Under a **free** filament the residual force relaxes to ~0 with mixed sign, which is the expected
+behaviour of a single motor relaxing to a new equilibrium, not a contradiction. *(A first sweep that walked the
+every4 lattice was CONFOUNDED — each site is +10.8 nm further along the axis, so it measured an increasingly
+stretched bond; discarded and redone.)*
+
+**SITE-NORMAL TORQUE INJECTS NO AXIAL FORCE, by construction:** `siteCoupleStep` writes only `bondData[d+9..11]`
+(the segment TORQUE slots) and never `d+6..8` (FORCE) — a pure couple.
+
+**DIAGNOSIS: primary D (telemetry interpreted backwards). A REFUTED** (polarity correct and invariant),
+**F REFUTED** (no axial leakage). **B/C/E remain OPEN** as contributors to the underlying force distribution —
+the natural-event sample was **n = 3** (7.2e6 motor-steps), far too small for the six-way decomposition, and
+all three events share one motor and site so the anchor-geometry comparison is degenerate. **D alone fully
+explains the reported 50/50.**
+
+**⇒ A longer Brownian-ON gliding run IS now scientifically justified** — no mechanics correction is indicated
+first. Required window (from section 9p): **~40 000 steps/seed** to lift a 2 um/s glide above the diffusive
+floor. `-glide-compat` now prints `r.fax` with a significance test.
+
+---
+
 ## 10. Load-bearing reports
 
 Read these before revisiting the associated topic:
 
 - `docs/TWOBODY_BLIND_TWEEZERS_SYNTHESIS.md` · `docs/TWOBODY_BIOCHEMICAL_CYCLE.md` · `docs/TWOBODY_SPARSE_MULTIMOTOR.md` · `docs/TWOBODY_LOWDENSITY_GLIDING.md` · `docs/TWOBODY_FLEXIBLE_MAT_GLIDING.md` · `docs/TWOBODY_FULLCOVERAGE_MAT.md` · `docs/TWOBODY_TAIL_RECRUITMENT.md` · `docs/TWOBODY_SUPPORTED_S2_TAIL.md` · `docs/TWOBODY_MD_INFORMED_S2.md` (two-body replacement-motor arc; §9b)
-- `docs/attachment/CANONICAL_ACTIN_ATTACHMENT_AUDIT.md` · `docs/attachment/PATH_B_SITE_ACCESSIBILITY_TELEMETRY.md` · `docs/attachment/FILAMENT_Z_SLAB_AND_ACCESSIBILITY_RERUN.md` (attachment architecture, accessibility telemetry, z-boundary; §9d) · `docs/attachment/SPARSE_LONG_PITCH_ACTIN_SITE_LATTICE.md` (**the current Path-B site geometry**; §9f) · `docs/attachment/BOUND_MOTOR_HELICAL_GEOMETRY_VISUAL_AUDIT.md` (**bound-head orientation is lab-referenced, not site-referenced**; §9h) · `docs/motor/MYOSIN_HEAD_ORIENTATION_DOF_HISTORY.md` (**the head's 3-D orientational DOF was lost at the 2026-07-14 two-body replacement; it explains the 30 % site mask**; §9i) · `docs/motor/RESTORED_3D_HEAD_TILT_DOF.md` (**neck–head tilt χ restores it kinematically, 20/20 site normals, no RAND_BASE_AZ; dynamics not yet done**; §9j)
+- `docs/attachment/CANONICAL_ACTIN_ATTACHMENT_AUDIT.md` · `docs/attachment/PATH_B_SITE_ACCESSIBILITY_TELEMETRY.md` · `docs/attachment/FILAMENT_Z_SLAB_AND_ACCESSIBILITY_RERUN.md` (attachment architecture, accessibility telemetry, z-boundary; §9d) · `docs/attachment/SPARSE_LONG_PITCH_ACTIN_SITE_LATTICE.md` (**the current Path-B site geometry**; §9f) · `docs/attachment/BOUND_MOTOR_HELICAL_GEOMETRY_VISUAL_AUDIT.md` (**bound-head orientation is lab-referenced, not site-referenced**; §9h) · `docs/motor/MYOSIN_HEAD_ORIENTATION_DOF_HISTORY.md` (**the head's 3-D orientational DOF was lost at the 2026-07-14 two-body replacement; it explains the 30 % site mask**; §9i) · `docs/motor/RESTORED_3D_HEAD_TILT_DOF.md` (**neck–head tilt χ restores it kinematically, 20/20 site normals, no RAND_BASE_AZ; dynamics not yet done**; §9j) · `docs/motor/POST_HEAD_FREEDOM_VALIDATION.md` / `docs/motor/CHI_AWARE_CAPTURE_ORIENTATION_AUDIT.md` (**both carry 2026-08-13 correction banners: their orientation angles were measured on `eBind`, which is 23.2° off the head axis**; §9l/§9m) · `docs/motor/SITE_NORMAL_HEAD_BINDING.md` (**THE CURRENT BINDING LAW: `xHeadHat = −n_site`; `xHeadHat` is neither `eBind` nor `−eBind`; all gates pass but natural capture yield is ZERO — read §14 before any gliding or twirling work**; §9n)
 - `docs/FINE_DT_V0_REFERENCE.md`
 - `docs/TIMESTEP_SERVO_AUDIT.md`
 - `docs/CANONICAL_STROKE_DISAMBIGUATION.md`
