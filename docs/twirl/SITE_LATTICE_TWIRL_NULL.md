@@ -1,3 +1,9 @@
+> ⚠ **TORSIONAL COHERENCE INVALIDATION (2026-09-06)** — twirl MAGNITUDES in this document were
+> measured with NO inter-segment torsional coupling (segments rolled independently; internal twist drift
+> reached +9.1 turns). Absolute pitch / turns-per-µm / Ω values here are VOID pending re-measurement with
+> `-rollspring`. Sign, antisymmetry and null results are unaffected. See
+> `docs/twirl/TORSIONAL_COHERENCE_INVALIDATION.md`.
+
 # Site-lattice chirality alone does NOT produce twirling (eps = 0 control)
 
 **Campaign** `RUN_LOGS/motor_audit/campaigns_2026-08/TWIRL_REPRO_GPU` · 2026-08-22/23 · GPU device-resident

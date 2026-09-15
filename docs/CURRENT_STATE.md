@@ -1483,6 +1483,78 @@ explains the reported 50/50.**
 first. Required window (from section 9p): **~40 000 steps/seed** to lift a 2 um/s glide above the diffusive
 floor. `-glide-compat` now prints `r.fax` with a significance test.
 
+*(That run was done — see section 9r. The ~40 000-step estimate was far too small: resolution needed ~10^5
+steps and the +2 um criterion ~10^6.)*
+
+---
+
+## 9r. THE REVISED SITE-NORMAL MOTOR GLIDES — class A, +2.000 um reached (2026-08-15)
+
+**Report: `docs/motor/SITE_NORMAL_LONG_GLIDING_ASSAY.md`. Raw:
+`RUN_LOGS/motor_audit/site_normal_long_glide{,_seed20260901,_seed20260902,_ETA001_FAILED}/`. CPU sequential
+runner throughout — the device path REFUSES site-normal and no GPU work was launched. NOTHING WAS TUNED.**
+
+**SETTLED RESULT.** A 7x1 um lawn at 3000 heads/um^2 (21 000 motors), 12-segment flexible actin, production
+per-segment UNION cull. **BOTH ensemble seeds reached +2.000 um independently** — seed 20260901
+**+2.00007 um at step 911 827 (t = 2.2796 s)** and seed 20260902 **+2.00006 um at step 958 627
+(t = 2.3966 s)**, both inside the pre-set 10^6-step horizon ⇒ **CLASS A, STRONG GLIDE**. Velocity
+**~0.79-0.95 um/s**; **live-axis cumulative +2.00242 um vs fixed-axis net +2.00006 um (0.1 %)** ⇒ travel is
+along the filament's OWN axis, not lab-x. Milestones monotonic, none reversed. **invalid 0 / solverFail 0**
+over 958 628 steps; contour conserved; z within +-6.6 nm.
+
+**Three independent seeds agree.** Matched-horizon velocity **+0.90 +- 0.04 um/s**, mean axial force
+**-0.283 +- 0.028 pN** (negative = productive), **3/3 sign agreement on both channels**, **twelve milestone
+crossings, every one in the expected direction, none reversed**. 2/2 seeds run to the horizon met the +2 um
+criterion.
+
+**Mechanism (3663 attachments):** duty **P(0)=0.283, P(1)=0.362, P(>=2)=0.354** — the filament is **unbound
+28 % of the time and glides anyway** (intermittent few-head regime); residence 817 us; detachment **3662 ATP
+/ 0 rigor**; bound nucleotide **ADP 985k / ADP.Pi 143k / NONE 73k / ATP 0** (post-stroke as required); axial
+force **680k negative vs 521k positive samples** = a real tug-of-war with a persistent **57:43 pointed bias**;
+**azimuth occupancy 93 % SIDE** — recruitment is overwhelmingly on the side azimuths, not upper or lower.
+
+**⇒ SUPERSEDES section 9p's gliding verdict and §14i of `SITE_NORMAL_HEAD_BINDING.md`** ("NOT DEMONSTRATED …
+no net thrust"). Both of §14i's conclusions fail: its `nPull`/`nDrag` polarity statistic was invalid (already
+retracted in §9q) AND its horizon was ~80x too short. **Its per-seed velocities (+1.65/+11.39/-6.80 um/s)
+are WITHDRAWN as unusable** for the reason below.
+
+### 9r-i. LOAD-BEARING NUMERICAL FINDING — `dt = 2.5e-6` with `eta = 0.01 Pa.s` is UNSTABLE
+
+`dt*k_F8/gamma ~ 2.16`, past the explicit integrator's stability limit of 2. One bound head triggers a
+period-2 z oscillation growing x1.155/step to **134 pN**, ejecting the filament **16 um** out of a
+nanometre-deep chamber — **entirely within finite arithmetic, so NaN/Inf checks never fire.** Isolated to eta
+by matched controls: `eta=0.10/dt=2.5e-6` and `eta=0.01/dt=2.5e-7` are both stationary at 1-5 pN. **This is
+the CLAUDE.md scaled-dt rule** (`dt(eta) = dt0*eta/eta0`) **biting: never run eta=0.01 at the canonical dt.**
+The production assay was therefore run at the canonical `eta = 0.1 / dt = 2.5e-6` — a stated deviation from
+the requested eta, taken because the requested pair is invalid and because `v ~ eta^-0.20` makes speed nearly
+eta-insensitive. **Health guards added** (finiteness is demonstrably not enough): stop on |bond force| >
+200 pN for 20 consecutive steps, centroid > 0.5 um off the lawn plane, or leaving the lawn footprint.
+
+### 9r-ii. Execution: the cull became load-bearing, and four gates say it is free
+
+The explicit-S2 step is **>99.9 % `matS2SolveStepTilt`**, the one stage the explicit path never culled (all
+N motors every step = 5.9 s/step at 21 000 motors = 68 days for 10^6 steps). Two additive, **default-inert**
+changes: a one-line guard in that kernel (`restC` row 8 = cull/worker tag, `exCounts[4]` = worker id, both
+default 0 ⇒ every existing path byte-identical) and an optional `MatCullPlan` in `stepGlidingCPU`. **One copy
+of the physics; no force law, gate, rate or rest pose touched.** Gates: **P0** device path refuses (CPU
+asserted, not assumed); **C** cull completeness — over **2 417 570 culled motor-samples the closest culled
+head came 57.11 nm** from the filament vs a **3.00 nm** g0 radius (**x19 margin**), queryR NOT enlarged;
+**W** worker striping **bit-identical**; **A** culled vs all-active **identical to every printed digit** at
+**11.0x** the speed (the cull is causally invisible: a culled motor's only channel to anything else is
+binding, and it is out of binding range by construction).
+
+**Method caveat that STRENGTHENS the result:** the `sqrt(2Dt)` noise floor uses FREE-filament diffusion, but
+with `avgBound ~1.3` the filament is intermittently tethered — measured across-seed scatter is **11x smaller**
+than free-Brownian predicts. **Every signal/floor ratio quoted is therefore CONSERVATIVE.**
+
+**Two retractions are preserved in the report, not overwritten** (a mid-run "DRIFT RESOLVED" call withdrawn
+when its sqrt-t slope eroded, then met later on the SAME unchanged criterion), because the report's other
+contribution is catching overclaims in earlier work.
+
+**New:** `softbox/SiteNormalLongGlideHarness.java`, `scripts/run_site_normal_long_glide.sh`,
+`scripts/site_normal_long_glide_analysis.py`, `scripts/site_normal_glide_ensemble.py`. Viewer frames (long
+movie + 1-frame-per-step milestone windows) under each run's `threejs_glide_seed*` / `simviewer/`.
+
 ---
 
 ## 10. Load-bearing reports
@@ -1490,7 +1562,7 @@ floor. `-glide-compat` now prints `r.fax` with a significance test.
 Read these before revisiting the associated topic:
 
 - `docs/TWOBODY_BLIND_TWEEZERS_SYNTHESIS.md` · `docs/TWOBODY_BIOCHEMICAL_CYCLE.md` · `docs/TWOBODY_SPARSE_MULTIMOTOR.md` · `docs/TWOBODY_LOWDENSITY_GLIDING.md` · `docs/TWOBODY_FLEXIBLE_MAT_GLIDING.md` · `docs/TWOBODY_FULLCOVERAGE_MAT.md` · `docs/TWOBODY_TAIL_RECRUITMENT.md` · `docs/TWOBODY_SUPPORTED_S2_TAIL.md` · `docs/TWOBODY_MD_INFORMED_S2.md` (two-body replacement-motor arc; §9b)
-- `docs/attachment/CANONICAL_ACTIN_ATTACHMENT_AUDIT.md` · `docs/attachment/PATH_B_SITE_ACCESSIBILITY_TELEMETRY.md` · `docs/attachment/FILAMENT_Z_SLAB_AND_ACCESSIBILITY_RERUN.md` (attachment architecture, accessibility telemetry, z-boundary; §9d) · `docs/attachment/SPARSE_LONG_PITCH_ACTIN_SITE_LATTICE.md` (**the current Path-B site geometry**; §9f) · `docs/attachment/BOUND_MOTOR_HELICAL_GEOMETRY_VISUAL_AUDIT.md` (**bound-head orientation is lab-referenced, not site-referenced**; §9h) · `docs/motor/MYOSIN_HEAD_ORIENTATION_DOF_HISTORY.md` (**the head's 3-D orientational DOF was lost at the 2026-07-14 two-body replacement; it explains the 30 % site mask**; §9i) · `docs/motor/RESTORED_3D_HEAD_TILT_DOF.md` (**neck–head tilt χ restores it kinematically, 20/20 site normals, no RAND_BASE_AZ; dynamics not yet done**; §9j) · `docs/motor/POST_HEAD_FREEDOM_VALIDATION.md` / `docs/motor/CHI_AWARE_CAPTURE_ORIENTATION_AUDIT.md` (**both carry 2026-08-13 correction banners: their orientation angles were measured on `eBind`, which is 23.2° off the head axis**; §9l/§9m) · `docs/motor/SITE_NORMAL_HEAD_BINDING.md` (**THE CURRENT BINDING LAW: `xHeadHat = −n_site`; `xHeadHat` is neither `eBind` nor `−eBind`; all gates pass but natural capture yield is ZERO — read §14 before any gliding or twirling work**; §9n)
+- `docs/attachment/CANONICAL_ACTIN_ATTACHMENT_AUDIT.md` · `docs/attachment/PATH_B_SITE_ACCESSIBILITY_TELEMETRY.md` · `docs/attachment/FILAMENT_Z_SLAB_AND_ACCESSIBILITY_RERUN.md` (attachment architecture, accessibility telemetry, z-boundary; §9d) · `docs/attachment/SPARSE_LONG_PITCH_ACTIN_SITE_LATTICE.md` (**the current Path-B site geometry**; §9f) · `docs/attachment/BOUND_MOTOR_HELICAL_GEOMETRY_VISUAL_AUDIT.md` (**bound-head orientation is lab-referenced, not site-referenced**; §9h) · `docs/motor/MYOSIN_HEAD_ORIENTATION_DOF_HISTORY.md` (**the head's 3-D orientational DOF was lost at the 2026-07-14 two-body replacement; it explains the 30 % site mask**; §9i) · `docs/motor/RESTORED_3D_HEAD_TILT_DOF.md` (**neck–head tilt χ restores it kinematically, 20/20 site normals, no RAND_BASE_AZ; dynamics not yet done**; §9j) · `docs/motor/POST_HEAD_FREEDOM_VALIDATION.md` / `docs/motor/CHI_AWARE_CAPTURE_ORIENTATION_AUDIT.md` (**both carry 2026-08-13 correction banners: their orientation angles were measured on `eBind`, which is 23.2° off the head axis**; §9l/§9m) · `docs/motor/SITE_NORMAL_HEAD_BINDING.md` (**THE CURRENT BINDING LAW: `xHeadHat = −n_site`; `xHeadHat` is neither `eBind` nor `−eBind`. §14i's gliding verdict is SUPERSEDED — see §9r**; §9n) · `docs/motor/SITE_NORMAL_LONG_GLIDING_ASSAY.md` (**THE MOTOR GLIDES: class A, +2.000 um reached, ~0.9 um/s, 3 seeds; AND `dt=2.5e-6` with `eta=0.01` is numerically UNSTABLE — read §3b before any low-eta run**; §9r)
 - `docs/FINE_DT_V0_REFERENCE.md`
 - `docs/TIMESTEP_SERVO_AUDIT.md`
 - `docs/CANONICAL_STROKE_DISAMBIGUATION.md`

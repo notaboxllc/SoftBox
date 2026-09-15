@@ -1,5 +1,374 @@
 # Soft Box Project Journal
 
+### 2026-09-12 — TRIAD BASE DOES NOT SUPPRESS TWIRLING (0.991x). The 12x claim was a one-seed draw under the diffusion floor.
+
+**The standing "TRIAD/SINGLE = 0.085 (12x suppression)" result is RETRACTED.** At **eps = 8 deg**, matched
+scene / lawn / runner / seed against the existing `RIGID_EPS_LADDER` e8 pair (mat 14x2, rho 2000, dt 1.25e-6,
+rigid nSeg=1, target 1 um, `-randbase-seed 20260901`): single-spring odd/eps = **-1.500**, triad odd/eps =
+**-1.486**, **ratio 0.991**. Both triad arms are INDIVIDUALLY resolved (z = -7.08 / +6.39; increment sign
+fraction 0.15 / 0.80) with a clean mirror reversal (-12.71 / +11.06 turns/um) and 0 invalid / 0 solverFail.
+Gliding is unaffected too (avgBound 2.14 / 2.00 vs 2.12 / 2.18; velocities overlapping). **The triad base is
+usable for the two-point / derived-chirality work without costing the twirl.**
+
+**Why the old number was wrong — a power failure, not a physics difference.** New instrument: drift-vs-diffusion
+on the roll coordinate, `z = net roll / (sd(dRoll) * sqrt(N))` over the trajectory rows, plus the increment sign
+fraction. Applied to the established single-spring ladder (same scene, 1 um of travel):
+
+| eps | odd turns/um | odd/eps | z native / mirror | sign frac |
+|---|---|---|---|---|
+| 1 | -1.31 | -1.31 | -0.70 / 1.00 | 0.51 / 0.54 |
+| 2 | -2.80 | -1.40 | -2.60 / 1.29 | 0.35 / 0.56 |
+| 4 | -5.87 | -1.47 | -3.93 / 3.12 | 0.34 / 0.68 |
+| 8 | -12.00 | -1.50 | **-5.88 / 8.16** | 0.26 / 0.89 |
+
+**At eps = 1.5 NO arm is resolved, single-spring included** (|z| <= 2.7, sign fraction ~0.5): the accumulated
+roll is at its own random-walk spread, so 0.085 was a RATIO OF TWO UNRESOLVED QUANTITIES. The expected odd
+signal there (~2.07 turns/um) is the same size as the diffusive spread (~1.7 turns) => z ~ 1.2 per arm, ~1.7
+per mirror pair. That also explains the already-flagged "reference itself 50% off" (-2.10 vs the ladder's
+-1.45): the reference was not anomalous, it was sampling noise of the signal's own size. Re-read with both
+eps=1.5 seeds complete AND distance-matched, triad odd/eps = **-1.23 +/- 0.94** — consistent with the ladder,
+not 12x below it. Consistent with the standing note that net roll / T is not a rotation rate
+(`twirl-omega-is-diffusive-artifact`); this adds a per-arm resolvability test.
+
+**Predicted before the run, from the geometry.** eps enters the triad through ONE scalar: `strokeSkew` writes
+`bindAzim += mirror*eps`, and `bondForcesSurfaceTriad` reads that same `bindAzim` as `az0` for all three
+contacts. So eps is a RIGID rotation of the whole 3-contact actin triangle about the filament axis. Each foot
+is then displaced purely tangentially IN ITS OWN local frame, so each keeps its full moment arm R and the
+**axial couple k*R^2*eps is preserved EXACTLY**; only the vector SUM of the three k/3 forces loses the cosine of
+the vertex azimuth spread (+37.0 / -18.5 / -18.5 deg) = **0.898x** on the net tangential force. Predicted ratio
+~1.0, measured 0.991. A large suppression, had it been real, would therefore have had to live in the rotational
+RESPONSE (3 non-collinear contacts clamp the head's orientation), not in the drive.
+
+**Rode along: the triad head-side patch basis was corrected.** `hy` was `motorYVec = perp3(uVec)`, a LAB-fixed
+perpendicular re-synthesised each step; it is now a material direction perpendicular to the head axis, seeded
+RELAXED at bind (= uSite projected, the actin-side axial leg) and parallel-transported thereafter
+(`headRollStep` pattern). `-triad-labpatch` restores the legacy basis as a regression control. **In THIS scene
+it is an exact no-op** — legacy vs material agree to the last printed digit on every channel — because the lab
+axis coincides with the filament axis and the latched head axis stays perpendicular to it, so `perp3` returns
+that axis identically and transport leaves it fixed. It bites only where that coincidence fails: a bending /
+multi-segment filament, a tilted filament, or `-headtilt` (which gives the head axis an axial component). An
+earlier claim here that the lab basis produced a "spurious roll brake in the twirl channel" is WITHDRAWN — the
+data and the algebra both say it does not, in this geometry.
+
+**SCOPE — every number in this entry is EXPLORATORY.** All of it is at `aeta = 0.1 Pa.s` (~100x water), used
+deliberately as a CONVENIENCE: it permits the larger timestep that makes these sweeps affordable.
+**Publication numbers will be re-measured at `aeta = 0.01 Pa.s`** — the lowest trustworthy viscosity per
+VISCOSITY_SENSITIVITY Part II, and the regime where twirling is actually resolved at the canonical operating
+point (at 0.10 the twirl is 1.06 sigma / 58% seed sign even at n=24, i.e. BLIND). Nothing here is a
+quantitative prediction. The comparisons are internally matched (same eta, same scene, same lawn) and that is
+the whole of what they claim.
+
+**Open.** eps=8 is n=1 per arm — decisive for presence/absence, not for a 10% difference; no triad arm above
+eps=8; the eps=1.5 pair is underpowered BY CONSTRUCTION and should not be re-run at 1 um of travel (it needs
+~8 um or ~9 mirror pairs). New: `scripts/triad_eps8.sh`, `-triad-labpatch`, `scripts/patchbasis_bite.sh`.
+
+### 2026-09-09 — TWO-POINT ATTACHMENT WORKS: the sites were ONE-SIDED. §3–§7 superseded.
+
+**The standing conclusion "two-point attachment destroys gliding" is FALSE.** With the two sites STRADDLING
+the bound site (n−2 and n+2) instead of trailing it (n and n−2), a two-spring bond glides at **0.946x** the
+single-spring control: **+1.087 +/- 0.093 vs +1.149 +/- 0.243**, all four seeds positive, LESS variable than the
+control and holding MORE bound heads. The one-sided pair gave 0.072 with scrambled signs — a **14x** recovery.
+
+**Why (the proof that made it findable).** For N zero-rest springs of stiffness k/N,
+`F_total = k(centroid(p) − centroid(a))`, and with symmetric head anchors F1 == F2 exactly, so the torques
+reduce too: **N springs ARE one spring of stiffness k at the SITE CENTROID.** Sites n and n−2 lie on the same
+side, so that centroid sat **2.70 nm rearward** — 54 % of a ~5 nm stroke — moving the propulsion→opposition
+crossover to BEFORE the attachment starts. Every attachment pushed the filament backward; the trajectory
+duly showed it reversing (−0.013, −0.041 um windows). Straddling puts the centroid at arc 0.00 / azimuth 0.0
+(0.38 nm inward radial residue only) and gliding returns.
+
+**Void:** §3 (the 0.06–0.19x collapse, the mirror reversal), §5 (linkage softening), §6 (site-normal
+loosening), §7 (the whole decomposition and the couple analysis) — all characterise the one-sided pair and say
+so nowhere. §7's two exact KERNEL GATES stand (the code is correct); its mechanism conclusions do not. The
+`HEAD_CONFORMATION_JUSTIFICATION` claim that two-point is an excluded structural alternative is withdrawn.
+
+**Eight explanations were refuted before the right one** — torsional clamp, converter shift, misaligned feet,
+axial cancellation, torsional decoherence, filament couple, numerical ringing, spring frustration — each built
+after seeing data rather than predicted. The surviving account came from two jba questions: zero-rest springs
+need a relaxed state, and N springs of k/N must behave like one spring of k. The second reduces the problem to
+"where is the centroid", which is answerable by inspection.
+
+**REOPENS the derived-handedness route.** Two-point was the path to chirality from the helical site geometry
+rather than an imposed `epsStroke`; it was closed on the strength of the void sections. Next experiment: run
+the straddled bond at **eps = 0** and measure whether the lattice chirality alone produces twirl.
+
+New flags: `-twopoint-straddle`, `-twopoint-alignfeet` (a true zero-energy state but dynamically identical to
+foot=0, since the resultant is unchanged — retained only to document that). Report:
+`docs/twirl/TWOPOINT_ATTACHMENT_SCOPE.md` §8.
+
+### 2026-09-06 — MISSING INTER-SEGMENT TORSIONAL CONSTRAINT: twirl magnitudes INVALIDATED; RollSpringSystem wired in
+
+**Found by jba from the movie:** three fluorescent probes on DIFFERENT segments of one filament rotated by
+**-12.25 / -3.11 / -8.64 turns** (internal twist drift **+9.14** and **+3.61** turns over 959 frames). The
+filament was NOT rotating as a body.
+
+**Cause — structural.** `ChainBendingForceSystem` never receives `yVec`; it is not even a kernel parameter. Its
+F4 "torsion" is `cross(u_i,u_j)`, a perpendicular-axis bending straightener with **zero torque about the shared
+axis**. INHERITED, not a porting error: v1 documents the same hole (`AZIMUTHAL_BINDING_BUILD_READ.md` Verdict A,
+*"segment roll is a free, uncoupled, random-at-birth DOF"*). `RollSpringSystem` (2026-07-09, Increment 1) is the
+fix and was validated in isolation but **never wired into the site-normal lineage** (`ChiralSiteHarness` check
+108 asserts it OFF).
+
+**Wired in** (`-rollspring`, `-rollstiff`): both CPU step paths + BOTH GPU graph builders, `rollP`+`f.yVec`
+uploaded. Rest twist from the SCENE's segment length (0.1755 um -> -22.50 deg/joint), not the prototype's
+`stdSegLength`. Gates: OFF byte-identical, ON differs, 0 invalid / 0 solverFail.
+**Two wiring bugs caught by the ON-must-differ gate** (both would have passed silently otherwise): the task went
+into the wrong graph builder, and `rollP`/`yVec` were never uploaded.
+
+**First re-measurement (eps=4, rho=2000, eta=0.1):** probe turns -1.43/-1.59/-1.82, drift **-0.16/-0.39** turns
+(20-50x more coherent). **Twirl per micron INCREASES: -2.40 -> -3.39 turns/um** (pitch 0.417 -> 0.295 um) --
+coupled segments let distributed motor torques ADD instead of cancelling. **A recorded forecast is REFUTED:** an
+18k-step smoke suggested pitch would grow to several um and leave the experimental band; that was a transient and
+the direction is opposite. Re-measure, do not rescale old numbers.
+
+**INVALIDATED (magnitude only):** every pitch in TWIRL_SKEW15 / EPS_LADDER / RANDBASE_LADDER / LOWVISC_STROKE /
+LOWVISC_EPS4 / the 5um movie; the "same order as experiment" claim; the eps calibration; the "3-7 deg required"
+structural argument; SITE_LATTICE_TWIRL_NULL's 82sigma; and **VISCOSITY_SENSITIVITY Part II** (its
+*"rotation is drag-limited"* mechanism used PER-SEGMENT rotational drag).
+**SURVIVES:** chirality sign structure, the mirror sign reversal, monotonicity in eps, all NULLs, and the gliding
+work (two-point / linkage / kbind).
+
+**Scope (jba priority): coherence is the gate, physical stiffness calibration is DEFERRED.** Primary observable =
+residual internal twist drift per micron from material probes (invisible to every aggregate scalar we log);
+target <=0.05 turns/um vs ~0.3-0.8 at f=0.5. Sweep f in {0.5,1.0,1.5}, f<2 by stability construction. The
+roll-spring stiffness is **uncalibrated** (no reference to actin C ~ 2.8e-26 N.m^2 anywhere in the prototype), so
+re-measured pitch is reproducible-under-stated-coupling, NOT yet a physical prediction.
+Notice: `docs/twirl/TORSIONAL_COHERENCE_INVALIDATION.md`; 5 affected docs bannered.
+
+### 2026-09-04 — Two-point attachment: the F9 null (§4) and the linkage-softening negative (§5)
+
+**§4 — "free the head↔converter connection" is a NULL for a trivial reason; the question is UNTESTED, not
+refuted.** Added a `keepF9` gate (`xbParams[13]`, `-twopoint-keepf9`) to `bondForcesSurfaceTwoPoint`. On/off is
+**byte-identical over 60k GPU steps**. Cause found by three probes: (a) the flag reaches the kernel
+(`keepF9` 0.0 vs 1.0 in the resolved buffer); (b) a forced 1e-18 N·m torque injected at the same site drives
+`rollTurns` to +28.7 vs −0.23 ⇒ the torque channel IS consumed; (c) `restF9` forced to 45° changes nothing.
+The answer is **`j1FMT` (`xbParams[2]`) = 0.000** ⇒ the F9 torque is identically zero. **F9 is dead code in the
+site-normal gliding harness**, in the default `bondForcesSurface` as much as in the two-point path.
+- **RETRACTED:** the "head is pinned THREE ways (two springs + F9 + kbind)" rationale in the kernel comment and
+  the scope doc is WRONG. F9 was never a constraint. Comments corrected in place.
+- **RETRACTED:** an earlier NO-F9 smoke reported as a null ran against a **stale binary** (class file postdated
+  the run output; a build inside a backgrounded command had not finished before the runs launched). Void, not a
+  result.
+- Because removing F9 was a no-op, the experiment carries **no information** about whether head reorientation
+  salvages two-spring gliding. NOT counted as a refuted fix.
+
+**§5 — relaxing the UPSTREAM linkage (neck/converter/S2) does NOT rescue two-point gliding.** Per jba the
+site-normal `U_bind` is **reserved** (candidate power-stroke conformational channel), so the test used three new
+DATA-ONLY knobs on per-motor `params`: `-soft-conv` (`params[6]` kconv), `-soft-s2a` (`params[11]` g4ks),
+`-soft-s2b` (`params[13]` g4kb). FDT-safe by construction (Brownian amplitudes are built from the drag gammas,
+not these stiffnesses); `f=1.0` verified **byte-identical**.
+- **Run-length gate:** a first 6-arm screen at 40k steps **failed its own positive control** (two-point/baseline
+  0.52× vs the known 0.06–0.19×) and was **discarded, not reported**. At 200k the control passes (A = 1.049 µm/s,
+  B = 0.222, **B/A = 0.212**) and only then were treatment arms read.
+- **Result:** converter 0.280×, S2-bend 0.268×, S2-axial **0.152×** (worse), all three together 0.334× — vs
+  baseline 1.000. **Flat over 100× in stiffness** (0.212/0.334/0.247/0.343 at f = 1/0.1/0.03/0.01) while
+  avgBound decays 0.84 → 0.30 ⇒ the knob bites, gliding does not respond.
+- **Confound excluded:** soft converter with NO two-point bond glides at **0.78×** ⇒ a soft linkage still
+  transmits force; C/D/G fail because the softening is irrelevant, not because the linkage went floppy.
+- **Structural reading:** the two-point bond is a **torsional clamp at the actin interface**; upstream compliance
+  sits on the wrong side of it. The only compliance that would release the head is rotational freedom **relative
+  to actin** — the reserved site-normal channel. Constraint and release are both in the reserved channel.
+- n = 1 per arm: several-fold effects resolved, the ordering among the treatment arms is NOT.
+
+
+**§6 (same day, later) — loosening the RESERVED site-normal channel does NOT rescue two-point gliding, and
+§5's clamp explanation is REFUTED.** New DIAGNOSTIC knob `-soft-kbind <f>` scales `params[7]=kbindCode` (the
+torsional spring holding `xHeadHat` to `-n_site`); reaches both readers (`gateP[0]`, `snP[4]`), bound stiffness
+only (`kDet` untouched); `f=1.0` byte-identical.
+- **Controls:** loosening the latch ALONE barely moves single-point glide (0.93x, 1.12x) ⇒ the site-normal latch
+  is NOT what limits gliding in the working model.
+- **Ladder non-monotonic** (0.212/0.273/0.119/0.485 at f=1/0.3/0.1/0.03) ⇒ x0.03 taken to multi-seed as a
+  CANDIDATE only. **Multi-seed (4 matched seeds): paired H-B = -0.025 +/- 0.154, t=0.16 ⇒ NULL.** The x0.03
+  single-seed 2.29x was a draw (H/B spans 0.14-2.74).
+- **RETRACTED — §5's structural reading.** "The two-point cost is a torsional clamp at the actin interface whose
+  only release is the site-normal channel" is a falsifiable prediction; releasing the clamp does NOT recover the
+  glide, so the clamp reading is **withdrawn**. §5's MEASUREMENTS stand (upstream softening null; the F control
+  excludes the floppy-linkage confound) -- only the explanation is retracted. **The mechanism of the two-point
+  penalty is NOT identified.** Untested candidate (recorded as a guess, not a result): an axial tug-of-war
+  between two springs anchored 5.4 nm apart along the axis, one AHEAD of the head.
+- **LOAD-BEARING — two-point is a HIGH-VARIANCE configuration:** 0.046-0.515 um/s across 4 seeds (**11x**) vs
+  single-point 0.977-1.171 (+/-10%). ⇒ **every single-seed two-point number is unreliable, including §3's
+  0.06-0.19x "collapse"** (n=1); the n=4 mean is **0.254x** baseline, ABOVE that range. Likely also explains the
+  §3 mirror reversal that would not reproduce. **Carry-forward: no two-point claim below n=4 paired; report the
+  paired difference, not a ratio of means.**
+
+
+**§7 (2026-09-05) — DECOMPOSITION: the cause is ACTIN SITE SEPARATION; §3–§6 were CONFOUNDED; the kernel is
+CLEAN.** jba: *"There must be a simple bottom line... I'm suspicious of a sign error or other bug."* Right
+instinct, wrong target — the kernel is sound, the CONFIGURATION carried TWO independent defects.
+- **TWO EXACT KERNEL GATES.** `foot=0,w=0` (one spring, tip anchor) AND `foot=0,w=0.5,pair=0` (two springs,
+  tip anchor, SAME site) each reproduce single-point **to 4 dp on all 4 seeds** (1.0487/0.8522/0.7661/0.5073)
+  ⇒ **NO BUG.** These gates should have existed from day one; their absence let a confounded setup survive
+  three rescue campaigns.
+- **TWO INDEPENDENT SUFFICIENT CAUSES, either alone fatal:** (1) the **2.82 nm anchor offset** (my footprint
+  embellishment) — one spring + offset already fails; (2) **actin site separation** — zero offset, two
+  springs, **already fatal at ONE monomer (2.7 nm)**; `pair=0` is perfect. **Weighting is IRRELEVANT**
+  (w=0/0.25/0.5 all ≈0, scattered sign) ⇒ the "asymmetric weighting leaves an uncancelled torque" idea is
+  ALSO wrong.
+- **Ladder (signed v, n=4):** SP **+0.794+/-0.112** `[+,+,+,+]` | pair=0 **+0.794** identical | pair=1 (2.7nm)
+  +0.074+/-0.131 | pair=2 (5.5nm) -0.117+/-0.191 | offset variants -0.05..-0.13, all sign-scattered.
+- **The motor is DE-RECTIFIED, not weakened:** faxPos/faxNeg magnitudes UNCHANGED vs single-point, net
+  collapses **-0.43 pN -> ~0**, glide direction becomes seed-dependent.
+- **Leading (still unproven) reading:** a single zero-rest spring is a BALL JOINT (no torque about the
+  attachment ⇒ head pivots freely); two separated springs form a COUPLE pinning head orientation to the
+  filament material frame, stiffness growing with separation. **The stroke appears to need the head to pivot
+  on actin.** This is the §5 clamp hypothesis — and **§6 did NOT refute it** (§6 loosened `kbind`, the
+  site-normal orientation latch, a DIFFERENT constraint that never touched the couple). **§6.1's retraction
+  of the clamp reading is itself WITHDRAWN.**
+- **§3–§6 CONFOUNDED:** all pre-§7 two-point numbers had BOTH defects. They survive only as *"two-point AS
+  IMPLEMENTED did not glide"*, not as tests of the mechanism. §3's 0.06–0.19x ratios are void (single-seed +
+  doubly-confounded). The converter shift (dTheta = -1.90+/-0.75 deg) is most likely a CONSEQUENCE of the
+  offset torque, **not** an independent mechanism — do not cite it as one.
+- **Reporting error corrected:** I reported `abs(v)` earlier, which HID that two-point glide flips direction
+  seed to seed. Signed velocities from now on; n>=4 minimum.
+- New CLI: `-twopoint-ancw`, `-twopoint-pair`, `-soft-conv/-soft-s2a/-soft-s2b`, `-soft-kbind`, `-convdiag`
+  (all default-off, no-op verified byte-identical). **Keep GATE-1/GATE-2 as regression tests.**
+
+Report: `docs/twirl/TWOPOINT_ATTACHMENT_SCOPE.md` §4–§7. Two-point remains a recorded negative.
+
+**Low-viscosity ε=4° stroke-skew campaign (running):** at t ≈ 0.415 s / 0.82 µm, ε-odd
+**−1.289 ± 0.157 turns/µm** (n=3 pairs), pitch **0.78 µm** — inside the experimental 0.47 ± 0.19 µm band.
+
+### 2026-08-13/15 — LONG FULL-MAT SITE-NORMAL GLIDING ASSAY: **CLASS A, STRONG GLIDE — +2.000 um REACHED**;
+### and the pinned (dt, eta) pair is UNSTABLE
+
+**HEADLINE — CLASS A, MET ON BOTH ENSEMBLE SEEDS INDEPENDENTLY. Seed 20260901 reached +2.00007 um at step
+911 827 (t = 2.2796 s) and seed 20260902 +2.00006 um at step 958 627 (t = 2.3966 s), both INSIDE the pre-set
+1e6-step horizon.** `STOP=TARGET_REACHED` on both. Full-run LS velocity **+0.8215 / +0.7898 um/s**; **live-axis cumulative
+forward +2.00242 um vs fixed-axis net +2.00006 um — agreeing to 0.1 %**, so the filament travelled two
+microns ALONG ITS OWN AXIS, not two microns of lab-x (the Phase-6 distinction, closed). Milestones monotonic
+and none reversed: 0.25/0.50/1.00/1.50/2.00 um at t = 0.230/0.562/1.227/1.862/2.397 s. **Mechanism over 3663 (s902) / 3772 (s901)
+attachments:** duty P(0)=0.283 P(1)=0.362 P(>=2)=0.354 P(>=5)=0.0096 (**unbound 28 % of the time and glides
+anyway** — intermittent few-head regime); mean residence 327 steps = 817 us; detachment **3662 ATP / 0 rigor
+/ 0 other** (Lymn-Taylor exclusively); bound nucleotide ADP 984 958 / ADP.Pi 143 373 / NONE 72 840 / **ATP 0**
+(bound heads post-stroke, as required); axial force **680 055 negative vs 521 116 positive** samples = a real
+tug-of-war with a persistent 57:43 pointed bias, mean **-0.3230 pN**; azimuth **93 % SIDE** (7419/1120423/
+73329); peak axial force 9.66 pN, below the 12 pN cap. **invalid 0, solverFail 0** over 958 628 / 911 828 steps,
+contour 2.10600 um conserved, z within +-7.6 nm. **Twelve milestone crossings across three seeds, every one
+in the expected pointed-leading direction, none reversed.** **The criterion, horizon and stop rule were all fixed before
+any data existed and NONE was altered** — at step 880 000 the seed's projection sat BEHIND the pace needed
+and extending the cap was explicitly declined.
+
+**The primary trajectory (seed 20260813) COMPLETED at t = 1.000 s (400 000 steps), stopped there at jba's
+request so the machine could carry two visualised ensemble seeds; individually class B:
+THE REVISED SITE-NORMAL MOTOR GLIDES, POINTED-LEADING, at ~0.95 um/s.** Net forward **+0.94596 um** against
+a Brownian floor of 0.19647 (**ratio 4.81**, vs **4.83 predicted for a constant 1.00 um/s drift** — 1 %
+agreement, where pure diffusion predicts a FLAT O(1) value). LS velocity **+0.9505**, start->end +0.9359,
+100 ms windows **+1.0465 +- 0.323**; **58 of 58 rolling windows positive across two window sizes, none
+negative**. Mean axial force **-0.2560 pN** (productive sign) sustained all run. avgBound 1.34, **max 7
+simultaneous heads**, 1727 captures / 1675 strokes. **invalid 0, solverFail 0**, contour exactly 2.10600 um,
+z within +-6.4 nm. Azimuth occupancy **94 % SIDE** (3489 lower / 503 092 side / 29 989 upper). Rotation
+ended -5.9 deg (+-3 deg wander) ⇒ genuine axial motility, no gross twirling (reported, not interpreted).
+**CONFIRMED ON TWO FURTHER INDEPENDENT SEEDS:** all three reach +0.25 um in the expected direction at
+0.89 / 1.09 / 1.35 um/s, all three with negative mean axial force ⇒ the single-lawn-artefact hypothesis is
+dead. **CLASS B (WEAK GLIDE)** — the assay's own **+2.000 um criterion was NOT reached** (needs t ~ 2.1 s;
+the primary was stopped at t = 1.0 s at jba's request to free the machine for two visualised ensemble seeds,
+which continue toward it).
+
+**RETRACTION, AND THEN THE TEST PASSING ON ITS UNCHANGED TERMS — both recorded.** At step 90 000 I wrote
+"DRIFT RESOLVED ... ~1.26 um/s" on `ratio >= 3` plus a then-favourable sqrt-t slope (+0.509). **Withdrawn at
+step 150 000.** The slope was the fragile half
+and continued data eroded it: **+0.509 -> +0.302 -> +0.196**, heading for the diffusive 0 not the drift 0.5.
+The ratio has sat FLAT (3.26/3.07/3.09/2.92/3.06/3.01/3.33/3.23) across eight checkpoints while t nearly
+DOUBLED, where a constant drift demanded x1.37 growth; displacement grows SUB-linearly (0.286 -> 0.388 um vs
+0.477 for a steady 1.27 um/s) and `v_fit` decays monotonically 1.27 -> 1.23 -> 1.10 -> 1.00. A ratio pinned
+near 3 while the floor grows underneath is a single excursion, not steady transport. This is a milder form of
+the §14i error mode and is recorded, not overwritten.
+
+**What SURVIVES and is independent of the kinematics:** the mean axial force on the
+filament, classified BY FORCE SIGN against filament polarity (NOT the retracted `F*v` power metric), is
+stably **-0.19..-0.21 pN** — negative is productive — with propulsive -1.08 vs resisting +0.81 pN, i.e. a
+real tug-of-war with a consistent pointed-directed bias, not a 50/50 split. Engagement `avgBound` 1.29, **max
+7 simultaneous heads**, 385 captures / 373 strokes. invalid 0, solverFail 0, z within +-6.4 nm, contour
+conserved. **The withdrawal was CORRECT at the time** — t = 0.15-0.30 s contains a genuine slow patch (+0.68 um/s
+disjoint window inside an otherwise ~1.1 um/s trajectory), which is what flattened the ratio. **By t = 0.9 s
+the SAME unchanged criterion was met** (ratio 4.78 vs 4.83 predicted; slope recovered to +0.445). **No bar
+was moved** — it was set before the data existed, failed, and was later met. Preserved in full because this
+report's other contribution is catching two overclaims in §14i, and it would be worthless if it committed
+the same error silently.
+**Caveat bounding everything: ONE SEED**, significance against a Brownian null for a single trajectory; a
+3-seed ensemble at ~90 k steps each is the highest-value follow-up.
+
+**The contrast that makes the point:** the failed eta=0.01 arm "reached" +0.25 um in **1605 steps** on an
+11.6 nN spike; this run took **74 270 steps** to the same displacement at **1.68 pN**, coverage still
+contour-complete.
+
+### 2026-08-13 (later, part 1) — the pinned (dt, eta) pair is UNSTABLE
+
+**What was done.** Built the long, high-density, full-mat gliding compatibility test for the revised
+site-normal motor — 7x1 um lawn, 3000 heads/um^2 (21 000 motors), 12-segment flexible actin, production
+per-segment UNION cull, up to 1e6 steps. **Nothing was tuned**: no molecular parameter, gate, threshold, rest
+pose, rate or chemistry setting was touched. Report: `docs/motor/SITE_NORMAL_LONG_GLIDING_ASSAY.md`. Raw:
+`RUN_LOGS/motor_audit/site_normal_long_glide/` (+ `..._ETA001_FAILED/`). New:
+`softbox/SiteNormalLongGlideHarness.java`, `scripts/run_site_normal_long_glide.sh`.
+
+**THE LOAD-BEARING FINDING — `dt = 2.5e-6 s` with `eta = 0.01 Pa.s` is past the explicit integrator's
+stability limit for the F8 bond.** The first attempt at that pair reported "+0.25 um" at step 1605 and
+"+0.50 um" at step **1606** — a quarter-micron in ONE timestep, driven by **11.6 nN** from a single bound
+head (~2000x physiological) — and by step 2000 the filament sat at `z in [-15.9, +13.5] um`, sixteen microns
+out of a nanometre-deep chamber. **Every value stayed FINITE throughout, so a NaN/Inf check never fired.**
+
+*Mechanism, measured.* Nothing is wrong until step 169, when one motor binds. From that step the filament's
+z extremes **swap sign on EVERY step** while the amplitude grows geometrically (0.003 -> 0.085 um) and the
+bond force climbs 5.9 -> 134 pN. That is the explicit overdamped update when `dt*k/gamma > 2`, amplification
+`|1 - dt*k/gamma|`; the measured growth of x1.155/step gives **`dt*k_F8/gamma ~ 2.16`**, just past 2. The
+bond ends 65.5 nm long.
+
+*Cause isolated by matched controls* (identical scene, seed, cull, workers, dt; only eta differs):
+`eta=0.01/dt=2.5e-6` blows up (134 pN, +-16 um); **`eta=0.10/dt=2.5e-6` is stationary (1-5 pN, +-3.5 nm,
+attachments lasting 130-430 steps)**; **`eta=0.01/dt=2.5e-7` is stationary (3-5 pN, +-3.5 nm, up to 5 bound
+by step 600)**. Not the cull (gate C: culled motors never came within 57 nm of the filament, x19 the 3 nm
+`g0` radius), not the striping (gate W: bit-identical). It is `gamma ~ eta`. **CLAUDE.md already carries the
+rule** from the viscosity campaign — `dt(eta) = dt0*eta/eta0` is REQUIRED, which for eta=0.01 prescribes
+exactly 2.5e-7 — and the faithful-dt ceiling of 1e-5 at canonical eta scales to 1e-6 at eta=0.01.
+
+**Consequence for the record: the 5000-step `-glide-compat` smoke (`SITE_NORMAL_HEAD_BINDING.md` §14i) ran at
+this same pair.** Its per-seed glide values (+1.65 / +11.39 / -6.80 um/s) are **not trustworthy even as
+noise** and must not be quoted; a withdrawal banner is now on §14i and a pointer on
+`SITE_FRAME_POWER_STROKE_AUDIT.md` §7b. **§1-§4 of the stroke audit are UNAFFECTED** — that fixture is
+Brownian-off, filament-clamped and force-measured, so the "pointed-directed at 8/8 helical azimuths" result
+is not an integration-stability question.
+
+**Execution change that made the assay possible (additive, default-inert, arithmetically neutral).** The
+explicit-S2 step is >99.9 % `matS2SolveStepTilt`, and that kernel was the ONE stage the explicit path never
+culled — it solved all N motors every step (5.9 s/step at 21 000 motors = 68 days for 1e6 steps).
+`matS2SolveStepTilt` gained a single guard `if (restC.get(8*nM+m) != counts.get(4)) continue;`; `restC` grew
+`8N -> 9N` (row 8 = cull/worker tag) and `exCounts` `4 -> 5` ints (elem 4 = worker id). **Both default 0 ⇒
+the guard never fires on any existing path ⇒ every existing run is byte-identical.** `stepGlidingCPU` gained
+an optional `MatCullPlan` that runs the validated `MatSoaSlice.matCull` and tags kept motors round-robin so
+the SAME kernel is invoked once per worker. There is still exactly ONE copy of the step sequence.
+
+**Gates (all PASS).** **P0** the device path REFUSES site-normal (asserted, not assumed) ⇒ CPU runner.
+**C** cull completeness: the literal brute-accepted-never-culled test is *vacuous* at this horizon (0
+accepted candidates in 120 sampled steps — capture is ~1e-5/eligible motor-step), so the well-powered form
+was used — over **2 417 570 culled motor-samples the closest culled head came 57.11 nm** from the filament vs
+a **3.00 nm** `g0` radius, **x19 margin**; `queryR` (80 nm, the value `buildS2Mat` itself sets) NOT enlarged.
+**W** striping bit-identical (1 vs 8 workers, all deltas exactly 0). Worker scaling 318 -> 108 ms/step
+(1 -> 16); the solve is latency- not compute-bound (SMT at 16 beats 8 physical by 28 %), serial stages ~8 ms.
+
+**Gate A (culled vs ALL-ACTIVE freeze control) — the cull is a NO-OP, not merely a good approximation.**
+Matched arms at the production `eta=0.1/dt=2.5e-6`, 400 heads/um^2, 6000 steps: culled and all-active agree
+to **every printed digit** — avgBound 0.1232 = 0.1232, captures 3 = 3, boundSteps 739 = 739, netFwd
++0.00143 um = +0.00143 um — while the culled arm is **11.0x faster** (237 s vs 2610 s). Designed as an
+order-of-magnitude regime check; chaotic decorrelation did not occur because the only channel by which a
+detached motor can influence anything is BINDING, and a culled motor is out of binding range by construction
+(gate C: never closer than 57 nm vs a 3 nm gate) ⇒ freezing its beam is causally invisible. **Stated limit:**
+6000 steps at low density demonstrates the mechanism, not a theorem for a frozen motor that later re-enters
+range and binds.
+
+**Health guards added** (finiteness was demonstrably not enough): stop on |bond force| > 200 pN for 20
+consecutive steps (the model's own faithful release cap is 12 pN), centroid > 0.5 um off the lawn plane, or
+centroid leaving the lawn footprint.
+
+**What's open.** The primary trajectory was re-based to the **canonical, validated `eta = 0.1 Pa.s,
+dt = 2.5e-6 s`** (a stated deviation from the requested eta = 0.01: making that valid costs a 10x smaller dt
+and buys only 0.25 s of simulated time against 2.5 s, while the Brownian floor is the same 0.31 um in both,
+so canonical has ~6x the signal-to-noise for the motility question; and `v ~ eta^-0.20` makes speed nearly
+eta-insensitive). **eta = 0.1 is CONSERVATIVE for recruitment (~2.3x lower avgBound)** — if the outcome is
+recruitment-limited, the follow-up is an `eta=0.01 / dt=2.5e-7` arm, already shown stable. Trajectory in
+progress at ~128 ms/step; t=0 coverage is contour-complete (143-171 candidates on each of the 12 segments).
+Gate A (culled vs all-active freeze control) not yet run — it must not run concurrently.
+
 ### 2026-08-13 (final) — SITE-FRAME POWER-STROKE POLARITY AUDIT: the 50/50 was my measurement artefact
 
 **What was done.** Audited why the revised motor's bound population read ~50/50 pulling/resisting. **Nothing

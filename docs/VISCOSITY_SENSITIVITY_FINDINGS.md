@@ -1,3 +1,9 @@
+> ⚠ **TORSIONAL COHERENCE INVALIDATION (2026-09-06)** — twirl MAGNITUDES in this document were
+> measured with NO inter-segment torsional coupling (segments rolled independently; internal twist drift
+> reached +9.1 turns). Absolute pitch / turns-per-µm / Ω values here are VOID pending re-measurement with
+> `-rollspring`. Sign, antisymmetry and null results are unaffected. See
+> `docs/twirl/TORSIONAL_COHERENCE_INVALIDATION.md`.
+
 # Gliding-speed sensitivity to viscosity (aeta) — a 3×3 probe
 
 **Date:** 2026-07-09 · **Runner:** GPU (canonical default; springs transcendental-free ⇒ GPU-trustworthy).

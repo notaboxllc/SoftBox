@@ -18,3 +18,6 @@ threejs_hmm_dimer_*/
 # Blind-study unblind key/comparison — NEVER commit (analyst must not receive these)
 UNBLIND_KEY_DO_NOT_GIVE_ANALYST.json
 unblind_comparison.txt
+
+# viewer-frame archives (large binaries; regenerate with -3js)
+site_normal_long_glide_*.tar.gz

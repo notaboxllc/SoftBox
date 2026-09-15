@@ -223,6 +223,20 @@ to the *underlying force* distribution, which is a different and still-unresolve
 
 ---
 
+## 7b. POINTER (2026-08-13) — the ensemble question moved to a long full-mat assay
+
+The §5 net-axial-force numbers are re-derived from the same 5000-step `-glide-compat` smoke, so they inherit
+that run's conditions — and that run's `(dt = 2.5 µs, η = 0.01 Pa·s)` pair has since been shown to be past
+the explicit integrator's stability limit for the F8 bond. See
+**`docs/motor/SITE_NORMAL_LONG_GLIDING_ASSAY.md` §3b**. The §5 per-seed net forces
+(−0.068 / +0.497 / −0.198 pN) should be treated as unusable rather than merely underpowered.
+
+**Nothing in §1–§4 is affected.** The deterministic site-frame fixture is Brownian-off, filament-clamped and
+force-measured directly, so it is not an integration-stability question at all: the stroke's axial polarity
+(pointed-directed at 8 of 8 helical azimuths) stands unchanged and is what motivated the long assay.
+
+---
+
 ## 8. WHAT WAS NOT RUN, and why
 
 - **PHASE 14 (Brownian-off gliding diagnostic) — not run.** The deterministic fixture in §2 is a *stronger*

@@ -1005,6 +1005,16 @@ are therefore unchanged by gate retirement: **−8.458 nm pointed-first, `k_ext`
 
 ## 14i. GLIDING COMPATIBILITY — DOES THE REVISED MOTOR STILL GLIDE?
 
+> **POINTER + WITHDRAWAL (2026-08-13).** This section is SUPERSEDED as gliding evidence by
+> `docs/motor/SITE_NORMAL_LONG_GLIDING_ASSAY.md`. Two independent problems were found with it.
+> **(1)** Its `nPull`/`nDrag` "no net thrust" reading was already withdrawn in
+> `docs/motor/SITE_FRAME_POWER_STROKE_AUDIT.md` — that statistic measures the filament's Brownian velocity,
+> not the motor. **(2)** The `(dt = 2.5 µs, η = 0.01 Pa·s)` pair used below is past the explicit
+> integrator's stability limit for the F8 bond (`dt·k/γ ≈ 2.16` against a threshold of 2; measured, with
+> matched η = 0.1 and dt = 2.5e-7 controls, in the long-assay report §3b). The per-seed glide values in the
+> table are therefore **not trustworthy even as noise** and should not be quoted. The machinery/recruitment
+> observations stand; the velocity numbers do not.
+
 **Answer: NOT DEMONSTRATED. The machinery runs cleanly and the motor DOES recruit, but no directed transport
 is produced — and the part of that statement which is actually resolvable says the bound population exerts no
 net axial thrust.**
