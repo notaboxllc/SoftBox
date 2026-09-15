@@ -268,12 +268,24 @@ public final class CrossBridgeSystem {
             double szx = suy * syz - suz * syy, szy = suz * syx - sux * syz, szz = sux * syy - suy * syx;
             double szl = szx * szx + szy * szy + szz * szz;
             if (szl > 1.0e-30) { double iz = 1.0 / Math.sqrt(szl); szx *= iz; szy *= iz; szz *= iz; }
-            double psi = bindAzim.get(m);
+            // ---- TARGET-OFFSET PROBE (xbParams[15]=dAzim rad, [16]=dArc um, [17]=radial scale) ----------
+            // The two-point bond is PROVABLY identical to ONE spring of the same stiffness anchored at the
+            // MIDPOINT of sites n and n-2 (the couple term 0.5(S1-S2)x(F2-F1) vanishes identically when the
+            // weights are equal and the anchors coincide). That midpoint differs from site n in exactly three
+            // ways: azimuth +13.5 deg, arc -2.70 nm, radius x0.972. These knobs move the BOND TARGET ONLY --
+            // bindAzim, and hence the kbind latch / site normal / stroke geometry, stay on site n. Applying all
+            // three reproduces two-point; applying them one at a time says WHICH offset destroys rectification.
+            double dAz  = (xbParams.getSize() > 15) ? xbParams.get(15) : 0.0;
+            double dArc = (xbParams.getSize() > 16) ? xbParams.get(16) : 0.0;
+            double rSc  = (xbParams.getSize() > 17) ? xbParams.get(17) : 1.0;
+            double psi = bindAzim.get(m) + dAz;
+            double Rt  = Ractin * rSc;
             double cps = Math.cos(psi), sps = Math.sin(psi);
-            double radx = Ractin * (cps * syx + sps * szx);
-            double rady = Ractin * (cps * syy + sps * szy);
-            double radz = Ractin * (cps * syz + sps * szz);
-            double apx = scx + aOff * sux + radx, apy = scy + aOff * suy + rady, apz = scz + aOff * suz + radz;
+            double radx = Rt * (cps * syx + sps * szx);
+            double rady = Rt * (cps * syy + sps * szy);
+            double radz = Rt * (cps * syz + sps * szz);
+            double aOffT = aOff + dArc;
+            double apx = scx + aOffT * sux + radx, apy = scy + aOffT * suy + rady, apz = scz + aOffT * suz + radz;
 
             // F8 spring (toward the OFF-AXIS surface site)
             double dx = apx - htipx, dy = apy - htipy, dz = apz - htipz;
@@ -625,6 +637,362 @@ public final class CrossBridgeSystem {
             motorTorqueSum.set(head,          (float) (motorTorqueSum.get(head)          - mag * ax));
             motorTorqueSum.set(nB + head,     (float) (motorTorqueSum.get(nB + head)     - mag * ay));
             motorTorqueSum.set(2 * nB + head, (float) (motorTorqueSum.get(2 * nB + head) - mag * az));
+        }
+    }
+
+    /**
+     * TWO-POINT SURFACE CROSS-BRIDGE (exploratory, flag-gated, default-off).
+     *
+     * WHY. The structure says one myosin motor domain contacts TWO actin protomers on the SAME long-pitch
+     * strand -- a primary "target" n and an ancillary n-2, ~5.5 nm apart (Milligan 1996; Lorenz & Holmes 2010
+     * AC3/AC1; Fujii & Namba 2017 "two actin subunits along one strand"). Those two sites are separated
+     * AXIALLY by 2*monoSp = 5.40 nm and AZIMUTHALLY by -2*twistPerMon = -27.0 deg, so at Ractin = 3.5 nm the
+     * chord between them carries a TANGENTIAL component of 1.63 nm and is tilted 16.8 deg off the filament
+     * axis, with a handedness set by ACTIN'S OWN HELIX.
+     *
+     * THE MECHANISM. For two anchors with chord d and head force F, the axial torque delivered to the filament
+     * is  M.u = -d_t * F_n  -- the TANGENTIAL CHORD component times the RADIAL FORCE component. Site-normal
+     * binding puts the head normal to the surface, so F_n is large. With d_t = 1.63 nm and F_n ~ 1 pN this is
+     * ~1.6e-21 N.m, the same order as epsStroke's ~3.2e-21 -- but it arises from GEOMETRY, with NO imposed
+     * skew angle and a handedness DERIVED from the lattice rather than asserted via mirror*eps.
+     *
+     * WHAT THIS CHANGES vs bondForcesSurface: ONLY the attachment topology. The single F8 spring becomes TWO
+     * HALF-STRENGTH springs (so the total cross-bridge stiffness is unchanged) from two anchors on the head's
+     * actin-facing face to sites A (bindArc, bindAzim) and B (bindArc - 2*monoSp, bindAzim - 2*twistPerMon).
+     * F9 (the state-dependent stroke switch) and F10 are UNCHANGED and still applied -- this is NOT the
+     * canonical-motor "remove F9" change.
+     *
+     * HEAD ANCHOR GEOMETRY. HEAD_LEN is 20 nm but the site chord is only 5.64 nm, so the anchors CANNOT be the
+     * head's two ends (as bondForcesCanonical uses, on the centreline). They are placed on the head tip,
+     * offset +-footHalf along the head's yVec -- i.e. a ~5.6 nm footprint on the head's face, which is what a
+     * ~1600 A^2 interface spanning two protomers actually looks like.
+     *
+     * xbParams: [0..7] as bondForcesSurface, plus [8]=footHalf (um) [9]=pairMonomers (default 2).
+     * surfP-derived twistPerMon and monoSp are passed in [10],[11]. Default path untouched.
+     */
+    public static void bondForcesSurfaceTwoPoint(
+            FloatArray motorCoord, FloatArray motorUVec, FloatArray motorYVec, FloatArray motorBRotGam,
+            FloatArray filCoord, FloatArray filUVec, FloatArray filYVec, FloatArray filBRotGam, FloatArray filSegLength,
+            IntArray boundSeg, FloatArray bindArc, FloatArray bindAzim, IntArray nucleotideState,
+            FloatArray bondData, FloatArray xbParams) {
+
+        int nB = motorCoord.getSize() / 3;
+        int nSeg = filCoord.getSize() / 3;
+        double myoSpring = xbParams.get(0), j1FMT = xbParams.get(2);
+        double dt = xbParams.get(3), headLen = xbParams.get(4);
+        double Ractin = xbParams.get(6);
+        double footHalf = xbParams.get(8), pairMon = xbParams.get(9);
+        double twistPerMon = xbParams.get(10), monoSp = xbParams.get(11);
+        double DEG2RAD = Math.PI / 180.0, RAD2DEG = 180.0 / Math.PI;
+        int nM = nB / 3;
+        // ASYMMETRIC weighting from the structure, not 50/50: Lorenz & Holmes 2010 give the PRIMARY interface
+        // 1295-1429 A^2 and the ANCILLARY 358-595 A^2, so the ancillary carries only ~22-30%. A 50/50 split
+        // over-weights it and over-CLAMPS the head: two springs 5.64 nm apart give a torsional stiffness a
+        // single point does not have, the head can no longer reorient as the filament slides, and it brakes
+        // (measured: v/base 0.07-0.19 for 50/50 on both foot axes). Total stiffness is preserved.
+        double wB = (xbParams.getSize() > 12) ? xbParams.get(12) : 0.5;   // ancillary weight
+        double kA = (1.0 - wB) * myoSpring, kB = wB * myoSpring;
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            int d = m * STRIDE;
+            for (int k = 0; k < STRIDE; k++) bondData.set(d + k, 0f);
+            int s = boundSeg.get(m);
+            if (s < 0) continue;
+
+            int h = 3 * m + 2;
+            double hcx = motorCoord.get(h), hcy = motorCoord.get(nB + h), hcz = motorCoord.get(2 * nB + h);
+            double hux = motorUVec.get(h), huy = motorUVec.get(nB + h), huz = motorUVec.get(2 * nB + h);
+            double hyx = motorYVec.get(h), hyy = motorYVec.get(nB + h), hyz = motorYVec.get(2 * nB + h);
+            double hbRGx = motorBRotGam.get(h), hbRGy = motorBRotGam.get(nB + h);
+            double htipx = hcx + 0.5 * headLen * hux, htipy = hcy + 0.5 * headLen * huy, htipz = hcz + 0.5 * headLen * huz;
+            // two head anchors on the tip face, +- footHalf along the head's zVec = uVec x yVec.
+            // NOT yVec: F10 drives head.yVec -> seg.yVec, a RADIAL material direction, whereas the n->n-2 site
+            // chord is mostly AXIAL (5.40 nm axial vs 1.63 nm tangential). Anchoring along yVec holds the foot
+            // PERPENDICULAR to the chord it must span, so the two springs fight and braked the glide 6.6x in the
+            // first smoke (v 0.163 vs 1.079 um/s). zVec lies in the axial-tangential plane.
+            double hzx = huy * hyz - huz * hyy, hzy = huz * hyx - hux * hyz, hzz = hux * hyy - huy * hyx;
+            double hzl = hzx * hzx + hzy * hzy + hzz * hzz;
+            if (hzl > 1.0e-30) { double iz2 = 1.0 / Math.sqrt(hzl); hzx *= iz2; hzy *= iz2; hzz *= iz2; }
+            // MEASURED: zVec was WORSE (v/base 0.07-0.14) and did NOT reverse under mirroring; yVec gave
+            // v/base 0.15-0.19 and DID reverse. Foot axis is yVec.
+            double a1x, a1y, a1z, a2x, a2y, a2z;   // computed after the sites (alignFeet needs the chord)
+            double unusedZ = hzx + hzy + hzz;
+
+            double scx = filCoord.get(s), scy = filCoord.get(nSeg + s), scz = filCoord.get(2 * nSeg + s);
+            double sux = filUVec.get(s), suy = filUVec.get(nSeg + s), suz = filUVec.get(2 * nSeg + s);
+            double syx = filYVec.get(s), syy = filYVec.get(nSeg + s), syz = filYVec.get(2 * nSeg + s);
+            double sbRGx = filBRotGam.get(s), sbRGy = filBRotGam.get(nSeg + s);
+            double slen = filSegLength.get(s);
+            double szx = suy * syz - suz * syy, szy = suz * syx - sux * syz, szz = sux * syy - suy * syx;
+            double szl = szx * szx + szy * szy + szz * szz;
+            if (szl > 1.0e-30) { double iz = 1.0 / Math.sqrt(szl); szx *= iz; szy *= iz; szz *= iz; }
+
+            // ---- site A (target protomer n) and site B (ancillary n - pairMon, toward the POINTED end) ----
+            // xbParams[19] = straddle. DEFAULT (0) puts the two sites at n and n-pairMon -- ONE-SIDED, so
+            // their centroid sits pairMon/2 monomers REARWARD of the site the head bound to. Since N springs
+            // of k/N are EXACTLY one spring of k at the site centroid (F1+F2 = k(centroid - htip), and with
+            // symmetric anchors F1 == F2), that rearward centroid IS the bond: it erases the propulsive half
+            // of the stroke. straddle=1 places the sites at n+pairMon and n-pairMon instead, so the centroid
+            // lands ON the bound site (arc 0, azimuth 0; only a 0.38 nm inward radial residue remains).
+            double straddle = (xbParams.getSize() > 19) ? xbParams.get(19) : 0.0;
+            double arc0 = bindArc.get(m) - 0.5 * slen;
+            double az0  = bindAzim.get(m);
+            double arcA = (straddle != 0.0) ? arc0 + pairMon * monoSp : arc0;
+            double azA  = (straddle != 0.0) ? az0  + pairMon * twistPerMon : az0;
+            double arcB = arc0 - pairMon * monoSp;
+            double azB  = az0  - pairMon * twistPerMon;
+            double cA = Math.cos(azA), sA = Math.sin(azA), cB = Math.cos(azB), sB = Math.sin(azB);
+            double pAx = scx + arcA * sux + Ractin * (cA * syx + sA * szx);
+            double pAy = scy + arcA * suy + Ractin * (cA * syy + sA * szy);
+            double pAz = scz + arcA * suz + Ractin * (cA * syz + sA * szz);
+            double pBx = scx + arcB * sux + Ractin * (cB * syx + sB * szx);
+            double pBy = scy + arcB * suy + Ractin * (cB * syy + sB * szy);
+            double pBz = scz + arcB * suz + Ractin * (cB * syz + sB * szz);
+            // xbParams[18] = alignFeet. The head's two contact points must be able to sit on their two actin
+            // sites SIMULTANEOUSLY, or the springs are frustrated by construction and their equilibrium is
+            // forced to the site midpoint (a spurious rearward anchor). Placing the feet along hyVec fails
+            // twice over: hyVec is a lab-derived Gram-Schmidt axis the head cannot roll to align, and it sits
+            // ~16.9 deg off the n->n-2 chord. With alignFeet the feet are placed ALONG THE SITE CHORD at
+            // exactly half its length, so head-at-midpoint is an EXACT ZERO-ENERGY state: a1==pA, a2==pB.
+            // This is the multi-contact reading of a real actin interface -- a patch of weak contacts that
+            // relaxes onto the lattice -- rather than a point bond.
+            double alignFeet = (xbParams.getSize() > 18) ? xbParams.get(18) : 0.0;
+            if (alignFeet != 0.0) {
+                double cx = pAx - pBx, cy = pAy - pBy, cz = pAz - pBz;
+                double cl = Math.sqrt(cx * cx + cy * cy + cz * cz);
+                if (cl > 1.0e-30) {
+                    double h2 = 0.5 * cl, ic = 1.0 / cl;
+                    a1x = htipx + h2 * cx * ic; a1y = htipy + h2 * cy * ic; a1z = htipz + h2 * cz * ic;
+                    a2x = htipx - h2 * cx * ic; a2y = htipy - h2 * cy * ic; a2z = htipz - h2 * cz * ic;
+                } else { a1x = htipx; a1y = htipy; a1z = htipz; a2x = htipx; a2y = htipy; a2z = htipz; }
+            } else {
+                a1x = htipx + footHalf * hyx; a1y = htipy + footHalf * hyy; a1z = htipz + footHalf * hyz;
+                a2x = htipx - footHalf * hyx; a2y = htipy - footHalf * hyy; a2z = htipz - footHalf * hyz;
+            }
+
+            // ---- two zero-rest half-strength springs ----
+            double F1x = kA * (pAx - a1x), F1y = kA * (pAy - a1y), F1z = kA * (pAz - a1z);
+            double F2x = kB * (pBx - a2x), F2y = kB * (pBy - a2y), F2z = kB * (pBz - a2z);
+            double Fx = F1x + F2x, Fy = F1y + F2y, Fz = F1z + F2z;
+
+            // head-side torque about the head centre (both anchors)
+            double R1x = (a1x - hcx) * 1e-6, R1y = (a1y - hcy) * 1e-6, R1z = (a1z - hcz) * 1e-6;
+            double R2x = (a2x - hcx) * 1e-6, R2y = (a2y - hcy) * 1e-6, R2z = (a2z - hcz) * 1e-6;
+            double THx = R1y * F1z - R1z * F1y + R2y * F2z - R2z * F2y;
+            double THy = R1z * F1x - R1x * F1z + R2z * F2x - R2x * F2z;
+            double THz = R1x * F1y - R1y * F1x + R2x * F2y - R2y * F2x;
+            // seg-side reaction and torque about the segment centre (this is where the AXIAL couple appears)
+            double S1x = (pAx - scx) * 1e-6, S1y = (pAy - scy) * 1e-6, S1z = (pAz - scz) * 1e-6;
+            double S2x = (pBx - scx) * 1e-6, S2y = (pBy - scy) * 1e-6, S2z = (pBz - scz) * 1e-6;
+            double TSx, TSy, TSz;
+            // xbParams[14] = dropCouple. The two-point bond is FORCE-IDENTICAL to a single spring anchored at
+            // the site MIDPOINT (kA=kB=k/2 => F1+F2 = k(mid - a)); it differs from single-point ONLY by the
+            // couple its two reactions apply to the filament. Setting this flag applies the SAME total reaction
+            // at the midpoint instead, removing the couple and nothing else -- so if gliding recovers, the
+            // couple is the whole cause.
+            double dropCouple = (xbParams.getSize() > 14) ? xbParams.get(14) : 0.0;
+            if (dropCouple != 0.0) {
+                double SMx = 0.5*(S1x+S2x), SMy = 0.5*(S1y+S2y), SMz = 0.5*(S1z+S2z);
+                TSx = SMy * (-Fz) - SMz * (-Fy);
+                TSy = SMz * (-Fx) - SMx * (-Fz);
+                TSz = SMx * (-Fy) - SMy * (-Fx);
+            } else {
+                TSx = S1y * (-F1z) - S1z * (-F1y) + S2y * (-F2z) - S2z * (-F2y);
+                TSy = S1z * (-F1x) - S1x * (-F1z) + S2z * (-F2x) - S2x * (-F2z);
+                TSz = S1x * (-F1y) - S1y * (-F1x) + S2x * (-F2y) - S2y * (-F2x);
+            }
+
+            // ---- F9 uVec alignment torque, state-dependent rest (the stroke switch) ----
+            // keepF9 = xbParams[13]. DEFAULT 0 (F9 OFF) for the two-point path, following the canonical-motor
+            // rationale: "NO F9 -- the head-vs-actin alignment torque is REMOVED; the head orientation is
+            // pinned by GEOMETRY rather than by the F9 alignment torque". Keeping F9 alongside two-point
+            // springs pins the head THREE ways (two springs + F9 + kbind) and over-constrains it, which is the
+            // suspected cause of the 5-15x glide collapse measured with F9 ON.
+            // MEASURED 2026-09-04 -- THAT RATIONALE IS WRONG: j1FMT (xbParams[2]) is 0.0 in the site-normal
+            // gliding harness, so this whole block contributes ZERO torque whatever keepF9 is. F9 is not one
+            // of the constraints on the head; the two springs + the site-normal U_bind are. Verified by a
+            // forced-torque probe (a 1e-18 N.m injection here drives rollTurns to +28.7 vs -0.23, so the
+            // channel is live) and by a rest-angle probe (restF9=45 changes nothing).
+            double keepF9 = (xbParams.getSize() > 13) ? xbParams.get(13) : 0.0;
+            double restF9 = (nucleotideState.get(m) != MotorStore.NUC_ADPPI) ? 120.0 : 90.0;
+            double t9x = suy * huz - suz * huy, t9y = suz * hux - sux * huz, t9z = sux * huy - suy * hux;
+            double m9 = t9x * t9x + t9y * t9y + t9z * t9z;
+            double T9x = 0, T9y = 0, T9z = 0;
+            if (keepF9 != 0.0 && m9 > 1.0e-30) {
+                double im = 1.0 / Math.sqrt(m9); t9x *= im; t9y *= im; t9z *= im;
+                double dot = sux * hux + suy * huy + suz * huz; if (dot > 1) dot = 1; if (dot < -1) dot = -1;
+                double angD = accurateAcos(dot) * RAD2DEG - restF9;
+                double tm = j1FMT * DEG2RAD * angD / ((1.0 / hbRGy + 1.0 / sbRGy) * dt);
+                T9x = tm * t9x; T9y = tm * t9y; T9z = tm * t9z;
+            }
+            bondData.set(d,     (float) Fx);      bondData.set(d + 1, (float) Fy);      bondData.set(d + 2, (float) Fz);
+            bondData.set(d + 3, (float) (THx - T9x)); bondData.set(d + 4, (float) (THy - T9y)); bondData.set(d + 5, (float) (THz - T9z));
+            bondData.set(d + 6, (float) (-Fx));   bondData.set(d + 7, (float) (-Fy));   bondData.set(d + 8, (float) (-Fz));
+            bondData.set(d + 9, (float) (TSx + T9x)); bondData.set(d + 10,(float) (TSy + T9y)); bondData.set(d + 11,(float) (TSz + T9z));
+            bondData.set(d + 12,(float) (Fx * sux + Fy * suy + Fz * suz));
+        }
+    }
+
+
+    /**
+     * TRIAD contact patch (2026-09-09): THREE zero-rest springs of k/3, arranged as an equilateral triangle
+     * in the actin SURFACE TANGENT PLANE, centred on the F8 contact point.
+     *
+     * WHY THREE. N zero-rest springs of k/N are exactly ONE spring of k at the site centroid, so multiplicity
+     * alone buys nothing -- what it buys is CONSTRAINED ROTATION: 1 contact is a ball joint (no torque at all),
+     * 2 is a hinge (rotation about the line joining them is FREE), 3 non-collinear fixes all 6 DOF. That matters
+     * here because the two-contact line lies only 16.4 deg off the FILAMENT AXIS, so a 2-contact bond leaves
+     * ~96% of the axial-torque channel free -- and axial torque IS twirl. Two contacts glide (measured 0.946x)
+     * while being nearly blind to the quantity the twirl assay measures.
+     *
+     * WHY NOT LATTICE SITES. n-2 / n / n+2 all lie on ONE long-pitch strand, which is locally straight: n sits
+     * just 0.38 nm off the n-2/n+2 line, a very weak roll constraint. The other strand (n+-1, n+-3) is at
+     * ~+-140-166 deg -- the FAR side of the filament, not the same face. So the triangle is placed on the
+     * SURFACE, not on monomer indices.
+     *
+     * SIZE. rho defaults to 2.26 nm, the equivalent disc radius of the ~1600 A^2 acto-myosin interface, giving
+     * vertices +-2.26 nm axial / +-1.95 nm tangential (azimuthal spread +-32 deg) and a 3.39 nm perpendicular
+     * offset -- 9x the lattice triangle.
+     *
+     * ZERO-ENERGY + TORQUE TRANSMISSION. The ACTIN contacts are placed on the cylinder surface in the filament
+     * frame; the HEAD anchors are placed at the same offsets in the HEAD's transverse plane (hy, hu x hy). They
+     * coincide when the head sits on the site -- a relaxed state -- but the head patch does NOT follow the
+     * filament, so relative rotation stretches the springs and axial torque is transmitted. That is exactly the
+     * channel a 2-contact bond loses.
+     *
+     * PATCH BASIS (corrected 2026-09-11). hy is NO LONGER motorYVec (a lab-fixed perpendicular re-synthesised
+     * each step by matPlaceHeadExplicit). It is {@code headPatch[m]}: a unit MATERIAL direction perpendicular to
+     * the head axis, seeded RELAXED at bind (= uSite projected perpendicular to the head axis, the actin-side
+     * axial leg) and parallel-transported thereafter. See the in-kernel note for the two artefacts the lab basis
+     * produced -- chiefly a spurious roll brake that grew as the filament rolled, in the twirl channel itself.
+     *
+     * triP: [0]=rho (um) [1]=onFlag.  headPatch: 3N material patch references (0 => seed on the next bound step).
+     */
+    // NOTE: motorBRotGam / filBRotGam / nucleotideState are deliberately NOT parameters -- the triad needs
+    // none of them, and TornadoVM's task() tops out at 15 arguments (see CLAUDE.md).
+    public static void bondForcesSurfaceTriad(
+            FloatArray motorCoord, FloatArray motorUVec, FloatArray motorYVec,
+            FloatArray filCoord, FloatArray filUVec, FloatArray filYVec, FloatArray filSegLength,
+            IntArray boundSeg, FloatArray bindArc, FloatArray bindAzim,
+            FloatArray bondData, FloatArray xbParams, FloatArray triP, FloatArray headPatch) {
+
+        int nB = motorCoord.getSize() / 3;
+        int nSeg = filCoord.getSize() / 3;
+        double myoSpring = xbParams.get(0);
+        double headLen = xbParams.get(4);
+        double Ractin = xbParams.get(6);
+        double rho = triP.get(0);
+        int nM = nB / 3;
+        double k3 = myoSpring / 3.0;
+
+        for (@Parallel int m = 0; m < nM; m++) {
+            int d = m * STRIDE;
+            for (int c = 0; c < STRIDE; c++) bondData.set(d + c, 0f);
+            int s = boundSeg.get(m);
+            if (s < 0) {   // DETACHED: clear the material patch reference so the NEXT bind re-seeds it relaxed
+                headPatch.set(m, 0f); headPatch.set(nM + m, 0f); headPatch.set(2 * nM + m, 0f);
+                continue;
+            }
+
+            int h = 3 * m + 2;
+            double hcx = motorCoord.get(h), hcy = motorCoord.get(nB + h), hcz = motorCoord.get(2 * nB + h);
+            double hux = motorUVec.get(h), huy = motorUVec.get(nB + h), huz = motorUVec.get(2 * nB + h);
+            double htx = hcx + 0.5 * headLen * hux, hty = hcy + 0.5 * headLen * huy, htz = hcz + 0.5 * headLen * huz;
+
+            double scx = filCoord.get(s), scy = filCoord.get(nSeg + s), scz = filCoord.get(2 * nSeg + s);
+            double sux = filUVec.get(s), suy = filUVec.get(nSeg + s), suz = filUVec.get(2 * nSeg + s);
+            double syx = filYVec.get(s), syy = filYVec.get(nSeg + s), syz = filYVec.get(2 * nSeg + s);
+            double szx = suy * syz - suz * syy, szy = suz * syx - sux * syz, szz = sux * syy - suy * syx;
+            double szl = szx * szx + szy * szy + szz * szz;
+            if (szl > 1.0e-30) { double iz = 1.0 / Math.sqrt(szl); szx *= iz; szy *= iz; szz *= iz; }
+
+            // ---- HEAD-SIDE PATCH BASIS: a MATERIAL reference, parallel-transported (2026-09-11) -------
+            // WAS: hy = motorYVec = perp3(uVec), a LAB-FIXED Gram-Schmidt perpendicular synthesised each step by
+            // matPlaceHeadExplicit. In this scene (bhat = +x, heads approach along +-z) perp3 returns ~= +x = the
+            // filament axis, so the patch LOOKED relaxed at the canonical pose -- by lab coincidence, not by
+            // construction. Two artefacts followed: (i) the actin-side triangle rotates with the filament (it is
+            // rebuilt in the filament frame every step) while the head-side one was pinned to the LAB, so a head
+            // binding after the filament had rolled by theta started ALREADY frustrated by theta, wrapping at the
+            // 120 deg vertex spacing -- a spurious roll brake that grows over a run, exactly in the channel a
+            // twirl assay measures; (ii) perp3 jumps discontinuously as the head axis crosses |hu_x| = 0.9.
+            // NOW: headPatch[m] is a unit material direction perpendicular to the head axis, SEEDED RELAXED at
+            // bind (hy := uSite projected perpendicular to hu, which is exactly the actin-side axial leg, so
+            // head-on-site is a true zero-energy state) and thereafter PARALLEL-TRANSPORTED against the current
+            // head axis (Gram-Schmidt = the discrete rotation-minimizing frame, the ChiralSiteSystem.headRollStep
+            // pattern). Nothing drives it, so relative rotation of the filament still strains the springs and the
+            // axial-torque channel is preserved -- but now anchored to the HEAD, not to the lab.
+            // FALLBACK: if the head axis is parallel to the filament axis the seed degenerates; then and only
+            // then it falls back to motorYVec, i.e. today's value.
+            // triP[2] = 1 (-triad-labpatch) restores the LEGACY lab-fixed basis as a regression control. The two
+            // branches are kept FULLY separate so the legacy arithmetic is reproduced exactly -- projecting and
+            // then un-projecting is not bit-exact in floating point, and a regression control must be.
+            double labPatch = (triP.getSize() > 2) ? triP.get(2) : 0.0;
+            double hyx, hyy, hyz;
+            if (labPatch != 0.0) {
+                hyx = motorYVec.get(h); hyy = motorYVec.get(nB + h); hyz = motorYVec.get(2 * nB + h);
+            } else {
+                hyx = headPatch.get(m); hyy = headPatch.get(nM + m); hyz = headPatch.get(2 * nM + m);
+                double pd = hyx * hux + hyy * huy + hyz * huz;          // parallel transport: Gram-Schmidt vs hu
+                hyx -= pd * hux; hyy -= pd * huy; hyz -= pd * huz;
+                double pl = Math.sqrt(hyx * hyx + hyy * hyy + hyz * hyz);
+                if (!(pl > 1.0e-9)) {                                   // uninitialised (just bound) or collapsed
+                    double sd = sux * hux + suy * huy + suz * huz;      // re-seed RELAXED: hy := uSite, perp hu
+                    hyx = sux - sd * hux; hyy = suy - sd * huy; hyz = suz - sd * huz;
+                    pl = Math.sqrt(hyx * hyx + hyy * hyy + hyz * hyz);
+                    if (!(pl > 1.0e-12)) {                              // head axis || filament axis => lab axis
+                        double lx = motorYVec.get(h), ly = motorYVec.get(nB + h), lz = motorYVec.get(2 * nB + h);
+                        double ld = lx * hux + ly * huy + lz * huz;
+                        hyx = lx - ld * hux; hyy = ly - ld * huy; hyz = lz - ld * huz;
+                        pl = Math.sqrt(hyx * hyx + hyy * hyy + hyz * hyz);
+                        if (!(pl > 1.0e-12)) continue;
+                    }
+                }
+                double ipl = 1.0 / pl; hyx *= ipl; hyy *= ipl; hyz *= ipl;
+                headPatch.set(m, (float) hyx); headPatch.set(nM + m, (float) hyy); headPatch.set(2 * nM + m, (float) hyz);
+            }
+            // hz = hu x hy completes the right-handed head patch frame; with hu = -n_site and hy = uSite this is
+            // the site's azimuthal tangential direction, which is the actin-side leg offT is laid out along.
+            double hzx = huy * hyz - huz * hyy, hzy = huz * hyx - hux * hyz, hzz = hux * hyy - huy * hyx;
+            double hzl = hzx * hzx + hzy * hzy + hzz * hzz;
+            if (hzl > 1.0e-30) { double izh = 1.0 / Math.sqrt(hzl); hzx *= izh; hzy *= izh; hzz *= izh; }
+
+            double arc0 = bindArc.get(m) - 0.5 * filSegLength.get(s);
+            double az0 = bindAzim.get(m);
+
+            double Fx = 0, Fy = 0, Fz = 0, THx = 0, THy = 0, THz = 0, TSx = 0, TSy = 0, TSz = 0;
+            double axialSum = 0;
+            for (int v = 0; v < 3; v++) {
+                // Vertex angles 90 / 210 / 330 deg are COMPILE-TIME constants, so their cos/sin are written as
+                // literals. Do NOT use Math.cos/Math.sin of a loop-derived angle here: the PTX backend fails to
+                // lower it ("unable to compute op COS"), the same trap documented for Math.acos in CLAUDE.md.
+                double ca = (v == 0) ? 0.0 : ((v == 1) ? -0.8660254037844387 : 0.8660254037844387);
+                double sa = (v == 0) ? 1.0 : -0.5;
+                double offA = rho * ca;              // axial offset
+                double offT = rho * sa;              // tangential offset (arc length on the surface)
+                // ---- actin contact: ON the cylinder surface, in the FILAMENT frame ----
+                double azv = az0 + offT / Ractin;
+                double cz = Math.cos(azv), sz2 = Math.sin(azv);
+                double px = scx + (arc0 + offA) * sux + Ractin * (cz * syx + sz2 * szx);
+                double py = scy + (arc0 + offA) * suy + Ractin * (cz * syy + sz2 * szy);
+                double pz = scz + (arc0 + offA) * suz + Ractin * (cz * syz + sz2 * szz);
+                // ---- head anchor: same offsets in the HEAD's transverse plane (does NOT follow the filament) ----
+                double ax = htx + offA * hyx + offT * hzx;
+                double ay = hty + offA * hyy + offT * hzy;
+                double az2 = htz + offA * hyz + offT * hzz;
+
+                double f1 = k3 * (px - ax), f2 = k3 * (py - ay), f3 = k3 * (pz - az2);
+                Fx += f1; Fy += f2; Fz += f3;
+                double Rx = (ax - hcx) * 1e-6, Ry = (ay - hcy) * 1e-6, Rz = (az2 - hcz) * 1e-6;
+                THx += Ry * f3 - Rz * f2; THy += Rz * f1 - Rx * f3; THz += Rx * f2 - Ry * f1;
+                double Sx = (px - scx) * 1e-6, Sy = (py - scy) * 1e-6, Sz = (pz - scz) * 1e-6;
+                TSx += Sy * (-f3) - Sz * (-f2); TSy += Sz * (-f1) - Sx * (-f3); TSz += Sx * (-f2) - Sy * (-f1);
+                axialSum += f1 * sux + f2 * suy + f3 * suz;
+            }
+            bondData.set(d,     (float) Fx);   bondData.set(d + 1, (float) Fy);   bondData.set(d + 2, (float) Fz);
+            bondData.set(d + 3, (float) THx);  bondData.set(d + 4, (float) THy);  bondData.set(d + 5, (float) THz);
+            bondData.set(d + 6, (float) (-Fx)); bondData.set(d + 7, (float) (-Fy)); bondData.set(d + 8, (float) (-Fz));
+            bondData.set(d + 9, (float) TSx);  bondData.set(d + 10,(float) TSy);  bondData.set(d + 11,(float) TSz);
+            bondData.set(d + 12,(float) axialSum);
         }
     }
 

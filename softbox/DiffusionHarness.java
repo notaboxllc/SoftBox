@@ -49,12 +49,18 @@ public final class DiffusionHarness {
     // chain-coefficient overrides for sign/behavior diagnosis (NaN = use v1 default)
     static double fracROverride = Double.NaN, fmtOverride = Double.NaN;
     static boolean deflect = false, lpOnly = false, characterize = false;
+    // -mono <n>: monomers per segment for the characterization chains. Default Constants.stdSegLength (32,
+    // the v1 benchmark). The GLIDING scene uses G4_MONO=64 (segLen 0.176 um), and segment length sets the
+    // discretized bending, so characterizing the gliding filament REQUIRES -mono 64.
+    static int monoOverride = -1;
+    static int monoCt() { return monoOverride > 0 ? monoOverride : Constants.stdSegLength; }
     // -cpu: run the SAME system methods on the sequential CPU runner (no TaskGraph, no
     // device transfers) instead of the GPU TaskGraph. Dev/debug validation mode; the GPU
     // production path is untouched (cpu=false leaves every code path byte-for-byte as before).
     static boolean cpu = false;
     // Lp-chain defaults (match v1: monomerCt=32, ~48 µm contour). alpha matched to v1 -pf for x-val.
     static final int LP_NSEG = 539, LP_STEPS = 60000, LP_CAD = 50;
+    static double RELAX_TAU = 5.0;   // -relax <n>: load phase runs n relaxation times
     static final double LP_ALPHA = 0.02;
 
     public static void main(String[] args) {
@@ -72,6 +78,13 @@ public final class DiffusionHarness {
             else if (args[i].equals("-deflect")) { deflect = true; }
             else if (args[i].equals("-lp")) { lpOnly = true; }
             else if (args[i].equals("-characterize")) { characterize = true; }
+            else if (args[i].equals("-mono")) { monoOverride = Integer.parseInt(args[++i]); }
+            else if (args[i].equals("-relax")) { RELAX_TAU = Double.parseDouble(args[++i]); }
+            else if (args[i].equals("-fracmove")) { FilamentStore.OV_FRACMOVE = Double.parseDouble(args[++i]); }
+            else if (args[i].equals("-pairs")) {   // -pairs <fracMove> <fracR> <fracMoveTorq>
+                FilamentStore.OV_FRACMOVE = Double.parseDouble(args[++i]);
+                FilamentStore.OV_FRACR    = Double.parseDouble(args[++i]);
+                FilamentStore.OV_FMT      = Double.parseDouble(args[++i]); }
             else if (args[i].equals("-cpu")) { cpu = true; }
             else pos.add(args[i]);
         }
@@ -79,7 +92,7 @@ public final class DiffusionHarness {
         if (lpOnly) {
             int nSeg = pos.size() >= 1 ? Integer.parseInt(pos.get(0)) : LP_NSEG;
             int M    = pos.size() >= 2 ? Integer.parseInt(pos.get(1)) : LP_STEPS;
-            measureLp(nSeg, Constants.stdSegLength, M, dt, LP_ALPHA, LP_CAD);
+            measureLp(nSeg, monoCt(), M, dt, LP_ALPHA, LP_CAD);
             return;
         }
         if (deflect) {
@@ -285,7 +298,7 @@ public final class DiffusionHarness {
 
     /** Returns {ratio (obs/exp, avg over load 2nd half), tauMeas (s), tauTheo (s)}. */
     private static double[] measureDeflection(int nSeg, double dt, int loadM, int releaseM) {
-        final int monomerCt = Constants.stdSegLength;        // 32, matching v1 benchmark
+        final int monomerCt = monoCt();                      // default 32 (v1 benchmark); -mono overrides
         final double frac = 0.01;                            // benchmarkForceFrac
         double segLen = (monomerCt + 1) * Constants.actinMonoRadius;   // microns (=0.0891)
         double totalLen = nSeg * segLen;                     // span (microns)
@@ -467,11 +480,29 @@ public final class DiffusionHarness {
      */
     private static void runCharacterize(double dt) {
         System.out.println("########## Soft Box filament characterization (manual tuning) ##########");
-        System.out.printf("coeffs: fracMove=0.5 fracR=%.4g fracMoveTorq=%.4g  BRotCoeff=%.2f  aeta=%.3g Pa-s%n",
-                Double.isNaN(fracROverride) ? 0.1 : fracROverride,
-                Double.isNaN(fmtOverride) ? 0.265 : fmtOverride, Constants.BRotCoeff, Constants.aeta);
-        double[] defl = measureDeflection(11, dt, 60000, 20000);     // ratio + tau (Brownian off)
-        double lp = measureLp(LP_NSEG, Constants.stdSegLength, LP_STEPS, dt, LP_ALPHA, LP_CAD);  // Lp (Brownian on)
+        System.out.printf("coeffs: fracMove=%.4g fracR=%.4g fracMoveTorq=%.4g  BRotCoeff=%.2f  aeta=%.3g Pa-s  dt=%.3g s  mono/seg=%d (segLen %.4f um)%n",
+                Double.isNaN(FilamentStore.OV_FRACMOVE) ? 0.5 : FilamentStore.OV_FRACMOVE,
+                Double.isNaN(fracROverride) ? (Double.isNaN(FilamentStore.OV_FRACR) ? 0.1 : FilamentStore.OV_FRACR) : fracROverride,
+                Double.isNaN(fmtOverride) ? (Double.isNaN(FilamentStore.OV_FMT) ? 0.265 : FilamentStore.OV_FMT) : fmtOverride, Constants.BRotCoeff, Constants.aeta,
+                dt, monoCt(), (monoCt()+1)*Constants.actinMonoRadius);
+        // STEP COUNTS MUST SCALE WITH dt. The 60000/20000 defaults were sized for dt=1e-5 (~1 relaxation
+        // time). At the production dt=1.25e-6 they cover only ~10% of tau, so the filament never relaxes:
+        // the ratio reads low and tau_meas comes back NaN. Preserve PHYSICAL time instead of step count.
+        // Size the run from the PHYSICAL relaxation time, not a step count. tau_theo depends only on EI, drag
+        // and span (not on the PAIRS coefficients), so it is knowable up front. Static deflection needs several
+        // tau: the approach is single-exponential, ratio ~ 1-exp(-t/tau), so 0.84 tau reads 0.50 and only ~5 tau
+        // reaches 99%. RELAX_TAU multiples of tau for the load phase, half that for release.
+        double zetaP = 4.0 * Math.PI * Constants.aeta / (Math.log(2.0 * (11 * 0.1755e-6) / (2.0 * Constants.radius * 1e-6)) + 0.84);
+        double spanM_ = 11 * (monoCt() + 1) * Constants.actinMonoRadius * 1e-6;
+        double tauT  = 11 * zetaP * (spanM_ * spanM_ * spanM_) / (Constants.EI * Math.pow(Math.PI, 4));
+        int loadM = (int) Math.max(60000, Math.round(RELAX_TAU * tauT / dt));
+        int relM  = (int) Math.max(20000, Math.round(0.5 * RELAX_TAU * tauT / dt));
+        int lpM   = (int) Math.max(LP_STEPS, Math.round(LP_STEPS * (1.0e-5 / dt)));
+        System.out.printf(java.util.Locale.US,
+                "  sizing: tau_theo(est) = %.4f s  -> load %d steps (%.2f s = %.1f tau), release %d, LP %d%n",
+                tauT, loadM, loadM*dt, loadM*dt/tauT, relM, lpM);
+        double[] defl = measureDeflection(11, dt, loadM, relM);     // ratio + tau (Brownian off)
+        double lp = measureLp(LP_NSEG, monoCt(), lpM, dt, LP_ALPHA, LP_CAD);  // Lp (Brownian on)
         System.out.println("---------------------------------------------------------------");
         System.out.printf("  READOUTS:  deflection ratio = %.4f   tau_meas/tau_theo = %.4f   Lp_meas = %.3f um%n",
                 defl[0], defl[1] / defl[2], lp);

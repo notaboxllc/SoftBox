@@ -149,6 +149,12 @@ public final class ChiralSiteHarness {
     // `cfg()` calls resetChiral(), which clears HEAD_TILT_3D / KBIND_BOUND_ONLY, so these must be re-applied
     // after it — exactly the savedSiteAware pattern. Report: docs/motor/SITE_NORMAL_HEAD_BINDING.md.
     static boolean SITE_NORMAL = false;                         // -site-normal on|off
+    static boolean EQUIV_SITENORMAL = false;                    // -equiv-sitenormal (whole-step CPU/GPU gate)
+    static int     EQUIV_STEPS = 200;                           // -equiv-steps N (the default 200 may never bind)
+    static double  EQUIV_DENSITY = -1;                          // -equiv-density D (raise to reach binding sooner)
+    static boolean EQUIV_NATIVEREST = false;                    // -equiv-nativerest (superseded rest pose)
+    static int     EQUIV_PREBOUND = 0;                          // -equiv-prebound N
+    static int     EQUIV_WARM = 0;                              // -equiv-warm N (CPU warm-start BOTH arms)
     static boolean HEAD_TILT   = false;                         // implied by -site-normal; also settable alone
     static int     NBLK      = 5;                               // measurement blocks for the block-SEM
     static int     NTRACE    = 60;                              // stationarity trace samples in the measure window
@@ -193,6 +199,14 @@ public final class ChiralSiteHarness {
             switch (args[i]) {
                 case "-fixtures" -> fixtures = true;
                 case "-equiv" -> equiv = true;
+                // whole-step CPU/GPU gate for the newly wired chi-dynamic 3-D head + site-normal device path
+                case "-equiv-sitenormal" -> { equiv = true; EQUIV_SITENORMAL = true; }
+                case "-equiv-steps" -> EQUIV_STEPS = Integer.parseInt(args[++i]);
+                case "-equiv-density" -> EQUIV_DENSITY = Double.parseDouble(args[++i]);
+                case "-equiv-straightrest" -> { }              // now the default; accepted as a no-op
+                case "-equiv-nativerest" -> EQUIV_NATIVEREST = true;
+                case "-equiv-prebound" -> EQUIV_PREBOUND = Integer.parseInt(args[++i]);
+                case "-equiv-warm" -> EQUIV_WARM = Integer.parseInt(args[++i]);
                 case "-twirl" -> twirl = true;
                 case "-twirl-audit" -> twirlAudit = true;
                 case "-twirl-equiv" -> twirlEquiv = true;
@@ -828,7 +842,7 @@ public final class ChiralSiteHarness {
         void roll(int t, int seed) {
             e.matc.set(0, t); e.matc.set(1, seed);
             ChiralSiteSystem.headRollStep(mot.boundSeg, e.outGeom, f.uVec, f.yVec, mot.body.bRotGam, mot.bindAzim,
-                    e.headRef, e.headOmega, e.headTau, e.headMis, G.bondData, e.chiP, e.matc, e.exCounts);
+                    e.headRef, e.headOmega, e.headTau, e.headMis, G.bondData, e.regOff, e.chiP, e.matc, e.exCounts);
         }
         void geom() { TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF); }
         double[] eBind(int m) {
@@ -1374,11 +1388,79 @@ public final class ChiralSiteHarness {
     // =============================================================================== CPU/GPU equivalence
     static boolean runEquiv() {
         System.out.println("\n--- CPU/GPU EQUIVALENCE — FULL chiral-site gliding graph, device-resident ---");
+        if (EQUIV_SITENORMAL) {
+            // The chi-dynamic 3-D head + site-normal arm: the SAME whole-step comparison, on the path that was
+            // CPU-only until the tilt solver was wired. SITE_NORMAL_DEVICE_OK lifts the per-assay-class refusal
+            // for this gate specifically — that is what the gate exists to justify.
+            System.out.println("  ARM: SITE-NORMAL + chi-dynamic 3-D head (newly wired device path)");
+            SITE_NORMAL = true; HEAD_TILT = true;
+            ExplicitCompleteMatHarness.SITE_AWARE = true;
+            ExplicitCompleteMatHarness.SITE_NORMAL_DEVICE_OK = true;
+            cfg(PATH_B_SITE_MODE, true, 0.0, 0.0, 0.0, false, +1.0, true);
+            // AFTER cfg (resetChiral re-applies the canonical default). Straight-rest is now the DEFAULT, so
+            // only an explicit -equiv-nativerest turns it off; the old forced assignment would have silently
+            // pinned it to the superseded pose here.
+            if (EQUIV_NATIVEREST) ExplicitCompleteMatHarness.STRAIGHT_REST = false;
+            if (EQUIV_DENSITY > 0) DENSITY = EQUIV_DENSITY;
+        } else
         cfg(2, true, REG_K, EPS_PILOT_DEG, 0, false, 1.0, true);
         System.out.println("  config: " + ExplicitCompleteMatHarness.chiralConfigString());
         Glide2D Gc = build(101), Gd = build(101);
+        // PRE-BOUND FIXTURE. Natural capture is rare (the site-normal orientation gate admits ~1% of in-reach
+        // candidates), so a short run binds nothing and the BOUND device path goes untested. Seeding an
+        // identical bound state into BOTH arms puts siteCoupleStep and the bound tilt branch under test from
+        // step 0 — inside the bit-close window where decisions are actually compared. The state comes from the
+        // production geometry (geom2D + nearestSeg2D + gate2D), not invented.
+        int preBound = 0;
+        if (EQUIV_PREBOUND > 0) {
+            for (Glide2D G : new Glide2D[]{ Gc, Gd }) {
+                int done = 0;
+                for (int m = 0; m < G.N && done < EQUIV_PREBOUND; m++) {
+                    try {
+                        TwoBodyConverterMotor.geom2D(G, m);
+                        int s = TwoBodyConverterMotor.nearestSeg2D(G, m); if (s < 0) continue;
+                        double[] gm = TwoBodyConverterMotor.gate2D(G, m, s);
+                        double half = 0.5 * G.fil.segLength.get(s);
+                        // The FULL production acceptance test (the §8 free-binding gate). Binding on arc-only
+                        // produces motors at impossible strain and the filament detonates (measured: 795 um of
+                        // CPU/GPU coordinate divergence), which tests nothing. Only geometrically valid binds.
+                        boolean pass = gm[0] < 3.0 && gm[2] < 25 && gm[3] < 25 && gm[4] < 20 && gm[5] < 2.0
+                                    && gm[6] < 15.0 && gm[7] < TwoBodyConverterMotor.A_SEMI[2] * 1e3
+                                    && gm[1] > 0.05 && gm[1] < 2 * half - 0.05;
+                        if (!pass) continue;
+                        G.mot.boundSeg.set(m, s); G.mot.bindArc.set(m, (float) gm[1]); G.mot.bindAzim.set(m, 0f);
+                        done++;
+                    } catch (Throwable ignored) { }
+                }
+                preBound = done;
+            }
+            System.out.printf(Locale.US, "  pre-bound fixture: %d motors bound identically in BOTH arms%n", preBound);
+        }
         var ec = ExplicitCompleteMatHarness.packExMat(Gc, 1);
         var ed = ExplicitCompleteMatHarness.packExMat(Gd, 1);
+        // WARM START. Advance BOTH arms through the SAME deterministic CPU steps until real binding has occurred,
+        // then hand that state to the device. This beats a synthetic pre-bound fixture: the bound state is one the
+        // model actually produced (valid geometry, valid site identity, valid nucleotide state), so the bound
+        // branches are exercised from device step 0 — inside the window where decisions are still compared.
+        // buildGlidingGraph uploads FIRST_EXECUTION buffers, so whatever is in the host arrays here is what runs.
+        if (EQUIV_WARM > 0) {
+            long w0 = System.currentTimeMillis();
+            for (int t = 0; t < EQUIV_WARM; t++) {
+                ExplicitCompleteMatHarness.stepGlidingCPU(ec, t, 101);
+                ExplicitCompleteMatHarness.stepGlidingCPU(ed, t, 101);
+            }
+            int wbC = 0, wbD = 0, wMism = 0;
+            for (int m = 0; m < Gc.N; m++) {
+                if (Gc.mot.boundSeg.get(m) >= 0) wbC++;
+                if (Gd.mot.boundSeg.get(m) >= 0) wbD++;
+                if (Gc.mot.boundSeg.get(m) != Gd.mot.boundSeg.get(m)) wMism++;
+            }
+            System.out.printf(Locale.US,
+                    "  warm start: %d CPU steps on BOTH arms (%.1f s) -> bound CPU=%d GPU-arm=%d, arm-vs-arm mismatch=%d%n",
+                    EQUIV_WARM, (System.currentTimeMillis() - w0) / 1000.0, wbC, wbD, wMism);
+            if (wMism != 0) System.out.println("  *** warm start did NOT produce identical arms — the comparison is invalid.");
+            if (wbC == 0) System.out.println("  *** warm start produced NO bound motors — lengthen it (-equiv-warm N).");
+        }
         TornadoExecutionPlan plan;
         TornadoCrashDiagnostic.planConstructionBegin("graph=buildGlidingGraph(chiral sites+headRoll) arm=equiv");
         try { plan = ExplicitCompleteMatHarness.buildGlidingGraph(ed, false); }
@@ -1386,10 +1468,14 @@ public final class ChiralSiteHarness {
             System.out.println("  FULL chiral graph did NOT lower: " + oneLine(root(ex).getMessage())
                     + "   (needs -Dtornado.enable.fma=false)"); return false; }
         TornadoCrashDiagnostic.planConstructionEnd(plan, "arm=equiv");
-        int K = 200, firstDiv = -1, siteMism = 0, bindMism = 0; double maxFil = 0, maxOm = 0, maxTau = 0, maxAz = 0, maxAbsOm = 0;
+        int K = EQUIV_STEPS, firstDiv = -1, siteMism = 0, bindMism = 0; double maxFil = 0, maxOm = 0, maxTau = 0, maxAz = 0, maxAbsOm = 0;
+        // BOUND-PATH EXERCISE COUNTERS. A run in which nothing ever binds validates the mechanics only: siteCouple
+        // has no work and the BOUND branch of the tilt solver is never entered. The gate must be able to say so.
+        int everBoundC = 0, everBoundD = 0, boundStepsC = 0, boundStepsD = 0;
         boolean lowered = true;
         TornadoCrashDiagnostic.executeLoopBegin("glide", 0, K-1, "arm=equiv executeCallsPlanned=" + K);
-        for (int t = 0; t < K; t++) {
+        for (int t0 = 0; t0 < K; t0++) {
+            final int t = EQUIV_WARM + t0;   // continue the RNG stream past the warm start, never replay it
             ed.matc.set(0, t); ed.matc.set(1, 101); Gd.mot.setCounts(t, 101, Gd.nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, 101);
             try { TornadoCrashDiagnostic.beforeExecute(t); plan.execute(); TornadoCrashDiagnostic.afterExecute(t); }
             catch (Throwable ex) { TornadoCrashDiagnostic.executeThrew(ex); lowered = false;
@@ -1398,6 +1484,10 @@ public final class ChiralSiteHarness {
             double dFil = 0;
             for (int i = 0; i < 3*Gc.nSeg; i++) dFil = Math.max(dFil, Math.abs(Gc.fil.coord.get(i) - Gd.fil.coord.get(i)));
             maxFil = Math.max(maxFil, dFil); if (firstDiv < 0 && dFil > 1e-6) firstDiv = t;
+            int nbc = 0, nbd = 0;
+            for (int m = 0; m < Gc.N; m++) { if (Gc.mot.boundSeg.get(m) >= 0) nbc++; if (Gd.mot.boundSeg.get(m) >= 0) nbd++; }
+            everBoundC = Math.max(everBoundC, nbc); everBoundD = Math.max(everBoundD, nbd);
+            if (nbc > 0) boundStepsC++; if (nbd > 0) boundStepsD++;
             if (firstDiv < 0 || t < 8) {   // decisions compared inside the bit-close window
                 for (int m = 0; m < Gc.N; m++) {
                     if (Gc.mot.boundSeg.get(m) != Gd.mot.boundSeg.get(m)) bindMism++;
@@ -1414,7 +1504,17 @@ public final class ChiralSiteHarness {
         int nbC = 0, nbD = 0; boolean fin = true;
         for (int m = 0; m < Gc.N; m++) { if (Gc.mot.boundSeg.get(m) >= 0) nbC++; if (Gd.mot.boundSeg.get(m) >= 0) nbD++; }
         for (int i = 0; i < 3*Gc.nSeg; i++) if (!Float.isFinite(Gd.fil.coord.get(i))) fin = false;
-        boolean ok = lowered && fin && siteMism == 0 && bindMism == 0 && maxOm < 1e-5 && maxAz < 1e-5 && maxFil < 1e-1;
+        // BOUND-PATH COVERAGE. On the site-normal arm the whole point is siteCoupleStep + the BOUND branch of the
+        // tilt solver; if nothing ever bound, those never ran and a "PASS" would assert far more than was tested.
+        boolean boundExercised = everBoundC > 0 && everBoundD > 0;
+        System.out.printf(Locale.US, "  bound-path coverage: peak bound CPU=%d GPU=%d, steps-with-a-bound-motor CPU=%d/%d GPU=%d/%d%n",
+                everBoundC, everBoundD, boundStepsC, K, boundStepsD, K);
+        if (EQUIV_SITENORMAL && !boundExercised)
+            System.out.println("  *** INCONCLUSIVE: nothing ever bound — siteCouple and the BOUND tilt branch were NEVER exercised.\n"
+                             + "      Mechanics/geometry agree, but this does NOT validate the site-normal binding law on device.\n"
+                             + "      Re-run with -equiv-steps / -equiv-density / -equiv-straightrest until binding occurs.");
+        boolean ok = lowered && fin && siteMism == 0 && bindMism == 0 && maxOm < 1e-5 && maxAz < 1e-5 && maxFil < 1e-1
+                  && (!EQUIV_SITENORMAL || boundExercised);
         System.out.printf(Locale.US,
                 "  %d device-resident steps: siteIdMism=%d bindMism=%d max|dOmega|=%.2e max|dTau|=%.2e max|dAzim|=%.2e "
                 + "max|dFilCoord|=%.2e µm |Omega|max=%.2e rel=%.2e firstDiv=%s bound CPU=%d GPU=%d finite=%b ⇒ %s%n",

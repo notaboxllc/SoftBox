@@ -337,6 +337,12 @@ public final class FilamentStore {
         counts.set(2, runSeed);
     }
 
+    // PAIRS COEFFICIENT OVERRIDES (2026-09-07). NaN = the v1 defaults below. These are the flexural tuning
+    // knobs (chainParams[1..3]); they are dt- AND viscosity-dependent because the effective stiffness is
+    // k = f*gamma/dt, so a set tuned at one dt does NOT transfer to another. Set them here so EVERY caller
+    // (characterization AND the production gliding build) uses one source of truth.
+    public static double OV_FRACMOVE = Double.NaN, OV_FRACR = Double.NaN, OV_FMT = Double.NaN;
+
     /** v1 deflection defaults (FilSegment/Env): fracMove=0.5, fracR=0.1, fracMoveTorq=0.265,
      *  filTorqSpring inactive (damped F4 branch). Carries continuously into 2b.
      *  dt is the CALLER'S stepping dt — REQUIRED: the chain force is ∝ 1/dt, so chainParams[0]
@@ -344,9 +350,9 @@ public final class FilamentStore {
      *  chainParams[0] is Env.deltaT, its stepping dt — see DELTAT_AUDIT_FINDINGS.md §3.B). */
     public void setChainParams(double dt) {
         chainParams.set(0, (float) dt);
-        chainParams.set(1, 0.5f);     // fracMove
-        chainParams.set(2, 0.1f);     // fracR
-        chainParams.set(3, 0.265f);   // fracMoveTorq
+        chainParams.set(1, (float) (Double.isNaN(OV_FRACMOVE) ? 0.5   : OV_FRACMOVE));   // fracMove
+        chainParams.set(2, (float) (Double.isNaN(OV_FRACR)    ? 0.1   : OV_FRACR));      // fracR
+        chainParams.set(3, (float) (Double.isNaN(OV_FMT)      ? 0.265 : OV_FMT));        // fracMoveTorq
         chainParams.set(4, 0.0f);     // filTorqSpring inactive -> damped torsion branch
         chainParams.set(5, 1.0e-20f); // filTorqSpring (unused while inactive)
         chainParams.set(6, (float) Constants.actinMonoRadius);

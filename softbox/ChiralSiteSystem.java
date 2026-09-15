@@ -332,10 +332,11 @@ public final class ChiralSiteSystem {
      */
     public static void headRollStep(IntArray boundSeg, DoubleArray outGeom, FloatArray filUVec, FloatArray filYVec,
             FloatArray motorBRotGam, FloatArray bindAzim, FloatArray headRef, FloatArray headOmega,
-            FloatArray headTau, FloatArray headMis, FloatArray bondData, DoubleArray chiP, IntArray matc, IntArray counts) {
+            FloatArray headTau, FloatArray headMis, FloatArray bondData, FloatArray regOff, DoubleArray chiP,
+            IntArray matc, IntArray counts) {
         int N = counts.get(0), nSeg = counts.get(3), nB = 3 * N;
         int mode = (int) chiP.get(0);
-        double epsBind = chiP.get(5), kOmega = chiP.get(7), dt = chiP.get(9);
+        double epsBind = chiP.get(5), kOmega = chiP.get(7), dt = chiP.get(9), dOmegaA4 = chiP.get(26);
         int brownOn = (int) chiP.get(10), rollOn = (int) chiP.get(11);
         double mirror = chiP.get(13);
         long tt = matc.get(0), seed = matc.get(1);
@@ -348,6 +349,7 @@ public final class ChiralSiteSystem {
             if (!(el > 1e-20)) continue;                                   // degenerate head ⇒ hold the coordinate
             double ie = 1.0 / el; ex *= ie; ey *= ie; ez *= ie;            // eBind
             int s = boundSeg.get(m);
+            if (s < 0) headOmega.set(N + m, 0f);       // A4 axial registry: cleared while unbound
             // --- site frame (only needed when bound) -------------------------------------------------
             double sux = 0, suy = 0, suz = 0, tnx = 0, tny = 0, tnz = 0;
             boolean haveSite = false;
@@ -404,6 +406,33 @@ public final class ChiralSiteSystem {
                     bondData.set(dB + 11, (float) (bondData.get(dB + 11) - tau * ez));
                 }
             }
+            // ---- A4 AXIAL REGISTRY (the atlas `g_omega` channel of tau_u = R*g_y + g_omega) -----------
+            // A 1-DOF registry coordinate omegaAx about the FILAMENT AXIS uSite, relaxing toward the
+            // state-dependent rest regOff[m] (0 pre-stroke, mirror*dOmega after the ADP.Pi->ADP switch).
+            // Its reaction on the filament is PURELY AXIAL, so it twists.
+            //
+            // WHY THIS IS SEPARATE from the eBind registry above: that one applies its couple about the BOND
+            // axis, which under site-normal binding (xHeadHat = -n_site) is approximately the site NORMAL --
+            // radial -- so its axial projection is ~0 and it cannot twirl. Measured directly: eps-odd
+            // +0.135 +- 0.481 turns/um (0.3 sigma), both arms SAME sign, i.e. no reversal
+            // (/tmp/A4_ebind_null_*). That null is a real result and the code producing it is left intact.
+            //
+            // omegaAx is stored in headOmega[N+m] rather than a new array because headRollStep already sits
+            // at TornadoVM's 15-argument task() ceiling.
+            if (haveSite && kOmega > 0.0 && dOmegaA4 != 0.0) {
+                double oa = headOmega.get(N + m);
+                double misAx = oa - regOff.get(m);
+                double tauAx = -kOmega * misAx;
+                int dA = m * STRIDE;
+                bondData.set(dA + 9,  (float) (bondData.get(dA + 9)  - tauAx * sux));
+                bondData.set(dA + 10, (float) (bondData.get(dA + 10) - tauAx * suy));
+                bondData.set(dA + 11, (float) (bondData.get(dA + 11) - tauAx * suz));
+                double tauAxB = 0.0;
+                if (brownOn != 0)
+                    tauAxB = Math.sqrt(2.0 * Constants.kT * gam / dt)
+                           * gauss(seed, tt, OMEGA_SALT + 104729L + (long) m * 7919L);
+                headOmega.set(N + m, (float) (oa + (tauAx + tauAxB) * dt / gam));
+            }
             headTau.set(m, (float) tau); headMis.set(m, (float) mis);
             // --- Brownian thermostat (no reaction) ----------------------------------------------------
             double tauB = 0.0;
@@ -437,14 +466,23 @@ public final class ChiralSiteSystem {
      * head stays bound; on release the interface state is discarded with the bond.
      */
     public static void strokeSkew(IntArray boundSeg, IntArray nucleotideState, IntArray prevNuc,
-            FloatArray bindAzim, DoubleArray chiP, IntArray counts) {
+            FloatArray bindAzim, FloatArray regOff, DoubleArray chiP, IntArray counts) {
         int N = counts.get(0);
-        double eps = chiP.get(6), mirror = chiP.get(13);
+        double eps = chiP.get(6), mirror = chiP.get(13), dOmega = chiP.get(26);
         int mode = (int) chiP.get(0);
         for (@Parallel int m = 0; m < N; m++) {
             int nu = nucleotideState.get(m), pv = prevNuc.get(m), bs = boundSeg.get(m);
-            if (mode > 0 && eps != 0.0 && bs >= 0 && pv == MotorStore.NUC_ADPPI && nu == MotorStore.NUC_ADP)
+            boolean fire = mode > 0 && bs >= 0 && pv == MotorStore.NUC_ADPPI && nu == MotorStore.NUC_ADP;
+            if (fire && eps != 0.0)
                 bindAzim.set(m, (float) (bindAzim.get(m) + mirror * eps));
+            // ---- A4: STATE-DEPENDENT REGISTRY (atlas mechanism A4, `omega_S = omega_P + dOmega`).
+            // The registry rest ORIENTATION switches at the same ADP.Pi -> ADP transition, so the bound head
+            // exerts a DIRECT AXIAL COUPLE (tau_u = g_omega) rather than a tangential force at the moment arm
+            // (tau_u = R*g_y, which is what epsStroke does). Independent torque route, same rectification
+            // criterion: a chiral coordinate that moves net-nonzero WHILE BOUND and is reset while unbound.
+            // Cleared whenever unbound, so every attachment begins in the pre-stroke registry.
+            if (bs < 0) regOff.set(m, 0f);
+            else if (fire && dOmega != 0.0) regOff.set(m, (float) (mirror * dOmega));
             prevNuc.set(m, nu);
         }
     }
@@ -696,6 +734,10 @@ public final class ChiralSiteSystem {
         int halfSearch = (int) sbP.get(22);
         double accTol = sbP.get(23);
         double phaseGlobal = sbP.get(25), stepPhase = (stairPhase != 0.0) ? stairPhase : (twistRate * rise);
+        // TWO-STRAND LATTICE: partner site at +1 actin monomer (opposite long-pitch strand). partAx == 0 => OFF,
+        // and the partner loop below collapses to a single iteration that is byte-identical to the one-strand scan.
+        double partAx = sbP.get(32), partPh = sbP.get(33);
+        int nPart = (partAx != 0.0) ? 1 : 0;
         double segTol = sbP.get(26);
         // CANONICAL SITE-NORMAL CAPTURE ORIENTATION GATE (noncanonical, flag-gated, default 0 ⇒ byte-identical).
         // sbP[27] = 1 enables it; sbP[28] = cos(tolerance). It REPLACES the actin-blind |psi - psiActin| gate
@@ -707,6 +749,21 @@ public final class ChiralSiteSystem {
         // Report: docs/motor/SITE_NORMAL_HEAD_BINDING.md.
         int orientSite = (int) sbP.get(27);
         double cosTolBind = sbP.get(28);
+        // TILT-AWARE CAPTURE (sbP[34]=cos, sbP[35]=sin of the GATE tilt; 0/1 => bit-identical legacy behaviour).
+        // WHY. The bound head is held by siteCoupleStep at eTarget = -n_site*cos(b) + u_site*sin(b), but this gate
+        // admitted candidates against -n_site alone. At b != 0 that is inconsistent in TWO ways:
+        //   (1) ADMISSION: a head is admitted up to 25 deg from RADIAL and the latch then drags it b degrees to a
+        //       pose that can be OUTSIDE the cone it was admitted through. The reorientation displaces the bound
+        //       point by 2*R_F8*sin(b/2) and does directed work on the filament once per attachment -- a second,
+        //       pre-stroke lever swing whose sign is set by sign(b). Measured: the velocity excess over the whole
+        //       -60..+60 tilt curve equals that chord to within 0.65-1.42x, at FLAT capture count.
+        //   (2) ENERGY: g5 charges 0.5*k_bind*thetaBind^2 against a 15 kT budget, with thetaBind measured here.
+        //       Against -n_site a radial capture is charged ~0, while the strain the latch actually relaxes
+        //       through is 0.5*512*(b in rad)^2 = 17.1 kT at b=30deg -- ABOVE the budget. The model was admitting
+        //       captures its own energy gate would reject, then spending the difference on the filament.
+        // Measuring both against the TILTED target removes the free swing and charges the real energy.
+        double ctlG = (sbP.getSize() > 34) ? sbP.get(34) : 1.0;
+        double stlG = (sbP.getSize() > 35) ? sbP.get(35) : 0.0;
         // ABLATION CONTROLS (explanatory only; both default 0 = the gate stays RETIRED in site-normal mode).
         // sbP[30] = 1 re-applies g6, sbP[31] = 1 re-applies g2, so a matched A/B/C/D comparison can quantify
         // which retired gate was dominant. They are NEVER set on any production path.
@@ -757,9 +814,10 @@ public final class ChiralSiteSystem {
             int k0 = (int) ((cum + footC + half) / rise + 0.5);
             int bestK = -1; double bestD2 = 1e9, bestArc = 0, bestPhi = 0, bestTh = 0;
             for (int j = -halfSearch; j <= halfSearch; j++) {
+              for (int p = 0; p <= nPart; p++) {
                 int k = k0 + j;
                 if (k < 0) continue;
-                double laRaw = k * rise - cum;                    // site arc from this segment's end1
+                double laRaw = k * rise + p * partAx - cum;       // site arc from this segment's end1
                 double segL = 2.0 * half;
                 // SEGMENT MEMBERSHIP, float32-robust. `cum` and `segLength` are float32, so a site whose global
                 // arc lands EXACTLY on a segment junction (for the canonical 12x65-monomer filament that is every
@@ -775,8 +833,8 @@ public final class ChiralSiteSystem {
                 // LARGER legacy margin is configured.
                 if (margin > segTol && !(la > margin && la < segL - margin)) continue;
                 double ph;
-                if (phaseGlobal != 0.0) { double tw = k * stepPhase; ph = tw - 6.283185307179586 * (double) ((long) (tw / 6.283185307179586)); }
-                else ph = (stairPhase != 0.0) ? (k * stairPhase) : (twistRate * (la - half));
+                if (phaseGlobal != 0.0) { double tw = k * stepPhase + p * partPh; ph = tw - 6.283185307179586 * (double) ((long) (tw / 6.283185307179586)); }
+                else ph = ((stairPhase != 0.0) ? (k * stairPhase) : (twistRate * (la - half))) + p * partPh;
                 double cph = Math.cos(ph), sph = Math.sin(ph);
                 double nx = cph * yx + sph * zx, ny = cph * yy + sph * zy, nz = cph * yz + sph * zz;
                 double aOff = la - half;
@@ -790,12 +848,19 @@ public final class ChiralSiteSystem {
                 if (!(sbP.get(24) * d * 1e12 < preloadPn)) continue;   // g4, real F8 bond extension
                 double thB = 0.0;
                 if (orientSite != 0) {                            // g1' CANONICAL SITE-NORMAL ORIENTATION
-                    double dh = -(xhx * nx + xhy * ny + xhz * nz);   // dot(xHeadHat, -n_site)
+                    // dot(xHeadHat, eTarget) with eTarget = -n_site*cos(b) + u_site*sin(b). At b = 0 this is
+                    // -(xh.n) to the last bit: -nx*1.0 is exact, + ux*0.0 is exact, and (-a)+(-b) == -(a+b) in
+                    // IEEE-754, so the legacy arithmetic is reproduced exactly, not approximately.
+                    double gtx = -nx * ctlG + ux * stlG;
+                    double gty = -ny * ctlG + uy * stlG;
+                    double gtz = -nz * ctlG + uz * stlG;
+                    double dh = xhx * gtx + xhy * gty + xhz * gtz;
                     if (!(dh >= cosTolBind)) continue;
                     if (dh > 1.0) dh = 1.0;
                     thB = cacos(dh);
                 }
-                if (d2 < bestD2) { bestD2 = d2; bestK = k; bestArc = la; bestPhi = ph; bestTh = thB; }
+                if (d2 < bestD2) { bestD2 = d2; bestK = 2 * k + p; bestArc = la; bestPhi = ph; bestTh = thB; }
+              }
             }
             if (bestK < 0) continue;
             candInt.set(m, s); candInt.set(N + m, bestK);

@@ -1181,7 +1181,15 @@ public final class TwoBodyConverterMotor {
     //  constant — NEVER selected from barbedDir/world/desired output. Handedness decided by MEASURED
     //  pre/post trajectories.
     // =====================================================================================
-    static final double[] A_SEMI={0.0045,0.00275,0.00225};   // ellipsoid semi-axes µm (9×5.5×4.5 nm)
+    // HEAD SHAPE (2026-09-08). The head is a SPHERE dynamically: drag is 6*pi*eta*RHEAD_UM (5 nm) and these
+    // semi-axes enter NEITHER the drag NOR the bond. They survive only as (a) a legacy render size and
+    // (b) the g6 binding-gate height threshold, which now has its own name below -- do not reintroduce
+    // A_SEMI into mechanics, and do not read a head ORIENTATION into it: the kbind latch holds the head
+    // radial, whereas the real motor domain lies roughly ALONG the filament (converter barbed-proximal).
+    static final double[] A_SEMI={0.0045,0.00275,0.00225};   // legacy ellipsoid semi-axes µm (9×5.5×4.5 nm)
+    /** g6 binding gate: max head-centre height above the segment centre. Was A_SEMI[2]; named so the gate
+     *  no longer rides on a semi-axis that describes nothing the mechanics uses. Value unchanged. */
+    static final double HEAD_GATE_Z_UM = 0.00225;   // 2.25 nm
     static final double LB_3C=0.008, RHEAD_3C=0.0046;
     // ===================================================================================================
     // F8 LONG-AXIS GEOMETRY (corrected 2026-08-13; see docs/motor/SITE_NORMAL_HEAD_BINDING.md §F8).

@@ -1431,7 +1431,16 @@ public final class TwoBodyBeamAnalyticGpu {
         double tol = 3e-7;
         long tt = matc.get(0), seed = matc.get(1); int brownOn = matc.get(2);
         int mPolicy = matc.get(3); int axMode = matc.get(4);
+        // CULL / WORKER TAG (data-only; inert by default). restC row 8 carries, per motor, the id of the
+        // worker responsible for solving it: 0 for every motor on a plain unculled call (the array is
+        // zero-initialised) and counts[4] is 0 for a plain unculled call, so the test below never fires and
+        // the whole mat is solved exactly as before — byte-identical. A caller that wants the production
+        // per-segment UNION cull writes -1 for culled motors and 0..T-1 for the kept ones, then issues T
+        // calls whose counts[4] differ; every kept motor is then solved EXACTLY ONCE, by one worker, with
+        // identical arithmetic (all writes are per-motor disjoint). See ExplicitCompleteMatHarness.MatCullPlan.
+        int myWorker = counts.get(4);
         for (@Parallel int m = 0; m < nM; m++) {
+            if (restC.get(8 * nM + m) != myWorker) continue;   // culled (-1) or another worker's motor
             double bx = frame.get(m), by = frame.get(nM + m), bz = frame.get(2 * nM + m);
             double ex = frame.get(3 * nM + m), ey = frame.get(4 * nM + m), ez = frame.get(5 * nM + m);
             double ux = frame.get(6 * nM + m), uy = frame.get(7 * nM + m), uz = frame.get(8 * nM + m);

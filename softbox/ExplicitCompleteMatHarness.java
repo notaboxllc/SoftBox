@@ -123,7 +123,11 @@ public final class ExplicitCompleteMatHarness {
     static double  R_ACTIN_NM = 3.5;                   // -actin-bind-radius-nm (default = Constants.radius = 3.5 nm)
     static double  SURF_EXCL_NM = 5.5;                 // -surface-exclusion-nm (3D actin-surface steric)
     static boolean SURF_STERIC = true;                 // -no-surface-exclusion clears (twirl mechanics vs sterics)
-    static final double TWIST_PER_MON_DEG = -166.5;    // actin 13/6, LEFT-handed (RollSpringHarness convention)
+    // actin 13/6, LEFT-handed (RollSpringHarness convention). NON-FINAL so -flip-helix can mirror the LATTICE
+    // itself: that is the only valid mirror control for DERIVED handedness. The usual -mirror flips MIRROR_SIGN,
+    // which acts through the IMPOSED epsStroke term and is therefore a NO-OP at eps = 0. It also discriminates
+    // against a lab-frame artefact: a bias from the Gram-Schmidt head axis would NOT reverse with the helix.
+    static double TWIST_PER_MON_DEG = -166.5;
     static boolean surfOn() { return SURFACE_ON; }
 
     // VILFAN-STYLE STEREOSPECIFIC TARGET-ZONE BINDING (noncanonical, default-off; Stage A).
@@ -182,6 +186,11 @@ public final class ExplicitCompleteMatHarness {
     static boolean HEAD_ROLL = false;        // -head-roll-dof on|off
     static boolean HEAD_ROLL_BROWN = true;   // -head-roll-brownian on|off (unbound rotational diffusion)
     static double  REG_K = 0.0;              // -bound-registry-k (N·m/rad); 0 ⇒ exactly inert
+    /** -registry-switch <deg>: ATLAS MECHANISM A4. The bound registry's REST ORIENTATION switches by this
+     *  angle at the ADP·Pi→ADP transition, so the head delivers a DIRECT AXIAL COUPLE to the filament
+     *  (tau_u = g_omega) instead of a tangential force at the moment arm (tau_u = R*g_y, = EPS_STROKE_DEG).
+     *  A mechanically INDEPENDENT torque route. Requires REG_K > 0 and HEAD_ROLL; 0 ⇒ exactly inert. */
+    static double  REG_SWITCH_DEG = 0.0;
     static double  EPS_BIND_DEG = 0.0;       // -binding-skew-deg
     static double  EPS_STROKE_DEG = 0.0;     // -stroke-skew-deg
     static boolean SITE_EXCLUSIVE = true;    // -no-site-exclusion clears
@@ -199,8 +208,160 @@ public final class ExplicitCompleteMatHarness {
     //       bound = the historical k_bind (512 pN·nm/rad², UNCHANGED); detached = K_DET_PNNM, a separate
     //       weak INTERNAL neck-relative rest elasticity. OFF ⇒ the single historical value everywhere.
     static boolean KBIND_BOUND_ONLY = false;    // -kbind-bound-only on|off
+    /** -s2-catch <factor>: SPECULATIVE binding-triggered catch-stiffening of the S2 BENDING stiffness.
+     *  A bound motor's g4kb is multiplied by this factor; a free motor keeps the canonical value, so the
+     *  diffusive search is untouched. 1.0 (default) => exactly inert, never wired, byte-identical.
+     *  NOT PHYSICALLY JUSTIFIED: no measurement of a state-dependent S2 stiffness is known to us. This is a
+     *  deliberate "what would the motor need" probe of the series-compliance hypothesis (§7.3.2), asserted as
+     *  an assumption, not a claim. Exp 4E's untested prescription made concrete. */
+    static double  S2_CATCH_FACTOR = 1.0;
+    /** -s2-loadcatch <factor> / -s2-loadf0 <pN>: LOAD-gated S2 bending catch-stiffening (Scholz 2005).
+     *  kb ramps kb0 -> kb0*factor as |F8| goes 0 -> F0. Physically motivated, unlike the binding-gated
+     *  S2_CATCH_FACTOR: the measured effect is a 10x extension/compression asymmetry in the tether, and a
+     *  lightly-loaded bound head correctly stays SOFT. 1.0 => exactly inert. */
+    static double  S2_LOAD_FACTOR = 1.0;
+    static double  S2_LOAD_F0_PN  = 2.0;
+    /** -twopoint [footHalf_nm]: EXPLORATORY two-point surface cross-bridge. The single F8 spring becomes two
+     *  HALF-strength springs to actin protomers n and n-2 (the structurally correct pair: same long-pitch
+     *  strand, 5.40 nm axial, -27.0 deg azimuthal => 1.63 nm tangential chord, 16.8 deg off-axis). The axial
+     *  torque M.u = -d_t*F_n then comes from GEOMETRY with no imposed skew, handedness DERIVED from the
+     *  lattice. Default off => never wired => byte-identical. */
+    static boolean TWO_POINT_BOND = false;
+    static double  TWO_POINT_FOOT_NM = 2.82;   // half the n->n-2 chord (5.64 nm)
+    static int     TWO_POINT_PAIR = 2;         // n - PAIR monomers
+    // -twopoint-keepf9. DEFAULT false. NOTE (2026-09-04): F9 is INERT in this harness regardless of this flag --
+    // xbParams[2] (j1FMT, the alignment fracMoveTorq) is 0.0 here, so the F9 torque is identically zero in BOTH
+    // bondForcesSurface and bondForcesSurfaceTwoPoint. The head is pinned by the two springs + the site-normal
+    // U_bind, NOT by F9. Kept as a gate so the null is reproducible; it is not a lever.
+    static boolean TWO_POINT_DROP_COUPLE = false;   // -twopoint-nocouple: reaction at the midpoint (NO-OP: the couple is identically zero)
+    // Bond-target offsets: move ONLY the spring target, leaving bindAzim (kbind / site normal / stroke) put.
+    static double  TGT_DAZ_DEG = 0.0, TGT_DARC_NM = 0.0, TGT_RSCALE = 1.0;
+    static boolean TWO_POINT_ALIGN_FEET = false;   // -twopoint-alignfeet: exact zero-energy state
+    static boolean TWO_POINT_STRADDLE = false;     // -twopoint-straddle: sites at n+pair and n-pair
+    // TRIAD: 3 contacts, k/3 each, equilateral in the actin surface tangent plane, centred on the F8 point.
+    // rho default 2.26 nm = equivalent disc radius of the ~1600 A^2 acto-myosin interface.
+    static boolean TRIAD_ON = false;
+    static double  TRIAD_RHO_NM = 2.26;
+    // -triad-labpatch: REGRESSION CONTROL. Restores the legacy LAB-FIXED head-patch basis (hy = motorYVec =
+    // perp3(uVec)) that the 2026-09-11 material-basis fix replaced, so the fix's own effect is measurable.
+    static boolean TRIAD_LAB_PATCH = false;
+    // -headtilt <deg>: bound-head pose. 0 = radial ("sticks straight out", current model).
+    // POSITIVE tilts the head toward the BARBED end, putting the neck/converter barbed-proximal.
+    static double  HEAD_TILT_DEG = 0.0;
+    // -tiltgate: make the CAPTURE gate consistent with the pose the latch holds. The g1' admission cone and the
+    // g5 energy charge are both evaluated against the TILTED eTarget instead of -n_site. Default OFF reproduces
+    // the legacy (inconsistent) behaviour bit-identically; at HEAD_TILT_DEG = 0 the two are identical anyway.
+    static boolean TILT_GATE = false;
+    static FloatArray triP = null;
+    // Per-motor MATERIAL head-patch reference for the triad (3N, seeded on the first bound step, cleared on
+    // detach). Device-resident FIRST_EXECUTION like e.headRef -- it is kernel-WRITTEN state, so it must never be
+    // re-uploaded per step or the transport would be reset every step.
+    static FloatArray triPatch = null;
+    static boolean triadOn() { return TRIAD_ON; }
+    static boolean tgtOffsetOn() { return TGT_DAZ_DEG != 0.0 || TGT_DARC_NM != 0.0 || TGT_RSCALE != 1.0; }
+    static boolean TWO_POINT_KEEP_F9 = false;
+    static double  TWO_POINT_ANC_W = 0.25;     // ancillary spring weight (Lorenz & Holmes: 22-30% of the interface)
+    // LINKAGE SOFTENING (2026-09-04, data-only; the -eta / S2-fixture precedent). Multiplicative scales on the
+    // per-motor params that sit UPSTREAM of the head: the converter torsional spring (params[6]=kconvCode), the
+    // S2 axial stretch (params[11]=g4ks) and the S2 bending (params[13]=g4kb). params is already per-motor planar
+    // storage read by BOTH runners, so this is pure data: no kernel edit, no buffer resize, no TaskGraph change.
+    // FDT-safe: every Brownian amplitude is built from the drag gammas, not from these stiffnesses, so softening
+    // a spring correctly RAISES its equipartition amplitude (kT/k) without breaking the fluctuation-dissipation
+    // balance. Softer also means a LARGER stability margin at fixed dt, never smaller. 1.0 = exact no-op.
+    static double  SOFT_CONV = 1.0, SOFT_S2A = 1.0, SOFT_S2B = 1.0;
+    // SOFT_KBIND (2026-09-04, DIAGNOSTIC ONLY): scales params[7]=kbindCode, the torsional spring that holds
+    // xHeadHat to eTarget=-n_site. This is the RESERVED site-normal channel (the candidate power-stroke
+    // conformational channel), deliberately loosened ONLY to test whether the two-point glide collapse is
+    // caused by the head being clamped against actin. Applied at params fill, so it propagates to BOTH readers
+    // (gateP[0] via line ~806 and snP[4] via line ~820, both built from params[7*N]). It scales the BOUND
+    // stiffness only -- gateP[1] (kDet, the detached head) keeps its own value. NOT a proposed model change,
+    // NOT to be promoted: at small factors the site-normal orientation latch stops holding and the bound head
+    // orientation is no longer specified, which is a DIFFERENT model, not a better one.
+    static double  SOFT_KBIND = 1.0;
+    // CONV_DIAG (2026-09-04): read back e.q (phi, psi) so the harness can report the BOUND-state converter
+    // angle distribution. Answers 'does two-point binding shift the relaxed converter position vs single F8?'
+    // Additive, gated, read-only ⇒ default byte-identical.
+    // -f8tan <nm>: HEAD-SIDE conformational origin of the stroke skew. At the stroke the head's actin-binding
+    // point shifts TANGENTIALLY by this many nm. Force-identical to epsStroke (zero-rest spring: moving either
+    // endpoint gives the same force) but stated as a conformational change of the HEAD. eps=1.5 deg at the
+    // 3.5 nm actin radius == 0.092 nm == ~0.9 Angstrom. 0 = off (no write => byte-identical).
+    static double  F8_TAN_NM = 0.0;
+    static int     F8_TAN_STATE = -1;      // <0 = any post-stroke state (isCocked); >=0 = that state only
+    static DoubleArray hcP = null;
+    static boolean f8TanOn() { return F8_TAN_NM != 0.0; }
+    static boolean CONV_DIAG = false;
+    // ROLL SPRING (-rollspring): the INTER-SEGMENT TORSIONAL-ROLL constraint. Without it segment roll is a
+    // free, uncoupled DOF (true of v1 too -- AZIMUTHAL_BINDING_BUILD_READ.md Verdict A), so a multi-segment
+    // filament accumulates unbounded internal twist and does NOT rotate as a body. Real actin has a torsional
+    // persistence length ~7 um (C ~ 2.8e-26 N.m^2, Yasuda 1996) and over a ~2 um filament rotates essentially
+    // coherently -- which is the assumption every twirling EXPERIMENT makes. Uses RollSpringSystem
+    // (docs/ROLL_SPRING_PROTOTYPE.md, Outcome A: coherent twist +/-2.5 deg/joint, stable, CPU=GPU).
+    static boolean ROLL_SPRING = false;
+    static double  ROLL_STIFF  = 0.5;    // f, fraction-per-step stiffness
+    static int     ROLL_MODE   = 2;      // 2 = springs-continuum (canonical, dt-convergent)
+    static double  ROLL_REFDT  = 1e-5;
+    // -rollrest <deg>: OVERRIDE the per-joint rest twist. NaN = derive from the scene segment length (the
+    // actin 13/6 helix). Setting 0 keeps the torsional COUPLING but removes the helical REST STATE, which
+    // separates the roll spring's MECHANICS from the binding GEOMETRY it imposes via the segment frames.
+    static double  ROLL_REST_DEG = Double.NaN;
+    static FloatArray rollP = null;
+    static boolean rollSpringOn() { return ROLL_SPRING; }
+    /** Per-joint rest twist from the actin 13/6 helix and the SCENE's own segment length. */
+    static double rollRestRad(double segLenUm) {
+        if (!Double.isNaN(ROLL_REST_DEG)) return ROLL_REST_DEG * Math.PI / 180.0;
+        double monPerSeg = segLenUm / Constants.actinMonoRadius;
+        double a = monPerSeg * (-166.5) * Math.PI / 180.0;
+        double t = 2*Math.PI; a = a - t*Math.floor(a/t + 0.5); return a;   // wrap to (-pi,pi]
+    }
+
     static double  K_DET_PNNM = 5.0;            // -k-det <pN·nm/rad²>  (DIAGNOSTIC candidate, NOT calibrated)
+    // STRAIGHT_REST — the detached head rests COLLINEAR WITH THE NECK ("a straight stick") instead of at the
+    // native (phi_pre, psiActin, chi=0) pose. restC rows 0..2 are the detached eTarget resolved in the LIVE
+    // neck frame (TwoBodyBeamAnalyticGpu:1391, eTarget = c1*n1 + c2*n2 + c3*n3), so "collinear with the neck"
+    // is EXACTLY (1,0,0) and needs no geometry. Rationale: at psiActin = 0 the native rest axis is xHeadHat =
+    // b_hat (the head lies ALONG the filament axis) while binding requires xHeadHat = -n_site (radial) — a
+    // ~90 deg structural mismatch that the capture funnel measures as a mean 100.43 deg miss and a 1.08 %
+    // orientation pass rate. This flag ONLY moves the DETACHED rest target; k_bind, the bound law, the
+    // capture gate, the lever pre-angle phi_pre and the stroke are untouched. Default OFF => byte-identical.
+    // CANONICAL DEFAULT since 2026-08-17 (jba). The detached head rests COLLINEAR WITH THE NECK.
+    // restC rows 0..2 are the detached eTarget in the LIVE neck frame (TwoBodyBeamAnalyticGpu:1391,
+    // eTarget = c1*n1 + c2*n2 + c3*n3), so "collinear with the neck" is EXACTLY (1,0,0) — exact geometry,
+    // nothing fitted, and frame-covariant so it carries to any motor orientation.
+    // WHY THIS IS THE DEFAULT: the superseded native pose (phi_pre, psiActin=0, chi=0) put the rest axis at
+    // xHeadHat = b_hat, i.e. ALONG the filament, while the site-normal law requires xHeadHat = -n_site, i.e.
+    // RADIAL — ~90 deg apart by construction (measured mean miss 100.43 deg, orientation gate admitting 1.08 %
+    // of in-reach candidates). Neither of the native pose's two angles encoded a claim about a DETACHED head:
+    // phi_pre = 30 deg came from Exp-3D's STROKE-AXIALITY criterion, and psiActin = 0 was the PREVIOUS binding
+    // law's bound-orientation convention, left stale when the site-normal law redefined that target.
+    // Measured effect (paired, d3000, dt 2.5e-6, 2 seeds): avgBound 1.155 -> 2.137 / 1.889; the gain is in
+    // attachment FREQUENCY, not bond lifetime (residence 855 -> 831 / 809 us).
+    // Reproduce the superseded pose with -nativerest (ChiralSiteHarness: -equiv-nativerest).
+    static boolean STRAIGHT_REST = true;        // -nativerest to opt out
+    // SITE_NORMAL_DEVICE_OK — the chi-dynamic 3-D head + site-normal stack is WIRED into buildGlidingGraph, but
+    // wiring is not validation. Per CLAUDE.md's per-assay-class gate, an unvalidated device class must HARD-FAIL
+    // rather than silently run, so the device path stays refused until this is explicitly set and the whole-step
+    // CPU/GPU equivalence gate has passed. The isolated lowering risk is already retired
+    // (ExplicitMatSolveTiltHarness: the 15x16 tilt solver lowers, 1.7e-09 um / 4.3e-07 rad vs the CPU runner).
+    static boolean SITE_NORMAL_DEVICE_OK = false;   // -sitenormal-device (experimental opt-in)
+    // DEVICE_CULL — run the production per-segment UNION cull ON THE DEVICE (matCull + matCullTag as graph tasks)
+    // instead of solving the whole mat every step. The CPU path has always culled; the device path did not, which
+    // is why the GPU wall-clock win was only ~5.6x despite ~110x the motor-step throughput (it was solving 21000
+    // motors against the CPU's ~1050). Default OFF so the wired-but-unvalidated device path stays byte-comparable
+    // to the runs already recorded; enable with -devicecull.
+    static boolean DEVICE_CULL = false;             // -devicecull
+    // CANONICAL DEFAULT since 2026-08-18 (jba). Emit the opposite-long-pitch-strand partner for every lattice
+    // site (see packExMat). F-actin is a TWO-START helix and `every4` takes monomer indices 4k — ALL EVEN — so
+    // the one-strand lattice omitted the structurally equivalent partner that real actin presents.
+    // MEASURED (straight-rest, dt 1.25e-6, 0.5 s, edge start): avgBound x1.47 / x1.54 / x1.73 at d500/1000/2000,
+    // and it RESTORES the engagement-density scaling (avgBound x3.58 across the 4x range vs the prior campaign's
+    // x3.72; one-strand managed only x3.04, i.e. it saturated early because sites, not motors, were scarce).
+    // STERIC CAVEAT: nearest-neighbour site separation goes 11.26 -> 7.46 nm, i.e. 1.61x -> 1.07x a nominal 7 nm
+    // head. Admissible but tight. A same-strand infill (+2 monomers, 5.64 nm) would be INSIDE the head and is
+    // NOT added. Reproduce the superseded single-strand lattice with -onestrand.
+    static boolean TWO_STRAND_SITES = true;        // -onestrand to opt out
     static boolean kbindGateOn() { return KBIND_BOUND_ONLY; }
+    static boolean s2CatchOn()   { return S2_CATCH_FACTOR != 1.0; }
+    static boolean s2LoadOn()    { return S2_LOAD_FACTOR != 1.0; }
     static boolean HEAD_TILT_BROWN = true;      // chi Brownian on (FDT); off = deterministic chi
     static boolean headTiltOn() { return HEAD_TILT_3D; }
 
@@ -254,8 +415,48 @@ public final class ExplicitCompleteMatHarness {
     static double  S2_BEND_SCALE   = 1.0;    // -s2-bend-stiffness-scale     : kb → s·kb only (EI softer/stiffer, length untouched)
     static double  CONV_ECC_SCALE  = 1.0;    // -converter-f8-eccentricity-scale : |rCF8_perp| → s·|rCF8_perp| (the F8 MATERIAL POINT moves; rConv, hence xH and gammaPsi, do NOT)
     static boolean CONV_ECC_COMP   = false;  // -converter-f8-eccentricity-compensated : hold |d0| (the converter rotation radius) FIXED while eccentricity varies
+    // CONVERTER AZIMUTH ON THE HEAD (-convaz <deg>; 2026-09-10). jba's construction: instead of TILTING the
+    // whole head (which swings the head CENTRE toward the filament -- head-centre radius 3.5+3.5cos(b) nm --
+    // and so changes the head/filament steric relationship in a model that has NO excluded-volume force and a
+    // RETIRED g6 steric gate), rotate the CONVERTER to a different material point on the spherical head while
+    // the head itself stays put. rF8 is untouched (|rF8|=3.5nm => head centre stays 3.5nm from the contact
+    // along the head axis => SAME DEPTH), and |rConv| is held at 3.5nm (converter stays ON the head =>
+    // gammaPsi, which depends on |rConv|, is UNCHANGED). The unavoidable cost is the converter ARM
+    // |rF8-rConv| = 7*cos(b/2) nm, which sets the stroke amplitude; CONV_AZ_COMP scales DTHETA_MOTOR by
+    // 1/cos(b/2) to hold the unloaded stroke fixed, so a gain cannot be a disguised stroke-length change
+    // (the CONV_ECC_COMP precedent). Default 0 => rConv = (-3.5, 0) = canonical antipodal, byte-identical.
+    static final double DTHETA_CANON = TwoBodyConverterMotor.DTHETA_MOTOR;   // captured before any scaling
+    static double  CONV_AZ_DEG     = 0.0;    // -convaz <deg>
+    static boolean CONV_AZ_COMP    = true;   // -convaz-nocomp to disable the stroke-amplitude compensation
+    // -stroke-swing <deg>: OVERRIDE the converter stroke SWING (canonical +60 deg, PRESTROKE_THETAS -30 ->
+    // ADP_THETAS +30). DISCRIMINATING CONTROL for
+    // "is a converter-position velocity gain the power stroke being better aimed, or the lever/S2 relaxing a
+    // binding-geometry strain?" With rF8 pinned at the site and psi pinned by the latch, the converter joint is
+    // forced to C = xF8 - R(psi)(rF8 - rConv), so convaz DISPLACES C by |d rConv| (3.5 nm at alpha=60) and the
+    // lever+S2 must accommodate it -- storing strain that relaxes once per attachment, sign set by sign(alpha).
+    // g5 charges the converter spring and the head orientation but NOT S2 beam strain, so that strain is
+    // uncharged, the same accounting gap that made the head-tilt gain an artefact.
+    //   -stroke-swing 0   : NO stroke => nothing to aim => any surviving alpha-dependence IS the binding lever
+    //   -stroke-swing -60 : REVERSED stroke => an aiming effect must flip sign; a binding-strain effect must not
+    //   -stroke-swing 60  : canonical (exactly reproduces ADP_THETAS; byte-identical)
+    // IMPLEMENTED AS A DATA OVERRIDE ON cockP, not on the constants: PRESTROKE_THETAS / ADP_THETAS are
+    // `static final`, so javac INLINES them and a runtime assignment is impossible (the Constants.aeta trap).
+    // cockP = [prestroke theta_s, ADP theta_s] is the single channel matCock reads, so rewriting cockP[1] is
+    // the whole change. An earlier attempt wrote TwoBodyConverterMotor.DTHETA_MOTOR, which the mat path never
+    // reads -- it was INERT and produced byte-identical arms (caught by the control returning no difference).
+    static double  STROKE_SWING_DEG = Double.NaN;
+    // -stroke-phase <deg>: rotate the WHOLE stroke window by delta at FIXED swing amplitude (both cockP
+    // entries shifted). This is the RE-AIM knob: the stroke's direction relative to the filament axis is set
+    // jointly by the converter placement (alpha) and the assembly's relaxed angles, so an alpha sweep at fixed
+    // rest angles is the UNADJUSTED curve -- it measures "move the converter and re-aim nothing". A cost at
+    // large alpha could therefore mean the biological geometry is worse, OR merely that the rest angles were
+    // set for alpha=0. Only this knob separates those.
+    // NOTE (deliberate): delta should be DERIVED from the geometry that makes the bound point's stroke arc
+    // tangent axial, not fitted per alpha to maximise gliding -- fitting it would be single-assay motor tuning,
+    // which is the thing that was declined before on versatility grounds.
+    static double  STROKE_PHASE_DEG = Double.NaN;
     static double  CONV_TRANS_NM   = 0.0;    // -converter-transverse-offset-nm : roll the motor's OWN base triad about its OWN b̂ so the converter JOINT C is displaced ⊥ the axial plane by this much at the reference pose
-    static boolean geomScaled() { return S2_LEN_SCALE != 1.0 || S2_BEND_SCALE != 1.0 || CONV_ECC_SCALE != 1.0 || CONV_TRANS_NM != 0.0; }
+    static boolean geomScaled() { return S2_LEN_SCALE != 1.0 || S2_BEND_SCALE != 1.0 || CONV_ECC_SCALE != 1.0 || CONV_TRANS_NM != 0.0 || CONV_AZ_DEG != 0.0; }
 
     // ---- §S2-FIXTURE: QUENCHED per-motor mechanically free S2 length (default-off) --------------------------
     // A lawn is a discrete distribution: class lengths (nm) + weights. Every motor is assigned ONE length at
@@ -344,7 +545,7 @@ public final class ExplicitCompleteMatHarness {
         return String.format(Locale.US, "s2Lawn=ON N=%d mean=%.4f nm SD=%.4f skew=%+.3f range=[%.2f,%.2f] seed=%d classes{ %s}",
                 N, mean, sd, sk, mn, mx, S2_LAWN_SEED, h);
     }
-    static void resetGeomScales() { S2_LEN_SCALE = 1.0; S2_BEND_SCALE = 1.0; CONV_ECC_SCALE = 1.0; CONV_ECC_COMP = false; CONV_TRANS_NM = 0.0; }
+    static void resetGeomScales() { S2_LEN_SCALE = 1.0; S2_BEND_SCALE = 1.0; CONV_ECC_SCALE = 1.0; CONV_ECC_COMP = false; CONV_TRANS_NM = 0.0; CONV_AZ_DEG = 0.0; CONV_AZ_COMP = true; }
 
     /**
      * Apply the default-off diagnostic geometry scales to a freshly built mat scene, BEFORE {@link #packExMat}
@@ -373,6 +574,19 @@ public final class ExplicitCompleteMatHarness {
      */
     static void applyGeomScales(Glide2D G) {
         if (S2_BEND_SCALE != 1.0) G.g4kb *= S2_BEND_SCALE;
+        if (CONV_AZ_DEG != 0.0) {
+            double b = Math.toRadians(CONV_AZ_DEG);
+            double rc = Math.sqrt(G.rConv[0]*G.rConv[0] + G.rConv[1]*G.rConv[1]);   // 3.5 nm canonically
+            G.rConv = new double[]{ -rc*Math.cos(b), rc*Math.sin(b) };              // |rConv| preserved
+            if (CONV_AZ_COMP) {                                                     // hold the unloaded stroke
+                double c = Math.cos(0.5*b);
+                if (Math.abs(c) < 1e-6) throw new IllegalArgumentException(
+                        "convaz " + CONV_AZ_DEG + " deg is degenerate: converter arm -> 0");
+                // anchored to the CANONICAL dtheta, never to the current value: applyGeomScales can run
+                // once per motor, and scaling in place would compound the compensation N times.
+                TwoBodyConverterMotor.DTHETA_MOTOR = DTHETA_CANON / c;
+            }
+        }
         if (CONV_ECC_SCALE != 1.0) {
             double dx0 = G.rF8[0] - G.rConv[0], dy0 = G.rF8[1] - G.rConv[1];
             double d0 = Math.sqrt(dx0*dx0 + dy0*dy0);
@@ -423,7 +637,7 @@ public final class ExplicitCompleteMatHarness {
 
     static boolean siteOn()   { return SITE_MODE > 0; }
     static boolean chiralOn() { return SITE_MODE > 0 || HEAD_ROLL; }
-    static boolean strokeSkewOn() { return SITE_MODE > 0 && EPS_STROKE_DEG != 0.0; }
+    static boolean strokeSkewOn() { return SITE_MODE > 0 && (EPS_STROKE_DEG != 0.0 || REG_SWITCH_DEG != 0.0); }
     /** the converter-frame task is wired only when a lattice provides a site frame AND the angle is nonzero. */
     static boolean convSkewOn() { return SITE_MODE > 0 && CONV_SKEW_DEG != 0.0; }
     /** the SECOND (post-cock) converter-frame invocation is wired ONLY for the state-gated mode. */
@@ -441,8 +655,8 @@ public final class ExplicitCompleteMatHarness {
         return switch (r) { case ChiralSiteSystem.RAMP_LINEAR -> "linear";
                             case ChiralSiteSystem.RAMP_SMOOTHSTEP -> "smoothstep";
                             case ChiralSiteSystem.RAMP_DELAYED -> "delayed"; default -> "off"; }; }
-    static void resetChiral() { SITE_MODE = 0; HEAD_ROLL = false; HEAD_ROLL_BROWN = true; REG_K = 0; EPS_BIND_DEG = 0;
-        EPS_STROKE_DEG = 0; SITE_EXCLUSIVE = true; MIRROR_SIGN = 1.0; SITE_CAPTURE_NM = 12.0; RAND_BASE_AZ = false; HEAD_TILT_3D = false; HEAD_TILT_BROWN = true; KBIND_BOUND_ONLY = false; K_DET_PNNM = 5.0;
+    static void resetChiral() { SITE_MODE = 0; HEAD_ROLL = false; HEAD_ROLL_BROWN = true; REG_K = 0; REG_SWITCH_DEG = 0; EPS_BIND_DEG = 0;
+        EPS_STROKE_DEG = 0; SITE_EXCLUSIVE = true; MIRROR_SIGN = 1.0; SITE_CAPTURE_NM = 12.0; RAND_BASE_AZ = false; HEAD_TILT_3D = false; HEAD_TILT_BROWN = true; KBIND_BOUND_ONLY = false; S2_CATCH_FACTOR = 1.0; S2_LOAD_FACTOR = 1.0; S2_LOAD_F0_PN = 2.0; K_DET_PNNM = 5.0; STRAIGHT_REST = true; SOFT_CONV = 1.0; SOFT_S2A = 1.0; SOFT_S2B = 1.0; SOFT_KBIND = 1.0; ROLL_REST_DEG = Double.NaN;   // canonical default
         CONV_SKEW_DEG = 0; CONV_SKEW_GAUGE = true; CONV_SKEW_STATE_GATED = false;
         CONV_SKEW_RAMP = ChiralSiteSystem.RAMP_OFF; CONV_SKEW_RAMP_ONSET = 0.25; }
     static String siteModeName(int m) {
@@ -518,7 +732,7 @@ public final class ExplicitCompleteMatHarness {
         // Brownian-noise ablation (noncanonical, default-off): per-channel filament Brownian mask
         FloatArray brChan;
         // discrete actin sites + head rotational DOF + registry (noncanonical, default-off)
-        DoubleArray chiP, sbP, candAzim; IntArray bindSite, prevNuc, siteStats;
+        DoubleArray chiP, sbP, candAzim; IntArray bindSite, prevNuc, siteStats; FloatArray regOff;
         FloatArray headRef, headOmega, headTau, headMis;
         // per-motor converter frame (true converter-stroke-plane rotation; identity/zero when the feature is off)
         DoubleArray convF;
@@ -526,6 +740,9 @@ public final class ExplicitCompleteMatHarness {
         DoubleArray chiHead; double gammaChi;
         DoubleArray restC;   // native head pose resolved in the LIVE neck frame: [m],[N+m],[2N+m] = c1,c2,c3
         DoubleArray gateP;   // [0] kBind [1] kDet — the binding-state stiffness gate
+        DoubleArray catchP;  // [0] kbFree [1] kbBound — the SPECULATIVE S2 catch-stiffening gate
+        DoubleArray loadP;   // [0] kbSoft [1] kbStiff [2] F0 (N) — the LOAD-gated catch (Scholz 2005)
+        FloatArray xbParams2pt;   // xbParamsSurf + [8]footHalf [9]pairMon [10]twistPerMon [11]monoSp
         DoubleArray snP;     // site-normal bound coupling: [0] Ractin [1] mirror [2] epsBind [3] on [4] kBind
     }
     static ExMat packExMat(Glide2D G, int brownOn) {
@@ -549,6 +766,10 @@ public final class ExplicitCompleteMatHarness {
             for (int j = 0; j <= M; j++) for (int k = 0; k < 3; k++) e.nodes.set((3*j+k)*N+m, G.g4Node[m][j][k]);
             double[] fr = ExplicitMatSolveHarness.frameArr(G, m); for (int c = 0; c < 15; c++) e.frame.set(c*N+m, fr[c]);
             for (int c = 0; c < 17; c++) e.params.set(c*N+m, pr[c]);
+            if (SOFT_CONV != 1.0) e.params.set(6*N+m,  e.params.get(6*N+m)  * SOFT_CONV);
+            if (SOFT_S2A  != 1.0) e.params.set(11*N+m, e.params.get(11*N+m) * SOFT_S2A);
+            if (SOFT_S2B  != 1.0) e.params.set(13*N+m, e.params.get(13*N+m) * SOFT_S2B);
+            if (SOFT_KBIND!= 1.0) e.params.set(7*N+m,  e.params.get(7*N+m)  * SOFT_KBIND);
             // §S2-FIXTURE: the ONLY change heterogeneity needs — params is already per-motor planar storage and
             // both runners already read params.get(c*nM+m), so a per-motor lawn is DATA ONLY (audit §3.2-3.3).
             if (G.g4l0Arr != null) { e.params.set(11*N+m, G.g4ksArr[m]);
@@ -557,7 +778,10 @@ public final class ExplicitCompleteMatHarness {
             e.q.set(m, G.phi[m]); e.q.set(N+m, G.psi[m]); e.q.set(2*N+m, G.thetaS[m]); e.q.set(3*N+m, G.psiActin[m]);
             int bs = G.mot.boundSeg.get(m); e.boundSeg.set(m, bs); e.active.set(m, bs >= 0 ? 1 : 0);
         }
-        e.exCounts = IntArray.fromElements(N, 1, M, nSeg);
+        // [4] = the matS2SolveStepTilt WORKER ID this call is responsible for (see MatCullPlan). The default 0
+        // paired with restC row R_WORKER defaulting to 0.0 means "every motor belongs to worker 0", so a plain
+        // single call processes the whole mat exactly as before — the guard is inert unless a cull plan writes it.
+        e.exCounts = IntArray.fromElements(N, 1, M, nSeg, 0);
         // [3] = binding-state Brownian mask (0 = canonical); [4] = F8 generalized-force axis for the TILT solver
         // ONLY (1 = econv, the geometry's exact Jacobian; 0 = the legacy eup convention — see the report's AXIS
         // section). matS2SolveStep never reads [4], so the default path is untouched.
@@ -571,6 +795,23 @@ public final class ExplicitCompleteMatHarness {
                 TwoBodyConverterMotor.PHI_PRE_3E, TwoBodyConverterMotor.A_SEMI[2], Constants.kT,
                 TwoBodyConverterMotor.bindMargin(), 1, TwoBodyConverterMotor.LEGACY_OWNERSHIP ? 1.0 : 0.0);
         e.cockP = DoubleArray.fromElements(TwoBodyConverterMotor.PRESTROKE_THETAS, TwoBodyConverterMotor.ADP_THETAS);
+        if (!Double.isNaN(STROKE_PHASE_DEG)) {   // re-aim: rotate BOTH converter targets, swing unchanged
+            double d = Math.toRadians(STROKE_PHASE_DEG);
+            e.cockP.set(0, e.cockP.get(0) + d); e.cockP.set(1, e.cockP.get(1) + d);
+            System.out.printf(java.util.Locale.US,
+                "  STROKE PHASE    = %+.1f deg RE-AIM: theta_s %+.1f -> %+.1f deg (swing %+.1f unchanged)%n",
+                STROKE_PHASE_DEG, Math.toDegrees(e.cockP.get(0)), Math.toDegrees(e.cockP.get(1)),
+                Math.toDegrees(e.cockP.get(1) - e.cockP.get(0)));
+        }
+        if (!Double.isNaN(STROKE_SWING_DEG)) {   // stroke-swing override (data-only; see STROKE_SWING_DEG)
+            double adpTheta = TwoBodyConverterMotor.PRESTROKE_THETAS + Math.toRadians(STROKE_SWING_DEG);
+            e.cockP.set(1, adpTheta);
+            System.out.printf(java.util.Locale.US,
+                "  STROKE SWING    = %+.1f deg OVERRIDE (canonical +60): theta_s ADP.Pi %+.1f -> ADP %+.1f deg%s%n",
+                STROKE_SWING_DEG, Math.toDegrees(TwoBodyConverterMotor.PRESTROKE_THETAS), Math.toDegrees(adpTheta),
+                STROKE_SWING_DEG == 0.0 ? "  [STROKE OFF -- nothing to aim]"
+                  : (STROKE_SWING_DEG < 0 ? "  [STROKE REVERSED]" : ""));
+        }
         e.zP = FloatArray.fromElements((float) G.kzCode);
         // ---- filament z SLAB (default-off; the harmonic e.zP path is untouched when Z_SLAB=false) -------------
         // The lawn plane is the S2 EMERGENCE height, read from the scene (G.g4E), not assumed: it is the plane the
@@ -599,8 +840,25 @@ public final class ExplicitCompleteMatHarness {
         e.surfP   = DoubleArray.fromElements(Ract, twist, Constants.actinMonoRadius);      // [Ractin, twistRate, monoSp]
         e.stericP = DoubleArray.fromElements(Ract, SURF_STERIC ? SURF_EXCL_NM * 1e-3 : 0.0, OCC_TOL_NM * 1e-3);
         // surface xbParams: G.xbParams[0..5] (pure-F8, align OFF) + [6]=Ractin + [7]=segF10Off(0, faithful; F10 already off)
-        e.xbParamsSurf = FloatArray.fromElements(G.xbParams.get(0), G.xbParams.get(1), G.xbParams.get(2),
+        e.xbParamsSurf = tgtOffsetOn()
+            ? FloatArray.fromElements(G.xbParams.get(0), G.xbParams.get(1), G.xbParams.get(2),
+                G.xbParams.get(3), G.xbParams.get(4), G.xbParams.get(5), (float) Ract, 0f,
+                0f, 0f, 0f, 0f, 0f, 0f, 0f,
+                (float) Math.toRadians(TGT_DAZ_DEG), (float) (TGT_DARC_NM * 1e-3), (float) TGT_RSCALE)
+            : FloatArray.fromElements(G.xbParams.get(0), G.xbParams.get(1), G.xbParams.get(2),
                 G.xbParams.get(3), G.xbParams.get(4), G.xbParams.get(5), (float) Ract, 0f);
+        // two-point surface bond params (exploratory; built only when the flag is on)
+        if (TWO_POINT_BOND) {
+            double tpm = twist * Constants.actinMonoRadius;   // rad per monomer, from the SAME twistRate the lattice uses
+            e.xbParams2pt = FloatArray.fromElements(G.xbParams.get(0), G.xbParams.get(1), G.xbParams.get(2),
+                    G.xbParams.get(3), G.xbParams.get(4), G.xbParams.get(5), (float) Ract, 0f,
+                    (float) (TWO_POINT_FOOT_NM * 1e-3), (float) TWO_POINT_PAIR,
+                    (float) tpm, (float) Constants.actinMonoRadius, (float) TWO_POINT_ANC_W, TWO_POINT_KEEP_F9 ? 1f : 0f, TWO_POINT_DROP_COUPLE ? 1f : 0f,
+                    0f, 0f, 0f, TWO_POINT_ALIGN_FEET ? 1f : 0f, TWO_POINT_STRADDLE ? 1f : 0f);
+            System.err.printf("[2PT] size=%d anc=%.2f align=%.0f straddle=%.0f foot=%.4f%n",
+                e.xbParams2pt.getSize(), e.xbParams2pt.get(12), e.xbParams2pt.get(18),
+                e.xbParams2pt.get(19), e.xbParams2pt.get(8));
+        }
         G.mot.bindAzim.init(0f);
         // Vilfan target-zone binding scratch/params (noncanonical, default-off ⇒ never wired ⇒ byte-identical)
         e.tzP = DoubleArray.fromElements(twist, TZ_ALPHA, TZ_HARD_RAD, TZ_DIAG ? 1.0 : 0.0);
@@ -630,14 +888,16 @@ public final class ExplicitCompleteMatHarness {
                 ChiralSiteSystem.THETA_PRE, ChiralSiteSystem.THETA_POST,
                 CONV_SKEW_RAMP, CONV_SKEW_RAMP_ONSET,
                 // [25] site azimuth convention: 1 = filament-global helix, 0 = legacy segment-relative
-                SITE_PHASE_GLOBAL ? 1.0 : 0.0);
+                SITE_PHASE_GLOBAL ? 1.0 : 0.0,
+                // [26] A4 registry rest-orientation switch at the ADP·Pi→ADP transition (rad)
+                REG_SWITCH_DEG * Math.PI / 180.0);
         // ---- SITE-AWARE CAPTURE parameter pack (see ChiralSiteSystem.siteGateA) --------------------------
         // kF8 is scene-uniform in this model; ASSERT it rather than assume it, so the packed scalar can never
         // silently diverge from the per-motor params[5N+m] the mechanics use.
         double kF8u = e.params.get(5 * N);
         for (int m = 1; m < N; m++) if (e.params.get(5 * N + m) != kF8u)
             throw new IllegalStateException("site-aware capture requires a scene-uniform kF8 (motor " + m + " differs)");
-        e.sbP = new DoubleArray(32);
+        e.sbP = new DoubleArray(36);
         for (int i = 0; i < 13; i++) e.sbP.set(i, e.bindP.get(i));
         e.sbP.set(13, G.eup[0]); e.sbP.set(14, G.eup[1]); e.sbP.set(15, G.eup[2]);
         e.sbP.set(16, siteRise(SITE_MODE)); e.sbP.set(17, chiTwist); e.sbP.set(18, chiStair); e.sbP.set(19, Ract);
@@ -653,6 +913,27 @@ public final class ExplicitCompleteMatHarness {
         e.sbP.set(29, e.params.get(7 * N));   // the historical bound orientation stiffness, UNCHANGED
         e.sbP.set(30, SITE_NORMAL_KEEP_G6 ? 1.0 : 0.0);   // ablation only; 0 = g6 RETIRED in site-normal mode
         e.sbP.set(31, SITE_NORMAL_KEEP_G2 ? 1.0 : 0.0);   // ablation only; 0 = g2 RETIRED in site-normal mode
+        // TWO-STRAND SITE LATTICE (sbP[32] = partner axial offset um; 0 => OFF, sbP[33] = partner phase rad).
+        // F-actin is a TWO-START helix: consecutive monomers alternate long-pitch strands. `every4` takes
+        // monomer indices 4k — ALL EVEN — so every site sits on ONE strand and the structurally equivalent
+        // partner (+1 monomer: +2.7 nm axial, -166.5 deg round, 7.46 nm away in 3D) is absent. Enabling this
+        // emits that partner for every site, doubling site supply. Nearest-neighbour separation goes
+        // 11.26 -> 7.46 nm, i.e. 1.61x -> 1.07x a nominal 7 nm head: still admissible, but only just. A
+        // same-strand infill (+2 monomers, 5.64 nm) would be INSIDE the head and is NOT added.
+        e.sbP.set(32, TWO_STRAND_SITES ? Constants.actinMonoRadius : 0.0);
+        // MIRROR_SIGN must flip the PARTNER PHASE too. A reflection reversing helical handedness preserves
+        // axial offsets (sbP[32]) and flips azimuths, so the two-start partner offset flips with chiTwist.
+        // Leaving it unmirrored would give a HALF-reflected lattice and blunt the native-vs-mirror control.
+        // MIRROR_SIGN=+1 (default) => byte-identical.
+        e.sbP.set(33, TWO_STRAND_SITES ? MIRROR_SIGN * Math.toRadians(-166.5) : 0.0);
+        // Gate tilt: the angle the CAPTURE test uses. 0 unless -tiltgate, so the default path is bit-identical.
+        double gateTilt = TILT_GATE ? HEAD_TILT_DEG * Math.PI / 180.0 : 0.0;
+        e.sbP.set(34, Math.cos(gateTilt)); e.sbP.set(35, Math.sin(gateTilt));
+        if (TILT_GATE)
+            System.out.printf(java.util.Locale.US,
+                "  TILT-AWARE GATE = ON  (g1' cone AND g5 energy charge evaluated at eTarget, tilt %+.1f deg; "
+                + "latch strain at the held pose = 0, vs %.1f kT charged-as-zero with the legacy gate)%n",
+                HEAD_TILT_DEG, 0.5 * e.params.get(7 * N) / 1e-21 * gateTilt * gateTilt / 4.1);
         e.candAzim = new DoubleArray(N); e.candAzim.init(0.0);
         // Per-motor CONVERTER FRAME (stride 13, planar): [0..2] b*, [3..5] econv*, [6..8] eup*, [9..11] gauge
         // offset (µm), [12] flag. ALL ZERO ⇒ flag 0 ⇒ matBeamGeom / matS2SolveStep take the VERBATIM canonical
@@ -674,8 +955,10 @@ public final class ExplicitCompleteMatHarness {
         // it inherits any viscosity rescaling (-eta) automatically instead of re-reading Constants.aeta.
         double Rh = TwoBodyConverterMotor.RHEAD_3C, rc2 = G.rConv[0] * G.rConv[0] + G.rConv[1] * G.rConv[1];
         double rotFrac = (8.0 * Rh * Rh * Rh) / (8.0 * Rh * Rh * Rh + 6.0 * Rh * rc2);
-        e.restC = new DoubleArray(8 * N); e.restC.init(0.0);   // rows 3..7: the site-normal bound target/flag/theta
+        e.restC = new DoubleArray(9 * N); e.restC.init(0.0);   // rows 3..7: the site-normal bound target/flag/theta
                                                        // (SiteNormalBindSystem.R_TGT/R_FLAG/R_THETA)
+                                                       // row 8 = R_WORKER, the matS2SolveStepTilt cull/worker tag
+                                                       // (0 everywhere ⇒ inert; see MatCullPlan).
         if (headTiltOn()) for (int m = 0; m < N; m++) e.params.set(18 * N + m, e.params.get(9 * N + m) * rotFrac);
         // restC is DIAGNOSTIC DATA when the feature is off: no kernel on the default path reads it, so filling
         // it unconditionally keeps OFF byte-identical while letting an OFF-arm probe display the live-frame
@@ -684,17 +967,70 @@ public final class ExplicitCompleteMatHarness {
         calibrateLeverRest(e);
         // binding-state stiffness gate: kBind is the value the pack already carries (historical, unchanged)
         e.gateP = DoubleArray.fromElements(e.params.get(7 * N), K_DET_PNNM * TwoBodyConverterMotor.KAPPA_CODE);
+        if (rollSpringOn()) {
+            double segLen = G.fil.segLength.get(0);
+            rollP = new FloatArray(7);
+            rollP.set(0, (float) G.dt); rollP.set(1, (float) ROLL_STIFF);
+            rollP.set(2, (float) rollRestRad(segLen)); rollP.set(3, (float) ROLL_MODE);
+            rollP.set(4, 0f); rollP.set(5, 0f); rollP.set(6, (float) ROLL_REFDT);
+            System.out.printf(java.util.Locale.US,
+                "  ROLL SPRING     = ON  (f=%.2f mode=%d segLen=%.5f um -> rest %.2f deg/joint)%n",
+                ROLL_STIFF, ROLL_MODE, segLen, Math.toDegrees(rollRestRad(segLen)));
+        }
+
+        // S2 catch gate. Uses motor 0's g4kb as the uniform base; a per-motor S2 lawn would be flattened by
+        // this kernel, so refuse rather than silently homogenise it.
+        if (s2CatchOn() && G.g4kbArr != null) {
+            for (int m = 1; m < N; m++) if (G.g4kbArr[m] != G.g4kbArr[0])
+                throw new IllegalStateException("-s2-catch writes an ABSOLUTE per-motor g4kb and would flatten a "
+                    + "heterogeneous S2 lawn (motor " + m + " differs from motor 0). Not supported together.");
+        }
+        e.catchP = DoubleArray.fromElements(e.params.get(13 * N), e.params.get(13 * N) * S2_CATCH_FACTOR);
+        e.loadP  = DoubleArray.fromElements(e.params.get(13 * N), e.params.get(13 * N) * S2_LOAD_FACTOR,
+                                            S2_LOAD_F0_PN * 1e-12);
         // CANONICAL SITE-NORMAL bound coupling pack (SiteNormalBindSystem.siteCoupleStep). k_bind is the
         // value the pack already carries — the historical 512 pN.nm/rad^2 — read here rather than from
         // params[7N+m], because matKbindGate has not yet run when the couple kernel fires on a CAPTURE step.
         e.snP = DoubleArray.fromElements(Ract, MIRROR_SIGN, EPS_BIND_DEG * Math.PI / 180.0,
-                SITE_NORMAL_BIND ? 1.0 : 0.0, e.params.get(7 * N));
+                SITE_NORMAL_BIND ? 1.0 : 0.0, e.params.get(7 * N), HEAD_TILT_DEG * Math.PI / 180.0);
+        if (f8TanOn()) {
+            hcP = DoubleArray.fromElements(F8_TAN_NM * 1e-3, MIRROR_SIGN, F8_TAN_STATE);
+            System.out.printf(java.util.Locale.US,
+                "  F8 TANGENTIAL   = %.4f nm (%.2f A) head-side conformational shift | mirror %+.1f | equiv eps %.3f deg%n",
+                F8_TAN_NM, F8_TAN_NM*10, MIRROR_SIGN, Math.toDegrees(F8_TAN_NM*1e-3 / (R_ACTIN_NM*1e-3)));
+        }
+        if (triadOn()) {
+            triP = FloatArray.fromElements((float) (TRIAD_RHO_NM * 1e-3), 1f, TRIAD_LAB_PATCH ? 1f : 0f);
+            triPatch = new FloatArray(3 * N); triPatch.init(0f);   // 0 => seed relaxed on the first bound step
+            System.out.printf(java.util.Locale.US,
+                "  TRIAD PATCH     = ON  (3 contacts, k/3 each, rho=%.2f nm; vertices +/-%.2f axial, +/-%.2f tangential)"
+                + (TRIAD_LAB_PATCH ? "  [basis: LEGACY LAB-FIXED (regression control)]" : "  [basis: MATERIAL, transported, seeded relaxed at bind]") + "%n",
+                TRIAD_RHO_NM, TRIAD_RHO_NM, TRIAD_RHO_NM*Math.sqrt(3)/2);
+        }
+        // SIGN verified empirically 2026-09-10 (frame geometry: converter measured at -2.21 nm at tilt +45,
+        // predicted -2.47): converter axial offset = -7.0*sin(tilt) nm, positive = BARBED. A NEGATIVE tilt is
+        // the biological pose. The previous wording here had it exactly backwards.
+        if (HEAD_TILT_DEG != 0.0)
+            System.out.printf(java.util.Locale.US,
+                "  HEAD TILT       = %+.1f deg => converter %+.2f nm axial (%s-side); head centre %.2f nm from "
+                + "filament axis (%.2f at 0 deg) -- NOTE no excluded-volume force, g6 retired%n",
+                HEAD_TILT_DEG, -7.0*Math.sin(Math.toRadians(HEAD_TILT_DEG)),
+                HEAD_TILT_DEG < 0 ? "BARBED/biological" : "POINTED",
+                3.5 + 3.5*Math.cos(Math.toRadians(HEAD_TILT_DEG)), 7.0);
+        if (CONV_AZ_DEG != 0.0)
+            System.out.printf(java.util.Locale.US,
+                "  CONVERTER AZIM  = %+.1f deg on the head; converter arm %.3f nm (canon 7.000); "
+                + "stroke compensation %s; head depth UNCHANGED%n",
+                CONV_AZ_DEG, 7.0*Math.cos(0.5*Math.toRadians(CONV_AZ_DEG)),
+                CONV_AZ_COMP ? "ON (dtheta x " + String.format(java.util.Locale.US, "%.4f",
+                    1.0/Math.cos(0.5*Math.toRadians(CONV_AZ_DEG))) + ")" : "OFF");
         e.bindSite = new IntArray(N); e.bindSite.init(-1);
         e.prevNuc = new IntArray(N); for (int m = 0; m < N; m++) e.prevNuc.set(m, G.mot.nucleotideState.get(m));
         e.siteStats = new IntArray(4); e.siteStats.init(0);
         e.headRef = new FloatArray(3 * N); e.headRef.init(0f);   // 0 ⇒ the kernel's deterministic first-use seed
-        e.headOmega = new FloatArray(N); e.headOmega.init(0f);
+        e.headOmega = new FloatArray(2 * N); e.headOmega.init(0f);   // [0..N) head roll about eBind; [N..2N) A4 axial registry
         e.headTau = new FloatArray(N); e.headTau.init(0f);
+        e.regOff = new FloatArray(N); e.regOff.init(0f);   // A4 per-motor registry rest offset (0 = pre-stroke/unbound)
         e.headMis = new FloatArray(N); e.headMis.init(0f);
         // ---- per-motor RANDOM BASE AZIMUTH (a SCENE control for the shared-base-frame artifact, not physics):
         // rotate each motor's whole base geometry rigidly about its OWN pivot P (= beam node M) around eup by a
@@ -840,6 +1176,12 @@ public final class ExplicitCompleteMatHarness {
             // (the historical stereospecific head orientation the k_bind spring points at) and chi = 0, on the
             // as-built (unbent) beam. Resolving THAT in the live neck frame is what makes eTarget the native
             // head-vs-neck relationship rather than an accident of the initial condition.
+            if (STRAIGHT_REST) {
+                // "a straight stick": eTarget = n1, the neck axis itself. Exact in the neck frame, and
+                // independent of phi — the lever pre-angle keeps its validated 3D value.
+                e.restC.set(m, 1.0); e.restC.set(N + m, 0.0); e.restC.set(2 * N + m, 0.0);
+                continue;
+            }
             double savePhi = e.q.get(m);
             e.q.set(m, TwoBodyConverterMotor.PHI_PRE_3E);
             double[] nf = neckFrame(e, m);
@@ -871,6 +1213,7 @@ public final class ExplicitCompleteMatHarness {
         CrossBridgeSystem.csrChunkScatter(mot.boundSeg, mot.counts, e.csrChunkParams, G.segOff, G.segMyo, e.csrMatrix);
         CrossBridgeSystem.segGather(G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts);
         if (!G.rigid) ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        if (!G.rigid && rollSpringOn()) RollSpringSystem.rollForces(f.uVec, f.yVec, f.end2NbrSlot, f.end1NbrSlot, f.bRotGam, f.torqueSum, rollP, f.counts);
         MatSoaSlice.matZConfine(f.coord, f.forceSum, e.zP, e.exCounts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
         RigidRodLangevinIntegrationSystem.integrate(f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts);
@@ -895,7 +1238,10 @@ public final class ExplicitCompleteMatHarness {
                 f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.chainParams,
                 f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
                 mot.bindArc, mot.nucleotideState, mot.forceMag, G.xbParams, G.segCount, G.segOff, G.segMyo);
-        if (prod) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.q, mot.boundSeg, mot.forceDotFil, f.coord, G.bondData);   // resident (production)
+        if (prod) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.q, mot.boundSeg, mot.forceDotFil, f.coord, G.bondData);
+        if (rollSpringOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, rollP, f.yVec);
+        if (f8TanOn())      tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, hcP);
+        if (triadOn())      tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, triP, triPatch);   // resident (production)
         tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.matc, mot.counts, f.counts);   // per-step counters only
         if (!prod) tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.q, mot.boundSeg, mot.forceDotFil, f.coord, G.bondData);   // validation-mirrored
         tg.task("beamGeom", TwoBodyBeamAnalyticGpu::matBeamGeom, e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF)
@@ -908,7 +1254,9 @@ public final class ExplicitCompleteMatHarness {
           .task("csrScan", CrossBridgeSystem::csrScan, mot.counts, G.segCount, G.segOff)
           .task("csrScatter", CrossBridgeSystem::csrChunkScatter, mot.boundSeg, mot.counts, e.csrChunkParams, G.segOff, G.segMyo, e.csrMatrix)
           .task("segGather", CrossBridgeSystem::segGather, G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts)
-          .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts)
+          .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        if (rollSpringOn()) tg.task("rollSpring", RollSpringSystem::rollForces, f.uVec, f.yVec, f.end2NbrSlot, f.end1NbrSlot, f.bRotGam, f.torqueSum, rollP, f.counts);
+        tg
           .task("zconf", MatSoaSlice::matZConfine, f.coord, f.forceSum, e.zP, e.exCounts)
           .task("brown", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts)
           .task("integ", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
@@ -1002,10 +1350,67 @@ public final class ExplicitCompleteMatHarness {
     // =============================================================== FREE-BINDING gliding (bind stages added)
     /** Gliding CPU-runner: the complete step WITH free binding + chemistry (all-active smoke; mot.boundSeg is the
      *  single source). Order = production stepGlideS2: geom → bind → chemistry → cock → placeHead → mechanics. */
-    static void stepGlidingCPU(ExMat e, int t, int seed) {
+    /**
+     * PRODUCTION PER-SEGMENT UNION CULL + worker striping for the CPU sequential runner.
+     *
+     * <p>The explicit-S2 gliding step is completely dominated by {@code matS2SolveStepTilt} (measured: 279 µs
+     * per motor-step, &gt;99.9 % of the step at every density), and that kernel is the ONE stage the historical
+     * explicit path never culled — it solved all N motors every step. On a 7×1 µm lawn at 3000 heads/µm² that
+     * is 5.9 s/step, which makes a long gliding trajectory impossible. This plan supplies the two things that
+     * fix it, and NOTHING else changes in the step:
+     *
+     * <ol>
+     *   <li><b>The cull.</b> {@link MatSoaSlice#matCull} — the validated per-segment UNION rule (a motor is
+     *       active iff it is BOUND or its site lies within {@code queryR} of the clamped closest point of ANY
+     *       live segment; never a filament-midpoint window) — writes {@code e.active}, which the binding gate
+     *       already consumes. Motors outside it are tagged -1 in {@code restC} row 8 and their beam/angles do
+     *       not advance this step.</li>
+     *   <li><b>Worker striping.</b> Kept motors are tagged round-robin with a worker id and the SAME kernel is
+     *       invoked once per worker with {@code exCounts[4] = id}. Each motor is solved exactly once, by one
+     *       worker, with identical arithmetic; every write in that kernel is per-motor disjoint.</li>
+     * </ol>
+     *
+     * <p>A null plan ⇒ the historical all-active, single-call behaviour, byte-identical.
+     */
+    static final class MatCullPlan {
+        final IntArray[] wCounts;                                   // per-worker exCounts clones (elem 4 = id)
+        final java.util.concurrent.ExecutorService pool;            // null ⇒ run the workers inline
+        final DoubleArray site; final DoubleArray cullP; final IntArray mc;
+        final int nWorkers;
+        long activeAcc, activeSteps; int lastActive, maxActive;
+        MatCullPlan(ExMat e, int nWorkers) {
+            Glide2D G = e.G; int N = e.N;
+            this.nWorkers = Math.max(1, nWorkers);
+            this.site = new DoubleArray(2 * N);
+            for (int m = 0; m < N; m++) { site.set(m, G.siteX[m]); site.set(N + m, G.siteY[m]); }
+            this.cullP = DoubleArray.fromElements(G.queryR * G.queryR);
+            this.mc = IntArray.fromElements(N, 0, 0, e.nSeg);
+            this.wCounts = new IntArray[this.nWorkers];
+            for (int w = 0; w < this.nWorkers; w++)
+                wCounts[w] = IntArray.fromElements(e.exCounts.get(0), e.exCounts.get(1), e.exCounts.get(2), e.exCounts.get(3), w);
+            this.pool = this.nWorkers > 1
+                    ? java.util.concurrent.Executors.newFixedThreadPool(this.nWorkers, r -> { Thread th = new Thread(r); th.setDaemon(true); return th; })
+                    : null;
+        }
+        void shutdown() { if (pool != null) pool.shutdownNow(); }
+        double meanActive() { return activeSteps > 0 ? (double) activeAcc / activeSteps : 0; }
+    }
+
+    static void stepGlidingCPU(ExMat e, int t, int seed) { stepGlidingCPU(e, t, seed, null); }
+
+    static void stepGlidingCPU(ExMat e, int t, int seed, MatCullPlan cp) {
         Glide2D G = e.G; FilamentStore f = G.fil; MotorStore mot = G.mot; RigidRodBody b = mot.body; int N = e.N;
         e.matc.set(0, t); e.matc.set(1, seed); mot.setCounts(t, seed, e.nSeg); f.counts.set(1, t); f.counts.set(2, seed);
-        for (int m = 0; m < N; m++) e.active.set(m, 1);   // no-cull smoke (physically identical; far motors fail the gate)
+        if (cp == null) { for (int m = 0; m < N; m++) e.active.set(m, 1); }   // no-cull (far motors fail the gate anyway)
+        else {
+            MatSoaSlice.matCull(mot.boundSeg, cp.site, f.coord, f.uVec, f.segLength, cp.cullP, cp.mc, e.active);
+            int w = 0, na = 0;
+            for (int m = 0; m < N; m++) {
+                if (e.active.get(m) == 1) { e.restC.set(8 * N + m, w); w = w + 1 == cp.nWorkers ? 0 : w + 1; na++; }
+                else { e.restC.set(8 * N + m, -1.0); mot.forceDotFil.set(m, 0f); mot.forceMag.set(m, 0f); }
+            }
+            cp.activeAcc += na; cp.activeSteps++; cp.lastActive = na; cp.maxActive = Math.max(cp.maxActive, na);
+        }
         if (convSkewOn())   // TRUE converter-stroke-plane rotation: build the per-motor converter frame FIRST, so
             ChiralSiteSystem.convFrameStep(mot.boundSeg, f.uVec, f.yVec, mot.bindAzim, e.frame, e.params, e.q,
                     e.convF, e.chiP, e.exCounts);   // geometry, gates, bond and solve all see ONE frame this step
@@ -1036,7 +1441,7 @@ public final class ExplicitCompleteMatHarness {
         else if (RIGOR_ON) NucleotideCycleSystem.cycleLymnTaylorRigor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
         else          NucleotideCycleSystem.cycleLymnTaylor(mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
         if (strokeSkewOn())   // askew EFFECTIVE STROKE: local-frame rest-coordinate change at the ADP·Pi→ADP switch
-            ChiralSiteSystem.strokeSkew(mot.boundSeg, mot.nucleotideState, e.prevNuc, mot.bindAzim, e.chiP, e.exCounts);
+            ChiralSiteSystem.strokeSkew(mot.boundSeg, mot.nucleotideState, e.prevNuc, mot.bindAzim, e.regOff, e.chiP, e.exCounts);
         if (surfOn()) {   // select+retain the material azimuth at the bind transition (canonical bindArc kept), then 3D steric
             if (!tzOn() && !siteOn())  // target-zone / discrete-site modes select + retain the azimuth themselves
                 TwoBodyBeamAnalyticGpu.matSurfaceAzim(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, e.surfP, e.exCounts);
@@ -1046,13 +1451,19 @@ public final class ExplicitCompleteMatHarness {
         if (convSkewStateGated())   // mirrors the GPU `convFrame2` task EXACTLY (see the graph comment / §24.2)
             ChiralSiteSystem.convFrameStep(mot.boundSeg, f.uVec, f.yVec, mot.bindAzim, e.frame, e.params, e.q,
                     e.convF, e.chiP, e.exCounts);
+        if (f8TanOn()) HeadConformationSystem.f8TangentialShift(mot.boundSeg, mot.nucleotideState, f.uVec, f.yVec, mot.bindAzim, e.outGeom, hcP, e.exCounts);
         TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit(e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec);
         if (surfOn())
-            CrossBridgeSystem.bondForcesSurface(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, mot.nucleotideState, G.bondData, e.xbParamsSurf);
+            if (triadOn())
+                CrossBridgeSystem.bondForcesSurfaceTriad(b.coord, b.uVec, b.yVec, f.coord, f.uVec, f.yVec, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, G.bondData, e.xbParamsSurf, triP, triPatch);
+            else if (TWO_POINT_BOND)
+                CrossBridgeSystem.bondForcesSurfaceTwoPoint(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, mot.nucleotideState, G.bondData, e.xbParams2pt);
+            else
+                CrossBridgeSystem.bondForcesSurface(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, mot.nucleotideState, G.bondData, e.xbParamsSurf);
         else
             CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams);
         if (chiralOn())   // head rotational DOF + bound orientational registry (equal-and-opposite into bondData)
-            ChiralSiteSystem.headRollStep(mot.boundSeg, e.outGeom, f.uVec, f.yVec, b.bRotGam, mot.bindAzim, e.headRef, e.headOmega, e.headTau, e.headMis, G.bondData, e.chiP, e.matc, e.exCounts);
+            ChiralSiteSystem.headRollStep(mot.boundSeg, e.outGeom, f.uVec, f.yVec, b.bRotGam, mot.bindAzim, e.headRef, e.headOmega, e.headTau, e.headMis, G.bondData, e.regOff, e.chiP, e.matc, e.exCounts);
         if (siteNormalOn())   // U_bind against the LATCHED site normal: motor target -> restC, EXACT reaction -> bondData
             SiteNormalBindSystem.siteCoupleStep(mot.boundSeg, mot.bindArc, mot.bindAzim, f.coord, f.uVec, f.yVec,
                     f.segLength, e.outGeom, G.bondData, e.restC, e.snP, e.exCounts);
@@ -1064,6 +1475,7 @@ public final class ExplicitCompleteMatHarness {
         CrossBridgeSystem.csrChunkScatter(mot.boundSeg, mot.counts, e.csrChunkParams, G.segOff, G.segMyo, e.csrMatrix);
         CrossBridgeSystem.segGather(G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts);
         if (!G.rigid) ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        if (!G.rigid && rollSpringOn()) RollSpringSystem.rollForces(f.uVec, f.yVec, f.end2NbrSlot, f.end1NbrSlot, f.bRotGam, f.torqueSum, rollP, f.counts);
         if (zSlabOn()) MatSoaSlice.matZSlab(f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, e.zsP, e.exCounts);
         else           MatSoaSlice.matZConfine(f.coord, f.forceSum, e.zP, e.exCounts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
@@ -1074,9 +1486,23 @@ public final class ExplicitCompleteMatHarness {
         DerivedGeometrySystem.derive(f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
         if (kbindGateOn() || headTiltOn())   // binding-state gate on the head-orientation stiffness (weak when detached)
             MatSoaSlice.matKbindGate(mot.boundSeg, e.params, e.gateP, e.exCounts);
-        if (headTiltOn())
-            TwoBodyBeamAnalyticGpu.matS2SolveStepTilt(e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts, e.convF, e.chiHead, e.restC);
-        else
+        if (s2CatchOn())    // SPECULATIVE binding-triggered S2 bending catch-stiffening
+            MatSoaSlice.matS2CatchGate(mot.boundSeg, e.params, e.catchP, e.exCounts);
+        if (s2LoadOn())     // LOAD-gated S2 bending catch-stiffening (Scholz 2005)
+            MatSoaSlice.matS2LoadGate(mot.boundSeg, mot.forceMag, e.params, e.loadP, e.exCounts);
+        if (headTiltOn()) {
+            if (cp == null || cp.nWorkers == 1)
+                TwoBodyBeamAnalyticGpu.matS2SolveStepTilt(e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, cp == null ? e.exCounts : cp.wCounts[0], e.convF, e.chiHead, e.restC);
+            else {
+                java.util.List<java.util.concurrent.Future<?>> fs = new java.util.ArrayList<>(cp.nWorkers);
+                for (int w = 0; w < cp.nWorkers; w++) {
+                    final IntArray wc = cp.wCounts[w];
+                    fs.add(cp.pool.submit(() -> TwoBodyBeamAnalyticGpu.matS2SolveStepTilt(e.nodes, e.frame, e.q, G.bondData,
+                            mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, wc, e.convF, e.chiHead, e.restC)));
+                }
+                for (var fu : fs) { try { fu.get(); } catch (Exception ex) { throw new RuntimeException("matS2SolveStepTilt worker failed", ex); } }
+            }
+        } else
             TwoBodyBeamAnalyticGpu.matS2SolveStep(e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts, e.convF);
         MatSoaSlice.matReduceBlocks(mot.boundSeg, e.active, mot.forceDotFil, e.redP, e.exCounts, e.redBlk);
         MatSoaSlice.matReduceFinal(e.redBlk, f.coord, e.redP, e.exCounts, e.redOut);
@@ -1084,14 +1510,19 @@ public final class ExplicitCompleteMatHarness {
     static GridScheduler glSched;
     static TornadoExecutionPlan buildGlidingGraph(ExMat e, boolean prod) {
         Glide2D G = e.G; FilamentStore f = G.fil; MotorStore mot = G.mot; RigidRodBody b = mot.body; int N = e.N, nSeg = e.nSeg;
-        // PER-ASSAY-CLASS PRODUCTION GATE (CLAUDE.md): the canonical site-normal binding law has been
-        // developed and validated on the CPU sequential runner ONLY. Its two kernels are ordinary @Parallel
-        // kernels of the same shape as their neighbours and are expected to lower, but no device run has been
-        // made, so the device path REFUSES rather than silently running an unvalidated physics variant.
-        if (siteNormalOn()) throw new IllegalStateException(
-                "site-normal head binding has no validated device path yet (CPU runner only); "
-                + "see docs/motor/SITE_NORMAL_HEAD_BINDING.md");
+        // PER-ASSAY-CLASS PRODUCTION GATE (CLAUDE.md). The chi-dynamic 3-D head + site-normal stack is now WIRED
+        // below (matBeamGeomTilt / headAxis / siteCouple / kbindGate / matS2SolveStepTilt). The lowering risk that
+        // justified the blanket refusal is retired by the isolated probe (ExplicitMatSolveTiltHarness). But wiring
+        // is NOT validation: until the whole-step CPU/GPU gate passes, this class stays refused rather than
+        // silently running an unvalidated physics variant on device.
+        if (siteNormalOn() && !SITE_NORMAL_DEVICE_OK) throw new IllegalStateException(
+                "site-normal device path is WIRED but not production-validated; set SITE_NORMAL_DEVICE_OK "
+                + "(-sitenormal-device) and run the whole-step CPU/GPU gate first. "
+                + "See docs/motor/SITE_NORMAL_HEAD_BINDING.md");
         for (int m = 0; m < N; m++) e.active.set(m, 1);
+        // matS2SolveStepTilt skips any motor whose restC row 8 (worker tag) != exCounts[4]. stepGlidingCPU writes
+        // that row when a MatCullPlan is active; the device path solves the WHOLE mat in one call, so reset it.
+        if (headTiltOn()) { for (int m = 0; m < N; m++) e.restC.set(8 * N + m, 0.0); e.exCounts.set(4, 0); }
         TaskGraph tg = new TaskGraph("glide");
         tg.transferToDevice(DataTransferMode.FIRST_EXECUTION,
                 e.nodes, e.frame, e.params, e.sys, e.outGeom, e.eupP, e.zP, e.active, e.noBind, e.exCounts, e.bindP, e.cockP,
@@ -1103,6 +1534,8 @@ public final class ExplicitCompleteMatHarness {
                 mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.forceMag,
                 G.xbParams, G.segCount, G.segOff, G.segMyo);
         if (prod) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
+        if (rollSpringOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, rollP, f.yVec);
+        if (f8TanOn())      tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, hcP);
         if (occOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.candInt, e.candArc, e.segCumArc, e.segFilId, e.occP, e.occStats);
         if (surfOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.prevBound, e.justBound, e.surfP, e.stericP, e.xbParamsSurf, e.segFilId, e.occStats, mot.bindAzim);
         if (tzOn())   tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.prevBound, e.justBound, e.tzP, e.tzDiag, mot.bindAzim, mot.bindPsi0);
@@ -1110,16 +1543,44 @@ public final class ExplicitCompleteMatHarness {
                 e.bindSite, e.prevNuc, e.siteStats, e.headRef, e.headOmega, e.headTau, e.headMis,
                 e.segCumArc, e.segFilId, mot.bindAzim);
         if (siteAwareOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.sbP, e.candInt, e.candArc, e.candAzim, e.segCumArc);
+        // chi-dynamic 3-D head + site-normal buffers (the four the device path was missing)
+        if (headTiltOn())                  tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.chiHead, e.restC);
+        if (kbindGateOn() || headTiltOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.gateP);
+        if (s2CatchOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.catchP);
+        if (s2LoadOn())  tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.loadP);
+        if (TWO_POINT_BOND) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.xbParams2pt);
+        // TRIAD: triP is a constant; triPatch is KERNEL-WRITTEN material state, so it MUST be resident
+        // (FIRST_EXECUTION) -- an implicit per-step copy-in would reset the parallel transport every step.
+        if (triadOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, triP, triPatch);
+        if (siteNormalOn())                tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.snP);
         if (zSlabOn())     tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.zsP);
         if (brownChanOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.brChan);
         if (RIGOR_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.rigorParams, mot.ruptureStats);
         if (ADP_RUP_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.adpRuptureParams, mot.adpRuptureStats);
         tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.matc, mot.counts, f.counts);
         if (!prod) tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
+        // DEVICE CULL — the production per-segment UNION cull as graph tasks, FIRST in the chain exactly as
+        // matCull is first in stepGlidingCPU. It reads the PREVIOUS step's filament pose on both runners.
+        // The three buffers mirror MatCullPlan's (site is static; cullP/mc are constants).
+        if (DEVICE_CULL) {
+            DoubleArray cullSite = new DoubleArray(2 * N);
+            for (int m = 0; m < N; m++) { cullSite.set(m, G.siteX[m]); cullSite.set(N + m, G.siteY[m]); }
+            DoubleArray cullPar = DoubleArray.fromElements(G.queryR * G.queryR);
+            IntArray cullMc = IntArray.fromElements(N, 0, 0, nSeg);
+            tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, cullSite, cullPar, cullMc);
+            tg.task("cull", MatSoaSlice::matCull, mot.boundSeg, cullSite, f.coord, f.uVec, f.segLength, cullPar, cullMc, e.active);
+            if (headTiltOn())   // publish the decision into restC row 8, the tag matS2SolveStepTilt skips on
+                tg.task("cullTag", MatSoaSlice::matCullTag, e.active, e.restC, mot.forceDotFil, mot.forceMag, e.exCounts);
+        }
         if (convSkewOn())   // TRUE converter-stroke-plane rotation — FIRST in the chain, before the geometry
             tg.task("convFrame", ChiralSiteSystem::convFrameStep, mot.boundSeg, f.uVec, f.yVec, mot.bindAzim,
                     e.frame, e.params, e.q, e.convF, e.chiP, e.exCounts);
-        tg.task("beamGeom", TwoBodyBeamAnalyticGpu::matBeamGeom, e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
+        if (headTiltOn())   // chi-aware head geometry (chi == 0 is byte-identical to matBeamGeom)
+            tg.task("beamGeom", TwoBodyBeamAnalyticGpu::matBeamGeomTilt, e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF, e.chiHead);
+        else
+            tg.task("beamGeom", TwoBodyBeamAnalyticGpu::matBeamGeom, e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
+        if (siteNormalOn())   // head-local +x axis into outGeom rows 9..11 — ONE axis for gate, solve and viewer
+            tg.task("headAxis", SiteNormalBindSystem::headAxisStep, e.frame, e.params, e.q, e.chiHead, e.convF, e.outGeom, e.exCounts);
         if (occOn()) {   // continuous local actin co-occupancy exclusion: parallel gate-only → single-thread serial resolve
             tg.task("gateOnly", TwoBodyBeamAnalyticGpu::matBindGateOnly, e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, e.candInt, e.candArc, e.exCounts)
               .task("occResolve", TwoBodyBeamAnalyticGpu::matOccupancyResolve, e.candInt, e.candArc, mot.boundSeg, mot.bindArc, e.segCumArc, e.segFilId, e.occP, e.occStats, e.exCounts);
@@ -1146,7 +1607,7 @@ public final class ExplicitCompleteMatHarness {
         else if (RIGOR_ON) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRigor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats);
         else          tg.task("chem", NucleotideCycleSystem::cycleLymnTaylor, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts);
         if (strokeSkewOn())   // askew EFFECTIVE STROKE: local-frame rest-coordinate change at ADP·Pi→ADP
-            tg.task("strokeSkew", ChiralSiteSystem::strokeSkew, mot.boundSeg, mot.nucleotideState, e.prevNuc, mot.bindAzim, e.chiP, e.exCounts);
+            tg.task("strokeSkew", ChiralSiteSystem::strokeSkew, mot.boundSeg, mot.nucleotideState, e.prevNuc, mot.bindAzim, e.regOff, e.chiP, e.exCounts);
         tg
           .task("cock", MatSoaSlice::matCock, mot.nucleotideState, e.q, e.cockP, e.exCounts);
         // STATE-GATED converter skew: re-evaluate the converter frame AFTER `cock` so the rotation and the
@@ -1157,13 +1618,19 @@ public final class ExplicitCompleteMatHarness {
         if (convSkewStateGated())
             tg.task("convFrame2", ChiralSiteSystem::convFrameStep, mot.boundSeg, f.uVec, f.yVec, mot.bindAzim,
                     e.frame, e.params, e.q, e.convF, e.chiP, e.exCounts);
+        if (f8TanOn()) tg.task("f8tan", HeadConformationSystem::f8TangentialShift, mot.boundSeg, mot.nucleotideState, f.uVec, f.yVec, mot.bindAzim, e.outGeom, hcP, e.exCounts);
         tg.task("place", TwoBodyBeamAnalyticGpu::matPlaceHeadExplicit, e.outGeom, mot.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec);
         if (surfOn())
-            tg.task("bond", CrossBridgeSystem::bondForcesSurface, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, mot.nucleotideState, G.bondData, e.xbParamsSurf);
+            if (triadOn()) tg.task("bond", CrossBridgeSystem::bondForcesSurfaceTriad, b.coord, b.uVec, b.yVec, f.coord, f.uVec, f.yVec, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, G.bondData, e.xbParamsSurf, triP, triPatch);
+            else tg.task("bond", TWO_POINT_BOND ? CrossBridgeSystem::bondForcesSurfaceTwoPoint : CrossBridgeSystem::bondForcesSurface,
+                    b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.bindAzim, mot.nucleotideState, G.bondData, TWO_POINT_BOND ? e.xbParams2pt : e.xbParamsSurf);
         else
             tg.task("bond", CrossBridgeSystem::bondForces, b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams);
         if (chiralOn())   // head rotational DOF + registry couple (equal-and-opposite; must sit AFTER bond, BEFORE segGather)
-            tg.task("headRoll", ChiralSiteSystem::headRollStep, mot.boundSeg, e.outGeom, f.uVec, f.yVec, b.bRotGam, mot.bindAzim, e.headRef, e.headOmega, e.headTau, e.headMis, G.bondData, e.chiP, e.matc, e.exCounts);
+            tg.task("headRoll", ChiralSiteSystem::headRollStep, mot.boundSeg, e.outGeom, f.uVec, f.yVec, b.bRotGam, mot.bindAzim, e.headRef, e.headOmega, e.headTau, e.headMis, G.bondData, e.regOff, e.chiP, e.matc, e.exCounts);
+        if (siteNormalOn())   // U_bind vs the LATCHED site normal; AFTER bond, BEFORE segGather (equal-and-opposite into bondData)
+            tg.task("siteCouple", SiteNormalBindSystem::siteCoupleStep, mot.boundSeg, mot.bindArc, mot.bindAzim,
+                    f.coord, f.uVec, f.yVec, f.segLength, e.outGeom, G.bondData, e.restC, e.snP, e.exCounts);
         tg
           .task("zeroAcc", ChainBendingForceSystem::zeroAccumulators, f.forceSum, f.torqueSum, f.counts)
           .task("csrZero", CrossBridgeSystem::csrChunkZero, e.csrChunkParams, mot.counts, e.csrMatrix)
@@ -1173,6 +1640,7 @@ public final class ExplicitCompleteMatHarness {
           .task("csrScatter", CrossBridgeSystem::csrChunkScatter, mot.boundSeg, mot.counts, e.csrChunkParams, G.segOff, G.segMyo, e.csrMatrix)
           .task("segGather", CrossBridgeSystem::segGather, G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts)
           .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
+        if (rollSpringOn()) tg.task("rollSpring", RollSpringSystem::rollForces, f.uVec, f.yVec, f.end2NbrSlot, f.end1NbrSlot, f.bRotGam, f.torqueSum, rollP, f.counts);
         // FILAMENT z BOUNDARY: exactly one of the two is wired. Default = the legacy harmonic well.
         if (zSlabOn()) tg.task("zslab", MatSoaSlice::matZSlab, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, e.zsP, e.exCounts);
         else           tg.task("zconf", MatSoaSlice::matZConfine, f.coord, f.forceSum, e.zP, e.exCounts);
@@ -1183,8 +1651,18 @@ public final class ExplicitCompleteMatHarness {
         tg
           .task("integ", RigidRodLangevinIntegrationSystem::integrate, f.coord, f.uVec, f.yVec, f.forceSum, f.torqueSum, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.params, f.counts)
           .task("orthoY", DerivedGeometrySystem::orthogonalizeY, f.uVec, f.yVec, f.counts)
-          .task("derive", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts)
-          .task("s2solve", TwoBodyBeamAnalyticGpu::matS2SolveStep, e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts, e.convF)
+          .task("derive", DerivedGeometrySystem::derive, f.coord, f.uVec, f.yVec, f.zVec, f.end1, f.end2, f.segLength, f.counts);
+        if (kbindGateOn() || headTiltOn())   // binding-state gate on the head-orientation stiffness (weak when detached)
+            tg.task("kbindGate", MatSoaSlice::matKbindGate, mot.boundSeg, e.params, e.gateP, e.exCounts);
+        if (s2CatchOn())    // SPECULATIVE binding-triggered S2 bending catch-stiffening (must precede s2solve)
+            tg.task("s2Catch", MatSoaSlice::matS2CatchGate, mot.boundSeg, e.params, e.catchP, e.exCounts);
+        if (s2LoadOn())     // LOAD-gated S2 bending catch-stiffening (must precede s2solve)
+            tg.task("s2Load", MatSoaSlice::matS2LoadGate, mot.boundSeg, mot.forceMag, e.params, e.loadP, e.exCounts);
+        if (headTiltOn())   // the 15x16 chi-dynamic solver (lowering retired by ExplicitMatSolveTiltHarness)
+            tg.task("s2solve", TwoBodyBeamAnalyticGpu::matS2SolveStepTilt, e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts, e.convF, e.chiHead, e.restC);
+        else
+            tg.task("s2solve", TwoBodyBeamAnalyticGpu::matS2SolveStep, e.nodes, e.frame, e.q, G.bondData, mot.boundSeg, e.params, e.sys, e.outGeom, mot.forceDotFil, mot.forceMag, e.matc, e.exCounts, e.convF);
+        tg
           .task("redBlk", MatSoaSlice::matReduceBlocks, mot.boundSeg, e.active, mot.forceDotFil, e.redP, e.exCounts, e.redBlk)
           .task("redFin", MatSoaSlice::matReduceFinal, e.redBlk, f.coord, e.redP, e.exCounts, e.redOut);
         if (prod) {
@@ -1193,6 +1671,7 @@ public final class ExplicitCompleteMatHarness {
             // buffer the `chem` task already writes on device. Default false ⇒ the -sweep/-throughput paths are byte-unchanged.
             if (PROD_SCI) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg, mot.nucleotideState);
             else          tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg);
+            if (CONV_DIAG) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.q);   // converter-angle diagnostic (read-only)
             if (occOn())  tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.occStats);   // per-step occupancy telemetry
             // Target-zone telemetry: the per-candidate diagnostics + the filament material frame (uVec/yVec) and the
             // bond reactions the twirl observables need. Gated on tzOn() ⇒ the canonical production path is unchanged.
@@ -1208,6 +1687,10 @@ public final class ExplicitCompleteMatHarness {
             if (EPISODE_TELEM) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.q, e.nodes, e.outGeom);
         }
         else {    tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.nodes, e.q, e.redOut, f.coord, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, G.bondData);
+                  // chi is a live generalized coordinate on the tilt path — it must come back or a CPU/GPU
+                  // comparison would silently read the stale host copy. outGeom carries xHeadHat rows 9..11.
+                  if (headTiltOn()) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.chiHead, e.outGeom);
+                  if (siteNormalOn()) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.bindSite, mot.bindAzim, mot.bindArc, e.restC);
                   if (occOn()) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.occStats);
                   if (tzOn())  tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.tzDiag, mot.bindAzim, mot.bindPsi0);
                   if (chiralOn()) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.bindSite, e.headRef, e.headOmega,
@@ -1226,6 +1709,11 @@ public final class ExplicitCompleteMatHarness {
         if (convSkewOn()) addW(glSched, "glide.convFrame", pn);   // converter-frame rotation: parallel over motors
         if (convSkewStateGated()) addW(glSched, "glide.convFrame2", pn);   // post-cock re-evaluation (state-gated mode)
         if (chiralOn()) addW(glSched, "glide.headRoll", pn);   // head roll DOF + registry: parallel over motors
+        if (siteNormalOn()) { addW(glSched, "glide.headAxis", pn); addW(glSched, "glide.siteCouple", pn); }   // parallel over motors
+        if (kbindGateOn() || headTiltOn()) addW(glSched, "glide.kbindGate", pn);   // per-motor stiffness gate
+        if (s2CatchOn()) addW(glSched, "glide.s2Catch", pn);
+        if (s2LoadOn())  addW(glSched, "glide.s2Load", pn);
+        if (DEVICE_CULL) { addW(glSched, "glide.cull", pn); if (headTiltOn()) addW(glSched, "glide.cullTag", pn); }
         if (brownChanOn()) addW(glSched, "glide.brChan", ps);   // per-channel filament Brownian mask: parallel over segments
         addW(glSched, "glide.csrZero", ((Math.max(1, nCh * nSeg) + 63) / 64) * 64);
         addW(glSched, "glide.csrHist", ((nCh + 63) / 64) * 64); addW(glSched, "glide.csrScatter", ((nCh + 63) / 64) * 64);

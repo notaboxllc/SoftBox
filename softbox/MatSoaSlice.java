@@ -47,6 +47,31 @@ public final class MatSoaSlice {
     //   filCoord/filUVec/filSegLen: FilamentStore FloatArrays (planar: X=[s], Y=[nSeg+s]).
     //   cullParams[0] = queryR^2 (double, = G.queryR^2). counts = {N, t, seed, nSeg}. active[N] written.
     // ===============================================================================================
+    /**
+     * DEVICE-SIDE CULL TAG — the kernel form of the host loop in {@code ExplicitCompleteMatHarness.stepGlidingCPU}
+     * that follows {@link #matCull}. It publishes the cull decision into the ONE channel the chi-dynamic solver
+     * reads: {@code restC} row 8, the per-motor worker tag ({@code matS2SolveStepTilt} skips any motor whose tag
+     * != {@code counts[4]}). The device path runs a single worker, so a kept motor is tagged 0 and a culled one
+     * -1. Culled motors also get their realized-load accumulators zeroed, exactly as the host loop does, so the
+     * chemistry and the reduction see the same values on both runners.
+     *
+     * <p>Skipping is what makes this pay on the device: the thread still launches, but exits before the 15x16
+     * Gauss-Jordan, which is >99.9% of the step's arithmetic.
+     */
+    public static void matCullTag(IntArray active, DoubleArray restC, FloatArray forceDotFil,
+                                  FloatArray forceMag, IntArray counts) {
+        int N = counts.get(0);
+        for (@Parallel int m = 0; m < N; m++) {
+            if (active.get(m) == 1) {
+                restC.set(8 * N + m, 0.0);
+            } else {
+                restC.set(8 * N + m, -1.0);
+                forceDotFil.set(m, 0f);
+                forceMag.set(m, 0f);
+            }
+        }
+    }
+
     public static void matCull(IntArray boundSeg, DoubleArray site,
                                FloatArray filCoord, FloatArray filUVec, FloatArray filSegLen,
                                DoubleArray cullParams, IntArray counts, IntArray active) {
@@ -1950,6 +1975,62 @@ public final class MatSoaSlice {
         double kBind = gateP.get(0), kDet = gateP.get(1);
         for (@Parallel int m = 0; m < N; m++) {
             params.set(7 * N + m, boundSeg.get(m) >= 0 ? kBind : kDet);
+        }
+    }
+
+    // ===============================================================================================
+    // S2 CATCH-STIFFENING GATE (SPECULATIVE — NOT PHYSICALLY JUSTIFIED; see the harness flag javadoc).
+    //
+    // Binding-state gate on the S2 BENDING stiffness g4kb (params slot 13), exactly the matKbindGate
+    // pattern one slot over: bound motors get kbBound, free motors keep kbFree.
+    //
+    // WHY BENDING AND WHY BOUND-ONLY. Exp 4E established that recruitment and stroke transmission share ONE
+    // compliance and that no PASSIVE tail does both ("what would work (not built): a state-dependent catch-
+    // STIFFENING tail"). Stiffening only the BOUND motors is exactly that: the free S2 stays soft, so the
+    // diffusive search that recruitment depends on is untouched, while a bound head gets a stiffer transverse
+    // path. Series compliance is dominated by BENDING, not stretch (Exp 4E Q4), so g4kb is the correct slot.
+    //
+    // DATA-ONLY: no solver edit, no buffer resize, no TaskGraph change. Race-free (own slot only). Must run
+    // BEFORE matS2SolveStep. Never wired when the factor is 1 => byte-identical.
+    //   catchP: [0] kbFree (N.m)  [1] kbBound (N.m)
+    // ===============================================================================================
+    // ===============================================================================================
+    // S2 LOAD-GATED CATCH-STIFFENING — the PHYSICALLY MOTIVATED form of matS2CatchGate below.
+    //
+    // Scholz, Altmann, Antognozzi, Tischer, Hoerber & Brenner (2005) Biophys J 88:360, photonic force
+    // microscope on single myosin: the whole-myosin tether's axial stiffness is ASYMMETRIC -- ~0.04 pN/nm in
+    // EXTENSION vs ~0.004 pN/nm in COMPRESSION, a MEASURED 10x, and "the source of this low stiffness is
+    // located OUTSIDE the myosin head domain". So a load-dependent tail compliance is observed, not invented.
+    //
+    // Gate on LOAD, not on binding state. kb ramps linearly from kbSoft (unloaded) to kbStiff (|F8| >= F0):
+    //   - a FREE searching head is unloaded  -> soft -> diffusive reach preserved (the Exp 4E requirement)
+    //   - a bound head bearing tension       -> stiff -> transverse push reaches the filament
+    //   - a bound but LIGHTLY loaded head (e.g. the pre-stroke dwell) STAYS SOFT -- which the binding-gated
+    //     version did NOT do, and that is the likely reason x20 binding-gating REVERSED gliding
+    //     (/tmp/CONV_S2CATCH_X20_motorbroken_*: travel -0.20..-0.41 um, avgBound 0.79-0.86 vs 0.99).
+    //
+    // forceMag is |F8| in SI NEWTONS, written by matS2SolveStep at the END of the step, so this gate reads the
+    // PREVIOUS step's load: a one-step lag, the same establishment lag convFrameStep documents.
+    // DATA-ONLY, race-free, must run BEFORE matS2SolveStep. Never wired when the factor is 1 => byte-identical.
+    //   loadP: [0] kbSoft (N.m)  [1] kbStiff (N.m)  [2] F0 (N, the force at which stiffening saturates)
+    // ===============================================================================================
+    public static void matS2LoadGate(IntArray boundSeg, FloatArray forceMag, DoubleArray params,
+                                     DoubleArray loadP, IntArray counts) {
+        int N = counts.get(0);
+        double kbSoft = loadP.get(0), kbStiff = loadP.get(1), F0 = loadP.get(2);
+        for (@Parallel int m = 0; m < N; m++) {
+            double f = boundSeg.get(m) >= 0 ? forceMag.get(m) : 0.0;
+            double x = f / F0;
+            if (x > 1.0) x = 1.0;
+            params.set(13 * N + m, kbSoft + (kbStiff - kbSoft) * x);
+        }
+    }
+
+    public static void matS2CatchGate(IntArray boundSeg, DoubleArray params, DoubleArray catchP, IntArray counts) {
+        int N = counts.get(0);
+        double kbFree = catchP.get(0), kbBound = catchP.get(1);
+        for (@Parallel int m = 0; m < N; m++) {
+            params.set(13 * N + m, boundSeg.get(m) >= 0 ? kbBound : kbFree);
         }
     }
 }

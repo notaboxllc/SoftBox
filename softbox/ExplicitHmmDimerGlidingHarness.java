@@ -353,7 +353,7 @@ public final class ExplicitHmmDimerGlidingHarness {
             G.thetaS[m] = PRE; TwoBodyConverterMotor.geom2D(G, m); int s = TwoBodyConverterMotor.nearestSeg2D(G, m); if (s < 0) continue;
             double[] gm = TwoBodyConverterMotor.gate2D(G, m, s); double half = 0.5 * f.segLength.get(s), margin = TwoBodyConverterMotor.bindMargin();
             boolean g0 = gm[0] < sc.tol.dBindNm, g1 = gm[2] < sc.tol.psiDeg, g2 = gm[3] < sc.tol.phiDeg, g3 = gm[4] < sc.tol.thetaDeg,
-                    g4 = gm[5] < sc.tol.preloadPn, g5 = gm[6] < sc.tol.energyKt, g6 = gm[7] < TwoBodyConverterMotor.A_SEMI[2] * 1e3, g7 = gm[1] > margin && gm[1] < 2 * half - margin;
+                    g4 = gm[5] < sc.tol.preloadPn, g5 = gm[6] < sc.tol.energyKt, g6 = gm[7] < TwoBodyConverterMotor.HEAD_GATE_Z_UM * 1e3, g7 = gm[1] > margin && gm[1] < 2 * half - margin;
             if (!(g0 && g1 && g2 && g3 && g4 && g5 && g6 && g7)) continue;
             double candMat = ExplicitHmmDimer3jsHarness.filMatCoordUm(f, G.nSeg, s, gm[1]);
             // --- GLOBAL continuous local actin co-occupancy exclusion (experimental; default OFF) ---

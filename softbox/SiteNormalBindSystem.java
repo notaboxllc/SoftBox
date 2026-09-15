@@ -183,7 +183,24 @@ public final class SiteNormalBindSystem {
             double phiSite = bindAzim.get(m) - mirror * epsBind;      // the TRUE site azimuth (offset removed)
             double cph = Math.cos(phiSite), sph = Math.sin(phiSite);
             double nx = cph * yx + sph * zx, ny = cph * yy + sph * zy, nz = cph * yz + sph * zz;
-            double etx = -nx, ety = -ny, etz = -nz;                   // eTarget = -n_site  (THE specification)
+            // HEAD BINDING TILT (snP[5], radians; 2026-09-10). DEFAULT 0 reproduces eTarget = -n_site exactly:
+            // the head "sticks straight out" radially, converter as far from the filament as geometry allows and
+            // centred over the site. That is NOT the biological pose -- the motor domain lies at an angle to the
+            // filament with the neck/converter displaced along the axis.
+            //   SIGN (verified 2026-09-10; an earlier version of this comment had it BACKWARDS):
+            //   eTarget is the target for xHeadHat = normalize(xF8 - xH), i.e. head-centre -> BINDING-POINT,
+            //   and the converter is ANTIPODAL to the binding point on that same axis (R_CONV = -R_F8, 3.5 nm
+            //   each side, asserted in TwoBodyConverterMotor:1226). So
+            //       converter - xF8 = -7.0nm * xHeadHat = +7.0nm*n_site*cos(b) - 7.0nm*u*sin(b)
+            //   and with u pointing BARBED (barbed=end2 since the 2026-06-19 convention swap) the converter's
+            //   axial offset is -7.0nm*sin(b): a POSITIVE tilt puts the converter on the POINTED side, a
+            //   NEGATIVE tilt on the BARBED side. NEGATIVE tilt is therefore the biological pose.
+            // n_site and u are orthogonal, so the rotated target is already unit-length.
+            double tilt = (snP.getSize() > 5) ? snP.get(5) : 0.0;
+            double ctl = Math.cos(tilt), stl = Math.sin(tilt);
+            double etx = -nx * ctl + ux * stl;
+            double ety = -ny * ctl + uy * stl;
+            double etz = -nz * ctl + uz * stl;
             double hx = outGeom.get(G_XHAT * N + m), hy = outGeom.get((G_XHAT + 1) * N + m),
                    hz = outGeom.get((G_XHAT + 2) * N + m);
             double hl = hx * hx + hy * hy + hz * hz;
