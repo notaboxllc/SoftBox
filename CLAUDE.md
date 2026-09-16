@@ -171,6 +171,47 @@ oracle, but its role changes across the migration:
   fix that only improves a number can be masking the real cause.
 - Bail-out-and-report on anything that contradicts the plan's assumptions; commit nothing.
 
+## Model-development discipline — biology first (jba, 2026-09-15)
+**The porting phase is over for the motor; this is how the model moves FORWARD.** Claude's role here is
+**skeptical collaborator**, not executor: raising a drift from the biology early is requested, not
+presumptuous. Say it plainly once, then proceed if jba reaffirms.
+
+**The loop, in order:**
+1. **Look to the ACTUAL BIOLOGY first** — literature / structural evidence — for motivation on how to improve
+   an aspect of the model. Motivation comes from the organism, not from the model's own behaviour.
+2. **Make the change and check RESPONSE / EMERGENCE** — gliding, twirling, engagement, force balance. Did we
+   break or improve anything? Emergent behaviour is the test, not a fitted number.
+3. **Re-evaluate for BIOLOGICAL REALISM balanced against COMPUTATIONAL PERFORMANCE** — a change that is more
+   faithful but unaffordable, or affordable but less faithful, is a trade to be made EXPLICITLY.
+
+**Value weighting: biological realism is the PRIMARY objective.** Computational performance is a constraint,
+not a goal. Reproducing a particular assay number is NOT the objective and never justifies a model change on
+its own (the no-single-assay-tuning firewall). **A mechanism that produces the right number for a reason a
+real motor does not have is a FAILURE, not a success** — internal consistency (force balance, CPU≡GPU,
+monotonicity, seed agreement) CANNOT detect this; only the organism can.
+
+**Failure signatures — all four occurred in one week (2026-09-08..15):**
+- **Optimising instead of predicting.** Hunting "the optimal converter azimuth for gliding velocity", when the
+  defensible order is: take the placement from STRUCTURE, then test whether it costs performance. An optimum
+  found in a coarse model that happens to match biology invites the obvious post-hoc objection; a structural
+  choice that survives a performance check does not.
+- **A mechanism working for an unbiological reason.** The `-headtilt` velocity gain (6×, monotone, every seed)
+  was a free pre-stroke swing: the capture gate admitted a head near radial and the latch then dragged it to
+  the tilted pose, doing directed work once per attachment and releasing 17 kT that the model's own 15 kT
+  binding budget never charged. Real myosin's lever swings at the POWER STROKE on nucleotide state, not at
+  attachment. Fixed by `-tiltgate`; the gain largely vanished.
+- **Treating a DERIVED quantity as a part.** The converter "arm" is the chord between two material points on
+  the head sphere, not a component; it changes when either point moves, and that is geometry, not a modified
+  part dimension.
+- **Building the argument before the citation.** A structural benchmark quoted from our own ellipsoid
+  arithmetic rather than a structure paper. If a claim rests on real geometry, get the literature FIRST — it
+  defines the target the whole campaign aims at.
+
+**Before writing code for any model change, answer:** what biological observation motivates this (citable, or
+inferred from our own model?); if it improves a number, WHY, and is that why something a real motor has; what
+does it cost in steps/s, dt and memory; and is this a structural CHOICE to be justified, or a parameter being
+FITTED to an assay? Prefer choice.
+
 ## Increment sequence (proposed — increment 1 is the agreed ungated start; 2+ are provisional)
 0. Scaffold — dir, repo, frozen-v1 worktree, docs. **(done)**
 1. **Filament slice** — FilSegment component arrays + rigid-rod overdamped Langevin integration
