@@ -242,6 +242,8 @@ public final class ExplicitCompleteMatHarness {
     // rho default 2.26 nm = equivalent disc radius of the ~1600 A^2 acto-myosin interface.
     static boolean TRIAD_ON = false;
     static double  TRIAD_RHO_NM = 2.26;
+    /** -triad-conform: lay the head-side triad vertices on the actin cylinder so head-on-site is strain-free. */
+    static boolean TRIAD_CONFORM = false;
     // -triad-labpatch: REGRESSION CONTROL. Restores the legacy LAB-FIXED head-patch basis (hy = motorYVec =
     // perp3(uVec)) that the 2026-09-11 material-basis fix replaced, so the fix's own effect is measurable.
     static boolean TRIAD_LAB_PATCH = false;
@@ -290,6 +292,14 @@ public final class ExplicitCompleteMatHarness {
     static DoubleArray hcP = null;
     static boolean f8TanOn() { return F8_TAN_NM != 0.0; }
     static boolean CONV_DIAG = false;
+    // -headaxis-diag: pull outGeom every step so the host can histogram xHeadHat.eup for BOUND vs UNBOUND
+    // motors. Read-only telemetry (the EPISODE_TELEM precedent); default off => no transfer, byte-identical.
+    // WHY: bound-site azimuth came out lower/side/upper = 5/79/21 %, i.e. heads bind the FAR side 4x more
+    // than the near side, which the straight-rest pose (head collinear with a neck rising from the mat)
+    // predicts should be the other way round. Since xHeadHat ~ -n_site when bound, that split is a READOUT
+    // of the head-axis direction distribution -- so measure the distribution directly, bound vs unbound, to
+    // see whether the GATE selects it or the resting S2 conformation already supplies it.
+    static boolean HEADAXIS_DIAG = false;
     // ROLL SPRING (-rollspring): the INTER-SEGMENT TORSIONAL-ROLL constraint. Without it segment roll is a
     // free, uncoupled DOF (true of v1 too -- AZIMUTHAL_BINDING_BUILD_READ.md Verdict A), so a multi-segment
     // filament accumulates unbounded internal twist and does NOT rotate as a body. Real actin has a torsional
@@ -1000,7 +1010,8 @@ public final class ExplicitCompleteMatHarness {
                 F8_TAN_NM, F8_TAN_NM*10, MIRROR_SIGN, Math.toDegrees(F8_TAN_NM*1e-3 / (R_ACTIN_NM*1e-3)));
         }
         if (triadOn()) {
-            triP = FloatArray.fromElements((float) (TRIAD_RHO_NM * 1e-3), 1f, TRIAD_LAB_PATCH ? 1f : 0f);
+            triP = FloatArray.fromElements((float) (TRIAD_RHO_NM * 1e-3), 1f, TRIAD_LAB_PATCH ? 1f : 0f,
+                                           TRIAD_CONFORM ? 1f : 0f);
             triPatch = new FloatArray(3 * N); triPatch.init(0f);   // 0 => seed relaxed on the first bound step
             System.out.printf(java.util.Locale.US,
                 "  TRIAD PATCH     = ON  (3 contacts, k/3 each, rho=%.2f nm; vertices +/-%.2f axial, +/-%.2f tangential)"
@@ -1672,6 +1683,7 @@ public final class ExplicitCompleteMatHarness {
             if (PROD_SCI) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg, mot.nucleotideState);
             else          tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.redOut, mot.boundSeg);
             if (CONV_DIAG) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.q);   // converter-angle diagnostic (read-only)
+            if (HEADAXIS_DIAG) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.outGeom);   // head-axis diagnostic (read-only)
             if (occOn())  tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.occStats);   // per-step occupancy telemetry
             // Target-zone telemetry: the per-candidate diagnostics + the filament material frame (uVec/yVec) and the
             // bond reactions the twirl observables need. Gated on tzOn() ⇒ the canonical production path is unchanged.

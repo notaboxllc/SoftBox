@@ -885,6 +885,28 @@ public final class CrossBridgeSystem {
         int nM = nB / 3;
         double k3 = myoSpring / 3.0;
 
+        // ---- TRIAD CONFORMITY (triP[3], 2026-09-17) ------------------------------------------------------
+        // The actin-side contacts are placed ON the filament cylinder -- an ARC at radius Ractin (azv = az0 +
+        // offT/Ractin below). The head-side anchors were a FLAT triangle in the head's transverse plane. Those
+        // two triangles are NOT congruent, so this bond had NO attainable zero-energy state: with the head
+        // sitting perfectly on-site the three ZERO-REST springs still read 0.72 / 0.18 / 0.18 nm of extension
+        // (rho=2.26, Ractin=3.5). They are UNEQUAL, so the pose that ought to be the energy minimum carries a
+        // net force, and the bond's true minimum is somewhere else -- a built-in frustration that every bind
+        // re-imposes with the same sense. triP[3]=1 lays the head-side vertices on the SAME cylinder, making
+        // head-on-site exactly strain-free while leaving the spring's response to RELATIVE motion untouched
+        // (that response is the triad's whole purpose -- it is what a 2-contact bond cannot transmit).
+        // Only TWO vertex angles exist and both are geometry constants, so the transcendentals are hoisted out
+        // of both loops -- which also keeps the kernel free of runtime-angle sin/cos, per the Math.acos PTX
+        // note in CLAUDE.md. conform=0 reproduces the flat layout EXACTLY (tanA/tanB are the same literals the
+        // vertex loop used, and the added normal term is * 0.0).
+        double conform = (triP.getSize() > 3) ? triP.get(3) : 0.0;
+        double tanA = rho, normA = 0.0, tanB = -0.5 * rho, normB = 0.0;
+        if (conform != 0.0 && Ractin > 1.0e-9) {
+            double dA = rho / Ractin, dB = -0.5 * rho / Ractin;
+            tanA = Ractin * Math.sin(dA);  normA = Ractin * (1.0 - Math.cos(dA));
+            tanB = Ractin * Math.sin(dB);  normB = Ractin * (1.0 - Math.cos(dB));
+        }
+
         for (@Parallel int m = 0; m < nM; m++) {
             int d = m * STRIDE;
             for (int c = 0; c < STRIDE; c++) bondData.set(d + c, 0f);
@@ -975,10 +997,16 @@ public final class CrossBridgeSystem {
                 double px = scx + (arc0 + offA) * sux + Ractin * (cz * syx + sz2 * szx);
                 double py = scy + (arc0 + offA) * suy + Ractin * (cz * syy + sz2 * szy);
                 double pz = scz + (arc0 + offA) * suz + Ractin * (cz * syz + sz2 * szz);
-                // ---- head anchor: same offsets in the HEAD's transverse plane (does NOT follow the filament) ----
-                double ax = htx + offA * hyx + offT * hzx;
-                double ay = hty + offA * hyy + offT * hzy;
-                double az2 = htz + offA * hyz + offT * hzz;
+                // ---- head anchor: the SAME material offsets in the HEAD's frame (does NOT follow the filament).
+                // conform=0: a flat triangle (offT along hz). conform=1: the same triangle laid on a cylinder of
+                // radius Ractin about the head axis, i.e. congruent to the actin-side arc, so head-on-site is a
+                // true zero-energy state. hu = -n_site at the canonical pose, so +normX * hu is the inward
+                // radial sag that the arc has and the flat triangle lacked.
+                double tOff = (v == 0) ? tanA : tanB;
+                double nOff = (v == 0) ? normA : normB;
+                double ax = htx + offA * hyx + tOff * hzx + nOff * hux;
+                double ay = hty + offA * hyy + tOff * hzy + nOff * huy;
+                double az2 = htz + offA * hyz + tOff * hzz + nOff * huz;
 
                 double f1 = k3 * (px - ax), f2 = k3 * (py - ay), f3 = k3 * (pz - az2);
                 Fx += f1; Fy += f2; Fz += f3;
