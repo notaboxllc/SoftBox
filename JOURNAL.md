@@ -1,5 +1,78 @@
 # Soft Box Project Journal
 
+### 2026-09-18 — THE TRIAD HAD NO REACHABLE REST STATE; and every roll error bar to date was wrong
+
+Two independent defects found while chasing the achiral roll. **Read the retraction list before trusting
+any roll number in this repo dated before today.**
+
+**1. TRIAD ZERO-STRAIN DEFECT (geometry — deterministic, seed-free, established).**
+`CrossBridgeSystem.bondForcesSurfaceTriad` placed the actin-side contacts ON the filament cylinder (an ARC
+at radius `Ractin`, `azv = az0 + offT/Ractin`) but the head-side anchors as a FLAT triangle in the head's
+transverse plane (`ht + offA*hy + offT*hz`). The two triangles are not congruent, so three ZERO-REST springs
+had **no attainable zero-energy state**. New gate `-triad-zerostrain` (pure geometry, no scene, no runner)
+places one head EXACTLY on-site and calls the real kernel:
+
+    conform   |summed extension|   roll torque      verdict
+    OFF             1.0725 nm      -7.822e-13     FRUSTRATED
+    ON              0.0000         0.000e+00      STRAIN-FREE
+
+Per-vertex extensions at the ideal pose are 0.72 / 0.18 / 0.18 nm (rho 2.26, Ractin 3.5, vertex arcs
++37.0/-18.5/-18.5 deg) — UNEQUAL, so the pose that ought to be the energy minimum carries a net force AND a
+negative roll torque. Every bind re-imposed it with the same sign.
+
+FIX `-triad-conform` (`TRIAD_CONFORM`, triP[3], DEFAULT OFF, regression byte-identical): lay the head-side
+vertices on the same cylinder — `offT*hz` becomes `R*sin(d)*hz + R*(1-cos d)*hu`, d = offT/R. Two vertex
+angles, both geometry constants, hoisted out of both loops (no runtime-angle transcendental in the kernel).
+
+`-triad-tiltscan` maps the frustration away from the ideal pose:
+- **AXIAL tilt: the roll torque is CONSTANT** (-7.8221e-13 from -40 to +40 deg). The 3-fold layout makes it
+  pose-independent, so this is a steady twist per bound motor, not a rectification.
+- **AZIMUTHAL tilt:** steep and nearly ODD (+4.2e-12 .. -5.2e-12), crossing zero near -7 deg. Its symmetric
+  average never cancels (-7.8e-13 .. -5.1e-13, always negative).
+- **AXIAL FORCE IS EXACTLY ZERO at every pose** (Sum offA = 0 over 0/+-120 deg) ⇒ the defect has **no direct
+  glide component**. Conform ADDS an odd axial restoring force the flat triad structurally lacked.
+
+REGRESSION: 9 rows x 40 columns byte-identical to `ALPHA_LONG/ap60` with conform OFF, 7 of them with motors
+bound through the triad kernel.
+
+**2. THE RUNNER BANNER WAS FALSE.** `SiteNormalLongGlideHarness.banner()` printed `EXECUTION = CPU ... No GPU
+work is launched` UNCONDITIONALLY, but `runLong()` force-sets `SITE_NORMAL_DEVICE_OK` when `-gpu` is passed, so
+`buildGlidingGraph` does NOT refuse. **Every GPU-flagged roll arm ran on the experimental device path** whose own
+runtime message says "treat trajectories as a device smoke/visualisation, not a measurement." Banner now reports
+the path actually taken. The roll is NOT a device artifact — the CPU `TWIRL_ALPHA_EPS0` arms reproduce it.
+
+**3. THE ROLL ERROR BARS WERE WRONG BY 2.4x, AND THE DOMINANT TERM IS QUENCHED.**
+Reported uncertainty used `sd(dRoll)*sqrt(N)`, which assumes independent increments; a bound motor persists
+across many output rows. Four CPU arms at ONE configuration (alpha=60, triad, eta 0.01, eps 0):
+
+    +5.85   -15.92   -12.36   -10.72  turns/s     <- same configuration, different seed
+
+    blocked within-arm SE (thermal)  +/- 5.0    <- shrinks with run length
+    across-seed sd (measured, n=4)   +/- 9.67
+    => QUENCHED component            +/- 8.3    <- 73% of the variance
+
+`ChiralSiteHarness.build(seed)` lays a DIFFERENT motor lawn per seed. No single trajectory can see that spread:
+a 1 s arm has SE 9.7, a 16 s arm still has SE 8.4. **Run length is nearly useless; only seeds help.** New
+`scripts/roll_estimator.py` (batch-means blocking + `ensemble()` + `paired()`).
+**DESIGN CONSEQUENCE: pair at matched seeds** — the same seed is the same lawn, so the quenched term cancels in
+the difference (unpaired diff sd 13.7 ⇒ 17 pairs for 10 turns/s at 3 sigma; PAIRED sd 7.1 ⇒ 4 pairs).
+
+**RETRACTED (all n=1, all re-scored against +/-9.67 — none resolved):**
+`alpha=0 is the unique null` (0.04 sigma) · `alpha=-60 is the strongest arm` (1.70) · `the roll does not need
+the power stroke` (0.96; the 4-significant-figure turns/attach agreement was one arm vs one arm) · `removing the
+triad kills the roll` (0.13) · `Brownian-off kills the roll` (0.13) · `patch size does not matter` (0.85) ·
+`the conform fix has not killed it` (1.11). The mirror decomposition that would separate artifact from genuine
+chiral twirling has n=2 per side: EVEN -8.29 +/- 4.8 (1.7 sigma), ODD +3.25 +/- 4.8 (0.7 sigma) — **neither the
+achirality nor the chirality of this roll is established.**
+
+**WHAT STANDS:** a negative roll EXISTS — pooled over 8 non-zero-alpha arms across BOTH runners,
+**-9.79 +/- 2.59 turns/s (3.8 sigma)**; and all of item 1, which is deterministic.
+
+**OPEN / RUNNING:** `TRIAD_CONFORM/conform` (seed 20260901) + `CONFORM_PAIRED` seeds 20260902/03 — three matched
+pairs of frustrated vs strain-free triad at alpha=60. Both arms of a pair share a runner, so device-path
+artifacts cancel with the lawn; quote the DIFFERENCE, never the absolute level. Pending that, jba has agreed the
+strain-free triad should become canonical, which re-baselines every triad number in this repo.
+
 ### 2026-09-12 — TRIAD BASE DOES NOT SUPPRESS TWIRLING (0.991x). The 12x claim was a one-seed draw under the diffusion floor.
 
 **The standing "TRIAD/SINGLE = 0.085 (12x suppression)" result is RETRACTED.** At **eps = 8 deg**, matched
