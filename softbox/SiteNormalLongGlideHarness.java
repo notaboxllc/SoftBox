@@ -162,6 +162,7 @@ public class SiteNormalLongGlideHarness {
     static double ANC_W_CLI = 0.25;   // ancillary spring weight; 0 = single spring at the OFFSET anchor
     static double SOFT_CONV = 1.0, SOFT_S2A = 1.0, SOFT_S2B = 1.0, SOFT_KBIND = 1.0;
     static boolean CONV_DIAG_CLI = false;
+    static boolean HEADAXIS_CLI  = false;   // -headaxis-diag: histogram xHeadHat.eup, bound vs unbound
     static boolean FLIP_HELIX_CLI = false;   // -flip-helix: mirror the ACTIN LATTICE handedness
     // SIGN verified empirically 2026-09-10: converter axial = -7.0*sin(tilt) nm, + = BARBED, so a
     // NEGATIVE tilt is the biological (converter barbed-side) pose. Earlier comment had it backwards.
@@ -267,6 +268,9 @@ public class SiteNormalLongGlideHarness {
                 case "-convaz-nocomp" -> CONV_AZ_COMP_CLI = false;
                 case "-flip-helix" -> FLIP_HELIX_CLI = true;
                 case "-triad-rho" -> ExplicitCompleteMatHarness.TRIAD_RHO_NM = Double.parseDouble(args[++i]);
+                case "-triad-conform" -> ExplicitCompleteMatHarness.TRIAD_CONFORM = true;
+                case "-triad-zerostrain" -> { triadZeroStrainGate(); return; }
+                case "-triad-tiltscan" -> { triadTiltScan(); return; }
                 case "-triad-labpatch" -> ExplicitCompleteMatHarness.TRIAD_LAB_PATCH = true;   // legacy lab-fixed patch basis (regression control)
                 case "-twopoint-ancw" -> ANC_W_CLI = Double.parseDouble(args[++i]);
                 case "-twopoint-pair" -> PAIR_CLI = Integer.parseInt(args[++i]);
@@ -274,6 +278,7 @@ public class SiteNormalLongGlideHarness {
                 case "-soft-s2a"  -> SOFT_S2A  = Double.parseDouble(args[++i]);
                 case "-soft-s2b"  -> SOFT_S2B  = Double.parseDouble(args[++i]);
                 case "-soft-kbind" -> SOFT_KBIND = Double.parseDouble(args[++i]);
+                case "-headaxis-diag" -> { HEADAXIS_CLI = true; ExplicitCompleteMatHarness.HEADAXIS_DIAG = true; }
                 case "-convdiag" -> CONV_DIAG_CLI = true;
                 case "-kbind-bound-only" -> KBIND_BOUND_ONLY_CLI = true;
                 case "-rollspring" -> ROLL_SPRING_CLI = true;
@@ -316,14 +321,145 @@ public class SiteNormalLongGlideHarness {
         if (report && !run) reportOnly();
     }
 
+    /**
+     * ZERO-STRAIN GATE (-triad-zerostrain). Pure geometry, no scene and no runner: place ONE head at the exact
+     * canonical bound pose (tip ON the site point, head axis along -n_site, patch self-seeded from uSite) and
+     * call the REAL CrossBridgeSystem.bondForcesSurfaceTriad with conform OFF, then ON. myoSpring is set to 3 so
+     * k3 = 1 and the reported force IS the vector sum of the three spring extensions, in length units -- a bond
+     * whose rest state is attainable must read exactly zero there.
+     */
+    static void triadZeroStrainGate() {
+        double Ractin  = ExplicitCompleteMatHarness.R_ACTIN_NM * 1e-3;
+        double rho     = ExplicitCompleteMatHarness.TRIAD_RHO_NM * 1e-3;
+        double headLen = 7.0e-3, segLen = 0.100;
+
+        System.out.printf(Locale.US, "%nTRIAD ZERO-STRAIN GATE   Ractin=%.2f nm  rho=%.2f nm  (vertex arcs %+.1f / %+.1f / %+.1f deg)%n",
+                Ractin * 1e3, rho * 1e3, Math.toDegrees(rho / Ractin),
+                Math.toDegrees(-0.5 * rho / Ractin), Math.toDegrees(-0.5 * rho / Ractin));
+        System.out.println("  Head placed EXACTLY on-site. A zero-rest 3-spring bond must read 0 here.\n");
+        System.out.printf(Locale.US, "  %-10s %14s %14s %14s%n", "conform", "|sum ext| nm", "roll torque", "verdict");
+
+        for (int mode = 0; mode < 2; mode++) {
+            FloatArray motorCoord = new FloatArray(9), motorUVec = new FloatArray(9), motorYVec = new FloatArray(9);
+            FloatArray filCoord = new FloatArray(3), filUVec = new FloatArray(3), filYVec = new FloatArray(3);
+            FloatArray filSegLength = new FloatArray(1), bindArc = new FloatArray(1), bindAzim = new FloatArray(1);
+            IntArray boundSeg = new IntArray(1);
+            FloatArray bondData = new FloatArray(CrossBridgeSystem.STRIDE);
+            FloatArray xbParams = new FloatArray(8), headPatch = new FloatArray(3);
+
+            // filament: centre at the origin, axis +x, yVec +y  =>  zVec = u x y = +z
+            filUVec.set(0, 1f); filYVec.set(1, 1f);
+            filSegLength.set(0, (float) segLen);
+            bindArc.set(0, (float) (0.5 * segLen));   // arc0 = bindArc - halfLen = 0 (segment centre)
+            bindAzim.set(0, 0f);                      // az0 = 0 => outward normal = +y, azimuthal tangent = +z
+            boundSeg.set(0, 0);
+
+            // head: tip ON the site point (0, Ractin, 0); axis = -n_site = -y
+            motorUVec.set(2, 0f); motorUVec.set(5, -1f); motorUVec.set(8, 0f);
+            motorCoord.set(2, 0f); motorCoord.set(5, (float) (Ractin + 0.5 * headLen)); motorCoord.set(8, 0f);
+
+            xbParams.set(0, 3f);                      // myoSpring: k3 = 1 => force == summed extension
+            xbParams.set(4, (float) headLen);
+            xbParams.set(6, (float) Ractin);
+            FloatArray triP = FloatArray.fromElements((float) rho, 1f, 0f, (float) mode);
+
+            CrossBridgeSystem.bondForcesSurfaceTriad(motorCoord, motorUVec, motorYVec,
+                    filCoord, filUVec, filYVec, filSegLength, boundSeg, bindArc, bindAzim,
+                    bondData, xbParams, triP, headPatch);
+
+            double fx = bondData.get(0), fy = bondData.get(1), fz = bondData.get(2);
+            double ext = Math.sqrt(fx * fx + fy * fy + fz * fz) * 1e3;      // nm
+            double roll = bondData.get(9);                                   // segment torque . filament axis (+x)
+            System.out.printf(Locale.US, "  %-10s %14.4f %14.3e %14s%n", mode == 0 ? "OFF" : "ON",
+                    ext, roll, ext < 1e-6 ? "STRAIN-FREE" : "FRUSTRATED");
+        }
+        System.out.println("\n  conform=OFF is the geometry every run to date used.");
+    }
+
+    /**
+     * TILT SCAN (-triad-tiltscan). The zero-strain gate only probes the IDEAL pose. A ratchet needs the
+     * frustration torque to survive AVERAGING over the poses a bound head actually explores, so sweep the head
+     * axis away from -n_site and read the roll torque (segment torque . filament axis) at each tilt, conform
+     * OFF vs ON. Two planes: AXIAL (head axis tilts toward the filament axis -- the channel HEADAXIS_DIAG
+     * measured) and AZIMUTHAL (tilts around the cylinder). The tip is held ON the site point throughout, and
+     * the patch self-seeds RELAXED at each pose, so what is measured is the geometric frustration alone.
+     * The symmetric mean over +-b is the rectification-relevant number: an ODD torque averages to zero and
+     * cannot ratchet; a non-zero mean can.
+     */
+    static void triadTiltScan() {
+        double Ractin  = ExplicitCompleteMatHarness.R_ACTIN_NM * 1e-3;
+        double rho     = ExplicitCompleteMatHarness.TRIAD_RHO_NM * 1e-3;
+        double headLen = 7.0e-3, segLen = 0.100;
+        double[] tilts = {-40,-30,-20,-10,-5,0,5,10,20,30,40};
+
+        System.out.printf(Locale.US, "%nTRIAD TILT SCAN   Ractin=%.2f nm  rho=%.2f nm   (tip held ON the site point)%n",
+                Ractin * 1e3, rho * 1e3);
+        System.out.println("  roll torque = segment torque . filament axis, in the k3=1 convention (contrast only, not physical units)\n");
+
+        for (int plane = 0; plane < 2; plane++) {
+            System.out.printf(Locale.US, "  --- %s tilt%n", plane == 0 ? "AXIAL (toward the filament axis)" : "AZIMUTHAL (around the cylinder)");
+            System.out.printf(Locale.US, "  %8s %16s %16s %13s %13s%n", "tilt deg", "roll tau OFF", "roll tau ON", "axial F OFF", "axial F ON");
+            double sumOff = 0, sumOn = 0; int n = 0;
+            for (double bdeg : tilts) {
+                double b = Math.toRadians(bdeg);
+                double[] r = new double[4];
+                for (int mode = 0; mode < 2; mode++) {
+                    FloatArray motorCoord = new FloatArray(9), motorUVec = new FloatArray(9), motorYVec = new FloatArray(9);
+                    FloatArray filCoord = new FloatArray(3), filUVec = new FloatArray(3), filYVec = new FloatArray(3);
+                    FloatArray filSegLength = new FloatArray(1), bindArc = new FloatArray(1), bindAzim = new FloatArray(1);
+                    IntArray boundSeg = new IntArray(1);
+                    FloatArray bondData = new FloatArray(CrossBridgeSystem.STRIDE);
+                    FloatArray xbParams = new FloatArray(8), headPatch = new FloatArray(3);
+
+                    filUVec.set(0, 1f); filYVec.set(1, 1f);            // axis +x, yVec +y => zVec +z
+                    filSegLength.set(0, (float) segLen);
+                    bindArc.set(0, (float) (0.5 * segLen)); bindAzim.set(0, 0f);
+                    boundSeg.set(0, 0);
+                    // site point (0, Ractin, 0); outward normal +y; azimuthal tangent +z
+                    double hux, huy, huz;
+                    if (plane == 0) { hux = Math.sin(b); huy = -Math.cos(b); huz = 0; }
+                    else            { hux = 0;           huy = -Math.cos(b); huz = Math.sin(b); }
+                    double px = 0, py = Ractin, pz = 0;
+                    motorUVec.set(2, (float) hux); motorUVec.set(5, (float) huy); motorUVec.set(8, (float) huz);
+                    motorCoord.set(2, (float) (px - 0.5 * headLen * hux));
+                    motorCoord.set(5, (float) (py - 0.5 * headLen * huy));
+                    motorCoord.set(8, (float) (pz - 0.5 * headLen * huz));
+
+                    xbParams.set(0, 3f); xbParams.set(4, (float) headLen); xbParams.set(6, (float) Ractin);
+                    FloatArray triP = FloatArray.fromElements((float) rho, 1f, 0f, (float) mode);
+                    CrossBridgeSystem.bondForcesSurfaceTriad(motorCoord, motorUVec, motorYVec,
+                            filCoord, filUVec, filYVec, filSegLength, boundSeg, bindArc, bindAzim,
+                            bondData, xbParams, triP, headPatch);
+                    double fx = bondData.get(0), fy = bondData.get(1), fz = bondData.get(2);
+                    r[mode] = bondData.get(9);                                       // roll torque (about +x)
+                    r[2 + mode] = fx * 1e3;   // AXIAL force component (filament axis = +x): the GLIDE channel
+                }
+                System.out.printf(Locale.US, "  %8.0f %16.4e %16.4e %13.5f %13.5f%n", bdeg, r[0], r[1], r[2], r[3]);
+                sumOff += r[0]; sumOn += r[1]; n++;
+            }
+            System.out.printf(Locale.US, "  %8s %16.4e %16.4e%n%n", "MEAN", sumOff / n, sumOn / n);
+        }
+        System.out.println("  A symmetric tilt distribution gives MEAN = 0 for an odd torque. A non-zero MEAN is the");
+        System.out.println("  rectifiable component: a bias that survives averaging over the poses a bound head explores.");
+    }
+
     static void banner() {
         System.out.println();
+        // 2026-09-18: this banner used to assert "EXECUTION = CPU ... no GPU work is launched"
+        // UNCONDITIONALLY, which was false whenever -gpu was passed: runLong() force-sets
+        // SITE_NORMAL_DEVICE_OK and builds the device graph. A whole roll campaign was read as CPU
+        // output on the strength of this text. It now reports the path that will ACTUALLY be taken.
         System.out.println("################################################################################");
-        System.out.println("#  EXECUTION = CPU SITE-NORMAL PRODUCTION PATH                                  #");
-        System.out.println("#  (ExplicitCompleteMatHarness.buildGlidingGraph REFUSES siteNormalOn(); there   #");
-        System.out.println("#   is no validated device path for matBeamGeomTilt / matS2SolveStepTilt /      #");
-        System.out.println("#   headAxisStep / siteCoupleStep. No GPU work is launched, and the old         #");
-        System.out.println("#   non-chi / non-site-normal GPU motor is NOT substituted.)                    #");
+        if (GPU_MODE) {
+            System.out.println("#  EXECUTION = GPU DEVICE-RESIDENT SITE-NORMAL GRAPH  ***EXPERIMENTAL***        #");
+            System.out.println("#  runLong() force-sets SITE_NORMAL_DEVICE_OK, so buildGlidingGraph does NOT    #");
+            System.out.println("#  refuse. The whole-step CPU/GPU equivalence gate for the bound branch is NOT  #");
+            System.out.println("#  green. Quote DIFFERENCES between arms on this same path, never absolute      #");
+            System.out.println("#  levels. Drop -gpu for the validated CPU sequential runner.                   #");
+        } else {
+            System.out.println("#  EXECUTION = CPU SITE-NORMAL SEQUENTIAL RUNNER (the validated path)           #");
+            System.out.println("#  buildGlidingGraph REFUSES siteNormalOn() unless -gpu force-enables it.       #");
+        }
         System.out.println("################################################################################");
         System.out.printf(Locale.US, "  LONG HIGH-DENSITY SITE-NORMAL GLIDING ASSAY%n");
         System.out.printf(Locale.US, "  mat %.1f x %.1f um | density %.0f heads/um^2 | dt %.3e s | eta %.4g Pa.s%n",
@@ -661,6 +797,11 @@ public class SiteNormalLongGlideHarness {
         // binds is already pushing in the PRE-stroke state (nuc = ADP.Pi, index 2), whereas the stroke can only
         // act AFTER the ADP.Pi->ADP transition (index 3). Indexed by nucleotideState.
         double[] faxByNuc = new double[4]; long[] nByNuc = new long[4];
+        // HEAD-AXIS DIAGNOSTIC: d = xHeadHat . eup, binned over [-1,1]. d>0 = head axis points AWAY from the
+        // mat (binds the NEAR/lower face); d<0 = points toward the mat (binds the FAR/upper face), because
+        // the bound head sits 3.5 nm outward along the site normal with xHeadHat ~ -n_site.
+        final int HB = 20; long[] haxBound = new long[HB], haxFree = new long[HB];
+        double haxSumB = 0, haxSumF = 0; long haxNB = 0, haxNF = 0; final int HAX_STRIDE = 100;
         // FORCE-BALANCE AUDIT (2026-09-13). Two channels the census already had the ingredients for:
         //  (1) netAcc: the TIME-AVERAGE of the per-step SUM of cross-bridge axial force on the filament. In a
         //      steady glide this must equal gamma_par * v -- the test that the alpha-effect is a real force
@@ -749,6 +890,16 @@ public class SiteNormalLongGlideHarness {
                 }
                 if (bs >= 0 && prevBs[m] == bs && prevNu[m] == MotorStore.NUC_ADPPI && nu == MotorStore.NUC_ADP) strokes++;
                 age[m] = bs < 0 ? -1 : (prevBs[m] == bs ? age[m] + 1 : 0);
+                if (HEADAXIS_CLI && (t % HAX_STRIDE) == 0) {
+                    double ax = e.outGeom.get(9*N+m), ay = e.outGeom.get(10*N+m), az = e.outGeom.get(11*N+m);
+                    double al = Math.sqrt(ax*ax + ay*ay + az*az);
+                    if (al > 0.5) {   // filters culled/uninitialised slots, whose outGeom is stale or zero
+                        double dd = (ax*G.eup[0] + ay*G.eup[1] + az*G.eup[2]) / al;
+                        int bin = (int) ((dd + 1.0) * 0.5 * HB); if (bin < 0) bin = 0; if (bin >= HB) bin = HB-1;
+                        if (bs >= 0) { haxBound[bin]++; haxSumB += dd; haxNB++; }
+                        else         { haxFree[bin]++;  haxSumF += dd; haxNF++; }
+                    }
+                }
                 prevBs[m] = bs; prevNu[m] = nu;
                 if (bs < 0) continue;
                 nb++;
@@ -1005,6 +1156,23 @@ public class SiteNormalLongGlideHarness {
             nByNuc[2] > 0 ? faxByNuc[2]/nByNuc[2]*1e12 : 0.0, nByNuc[2],
             nByNuc[3] > 0 ? faxByNuc[3]/nByNuc[3]*1e12 : 0.0, nByNuc[3],
             nByNuc[0] > 0 ? faxByNuc[0]/nByNuc[0]*1e12 : 0.0, nByNuc[0]);
+        if (HEADAXIS_CLI && (haxNB + haxNF) > 0) {
+            System.out.printf(Locale.US,
+                "  HEAD-AXIS DIAGNOSTIC  d = xHeadHat.eup   (d<0 => axis points TOWARD the mat => binds the FAR/upper face)%n"
+              + "    BOUND   mean d = %+.4f  (n=%d)%n    UNBOUND mean d = %+.4f  (n=%d)%n",
+                haxNB > 0 ? haxSumB/haxNB : 0.0, haxNB, haxNF > 0 ? haxSumF/haxNF : 0.0, haxNF);
+            StringBuilder hb = new StringBuilder("    bin(d):");
+            for (int k = 0; k < HB; k++) hb.append(String.format(Locale.US, " %+.2f", -1.0 + (k + 0.5) * 2.0 / HB));
+            System.out.println(hb);
+            StringBuilder b1 = new StringBuilder("    bound %:"), b2 = new StringBuilder("    free  %:");
+            for (int k = 0; k < HB; k++) {
+                b1.append(String.format(Locale.US, " %5.1f", haxNB > 0 ? 100.0*haxBound[k]/haxNB : 0.0));
+                b2.append(String.format(Locale.US, " %5.1f", haxNF > 0 ? 100.0*haxFree[k]/haxNF : 0.0));
+            }
+            System.out.println(b1); System.out.println(b2);
+            System.out.println("    => if BOUND is skewed but UNBOUND is not, the capture GATE selects the axis;");
+            System.out.println("       if UNBOUND is already skewed, the resting S2/lever conformation supplies it.");
+        }
         {   // ---- FORCE BALANCE: time-mean net motor force vs gamma_par * v ----
             double netPn = netSteps > 0 ? netAcc/netSteps*1e12 : 0.0;          // + = toward BARBED = backward
             double Lf = contour(G)*1e-6, rf = 3.5e-9;
