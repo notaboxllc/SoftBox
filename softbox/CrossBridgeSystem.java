@@ -893,8 +893,13 @@ public final class CrossBridgeSystem {
         // (rho=2.26, Ractin=3.5). They are UNEQUAL, so the pose that ought to be the energy minimum carries a
         // net force, and the bond's true minimum is somewhere else -- a built-in frustration that every bind
         // re-imposes with the same sense. triP[3]=1 lays the head-side vertices on the SAME cylinder, making
-        // head-on-site exactly strain-free while leaving the spring's response to RELATIVE motion untouched
-        // (that response is the triad's whole purpose -- it is what a 2-contact bond cannot transmit).
+        // head-on-site exactly strain-free while PRESERVING THE INTENDED TORSIONAL CONSTRAINT (that constraint
+        // is the triad's whole purpose -- it is what a 2-contact bond cannot transmit). It is NOT dynamically
+        // neutral and must not be described as such: the off-equilibrium force/torque landscape changes, and
+        // -triad-tiltscan shows conform RESTORING an axial restoring response the flat geometry structurally
+        // lacked. The roll channel specifically is unchanged at leading order -- rolling the filament moves all
+        // three actin contacts by R*theta tangentially whatever the patch shape, so that stiffness is 3*k3*R^2
+        // either way -- but engagement and gliding need a small re-baseline after promotion.
         // Only TWO vertex angles exist and both are geometry constants, so the transcendentals are hoisted out
         // of both loops -- which also keeps the kernel free of runtime-angle sin/cos, per the Math.acos PTX
         // note in CLAUDE.md. conform=0 reproduces the flat layout EXACTLY (tanA/tanB are the same literals the

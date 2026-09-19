@@ -14,9 +14,20 @@ estimate Var(net) = m * Var(block sum) over the m blocks. For b below the correl
 blocks are still correlated and the estimate is too small; above it the estimate PLATEAUS at the
 truth. Scan b and read the plateau. This is the standard MCMC batch-means / blocking estimator.
 
-VALIDATION (the point of the exercise): applied to a SINGLE arm, the plateau SE must reproduce the
-independently-measured ACROSS-SEED scatter. If it does, one arm can be quoted honestly without
-needing an ensemble to discover its own error bar.
+WHAT THIS DOES AND DOES NOT ESTIMATE (corrected 2026-09-18 after reviewer note section 4a; the
+original docstring here claimed a single arm's plateau "must reproduce the across-seed scatter",
+which is wrong in principle). Decompose:
+
+    Var(R) = Var_lawn( E[R | lawn] )  +  E_lawn( Var[R | lawn] )
+
+Blocking estimates the SECOND term only -- stochastic uncertainty CONDITIONAL on one fixed motor
+lawn. A trajectory on one lawn never samples the population of lawns, so it cannot recover the
+first term no matter how long it runs. Measured here: blocked plateau ~+/-5.0 vs across-seed sd
++/-9.67, the difference being the quenched lawn term (~+/-8.3).
+
+So: use blocked SE for within-run questions, and INDEPENDENT SEEDS for any population-level
+statement about an absolute roll rate. For comparing two conditions, use paired() -- matched seeds
+share a lawn, so the quenched term cancels in the difference.
 """
 import csv, math, os, sys, statistics as st
 
@@ -62,7 +73,14 @@ def ensemble(paths, label):
     return rs
 
 def paired(a_paths, b_paths, la, lb):
-    """Matched-seed difference. The quenched lawn term cancels, which is the whole point."""
+    """Matched-seed difference: the quenched lawn term cancels, which is the whole point.
+
+    NOTE the error bar this returns is the spread of the PAIRED DIFFERENCES ACROSS SEEDS, which is the
+    population uncertainty of the treatment effect. Do NOT substitute the two arms' within-arm blocked
+    SEs combined in quadrature -- that answers a conditional question about one lawn and understates
+    the effect's variability across lawns. With n=1 pair there is no paired error bar at all; the
+    result is directional only. (Reviewer note section 4b.)
+    """
     da = [rate_se(p)[0] for p in a_paths]; db = [rate_se(p)[0] for p in b_paths]
     d = [y - x for x, y in zip(da, db)]
     m = st.mean(d); se = (st.stdev(d) / math.sqrt(len(d))) if len(d) > 1 else float("nan")

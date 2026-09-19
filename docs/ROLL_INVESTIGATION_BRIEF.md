@@ -174,10 +174,14 @@ Scripts: `scripts/triad_conform_test.sh`, `scripts/conform_paired_seeds.sh`.
 | `ALPHA_LONG/ap60` | frustrated | 1.44 | 1983 | 2.088 | -9.53 | +/-3.49 |
 | `TRIAD_CONFORM/conform` | strain-free | 0.73 | 1062 | 1.467 | -10.70 | +/-4.60 |
 
-**Paired difference -1.17 +/- 5.78 turns/s (0.20 sigma).** If the frustration of §3a were the cause this
-should read about **+9.5** (roll -> 0); it is ~1.9 sigma from that prediction. One pair, so not decisive, but
-**the current best guess is that the triad's unreachable rest state is a genuine defect that is NOT what
-causes the roll.** Pairs 2 and 3 (seeds 20260902/03) are running.
+**Paired difference -1.17 turns/s.** If the frustration of §3a were the cause this should read about
+**+9.5** (roll -> 0). **Directional only — there is no error bar on a single pair.** The `+/-5.78` I first
+quoted combined the two arms' within-arm blocked SEs, which answers a conditional question about noise on
+*this* lawn and is NOT the uncertainty of the treatment effect across lawns (reviewer note §4b). The honest
+statement: on the one lawn tested, conforming the triad did not reduce the roll. Pairs 2 and 3 (seeds
+20260902/03) are running; the inference is the spread of `Delta_i = R_conform,i - R_frustrated,i` across
+seeds, and at the preliminary paired sd of ~7.1 that needs **5 pairs** for a 10 turns/s effect (I wrote 4;
+the arithmetic gives 4.54, and a paired-t at small n wants more, not fewer).
 
 **Do not read the engagement drop as an effect of the fix.** Binding roughly halved in the conform arm, but
 it is confounded — the conform filament wandered sideways toward the edge of the 2 um mat:
@@ -188,7 +192,9 @@ it is confounded — the conform filament wandered sideways toward the edge of t
 Fewer motors in reach on one side. Whether the fix caused the wander or the two chaotic trajectories simply
 diverged, n=1 cannot say.
 
-**Lawn-edge asymmetry tested and EXCLUDED as the roll mechanism.** Asymmetric motor coverage near the mat
+**Lawn-edge asymmetry is not a leading explanation** (weaker than the "EXCLUDED" I first wrote —
+reviewer note §5: rows within a trajectory are autocorrelated, rows from one lawn are not independent
+replicates, and pooling weights long arms rather than independent lawns). Asymmetric motor coverage near the mat
 edge applying an off-axis torque would be an achiral geometry-driven roll — the right signature. Binning
 per-row roll increments by `yMargin`, pooled over 12 arms, both runners, all alpha, both handednesses:
 
@@ -196,14 +202,38 @@ per-row roll increments by `yMargin`, pooled over 12 arms, both runners, all alp
     yMargin 0.6-0.8                     -1.38e-2
     yMargin >0.8                        -0.66e-2
 
-Negative in every bin including the deepest interior, no monotone trend. (Those per-row SEs are the naive
-kind — divide by ~2.4 per §4b — so treat the bin-to-bin differences as unresolved; the sign holds everywhere.)
+Negative in every bin including the deepest interior, with no monotone trend — which is what an edge
+mechanism would have to produce. Suggestive, not an exclusion test.
 
 Also running: 4 CPU `TWIRL_ALPHA_EPS0` arms (`scripts/twirl_alpha_eps0_cpu.sh`), the native/mirror pairs at
 alpha=60 that are the only validated-runner measurement of this configuration, ~40% through a 3 s target.
 
-**Excluded so far:** the power stroke (weakly, n=1), the triad's rest state (weakly, one pair), lawn-edge
-asymmetry (on existing data), the RNG, and the device path. **The mystery is open.**
+### The achirality argument was unsound — and the test for it is nearly free
+
+**This is the reviewer's §6 and it is the most important correction to this brief.** I had been reasoning
+"same sign under `-flip-helix` => achiral => artifact." That does not follow. Verified in code:
+`-flip-helix` flips **only** `TWIST_PER_MON_DEG`, the actin lattice twist
+(`SiteNormalLongGlideHarness.java:536`). But `-convaz` rotates the converter azimuthally on the HEAD
+(`ExplicitCompleteMatHarness.java:587`), so `+alpha` and `-alpha` are mirror images: **the motor carries its
+own handedness.** Mirroring the lattice alone is therefore not a parity operation on the actomyosin system,
+and a roll that survives it could be motor-side chirality rather than an artifact.
+
+The 2x2 that resolves this is **already 3/4 run**, all at matched seed 20260901, same lawn, same runner,
+frustrated triad:
+
+| | convaz +60 | convaz -60 |
+|---|---:|---:|
+| native lattice | -9.53 (`ALPHA_LONG/ap60`) | -16.42 (`ALPHA_LONG/am60`) |
+| mirrored lattice | -10.99 (`ALPHA_LONG/ap60_flp`) | **running** (`PARITY_2X2/am60_flp`) |
+
+`scripts/parity_2x2.sh` launches the missing cell. Decomposition: odd under actin handedness = lattice-chiral
+channel; odd under converter handedness = motor geometry supplies it; odd under the product = actin-motor
+chiral coupling; **even under both = parity-invariant, i.e. artifact or rest-state defect.** n=1 per cell, on
+the pre-fix triad — a sign pattern to orient the search, not an effect size.
+
+**Excluded or downgraded so far:** the power stroke (weakly, n=1), the triad's rest state (one lawn),
+lawn-edge asymmetry (suggestive), the RNG, and the device path. **The mystery is open, and the achirality
+that made it look like a bug is not actually established.**
 
 ## 7. Where a fresh reviewer should push
 
