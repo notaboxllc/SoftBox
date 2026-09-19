@@ -237,3 +237,98 @@ The updated first conform pair makes the triad-frustration hypothesis less attra
 **Finish the conform pairs, promote the mechanically valid triad, then perform the 2x2 handedness decomposition before any further causal ablation campaign.**
 
 That is the shortest path to determining whether there is still a bug to hunt at all.
+
+---
+
+# Reply from Claude Code (2026-09-19)
+
+**Everything above this line is the reviewer's text, unmodified.** Their note asks that the two readings not
+be silently merged, so this is appended and attributed rather than edited in. Actions taken are in commit
+`61cb948`.
+
+## Accepted without reservation
+
+**§2 (geometry).** The independent derivation matches: `R(cos d - 1) n + R sin d t` is the exact cylindrical
+displacement, and at `hu = -n_site` that is `R sin(d) hz + R (1 - cos d) hu`. This is the first independent
+confirmation the construction is right rather than merely convenient.
+
+**§3 (the fix is not dynamically neutral).** Correct, and the kernel comment contradicted my own tilt scan,
+which shows conform *restoring* an axial response the flat geometry lacked. Reworded to "preserving the
+intended torsional constraint," with the roll channel's leading-order invariance stated narrowly (rolling the
+filament moves all three actin contacts by `R*theta` whatever the patch shape, so that stiffness is `3*k3*R^2`
+either way) and an explicit note that engagement/gliding need a re-baseline after promotion.
+
+**§4a (blocking cannot recover quenched variance).** Correct in principle and the docstring was wrong. The
+measurement that motivated the script — blocked plateau ~+/-5.0 against across-seed sd +/-9.67 — is what
+*revealed* the quenched term, but I left a stated expectation in the file that the decomposition forbids.
+Fixed, with `Var(R) = Var_lawn(E[R|lawn]) + E_lawn(Var[R|lawn])` written into the docstring.
+
+**§4b (one pair has no paired error).** Correct. The `+/-5.78` combined within-arm blocked SEs, which is
+conditional on one lawn. Withdrawn, along with the "1.9 sigma from +9.5" framing. Also corrected 4 pairs to 5.
+**Your paired-sd estimate has since been validated:** three pairs give sd 7.97 against your predicted ~7.1, so
+the requirement is nearer 6 pairs than 5.
+
+**§5 (lawn-edge wording).** Downgraded to "not a leading explanation." I would note in mild defence that an
+edge mechanism has to predict ~0 in the interior and the interior bins are negative — but the objection about
+autocorrelation and non-independent replicates stands, and the weaker wording is the right one.
+
+**§9 (stopping rule) and §10 (paper framing).** Adopted. The observation I had not made myself is that
+`-filsegs 1` is a single rigid rod with no torsional mechanics at all, so this assay can show whether torque is
+generated but never how distributed motor torque becomes whole-filament twirl. That is a real ceiling on what
+it can support in a paper, independent of any statistics.
+
+## §6 is the most important correction to our work, and it is verified
+
+`-flip-helix` flips **only** `TWIST_PER_MON_DEG` (`SiteNormalLongGlideHarness.java:536`), while `-convaz`
+rotates the converter azimuthally on the head (`ExplicitCompleteMatHarness.java:587`), so `+alpha` and
+`-alpha` are mirror images and the motor carries its own handedness. Mirroring the lattice alone is not a
+parity operation on the system. **"Even under `-flip-helix` => achiral => artifact" was the load-bearing
+intuition behind treating this as a bug, and it does not follow.**
+
+## §7: adopted, with one deliberate deviation
+
+The 2x2 turned out to be **3/4 already run** at matched seed 20260901:
+
+| | convaz +60 | convaz -60 |
+|---|---:|---:|
+| native | -9.53 (`ALPHA_LONG/ap60`) | -16.42 (`ALPHA_LONG/am60`) |
+| mirrored | -10.99 (`ALPHA_LONG/ap60_flp`) | running (`PARITY_2X2/am60_flp`) |
+
+**Deviation:** you recommend running it *after* promoting the conforming triad; I launched the missing cell on
+the **frustrated** geometry, because three cells already exist there and it costs one arm instead of four.
+There is also an argument that the pre-fix geometry is the more informative substrate for validating the
+decomposition itself: the triad defect is parity-invariant by construction, so if the square is working, that
+defect should appear in the even-under-both cell. If you think that reasoning is wrong, the 2x2 should be
+redone on the conforming geometry and the cost is four arms.
+
+**§8 accepted as a constraint on interpretation:** `convaz` is a mechanism probe, not a twirling knob, and the
+structural evidence fixing its sign and magnitude in real myosin is still uncited.
+
+## What your framework caught that neither document stated
+
+Applying §4a one level up broke the claim this brief called the one survivor.
+
+`alpha_long_1s.sh` passes `-seed 20260901` to **every** arm. So `ap60`/`ap30`/`am60`/`ap90` are four arms on
+ONE lawn, and the CPU quad adds lawns 20260901 and 20260902 with two arms each. Six of the eight arms I pooled
+into "a negative roll EXISTS, -9.79 +/- 2.59, 3.8 sigma" were the same lawn. **The unit of replication is the
+lawn, not the arm**; n was about 2, and the 3.8 sigma was pseudo-replication.
+
+Three frustrated arms on three different lawns, identical otherwise (t = 0.902 s, still running):
+
+    lawn 20260901   -8.94
+    lawn 20260902   -1.44
+    lawn 20260903   +1.20
+    mean -3.06 +/- 3.04   t = -1.01 on 2 df   NOT RESOLVED
+
+**It is not currently established that this model rolls at all.** Every upstream diagnostic — the alpha scan,
+the ratchet test, the Brownian controls — ran on lawn 20260901, so they were measuring variation within one
+quenched realization. Your §9 stopping rule would have prevented most of that; it is now the working process.
+
+The three paired differences (`conform - frustrated`) are -2.45, -0.35, +12.28: mean +3.16, SE 4.60, t = 0.69.
+Unresolved, and the point estimate now sits almost exactly on the "complete cure" value — the opposite
+direction from pair 1 alone, which is your §4b point demonstrated rather than argued.
+
+## Standing recommendation
+
+Unchanged from yours, with one addition: before any further mechanism work, establish across independent
+lawns whether there is a roll to explain. That is now the open question, ahead of what causes it.

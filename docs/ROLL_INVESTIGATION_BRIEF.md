@@ -159,8 +159,36 @@ The mirror decomposition — the test that would actually separate artifact from
 n=2 per side: **EVEN (achiral) -8.29 +/- 4.8 (1.7 sigma), ODD (chiral) +3.25 +/- 4.8 (0.7 sigma)**. Neither
 the achirality nor the chirality of this roll is established.
 
-**What stands:** a negative roll EXISTS. Pooled over 8 non-zero-alpha arms across both runners,
-**-9.79 +/- 2.59 turns/s (3.8 sigma)**. And all of §3.
+### RETRACTED 2026-09-19: "a negative roll exists" was pseudo-replicated
+
+This brief previously said the one surviving claim was *"a negative roll EXISTS. Pooled over 8 non-zero-alpha
+arms across both runners, -9.79 +/- 2.59 turns/s (3.8 sigma)."* **That is withdrawn.** Checking the launch
+scripts: `alpha_long_1s.sh` passes `-seed 20260901` to every arm, so `ap60`/`ap30`/`am60`/`ap90` are FOUR ARMS
+ON ONE LAWN; the CPU quad adds lawns 20260901 and 20260902, two arms each. Six of the eight were the same
+lawn. I pooled them as eight independent samples. **The unit of replication is the lawn, not the arm**, and by
+that measure n was about 2. The 3.8 sigma is an artifact of the pseudo-replication.
+
+This is the §4a decomposition applied one level up: arms within a lawn are correlated exactly as rows within
+an arm are. It is the same mistake the estimator fix addressed, at a different level, and I did not go back
+and re-examine this claim with the lens that caught the other one.
+
+Three frustrated-triad arms on three DIFFERENT lawns, identical in every other respect (from `CONFORM_PAIRED`,
+read at t=0.902 s):
+
+    lawn 20260901   -8.94
+    lawn 20260902   -1.44
+    lawn 20260903   +1.20
+    mean -3.06 +/- 3.04 turns/s   t = -1.01 on 2 df   NOT RESOLVED
+
+**So it is not currently established that this model rolls at all.** Lawn 20260901 looks like an outlier, and
+every upstream diagnostic in §5 — the alpha scan, the ratchet test, the Brownian controls — ran on that one
+lawn, so they were measuring variation *within a single quenched realization*.
+
+One thing survives properly: the mirror decomposition is genuinely lawn-paired (each of lawns 20260901 and
+20260902 contributed a native AND a mirrored arm), so EVEN/ODD above is n=2 matched lawns rather than n=2
+arms. It is still far too small to conclude anything.
+
+**What stands:** all of §3 — the geometry, which is deterministic and involves no seeds.
 
 ## 6. The causal test — FIRST PAIR IN, AND IT DISFAVOURS THE HYPOTHESIS
 
