@@ -89,8 +89,10 @@ inward radial sag the arc has and the flat triangle lacked. Kernel change at
 regardless of rho, so the roll-channel stiffness is `3*k3*R^2` either way. This is why halving rho left the
 roll unchanged, and it means the fix does not weaken the channel the triad exists for.
 
-jba has agreed the strain-free triad should become canonical pending the test in §6. It has **not** been
-flipped to default yet.
+jba has agreed the strain-free triad should become canonical. It has **not** been flipped to default yet,
+and note §6: the first paired test suggests the fix does **not** cure the roll. The case for adopting it is
+that a zero-rest spring set with no reachable rest state is indefensible on its own terms, and that it
+restores an axial restoring force the flat triad structurally lacked — not that it solves this mystery.
 
 ## 4. Two methodological defects found while doing this — READ BEFORE TRUSTING ANY ROLL NUMBER
 
@@ -160,15 +162,48 @@ the achirality nor the chirality of this roll is established.
 **What stands:** a negative roll EXISTS. Pooled over 8 non-zero-alpha arms across both runners,
 **-9.79 +/- 2.59 turns/s (3.8 sigma)**. And all of §3.
 
-## 6. In flight
+## 6. The causal test — FIRST PAIR IN, AND IT DISFAVOURS THE HYPOTHESIS
 
-`TRIAD_CONFORM/conform` (seed 20260901) plus `CONFORM_PAIRED/{frust,conform}_2026090{2,3}` — three matched
-pairs of frustrated vs strain-free triad at alpha=60, 1.0 s each. Scripts: `scripts/triad_conform_test.sh`,
-`scripts/conform_paired_seeds.sh`. Both arms of a pair share a runner, so device-path artifacts cancel along
-with the lawn: **quote the difference, never the absolute level.**
+Matched-seed pairs of frustrated vs strain-free triad at alpha=60, 1.0 s each, same lawn, same runner.
+Scripts: `scripts/triad_conform_test.sh`, `scripts/conform_paired_seeds.sh`.
+
+**Pair 1 (seed 20260901) complete:**
+
+| | triad | avgB | attach/s | glide um/s | turns/s | blocked SE |
+|---|---|---|---|---|---|---|
+| `ALPHA_LONG/ap60` | frustrated | 1.44 | 1983 | 2.088 | -9.53 | +/-3.49 |
+| `TRIAD_CONFORM/conform` | strain-free | 0.73 | 1062 | 1.467 | -10.70 | +/-4.60 |
+
+**Paired difference -1.17 +/- 5.78 turns/s (0.20 sigma).** If the frustration of §3a were the cause this
+should read about **+9.5** (roll -> 0); it is ~1.9 sigma from that prediction. One pair, so not decisive, but
+**the current best guess is that the triad's unreachable rest state is a genuine defect that is NOT what
+causes the roll.** Pairs 2 and 3 (seeds 20260902/03) are running.
+
+**Do not read the engagement drop as an effect of the fix.** Binding roughly halved in the conform arm, but
+it is confounded — the conform filament wandered sideways toward the edge of the 2 um mat:
+
+    frustrated   yMargin mean 0.845 um    0.0% of the run within 0.30 um of the lawn edge
+    strain-free  yMargin mean 0.518 um   25.8%
+
+Fewer motors in reach on one side. Whether the fix caused the wander or the two chaotic trajectories simply
+diverged, n=1 cannot say.
+
+**Lawn-edge asymmetry tested and EXCLUDED as the roll mechanism.** Asymmetric motor coverage near the mat
+edge applying an off-axis torque would be an achiral geometry-driven roll — the right signature. Binning
+per-row roll increments by `yMargin`, pooled over 12 arms, both runners, all alpha, both handednesses:
+
+    yMargin 0.2-0.4   mean d(roll)/row  -1.34e-2
+    yMargin 0.6-0.8                     -1.38e-2
+    yMargin >0.8                        -0.66e-2
+
+Negative in every bin including the deepest interior, no monotone trend. (Those per-row SEs are the naive
+kind — divide by ~2.4 per §4b — so treat the bin-to-bin differences as unresolved; the sign holds everywhere.)
 
 Also running: 4 CPU `TWIRL_ALPHA_EPS0` arms (`scripts/twirl_alpha_eps0_cpu.sh`), the native/mirror pairs at
 alpha=60 that are the only validated-runner measurement of this configuration, ~40% through a 3 s target.
+
+**Excluded so far:** the power stroke (weakly, n=1), the triad's rest state (weakly, one pair), lawn-edge
+asymmetry (on existing data), the RNG, and the device path. **The mystery is open.**
 
 ## 7. Where a fresh reviewer should push
 
@@ -178,10 +213,13 @@ alpha=60 that are the only validated-runner measurement of this configuration, ~
 2. **Attack §4b.** The 73%-quenched claim rests on four arms at one configuration plus the fact that `seed`
    reaches `ChiralSiteHarness.build`. If it is wrong, the paired design is wrong and the retractions in §5
    are too harsh.
-3. **The unexplained residue.** Even taking §3 at face value, a *constant* torque per bound motor does not
-   obviously explain why alpha=0 showed no roll while alpha!=0 did, since a symmetric azimuthal pose
-   distribution never cancels the frustration. Either alpha=0 parks the head at the -7 deg zero crossing, or
-   something else opposes it there, or the frustration is not the cause. This is the live hole.
+3. **Find the actual cause.** §6 removes the leading suspect. What is left: a negative roll that survives
+   mirroring the lattice (weakly), survives removing the power stroke (weakly), survives making the triad
+   strain-free (one pair), and happens everywhere on the lawn. Two threads not yet pulled — (a) the azimuthal
+   frustration torque of §3b is steep and nearly odd with a zero crossing near -7 deg, so the realized mean
+   depends on where the bound head sits in azimuth, and that distribution has never been measured (the
+   `HEADAXIS_DIAG` campaign measured the AXIAL channel only); (b) nothing else in the bond has been asked
+   whether it has a reachable rest state.
 4. **Is anything else in the bond similarly frustrated?** The triad was found by asking "does this have a
    reachable rest state?" That question has not been asked of the other couplings.
 5. **The failure pattern in my own work here** — repeatedly reporting an effect at 1-3 sigma and retracting
