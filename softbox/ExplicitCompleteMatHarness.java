@@ -242,8 +242,17 @@ public final class ExplicitCompleteMatHarness {
     // rho default 2.26 nm = equivalent disc radius of the ~1600 A^2 acto-myosin interface.
     static boolean TRIAD_ON = false;
     static double  TRIAD_RHO_NM = 2.26;
-    /** -triad-conform: lay the head-side triad vertices on the actin cylinder so head-on-site is strain-free. */
-    static boolean TRIAD_CONFORM = false;
+    // CANONICAL since 2026-09-19 (jba + independent reviewer §2/§11). The head-side triad vertices lie on the
+    // ACTIN CYLINDER, congruent to the actin-side arc, so head-on-site is a true zero-energy state. Promoted on
+    // MECHANICAL grounds -- three zero-rest springs representing a relaxed interface must possess a reachable
+    // rest state -- and explicitly NOT because it explains the unexplained roll (it does not; see JOURNAL
+    // 2026-09-19). Regression across three matched lawns: net glide +0.057 +/- 0.392 um/s (t=0.15), avgBound
+    // +0.046 +/- 0.422 (t=0.11), attachments +135 +/- 590 /s (t=0.23) -- gliding and engagement both survive.
+    // -triad-flat restores the legacy FLAT head-side triangle byte-identically, for regression only.
+    // NOTE this is NOT a dynamically neutral change: the off-equilibrium landscape differs and conform restores
+    // an axial restoring response the flat geometry structurally lacked. Every triad number recorded before
+    // this date was measured on the frustrated geometry.
+    static boolean TRIAD_CONFORM = true;
     // -triad-labpatch: REGRESSION CONTROL. Restores the legacy LAB-FIXED head-patch basis (hy = motorYVec =
     // perp3(uVec)) that the 2026-09-11 material-basis fix replaced, so the fix's own effect is measurable.
     static boolean TRIAD_LAB_PATCH = false;

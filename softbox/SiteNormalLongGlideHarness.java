@@ -268,7 +268,10 @@ public class SiteNormalLongGlideHarness {
                 case "-convaz-nocomp" -> CONV_AZ_COMP_CLI = false;
                 case "-flip-helix" -> FLIP_HELIX_CLI = true;
                 case "-triad-rho" -> ExplicitCompleteMatHarness.TRIAD_RHO_NM = Double.parseDouble(args[++i]);
+                // -triad-conform is now the DEFAULT (canonical 2026-09-19); kept as an explicit no-op so
+                // existing scripts and logs that name it keep working. -triad-flat is the regression opt-out.
                 case "-triad-conform" -> ExplicitCompleteMatHarness.TRIAD_CONFORM = true;
+                case "-triad-flat" -> ExplicitCompleteMatHarness.TRIAD_CONFORM = false;
                 case "-triad-zerostrain" -> { triadZeroStrainGate(); return; }
                 case "-triad-tiltscan" -> { triadTiltScan(); return; }
                 case "-triad-labpatch" -> ExplicitCompleteMatHarness.TRIAD_LAB_PATCH = true;   // legacy lab-fixed patch basis (regression control)
@@ -373,7 +376,9 @@ public class SiteNormalLongGlideHarness {
             System.out.printf(Locale.US, "  %-10s %14.4f %14.3e %14s%n", mode == 0 ? "OFF" : "ON",
                     ext, roll, ext < 1e-6 ? "STRAIN-FREE" : "FRUSTRATED");
         }
-        System.out.println("\n  conform=OFF is the geometry every run to date used.");
+        System.out.printf(Locale.US, "%n  RESOLVED DEFAULT for this build: conform=%s  (canonical since 2026-09-19;%n"
+                + "  -triad-flat restores the OFF row, which is the geometry every run before that date used).%n",
+                ExplicitCompleteMatHarness.TRIAD_CONFORM ? "ON" : "OFF");
     }
 
     /**
