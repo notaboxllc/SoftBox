@@ -1,4 +1,30 @@
-# Briefing: the unexplained filament roll — state as of 2026-09-18
+# Briefing: the unexplained filament roll — state as of 2026-09-20
+
+## BOTTOM LINE (read this first; everything below §5 is largely a retraction history)
+
+**There is probably no mysterious roll.** With the corrected triad, across **6 independent motor lawns**,
+the mean roll at alpha=60 / eps=0 is **+3.66 +/- 3.73 turns/s (t=0.98), 95% CI [-5.9, +13.3]** — consistent
+with zero, and the *sign has reversed*: four of six lawns are positive. Lawn 20260901, on which every
+retracted claim in §5 was measured, is the most negative of the six. The original "-9.53 turns/s, z=-3.07"
+was one draw from a distribution centred near zero with a per-lawn sd of ~9.
+
+**The lawn-to-lawn scatter is probably PHYSICAL, not an artifact.** At avgBound ~1 a single motor is attached
+at a time at some azimuth, applying an off-axis force; a filament travelling ~1.5 um over motors spaced 70 nm
+engages only a few dozen distinct ones, so a finite sample of azimuths does not average to zero. Each lawn has
+its own net torque. A real gliding assay has the same thing, which makes this a *prediction* (single-filament
+twirl should show large filament-to-filament scatter) rather than something to engineer away.
+**Testable:** if it is finite-sampling, the scatter should fall as 1/sqrt(distinct motors engaged) — with
+longer filaments, higher density, or longer travel. Not yet tested.
+
+**The conforming triad is CANONICAL** as of 2026-09-19, promoted on mechanical grounds (§3), with a clean
+paired regression (§6). **This did not fix the roll and was never claimed to.**
+
+**Methodological findings that outlive this investigation** (§4, §8): roll increments are autocorrelated so
+naive SEs understate by ~2.4x; ~73% of the variance is quenched in the motor lawn and is immune to run length;
+the unit of replication is the LAWN, not the arm; and matched-lawn pairing cancels the quenched term (measured
+2.4x reduction), which makes the **eps-odd paired estimator ~9x cheaper than absolute roll** for the twirling
+question this project actually cares about.
+
 
 **Audience:** a reviewer coming to this repo cold, asked to look over the recent work.
 **Author:** Claude Opus 5, written at jba's request for a second opinion.
@@ -190,7 +216,7 @@ arms. It is still far too small to conclude anything.
 
 **What stands:** all of §3 — the geometry, which is deterministic and involves no seeds.
 
-## 6. The causal test — FIRST PAIR IN, AND IT DISFAVOURS THE HYPOTHESIS
+## 6. The causal test — COMPLETE. The fix is mechanically right and changes nothing about the roll
 
 Matched-seed pairs of frustrated vs strain-free triad at alpha=60, 1.0 s each, same lawn, same runner.
 Scripts: `scripts/triad_conform_test.sh`, `scripts/conform_paired_seeds.sh`.
@@ -202,8 +228,23 @@ Scripts: `scripts/triad_conform_test.sh`, `scripts/conform_paired_seeds.sh`.
 | `ALPHA_LONG/ap60` | frustrated | 1.44 | 1983 | 2.088 | -9.53 | +/-3.49 |
 | `TRIAD_CONFORM/conform` | strain-free | 0.73 | 1062 | 1.467 | -10.70 | +/-4.60 |
 
-**Paired difference -1.17 turns/s.** If the frustration of §3a were the cause this should read about
-**+9.5** (roll -> 0). **Directional only — there is no error bar on a single pair.** The `+/-5.78` I first
+**FINAL, three matched lawns** (each 1.0 s; `conform - frustrated`):
+
+| lawn | frustrated | strain-free | Delta |
+|---|---:|---:|---:|
+| 20260901 | -9.53 | -10.70 | -1.17 |
+| 20260902 | +0.95 | -1.06 | -2.01 |
+| 20260903 | +4.36 | +11.89 | +7.53 |
+
+    paired effect of the fix       +1.45 +/- 3.05   t=+0.48 on 2 df
+    FRUSTRATED roll,  3 lawns      -1.41 +/- 4.18   t=-0.34
+    STRAIN-FREE roll, 3 lawns      +0.04 +/- 6.55   t=+0.01
+    paired glide change            -0.14 +/- 0.31   t=-0.46   <- REGRESSION GATE, passes
+
+Neither the treatment effect nor either absolute level is resolved, and the fix neither cured nor worsened
+the roll. **Historical note kept deliberately:** the first pair alone read -1.17 and I presented it as
+evidence *against* the frustration hypothesis; with three pairs the point estimate is +1.45, the opposite
+sign. That is reviewer note §4b demonstrated rather than argued. The `+/-5.78` I first
 quoted combined the two arms' within-arm blocked SEs, which answers a conditional question about noise on
 *this* lawn and is NOT the uncertainty of the treatment effect across lawns (reviewer note §4b). The honest
 statement: on the one lawn tested, conforming the triad did not reduce the roll. Pairs 2 and 3 (seeds
@@ -263,7 +304,94 @@ the pre-fix triad — a sign pattern to orient the search, not an effect size.
 lawn-edge asymmetry (suggestive), the RNG, and the device path. **The mystery is open, and the achirality
 that made it look like a bug is not actually established.**
 
-## 7. Where a fresh reviewer should push
+## 7. The 2x2 handedness square — COMPLETE, and defeated by its own design
+
+All four cells at matched seed 20260901, frustrated triad, GPU path, 1.0 s:
+
+| | convaz +60 | convaz -60 |
+|---|---:|---:|
+| native lattice | -9.53 | -16.42 |
+| mirrored lattice | -10.99 | -0.84 |
+
+| component | value | SE (lawn shared) | SE (not shared) |
+|---|---:|---:|---:|
+| **parity-invariant** (artifact/defect channel) | **-9.45** | 2.25 (4.2s) | 5.90 (1.6s) |
+| odd under ACTIN handedness | -3.53 | 2.25 (1.6s) | 5.90 (0.6s) |
+| odd under CONVERTER handedness | -0.82 | 2.25 (0.4s) | 5.90 (0.1s) |
+| odd under the PRODUCT | +4.26 | 2.25 (1.9s) | 5.90 (0.7s)|
+
+**No chiral component is resolved**, and the converter-odd term — the reviewer's §6 hypothesis that `convaz`
+supplies motor-side handedness — is essentially zero. The dominant term is parity-invariant, which is the
+artifact channel, **but on a single lawn that is exactly what a quenched lawn offset looks like and cannot be
+separated from one.** Lawn 20260901 is independently known to be the negative outlier (§BOTTOM LINE), so
+`R0 = -9.45` is most likely just that lawn. Separating them needs the square replicated across lawns: 4 cells
+x n lawns. Parity-even sanity holds (glide 2.088 / 1.551 / 1.434 / 1.637 um/s, avgBound 1.44 / 1.40 / 1.29 /
+1.32 — scattered, no systematic pattern).
+
+## 8. Audit: is the helix mirror complete? — and a landmine that did not fire
+
+Asked because the mirror control is load-bearing for any chirality claim. Result: **complete for the lattice
+at our settings**, with one live gap (motor-side, §7) and one residual not closed by reading.
+
+**THE LANDMINE.** `siteStairPhase(SITE_MODE)` returns pi/4 for mode 4 and pi/2 for mode 5, and when non-zero
+`ChiralSiteSystem:244` takes `ph = k*stairPhase` and **ignores `twistRate` entirely**. `-flip-helix` negates
+only `TWIST_PER_MON_DEG`. **On a stair lattice the mirror control is therefore completely INERT** — every
+EVEN/ODD number would compare two identical lattices, and it would look exactly like "the roll is achiral."
+We run `PATH_B_SITE_MODE = 3`, where `siteStairPhase` returns 0, so we are clear. Anyone using
+`-site-lattice stair9-45` or `stair9-90` is not.
+
+| element | flips with `-flip-helix`? | live at eps=0? |
+|---|---|---|
+| site azimuth `phi = twistRate*(arc-half)` | **yes** | the mirror itself |
+| `siteStairPhase` override | no | inert — mode 3 returns 0 |
+| `MIRROR_SIGN` -> `tSite = mirror*(uSite x nSite)` | no | inert — enters only as `cos(epsBind)*uSite + sin(epsBind)*tSite`, exactly `uSite` at epsBind=0 |
+| `MIRROR_SIGN` -> `candAzim = bestPhi + mirror*epsBind` | no | inert — epsBind=0 |
+| A4 axial registry `regOff = mirror*dOmega` | no | off — `REG_SWITCH_DEG = 0` |
+| `EPS_BIND / EPS_STROKE / CONV_SKEW / CONV_TRANS / F8_TAN` | no | all zero |
+| triad vertex layout | no | **achiral** — reflecting the tangential axis maps {90,210,330} onto itself under a 180 deg rotation |
+| `convaz` | **no** | **LIVE** — motor-side handedness; this is what §7 separates |
+
+`MIRROR_SIGN` also negates `chiTwist` (`ExplicitCompleteMatHarness:893`), so it partly duplicates
+`-flip-helix` anyway.
+
+**Residual not closed by reading:** `ChiralSiteSystem:375` re-seeds `headRef = tSite` when the material
+reference degenerates. That depends on `mirror` and is NOT killed by `epsBind = 0`. It should fire only when
+`headRef` goes nearly parallel to the bond axis, and it sets a transient initial condition for a restoring
+couple — but "should be rare" is an assumption. One counter would close it.
+
+**Empirical cross-check.** A correct mirror leaves every parity-EVEN scalar alone. Across four native/mirrored
+pairs: glide +0.086 +/- 0.324 (t=0.27), avgBound -0.119 +/- 0.109 (t=-1.09), flux -162 +/- 160 (t=-1.02). No
+systematic shift. This also **withdraws an earlier observation** that "flipped arms glide ~35% slower" — that
+was the two GPU pairs; the CPU pairs go the other way.
+
+## 9. The design that actually answers the twirling question
+
+Measured, not assumed. Matched-lawn pairing cancels the quenched term:
+
+    unpaired per-lawn sd (n=6 lawns)          9.13
+    paired diff sd if pairing did nothing    12.92
+    MEASURED paired diff sd (n=3 pairs)       5.28    <- 2.4x smaller
+    => quenched q = 8.34   thermal th = 3.74 turns/s
+
+The quenched torque is a property of the LAWN, not of the trajectory. So a matched-lawn `+eps` / `-eps` pair
+cancels it and the eps-odd component is limited only by the thermal term (SE per pair = th/sqrt(2) = 2.64).
+
+| target | turns/um | pairs | arms | days on 8 cores |
+|---:|---:|---:|---:|---:|
+| 3 turns/s | 2.1 | 7 | 14 | 0.6 |
+| 2 | 1.4 | 16 | 32 | 1.4 |
+| **1.5** | **1.0 (biological scale)** | **28** | **56** | **2.5** |
+| 1 | 0.7 | 63 | 126 | 5.7 |
+
+Absolute roll at the same 1 turn/um sensitivity costs ~484 lawns, ~22 days. **The eps-odd paired estimator is
+~9x cheaper**, and it is the estimator this project already established (CLAUDE.md: "gliding = eps-EVEN,
+twirling = eps-ODD"). The drift into measuring absolute roll at eps=0 happened only because we were bug-hunting.
+
+**Longer runs do not help.** The quenched term is immune to run length: per-lawn sd is 9.1 at T=1 s and 8.4 at
+T=16 s. For a fixed budget `SE^2 = (q^2*T + th^2)/B`, so SHORTER arms are strictly cheaper — T=0.25 s buys
+~2.8x the precision per core-hour. (Wants one sanity arm confirming engagement is at steady state that early.)
+
+## 10. Where a fresh reviewer should push
 
 1. **Attack §3a directly.** Is the arc-vs-chord reading right, and is `R*sin(d)*hz + R*(1-cos d)*hu` the
    correct conforming construction given `hu = -n_site`? One command, one second, no GPU. If this is wrong
@@ -271,13 +399,15 @@ that made it look like a bug is not actually established.**
 2. **Attack §4b.** The 73%-quenched claim rests on four arms at one configuration plus the fact that `seed`
    reaches `ChiralSiteHarness.build`. If it is wrong, the paired design is wrong and the retractions in §5
    are too harsh.
-3. **Find the actual cause.** §6 removes the leading suspect. What is left: a negative roll that survives
-   mirroring the lattice (weakly), survives removing the power stroke (weakly), survives making the triad
-   strain-free (one pair), and happens everywhere on the lawn. Two threads not yet pulled — (a) the azimuthal
-   frustration torque of §3b is steep and nearly odd with a zero crossing near -7 deg, so the realized mean
-   depends on where the bound head sits in azimuth, and that distribution has never been measured (the
-   `HEADAXIS_DIAG` campaign measured the AXIAL channel only); (b) nothing else in the bond has been asked
-   whether it has a reachable rest state.
+3. **Attack the "it is physical" reframing in the BOTTOM LINE.** The claim that lawn-to-lawn scatter is
+   finite-sampling of a sparse lawn is a hypothesis with one prediction — scatter ~ 1/sqrt(distinct motors
+   engaged) — and that prediction has NOT been tested. If it fails, the scatter is something else and the
+   "no mystery" conclusion weakens.
+4. **Is n=8 enough to call it?** At per-lawn sd 9.1, n=8 gives a CI half-width of ~7.7 turns/s (~5 turns/um).
+   That bounds the roll below the size we chased but nowhere near the ~1 turn/um biological scale. A null
+   there means "too small to measure at this scale", NOT "zero" — see §9 for what closing that would cost.
+5. **The §8 residual** (`headRef = tSite` re-seed) and whether any other coupling in the bond lacks a
+   reachable rest state. The triad was found by asking that question; it has not been asked elsewhere.
 4. **Is anything else in the bond similarly frustrated?** The triad was found by asking "does this have a
    reachable rest state?" That question has not been asked of the other couplings.
 5. **The failure pattern in my own work here** — repeatedly reporting an effect at 1-3 sigma and retracting
