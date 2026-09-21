@@ -332,3 +332,234 @@ direction from pair 1 alone, which is your §4b point demonstrated rather than a
 
 Unchanged from yours, with one addition: before any further mechanism work, establish across independent
 lawns whether there is a roll to explain. That is now the open question, ahead of what causes it.
+
+
+---
+
+# Reviewer update (2026-09-21): closure assessment
+
+This update responds to the 2026-09-20/21 closure of `docs/ROLL_INVESTIGATION_BRIEF.md`, including the eight-lawn corrected-triad ensemble, the completed pre-fix 2x2 square, and §9's proposed next twirling experiment.
+
+## 12. Main judgment: close the "mystery roll" bug hunt
+
+I agree with the new narrow conclusion:
+
+> **There is no evidence for a large, systematic, one-directional unphysical roll in the corrected model.**
+
+Across eight independent lawns at alpha=60, eps=0, corrected triad, the reported mean is
+
+```
++1.90 +/- 3.05 turns/s
+95% CI [-5.30, +9.11]
+```
+
+and in distance-normalized form
+
+```
++0.77 +/- 2.23 turns/um
+95% CI [-4.49, +6.04].
+```
+
+The signs are mixed (5 positive, 3 negative). This is incompatible with the earlier narrative of a robust ~-10 turns/s population-level bias. The original causal hunt was therefore aimed at a phenotype that had not first been established at the correct experimental unit.
+
+That specific bug hunt should remain **closed** unless new independent-lawn evidence re-establishes a large systematic bias.
+
+The scope statement in the brief is important and correct: this does **not** prove zero biological-scale twirl. The current confidence interval easily contains ~1 turn/um. It closes "large unphysical roll," not "any twirl."
+
+## 13. Statistical correction: lawn 20260901 is not an "outlier" because it lies outside the CI for the mean
+
+The brief currently says lawn 20260901 "sits outside the ensemble's own CI" and uses that to characterize it as an outlier.
+
+That inference is statistically incorrect. A confidence interval for the **population mean** is not a prediction interval for an individual lawn.
+
+With the reported ensemble mean +1.90 turns/s and per-lawn SD 8.63 turns/s,
+
+```
+z_lawn = (-10.70 - 1.90) / 8.63 ~= -1.46
+```
+
+so 20260901 is the most negative of the eight but is not remotely an extreme draw from the observed lawn-to-lawn distribution.
+
+Suggested replacement:
+
+> Lawn 20260901 was an unusually negative but not anomalous realization of a broad lawn-to-lawn distribution whose ensemble mean is consistent with zero.
+
+This actually strengthens the closure story: no special pathology is needed to explain the lawn that launched the investigation.
+
+## 14. "The scatter is physical" is a plausible hypothesis, not yet an established result
+
+The brief proposes that large lawn-to-lawn scatter is finite-sampling physics: with ~1 head bound at a time and only a few dozen distinct motors engaged, random azimuthal imbalance gives each finite lawn its own net torque bias.
+
+That explanation is plausible and has a clean prediction:
+
+```
+scatter ~ 1 / sqrt(N_distinct motors engaged)
+```
+
+but it has **not yet been tested**. Therefore I would distinguish:
+
+- **Established:** large lawn-to-lawn variation exists and dominates the uncertainty of absolute roll.
+- **Hypothesis:** that variation is the physically expected finite-sampling torque of a sparse motor lawn.
+- **Prediction:** increasing independent motor sampling (longer travel, more motors, etc.) reduces the scatter approximately as `1/sqrt(N_distinct)`.
+
+I would not run a new campaign solely to prove this unless filament-to-filament scatter itself becomes a paper claim. The large-unphysical-roll concern is already closed without it.
+
+## 15. Was this a wild goose chase?
+
+Mostly, in the narrow causal sense.
+
+The sequence was approximately:
+
+```
+one lawn shows large negative roll
+-> treat it as a population phenotype
+-> propose molecular/mechanical causes
+-> run many one-factor ablations
+-> discover the experimental unit was the lawn
+-> independent lawns show no large systematic roll
+```
+
+So most of the **mechanism hunt** was unnecessary.
+
+However, the investigation improved the research instrument in ways that matter beyond this question. It uncovered:
+
+1. a real deterministic triad rest-state defect;
+2. a misleading CPU/GPU execution banner;
+3. invalid independent-increment roll error bars;
+4. pseudo-replication across arms sharing one quenched lawn;
+5. an incomplete parity argument (mirroring actin alone is not mirroring the full actomyosin system);
+6. a mirror-control landmine for stair lattices;
+7. a much better understanding of how strongly quenched lawn variance controls these assays.
+
+The right retrospective is therefore:
+
+> **A largely unnecessary causal hunt produced several valuable model and methodology corrections.**
+
+The lesson is not "never investigate surprising trajectories." It is "establish the phenotype across the highest quenched level before explaining it."
+
+## 16. Permanent campaign rule recommended
+
+Before launching a mechanism campaign for any emergent observable, explicitly identify the hierarchy of stochastic/quenched replication and establish the effect at the highest relevant level.
+
+For the current gliding assays, the hierarchy includes at least:
+
+```
+output rows / timesteps
+    < attachment episodes
+        < trajectories on one frozen motor lawn
+            < independent motor lawns
+```
+
+Rows within an arm do not create independent lawns. Multiple treatment arms on one lawn do not establish a population-level absolute phenotype.
+
+Suggested gate:
+
+> **Existence gate:** no causal/mechanistic decomposition of an emergent phenotype until it is resolved across independent realizations of every quenched random structure capable of shifting its mean.
+
+Matched-lawn comparisons remain highly valuable for **treatment effects**, because pairing can cancel the lawn term. But they answer a different question from whether an absolute phenotype exists in the population.
+
+## 17. Caution on §9: the proposed sample sizes are much more uncertain than the table suggests
+
+Section 9 estimates the paired-difference SD as 5.28 turns/s from only three matched pairs and then gives exact-looking campaign sizes such as 28 pairs / 56 arms for a ~1 turn/um target.
+
+That SD estimate is still extremely uncertain.
+
+For n=3 pairs (2 degrees of freedom), a standard 95% chi-square interval around an observed SD of 5.28 turns/s is approximately
+
+```
+2.75 to 33 turns/s
+```
+
+for the underlying paired SD.
+
+Therefore "28 pairs" should be treated as a **pilot power estimate**, not a production campaign size.
+
+Recommendation:
+
+- first run a small number of short matched pairs;
+- update the paired variance estimate;
+- inspect whether the effect is even in the expected regime;
+- then decide whether extending is scientifically justified.
+
+Do not commit to a 56-arm campaign from a three-pair variance estimate.
+
+The observation that shorter arms may be more efficient when quenched variance dominates is useful, but it too should be validated with a small steady-state / short-window control before optimizing a large campaign around it.
+
+## 18. More important: be explicit about what the eps-odd estimator actually tests
+
+A matched `+eps / -eps` comparison is statistically attractive because the shared lawn cancels much of the quenched background.
+
+But the estimand is the **response to the imposed eps perturbation**.
+
+That is scientifically appropriate if the paper's question is:
+
+> Does this explicitly specified chiral motor perturbation generate the expected odd rotational response?
+
+It does **not**, by itself, answer the stronger biology-first question:
+
+> Does the unperturbed, structurally specified actomyosin model at eps=0 generate native twirling from its own geometry?
+
+This distinction matters because `EPS_BIND_DEG` / `EPS_STROKE_DEG` are explicit model inputs. An eps-odd signal can demonstrate transmission of a deliberately imposed handed bias even if the native model has no spontaneous chiral output.
+
+This does not make the eps-odd experiment invalid. It means the claim must match the estimator.
+
+### If the target is the Vilfan/helical-site mechanism
+
+If the desired paper-level claim is that **native structural helicity** produces twirling, then the clean experiment should ultimately preserve eps=0 and compare appropriately mirrored versions of the complete physical system.
+
+A matched native/enantiomer pair on the same lawn could in principle use
+
+```
+R_odd = (R_native - R_full-mirror) / 2
+```
+
+to cancel shared achiral lawn torque while isolating intrinsic structural chirality.
+
+However, the current `-flip-helix` is explicitly **not** such a full-parity transformation; the recent audit established that. A full mirror should only be built if native twirling remains a central paper claim, and its transformation rules should be specified structurally before any run.
+
+## 19. Interpretation of the completed 2x2 square
+
+The completed 2x2 on lawn 20260901 is useful as a diagnostic but should not be promoted into a mechanistic result.
+
+Its dominant parity-even component (~-9.45 turns/s) occurs on the same lawn now known to have a large negative baseline. With one lawn, parity-invariant treatment structure is inseparable from a quenched lawn offset.
+
+The square therefore demonstrates primarily that:
+
+- one-lawn symmetry decompositions cannot estimate population-level components when a large lawn intercept is present;
+- the earlier "same sign under actin flip = artifact" reasoning was invalid;
+- replicating that pre-fix square across lawns is not warranted now that the absolute mystery-roll phenotype has failed its existence gate.
+
+I would **not rerun the 2x2 on the conforming triad** merely to complete the historical story.
+
+## 20. Recommended project state now
+
+1. Keep the conforming triad canonical on mechanical grounds.
+2. Mark the large-unphysical-roll bug hunt closed.
+3. Do not investigate causes of the old ~-10 turns/s signal further.
+4. Do not test the finite-sampling scatter hypothesis unless it becomes relevant to a paper claim.
+5. Before any new twirling campaign, state the biological claim first and choose the estimator that actually tests that claim.
+6. If using eps-odd, describe it as a response to an imposed chiral perturbation unless eps itself has an independently justified structural interpretation.
+7. If the target is native helical/Vilfan twirling at eps=0, design a true full-parity matched control rather than relying on `-flip-helix` alone.
+8. Treat all campaign-size calculations based on n=3 paired variance as provisional pilots.
+
+The immediate priority should return to the broader motor-model paper rather than continuing to debug a roll pathology that is no longer observed at the population level.
+
+## 21. Housekeeping corrections suggested for the closed brief
+
+The closure document should get one cleanup pass so future readers do not have to reconstruct which statements are historical.
+
+At minimum:
+
+- replace the claim that lawn 20260901 is an "outlier" because it lies outside the confidence interval for the mean;
+- update §3 language that still says the conforming triad is default-OFF, since it became canonical on 2026-09-19;
+- remove stale §6 prose saying pairs 2 and 3 are running after their completed results are already shown;
+- clean the duplicated numbering at the end of §10;
+- clearly label the pre-closure mechanistic sections as historical/retracted where their premises depended on a population roll that is no longer established.
+
+## 22. Final assessment
+
+The best concise statement is:
+
+> **The model had a real attachment-geometry defect, but the feared large systematic roll did not survive correct replication across motor lawns. The subsequent causal hunt was mostly unnecessary, while the methodological corrections it exposed are valuable and should become permanent experimental-design rules.**
+
+The next twirling study should start from the biological claim, not from the historical anomaly.
