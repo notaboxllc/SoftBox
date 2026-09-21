@@ -1,12 +1,28 @@
-# Briefing: the unexplained filament roll — state as of 2026-09-20
+# Briefing: the unexplained filament roll — CLOSED, state as of 2026-09-20
 
 ## BOTTOM LINE (read this first; everything below §5 is largely a retraction history)
 
-**There is probably no mysterious roll.** With the corrected triad, across **6 independent motor lawns**,
-the mean roll at alpha=60 / eps=0 is **+3.66 +/- 3.73 turns/s (t=0.98), 95% CI [-5.9, +13.3]** — consistent
-with zero, and the *sign has reversed*: four of six lawns are positive. Lawn 20260901, on which every
-retracted claim in §5 was measured, is the most negative of the six. The original "-9.53 turns/s, z=-3.07"
-was one draw from a distribution centred near zero with a per-lawn sd of ~9.
+**There is no mysterious roll.** With the corrected triad, across **8 independent motor lawns** (1.0 s each,
+alpha=60, eps=0):
+
+| lawn | turns/s | turns/um | | lawn | turns/s | turns/um |
+|---|---:|---:|---|---|---:|---:|
+| 20260901 | -10.70 | -7.30 | | 20260905 | +13.65 | +8.21 |
+| 20260902 | -1.06 | -1.73 | | 20260906 | +7.32 | +4.83 |
+| 20260903 | +11.89 | +8.23 | | 20260907 | -7.27 | -8.14 |
+| 20260904 | +0.88 | +0.45 | | 20260908 | +0.49 | +1.66 |
+
+    mean  +1.90 +/- 3.05 turns/s   t = +0.62 on 7 df   95% CI [-5.30, +9.11]
+    in turns/um  +0.77 +/- 2.23                        95% CI [-4.49, +6.04]
+    per-lawn sd 8.63    sign split 5 positive / 3 negative
+
+Consistent with zero, sign split a coin flip. Lawn 20260901 — on which **every** retracted claim in §5 was
+measured — is the most negative of the eight and sits outside the ensemble's own CI. The original
+"-9.53 turns/s, z = -3.07" was one draw from a distribution centred near zero with a per-lawn sd of ~8.6.
+
+**Scope of that conclusion, stated precisely:** the CI in turns/um is [-4.5, +6.0], which does NOT exclude the
+~1 turn/um biological twirl scale. This closes *"is there a large unphysical roll"* — it does not close
+*"is there any twirl."* That second question is a different and much cheaper experiment (§9).
 
 **The lawn-to-lawn scatter is probably PHYSICAL, not an artifact.** At avgBound ~1 a single motor is attached
 at a time at some azimuth, applying an off-axis force; a filament travelling ~1.5 um over motors spaced 70 nm
