@@ -207,6 +207,30 @@ monotonicity, seed agreement) CANNOT detect this; only the organism can.
   arithmetic rather than a structure paper. If a claim rests on real geometry, get the literature FIRST — it
   defines the target the whole campaign aims at.
 
+**THE EXISTENCE GATE — establish the phenotype at the highest quenched level BEFORE explaining it
+(2026-09-21; jba + independent reviewer §16; the mystery-roll post-mortem).** Emergent observables in these
+assays sit in a hierarchy of replication:
+
+```
+output rows / timesteps  <  attachment episodes  <  trajectories on ONE frozen motor lawn  <  INDEPENDENT motor lawns
+```
+
+**Rows within an arm are not independent samples. Multiple treatment arms on one lawn are not independent
+samples.** `ChiralSiteHarness.build(seed)` lays a different motor lawn per seed, and for filament roll ~73 % of
+the variance is quenched at that level and is **immune to run length** (per-lawn sd 9.1 at T=1 s, 8.4 at 16 s).
+
+> **GATE: no causal or mechanistic decomposition of an emergent phenotype until it is resolved across
+> independent realizations of every quenched random structure capable of shifting its mean.**
+
+What it would have prevented: a week of ablations (alpha scan, stroke reversal, Brownian channels, triad
+patch) chasing a −9.53 turns/s roll that was **one lawn**. Eight independent lawns gave +1.90 ± 3.05 — no
+effect. Six of the eight arms originally pooled as independent shared seed 20260901.
+Matched-lawn pairing stays valuable for **treatment effects** (it cancels the quenched term, measured 2.4×),
+but a paired design answers a different question from whether an absolute phenotype exists in the population.
+Corollary: **a campaign size derived from an n≈3 variance estimate is a pilot, not a plan** — the 95 % χ²
+interval on σ at 2 df spans ~6×, which moved one campaign estimate from 16 to 2203 arms.
+Post-mortem: `docs/ROLL_INVESTIGATION_BRIEF.md`, `docs/ROLL_INVESTIGATION_SECOND_OPINION.md`.
+
 **Before writing code for any model change, answer:** what biological observation motivates this (citable, or
 inferred from our own model?); if it improves a number, WHY, and is that why something a real motor has; what
 does it cost in steps/s, dt and memory; and is this a structural CHOICE to be justified, or a parameter being

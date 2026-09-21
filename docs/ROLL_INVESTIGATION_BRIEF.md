@@ -17,8 +17,12 @@ alpha=60, eps=0):
     per-lawn sd 8.63    sign split 5 positive / 3 negative
 
 Consistent with zero, sign split a coin flip. Lawn 20260901 — on which **every** retracted claim in §5 was
-measured — is the most negative of the eight and sits outside the ensemble's own CI. The original
-"-9.53 turns/s, z = -3.07" was one draw from a distribution centred near zero with a per-lawn sd of ~8.6.
+measured — was an unusually negative but **not anomalous** realization of a broad lawn-to-lawn distribution:
+`z_lawn = (-10.70 - 1.90)/8.63 = -1.46`. (An earlier version of this brief called it an outlier because it
+lies outside the CI for the *mean*. That is wrong — a CI for the population mean is not a prediction interval
+for an individual lawn; reviewer note §13.) The correction *strengthens* the closure: no special pathology is
+needed to explain the lawn that launched the investigation. The original "-9.53 turns/s, z = -3.07" was simply
+one draw from a distribution centred near zero with a per-lawn sd of ~8.6.
 
 **Scope of that conclusion, stated precisely:** the CI in turns/um is [-4.5, +6.0], which does NOT exclude the
 ~1 turn/um biological twirl scale. This closes *"is there a large unphysical roll"* — it does not close
@@ -107,7 +111,7 @@ ON contrast means anything.)
 ### 3b. The fix, and what it does away from the ideal pose
 
 `-triad-conform` (`TRIAD_CONFORM`, `ExplicitCompleteMatHarness.java:246`, carried as `triP[3]`,
-**default OFF**) lays the head-side vertices on the same cylinder: `offT*hz` becomes
+**CANONICAL since 2026-09-19**; `-triad-flat` is the regression opt-out) lays the head-side vertices on the same cylinder: `offT*hz` becomes
 `R*sin(d)*hz + R*(1-cos d)*hu`, `d = offT/R`. At the canonical pose `hu = -n_site`, so the added term is the
 inward radial sag the arc has and the flat triangle lacked. Kernel change at
 `CrossBridgeSystem.java:888` (hoisted constants) and `:1000` (the anchor).
@@ -264,9 +268,8 @@ sign. That is reviewer note §4b demonstrated rather than argued. The `+/-5.78` 
 quoted combined the two arms' within-arm blocked SEs, which answers a conditional question about noise on
 *this* lawn and is NOT the uncertainty of the treatment effect across lawns (reviewer note §4b). The honest
 statement: on the one lawn tested, conforming the triad did not reduce the roll. Pairs 2 and 3 (seeds
-20260902/03) are running; the inference is the spread of `Delta_i = R_conform,i - R_frustrated,i` across
-seeds, and at the preliminary paired sd of ~7.1 that needs **5 pairs** for a 10 turns/s effect (I wrote 4;
-the arithmetic gives 4.54, and a paired-t at small n wants more, not fewer).
+20260902/03 completed and are tabulated below; the inference is the spread of
+`Delta_i = R_conform,i - R_frustrated,i` across seeds.
 
 **Do not read the engagement drop as an effect of the fix.** Binding roughly halved in the conform arm, but
 it is confounded — the conform filament wandered sideways toward the edge of the 2 um mat:
@@ -403,6 +406,38 @@ Absolute roll at the same 1 turn/um sensitivity costs ~484 lawns, ~22 days. **Th
 ~9x cheaper**, and it is the estimator this project already established (CLAUDE.md: "gliding = eps-EVEN,
 twirling = eps-ODD"). The drift into measuring absolute roll at eps=0 happened only because we were bug-hunting.
 
+### 9a. Those sample sizes are a PILOT estimate, not a campaign size (reviewer §17)
+
+The paired sd of 5.28 comes from **three** pairs. A 95% chi-square interval on the underlying sigma at 2 df is
+**[2.75, 33.2]**, which moves the pairs needed for a 1 turn/um target from **16 to 2203**. The table above is
+the point estimate and nothing more. Run a small number of short matched pairs first, re-estimate the paired
+variance, check the effect is in the expected regime, and only then size a campaign. The same applies to the
+shorter-arm efficiency claim: validate it with a short steady-state control before optimizing around it.
+
+### 9b. What the eps-odd estimator actually tests — and what it does NOT (reviewer §18)
+
+**This is the more important caveat and it was missing from my original recommendation.** A matched
+`+eps / -eps` comparison estimates the **response to an imposed chiral perturbation**. `EPS_BIND_DEG` /
+`EPS_STROKE_DEG` are explicit model inputs, so an eps-odd signal demonstrates that the model *transmits* a
+deliberately imposed handed bias. It does **not** answer the biology-first question:
+
+> does the unperturbed, structurally specified actomyosin model at eps=0 generate native twirling from its own
+> geometry?
+
+Those are different claims and the estimator must match the one being made.
+
+**Note what this implies about the work already done.** The n=8 ensemble in the BOTTOM LINE *is* the
+native-twirl measurement — absolute roll at eps=0, the right estimator for the biology-first question. It is
+simply underpowered: CI [-4.5, +6.0] turns/um against a ~1 turn/um target. Getting there by brute force costs
+~484 lawns.
+
+**The cheap route to native twirl is a TRUE FULL-PARITY mirror at matched lawns** — `R_odd = (R_native -
+R_full_mirror)/2` cancels the shared achiral lawn torque while isolating intrinsic structural chirality. The
+existing `-flip-helix` is explicitly **not** such a transform (§8 established this: it mirrors the actin
+lattice only, leaving motor-side handedness alone). Building one is a **code task** — specifying the
+transformation structurally — not a compute task, and it should only be built if native twirling remains a
+central paper claim.
+
 **Longer runs do not help.** The quenched term is immune to run length: per-lawn sd is 9.1 at T=1 s and 8.4 at
 T=16 s. For a fixed budget `SE^2 = (q^2*T + th^2)/B`, so SHORTER arms are strictly cheaper — T=0.25 s buys
 ~2.8x the precision per core-hour. (Wants one sanity arm confirming engagement is at steady state that early.)
@@ -424,8 +459,6 @@ T=16 s. For a fixed budget `SE^2 = (q^2*T + th^2)/B`, so SHORTER arms are strict
    there means "too small to measure at this scale", NOT "zero" — see §9 for what closing that would cost.
 5. **The §8 residual** (`headRef = tSite` re-seed) and whether any other coupling in the bond lacks a
    reachable rest state. The triad was found by asking that question; it has not been asked elsewhere.
-4. **Is anything else in the bond similarly frustrated?** The triad was found by asking "does this have a
-   reachable rest state?" That question has not been asked of the other couplings.
-5. **The failure pattern in my own work here** — repeatedly reporting an effect at 1-3 sigma and retracting
+6. **The failure pattern in my own work here** — repeatedly reporting an effect at 1-3 sigma and retracting
    it a few hours later — is documented as a standing issue. If a claim in this repo is not accompanied by a
    resolution statement, distrust it.

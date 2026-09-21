@@ -563,3 +563,68 @@ The best concise statement is:
 > **The model had a real attachment-geometry defect, but the feared large systematic roll did not survive correct replication across motor lawns. The subsequent causal hunt was mostly unnecessary, while the methodological corrections it exposed are valuable and should become permanent experimental-design rules.**
 
 The next twirling study should start from the biological claim, not from the historical anomaly.
+
+---
+
+# Reply from Claude Code (2026-09-21): closure round
+
+Their text above is unmodified. Actions in commit below; all corrections accepted.
+
+## Accepted and fixed
+
+**§13 — "outlier" was a statistical error.** Correct, and it is the kind I should not be making. I used a CI
+for the *population mean* as though it were a prediction interval for an individual lawn. `z_lawn =
+(-10.70 - 1.90)/8.63 = -1.46` — the most negative of eight, not anomalous. The brief now says so, and adopts
+your point that this *strengthens* the closure: no special pathology is needed to explain the lawn that
+launched the investigation.
+
+**§17 — the §9 sample sizes were spurious precision.** Verified your chi-square interval exactly: observed
+paired sd 5.28 at 2 df gives sigma in **[2.75, 33.2]**, which moves the pairs needed for a 1 turn/um target
+from **16 to 2203**. A new §9a says the table is a point estimate and nothing more, and that the shorter-arm
+efficiency claim needs its own short steady-state control before anything is optimized around it.
+
+**§21 — housekeeping.** All five done: the outlier claim, §3's stale "default OFF" (canonical since
+2026-09-19), §6's stale "pairs are running", the duplicated numbering in the push list, and historical
+labelling.
+
+**§19 — the 2x2.** Agreed, not rerunning it on the conforming triad.
+
+**§14 — the finite-sampling hypothesis.** Agreed on the three-way split, and it was already flagged as an
+untested prediction in the push list rather than asserted. Not running a campaign for it.
+
+## §18 is the most important thing in this review and I had it wrong
+
+I recommended the eps-odd paired estimator as "the design that actually answers the twirling question." It
+does not. It estimates the **response to an imposed chiral perturbation** — `EPS_BIND_DEG` / `EPS_STROKE_DEG`
+are explicit model inputs, so an eps-odd signal shows the model *transmits* a deliberately imposed handed
+bias, which is a weaker and different claim from native structural twirling. New §9b states that.
+
+**One thing worth adding to your framing.** The n=8 ensemble we just ran *is* the native-twirl experiment —
+absolute roll at eps=0 is the correct estimator for the biology-first question. It is simply underpowered:
+CI [-4.5, +6.0] turns/um against a ~1 turn/um target, and brute force costs ~484 lawns.
+
+So the cheap route to native twirl is the one you point at in §18: a **true full-parity mirror** at matched
+lawns, `R_odd = (R_native - R_full_mirror)/2`, cancelling the shared achiral lawn torque while isolating
+intrinsic structural chirality. Our §8 audit already established that `-flip-helix` is not such a transform.
+**That makes it a code task — specifying the transformation structurally — not a compute task**, which is a
+much better place to spend effort than any of the campaigns in §9. It should only be built if native twirling
+stays a central paper claim.
+
+## §16 adopted into the permanent rules
+
+The existence gate is now in `CLAUDE.md` under the model-development discipline, with the replication
+hierarchy, the measured quenched fraction, what it would have prevented, and the corollary from §17 that an
+n≈3 variance estimate is a pilot rather than a plan. That is the durable output of this episode.
+
+## On §15
+
+Agreed, including the phrasing. One addition for the record: the hunt was not merely unnecessary, it was
+*self-reinforcing* — every one-factor ablation ran on the same lawn, so each returned a large effect that
+appeared to corroborate the last. A one-lawn design cannot fail to look consistent. That is what the existence
+gate is really protecting against, more than the wasted compute.
+
+## Where this leaves the project
+
+Aligned with your §20. The roll hunt is closed, the conforming triad stays canonical on mechanical grounds,
+and the next twirling work should start from the biological claim and pick its estimator to match — with the
+full-parity mirror as the first thing to build if that claim is native twirling.
