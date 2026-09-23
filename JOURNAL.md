@@ -1,5 +1,31 @@
 # Soft Box Project Journal
 
+### 2026-09-23 — TWIRL: the diffusive background is REAL ROTATIONAL BROWNIAN MOTION; the few-head regime cannot show twirl
+
+**Resume point: `docs/TWIRL_SESSION_HANDOFF.md` — read it first.** Next action is committed and ready:
+`./scripts/rollclamp_twirl.sh` (7 arms, ~1 day), launched-but-stopped before a reboot; none of it ran.
+
+**THE FINDING.** The eps=0 "diffusive twirl" is not an artefact — it is free rotational Brownian motion,
+and our runs reproduce the analytic value: `gamma_roll = 4*pi*eta*L*R^2 = 3.24e-24 N.m.s` (the `R^2` is
+the point — actin is 3.5 nm thin), `D_roll = kT/gamma = 1278 rad^2/s`, giving **8.05 turns RMS at 1 s
+against our measured 6.87**. A 2.1 um filament held by ~1 bound head genuinely tumbles several turns per
+second, so a ~1 turn/um twirl would need ~95 s on a ~286 um mat.
+
+**THE REAL ASSAY ESCAPES THIS VIA ENGAGEMENT, NOT DRAG.** A 20 um filament in water has about the same
+`gamma_roll` as ours (10x length cancels 10x viscosity). What differs is that at full lawn density 10-50
+heads are bound at once and the cross-bridges clamp roll to a rigid surface — both what makes twirl
+observable and what generates it. **We deliberately run avgBound ~1, which is exactly the regime where
+roll is unconstrained and twirl is unmeasurable.** That is a scoping statement about what this model can
+be asked and it outlives the twirl question. Hence the new design: density 800 (avgBound ~6-10, jba's
+publication density) plus `-norollbrownian` as a background-free diagnostic readout of the chiral torque.
+
+**ALSO THIS SESSION.** Conforming triad promoted to canonical on mechanical grounds (2026-09-19; it does
+NOT explain the roll). Runner/mat benchmark on an idle machine: GPU rate ~ N^-0.38 (the device cull MASKS),
+CPU ~ N^-0.19 (it COMPACTS), GPU still wins ~2.9x everywhere realistic; `-workers 8` slower than `-workers 4`.
+`-noise-seed` added (keys the RNG independently of the lawn) — and was silently INERT on first attempt
+because this harness has its own duplicate step loop, the third such incident; resolved values are now
+echoed in the banner.
+
 ### 2026-09-18 — THE TRIAD HAD NO REACHABLE REST STATE; and every roll error bar to date was wrong
 
 Two independent defects found while chasing the achiral roll. **Read the retraction list before trusting
