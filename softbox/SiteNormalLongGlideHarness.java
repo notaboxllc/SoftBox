@@ -308,6 +308,8 @@ public class SiteNormalLongGlideHarness {
                                      ExplicitCompleteMatHarness.RIGOR_ON = true;
                                      ExplicitCompleteMatHarness.ADP_RUP_ON = false; }
                 case "-randbase-seed" -> ExplicitCompleteMatHarness.RAND_BASE_SEED = Integer.parseInt(args[++i]);
+                // SAME lawn, DIFFERENT noise stream — the control for whether matched-lawn pairing works.
+                case "-noise-seed" -> ExplicitCompleteMatHarness.NOISE_SEED = Integer.parseInt(args[++i]);
                 // A silently-swallowed unknown flag has now cost two campaign relaunches (a stale build
                 // missing -mirror/-target, and -norollbrownian clobbered by cfg()). Anything that LOOKS like
                 // a flag but matched no case is almost always a typo or a stale binary: say so loudly.
@@ -552,6 +554,9 @@ public class SiteNormalLongGlideHarness {
         ExplicitCompleteMatHarness.setBrownianPolicy(FIL_BROWN_ALL, FIL_BROWN_ALL,
                 FIL_BROWN_ALL && ROLL_BROWN, FIL_BROWN_ALL, true, true);
         System.out.printf(Locale.US, "  BROWNIAN POLICY: %s%n", ExplicitCompleteMatHarness.brownianPolicyString());
+        System.out.printf(Locale.US, "  RNG KEYING: lawn seed %d ; per-step RNG seed %d%s%n",
+                SEED, ExplicitCompleteMatHarness.rngSeed(SEED),
+                ExplicitCompleteMatHarness.rngSeed(SEED) != SEED ? "  (-noise-seed: SAME LAWN, DIFFERENT NOISE)" : "");
         var Gs = ChiralSiteHarness.build(seed);
         // The rigor kernel gates on the DATA field rigorParams[0] (NucleotideCycleSystem:519), not on the Java
         // static RIGOR_ON — setting the static alone dispatches the rigor kernel but it then takes the branch its
@@ -859,8 +864,13 @@ public class SiteNormalLongGlideHarness {
         int t = t0;
         for (; t < STEPS; t++) {
             if (GPU_MODE) {
-                e.matc.set(0, t); e.matc.set(1, SEED);
-                G.mot.setCounts(t, SEED, nSeg); G.fil.counts.set(1, t); G.fil.counts.set(2, SEED);
+                // RNG KEYING, NOT THE LAWN. -noise-seed routes through rngSeed() so the per-step Brownian +
+                // chemistry stream can be changed while build(SEED) keeps the SAME motor lawn. This loop is a
+                // DUPLICATE of the one in ExplicitCompleteMatHarness; patching only that one left -noise-seed
+                // silently inert (caught by two arms coming back byte-identical -- the -dtheta failure mode).
+                int rs = ExplicitCompleteMatHarness.rngSeed(SEED);
+                e.matc.set(0, t); e.matc.set(1, rs);
+                G.mot.setCounts(t, rs, nSeg); G.fil.counts.set(1, t); G.fil.counts.set(2, rs);
                 gpuPlan.execute();
                 if ((t & 1023) == 0) drainPlanResults(gpuPlan);
                 // TornadoExecutionPlan.execute() UNCONDITIONALLY builds a trace String

@@ -409,6 +409,19 @@ public final class ExplicitCompleteMatHarness {
     static boolean HEAD_TILT_AXIS_FIX = true;
     static boolean RAND_BASE_AZ = false;     // -randomize-motor-base-azimuth (SCENE control, not physics)
     static int     RAND_BASE_SEED = 20260724;
+    // NOISE_SEED (-noise-seed) — key the per-step RNG (Brownian + chemistry) on a DIFFERENT integer from the
+    // one that lays the motor lawn. build(seed) keeps the lawn; only the (slot, step, runSeed) RNG keying moves.
+    //
+    // WHY (jba, 2026-09-22). The matched-lawn paired design assumes roll = L(lawn) + S(treatment) with L shared
+    // between the two arms of a pair. jba's objection: L is not a property of the lawn, it is a property of the
+    // filament's PATH THROUGH the lawn — the effective lawn is the LOCAL one. Two arms that decorrelate sample
+    // different local motor arrangements, so L does not fully cancel and the pairing gain is smaller than the
+    // simple model claims. This knob gives the decisive control: SAME lawn, SAME treatment, DIFFERENT noise
+    // stream. The spread of that pair is the part of the paired variance that pairing can NEVER remove.
+    static final int NOISE_SEED_UNSET = Integer.MIN_VALUE;
+    static int     NOISE_SEED = NOISE_SEED_UNSET;
+    /** RNG keying seed: NOISE_SEED when set, else the lawn seed (exact no-op by default). */
+    static int rngSeed(int lawnSeed) { return NOISE_SEED != NOISE_SEED_UNSET ? NOISE_SEED : lawnSeed; }
     // ---- TRUE LOCAL-FRAME ROTATION OF THE CONVERTER POWER STROKE (noncanonical, default-off) ----------------
     // A DIFFERENT mechanism from EPS_BIND_DEG / EPS_STROKE_DEG, which are actin-SIDE attachment-position offsets.
     // This one rotates the MOTOR-SIDE converter stroke plane itself, in the local actin-site frame, so the whole
@@ -1221,7 +1234,7 @@ public final class ExplicitCompleteMatHarness {
     /** CPU-runner = the complete explicit mat step as plain-Java kernel calls (pre-bound, chemistry fixed, no bind search). */
     static void stepExCPU(ExMat e, int t, int seed) {
         Glide2D G = e.G; FilamentStore f = G.fil; MotorStore mot = G.mot; RigidRodBody b = mot.body;
-        e.matc.set(0, t); e.matc.set(1, seed); mot.setCounts(t, seed, e.nSeg); f.counts.set(1, t); f.counts.set(2, seed);
+        e.matc.set(0, t); e.matc.set(1, rngSeed(seed)); mot.setCounts(t, rngSeed(seed), e.nSeg); f.counts.set(1, t); f.counts.set(2, rngSeed(seed));
         TwoBodyBeamAnalyticGpu.matBeamGeom(e.nodes, e.frame, e.params, e.q, e.exCounts, e.outGeom, e.convF);
         TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit(e.outGeom, e.boundSeg, e.eupP, e.exCounts, b.coord, b.uVec, b.yVec);
         CrossBridgeSystem.bondForces(b.coord, b.uVec, b.yVec, b.bRotGam, f.coord, f.uVec, f.yVec, f.bRotGam, f.segLength, mot.boundSeg, mot.bindArc, mot.nucleotideState, G.bondData, G.xbParams);
@@ -1322,7 +1335,7 @@ public final class ExplicitCompleteMatHarness {
         log.append("## §7 one complete explicit mat step (CPU-runner vs GPU, N=" + N + ", 1 pre-bound motor, Brownian on)\n");
         boolean lowered = true; String err = null;
         try {
-            ed.matc.set(0, 0); ed.matc.set(1, seed); Gd.mot.setCounts(0, seed, nSeg); Gd.fil.counts.set(1, 0); Gd.fil.counts.set(2, seed);
+            ed.matc.set(0, 0); ed.matc.set(1, rngSeed(seed)); Gd.mot.setCounts(0, rngSeed(seed), nSeg); Gd.fil.counts.set(1, 0); Gd.fil.counts.set(2, rngSeed(seed));
             plan.execute();
         } catch (Throwable ex) { lowered = false; Throwable r = root(ex); err = r.getClass().getName() + ": " + oneLine(r.getMessage()); }
         if (!lowered) { log.append("- GRAPH LOWERS: **NO** — " + err + "\n"); System.out.println("  §7 graph LOWERS: NO — " + err); return false; }
@@ -1337,7 +1350,7 @@ public final class ExplicitCompleteMatHarness {
         log.append("## §8 multi-step complete-mat trajectory (" + steps + " steps, CPU-runner vs GPU)\n");
         int firstDiv = -1; double maxNode = d1[0], maxFil = d1[3];
         for (int t = 1; t < steps; t++) {
-            ed.matc.set(0, t); ed.matc.set(1, seed); Gd.mot.setCounts(t, seed, nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, seed);
+            ed.matc.set(0, t); ed.matc.set(1, rngSeed(seed)); Gd.mot.setCounts(t, rngSeed(seed), nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, rngSeed(seed));
             try { plan.execute(); } catch (Throwable ex) { Throwable r = root(ex); log.append("- device execute FAILED @t=" + t + ": " + oneLine(r.getMessage()) + "\n"); System.out.println("  execute FAILED @t=" + t); return false; }
             stepExCPU(ec, t, seed);
             double[] dt = compare(ec, ed, Gc, Gd, mBound);
@@ -1420,7 +1433,7 @@ public final class ExplicitCompleteMatHarness {
 
     static void stepGlidingCPU(ExMat e, int t, int seed, MatCullPlan cp) {
         Glide2D G = e.G; FilamentStore f = G.fil; MotorStore mot = G.mot; RigidRodBody b = mot.body; int N = e.N;
-        e.matc.set(0, t); e.matc.set(1, seed); mot.setCounts(t, seed, e.nSeg); f.counts.set(1, t); f.counts.set(2, seed);
+        e.matc.set(0, t); e.matc.set(1, rngSeed(seed)); mot.setCounts(t, rngSeed(seed), e.nSeg); f.counts.set(1, t); f.counts.set(2, rngSeed(seed));
         if (cp == null) { for (int m = 0; m < N; m++) e.active.set(m, 1); }   // no-cull (far motors fail the gate anyway)
         else {
             MatSoaSlice.matCull(mot.boundSeg, cp.site, f.coord, f.uVec, f.segLength, cp.cullP, cp.mc, e.active);
@@ -1775,7 +1788,7 @@ public final class ExplicitCompleteMatHarness {
         long cBinds = 0, cDetach = 0; int[] prevBc = new int[N]; for (int m = 0; m < N; m++) prevBc[m] = -1;
         int firstDiv = -1; double maxFil = 0; int nbC = 0, nbD = 0, invalid = 0;
         for (int t = 0; t < steps; t++) {
-            ed.matc.set(0, t); ed.matc.set(1, seed); Gd.mot.setCounts(t, seed, nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, seed);
+            ed.matc.set(0, t); ed.matc.set(1, rngSeed(seed)); Gd.mot.setCounts(t, rngSeed(seed), nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, rngSeed(seed));
             try { plan.execute(); } catch (Throwable ex) { log.append("- execute FAILED @t=" + t + ": " + oneLine(root(ex).getMessage()) + "\n"); System.out.println("  execute FAILED @t=" + t); return false; }
             stepGlidingCPU(ec, t, seed);
             nbC = (int) ec.redOut.get(0); nbD = (int) ed.redOut.get(0);
@@ -1916,7 +1929,7 @@ public final class ExplicitCompleteMatHarness {
             // drive thetaS + boundSeg on both runners
             for (Object[] pr : new Object[][]{ { ec, Gc }, { ed, Gd } }) { ExMat e = (ExMat) pr[0]; Glide2D G = (Glide2D) pr[1];
                 e.q.set(2 * N + mB, th); e.boundSeg.set(mB, bs); G.mot.boundSeg.set(mB, bs); e.active.set(mB, bs >= 0 ? 1 : 0); }
-            ed.matc.set(0, t); ed.matc.set(1, seed); Gd.mot.setCounts(t, seed, nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, seed);
+            ed.matc.set(0, t); ed.matc.set(1, rngSeed(seed)); Gd.mot.setCounts(t, rngSeed(seed), nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, rngSeed(seed));
             try { plan.execute(); } catch (Throwable ex) { log.append("- execute FAILED @t=" + t + ": " + oneLine(root(ex).getMessage()) + "\n"); return false; }
             stepExCPU(ec, t, seed);
             double[] d = compare(ec, ed, Gc, Gd, mB); maxNode = Math.max(maxNode, d[0]); if (firstDiv < 0 && d[0] > 1e-6) firstDiv = t;
