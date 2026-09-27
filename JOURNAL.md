@@ -1,5 +1,63 @@
 # Soft Box Project Journal
 
+### 2026-09-26 (later) — long-glide GPU path 5.7x faster (35 -> 199 steps/s at 96k motors), all byte-identical
+
+Profiled the 96k-motor twirl run (stack sampling + a new `-kprofile <n>` per-task TornadoVM profile; the profile
+log ACCUMULATES every execute, so parse only the last record). Four default-off `SiteNormalLongGlideHarness` flags,
+each gated byte-identical on trajectory rows (and frames) vs the path before it:
+
+| flag | what | where the time was | gate |
+|---|---|---|---|
+| `-resident` | motor/filament state uploaded once, not every step | ~10% | GPU d200 |
+| `-chunkocc` | `siteOccupancyResolve` / `matSurfaceStericPrune` (single-thread serial over ALL N) skip empty 256-motor blocks via a parallel `ChiralSiteSystem.occChunkFlags` pre-pass writing bits into the stats-array tail; stats arrays of size 4 (every other caller) => unchanged. Also the host census skips blocks bound neither now nor last step | 10.5 of 12.4 ms/step GPU; ~65% of host after the next fix | GPU d800 (43 captures), CPU d800 (31) |
+| `-leanreadback` | per-step copy-back only what the loop reads (~6 of 41 MB); frame/checkpoint/milestone/coverage state `UNDER_DEMAND`, pulled lazily | ~7 ms/step copy-out | GPU rows + 6 frames |
+
+**Correction logged:** the first stack profile's 57% "host->device copy" was kernel-ARGUMENT writes at each launch,
+which wait on queued kernels -- i.e. mostly GPU time. The handoff's "the device cull MASKS" explanation was also
+not the cost (an early-returning thread is ns); the cost was the two single-thread serial resolvers.
+**Pre-existing issues found (not fixed except as noted):** (1) GPU-path checkpoints never copied back `justBound`,
+`prevBound`, `prevNuc`, `avgInit`, `cooldown`, `forceDotAvg`, so resuming from one was not exact -- `-leanreadback`
+pulls them before `writeState`; (2) **runner ORDER mismatch**: `stepGlidingCPU` runs `surfPrune` AFTER `chem`/
+`strokeSkew`, `buildGlidingGraph` runs it BEFORE `chem` -- a candidate cause of the not-green bound-branch CPU/GPU gate.
+Long run relaunched with all flags: **198.7 steps/s, 3.5 s in ~1.6 days** (was ~9.3).
+
+### 2026-09-26 — long twirl run 1 stopped at the lawn edge; relaunched on a 6 um-wide lawn (slow: ~35 steps/s)
+
+**Run 1** (`d800_epsM1p25_fdt`, 20 x 2 um lawn, eps -1.25, roll Brownian ON): drifted ~1 um sideways in 1.7 s
+and rode the lawn y-edge from **1.72 s** (glide 3.57 -> 2.61 um/s, avgBound falling); stopped at 2.35 s (the
+JVM wedged in TornadoVM on SIGTERM -- main stuck in `TaskGraph.execute`, shutdown hook joined on it -- SIGKILLed,
+no hs_err, GPU clean). **On-lawn: +11.9 turns left-handed, +6.9 +/- 3.1 turns/s, 1.94 +/- 0.86 turns/um
+(2.3 sigma, blocked SE not plateaued => optimistic).** Consistent with the structural prediction (~1.7-2.0) and
+Beausang's ~2.1, NOT resolved. Not a clean persistent twirl: eighths +4.0 +3.3 -0.6 +0.2 +4.5 -3.0 +1.7 +1.5 --
+a weak left-handed bias under +/-3-turn thermal tumbling (eps=4 rolled ~3x faster, 7-8/8 slices monotone).
+
+**Run 2** (`d800_epsM1p25_fdt_maty6`): 20 x 6 um lawn (96000 motors), heap 10G, new **`-stop-offlawn <um>`**
+(harness: stop_reason OFF_LAWN once yMargin < -um, checked on the trajectory row; default NaN = off, echoed in
+the banner). **Measured 35 steps/s, NOT the ~65 extrapolated from rate ~ N^-0.38** (3x motors cost ~2.8x) and
+the GPU sits ~55% busy => some host-side cost scales with N. 3.5 s = ~9.3 days (~3.3 sigma if the twirl is
+~2 turns/um); 3 sigma ~2.9 s ~7.7 days. Open: profile the N-scaling host cost; a 16 um-long lawn saves ~20%.
+
+### 2026-09-24 — ROLLCLAMP_TWIRL stopped at 0.32 s; ONE long FDT twirl run parked at the structural eps
+
+**ROLLCLAMP_TWIRL (7 arms, one lawn, roll Brownian OFF, stopped by jba's call at ~0.32 s).** The imposed stroke
+skew becomes PERSISTENT filament roll, visible in single trajectories (d800 eps+4 7/8 octants negative, eps-4
+8/8 positive). eps_odd: d800 **-20.7 +/- 2.9 turns/s (7.2 sigma)**, d200 -13.6 +/- 3.5 (3.9 sigma); eps-even
+consistent with zero at both. **Per distance glided the response is ~density-flat: -5.6 (d800) vs -6.3 (d200)
+turns/um**, i.e. ~1.4-1.6 turns/um/deg. Per stroke, BOTH glide (~1.0 -> 0.4 nm) and roll (~2.2 -> 0.82 deg,
+55% -> 20% of eps) fall ~2.5x as avgBound goes 1.6 -> 6.2: engagement constrains roll and glide EQUALLY, so
+turns/s rises only because strokes/s rises ~4x. jba's hypothesis (twirl falls/saturates with avgBound) is
+therefore untested in turns/um beyond two densities, one lawn each. Roll-Brownian OFF bought only ~10% less
+roll noise (0.065-0.068 vs 0.073 per row) -- the direct thermal roll torque is NOT the dominant roll noise.
+
+**Parked: `scripts/twirl_long_structural.sh`** -- d800, eps **-1.25 deg** (structural: the motor-side F8-anchor
+tangential shift, docs/twirl/ACTIN_SITE_LATTICE_LITERATURE_BASIS.md s7.4.1; sign chosen LEFT-handed: +roll is
+right-handed about +x = barbed, glide is -x, so +roll = omega antiparallel to v), roll Brownian ON, 20 x 2 um
+mat (32000 motors), 3.5 s, rhodamine probes x8 (exag 11.4x) + JSON every 1 ms (~580 KB/frame, ~2 GB).
+Measured **88 steps/s alone => 3.7 days**. Expected single-trajectory SNR ~1.8*sqrt(T). **RISK:** the lawn is
+only 2 um wide and past d800 runs drifted up to 0.4 um laterally / 3-7 deg heading per 1.3 um of travel; a
+watcher flags yMargin < 0.2 um (the harness has no off-lawn stop). The printed "lawn margin -7.053" is a
+formula artifact (assumes a centred filament); the real end-of-run axial margin is ~1.45 um.
+
 ### 2026-09-23 — TWIRL: the diffusive background is REAL ROTATIONAL BROWNIAN MOTION; the few-head regime cannot show twirl
 
 **Resume point: `docs/TWIRL_SESSION_HANDOFF.md` — read it first.** Next action is committed and ready:

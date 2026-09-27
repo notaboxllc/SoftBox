@@ -1,6 +1,9 @@
 package softbox;
 
 import uk.ac.manchester.tornado.api.TornadoExecutionPlan;
+import uk.ac.manchester.tornado.api.TornadoProfilerResult;
+import uk.ac.manchester.tornado.api.TornadoExecutionResult;
+import uk.ac.manchester.tornado.api.enums.ProfilerMode;
 import uk.ac.manchester.tornado.api.types.arrays.*;
 
 import java.io.IOException;
@@ -59,6 +62,13 @@ public class SiteNormalLongGlideHarness {
     static int          FIL_SEGS = 12;                             // ~2.106 µm flexible chain
     static final int    MAX_STEPS = 1_000_000;                     // 2.5 s simulated
     static double TARGET_UM = 2.000;                               // success / reversal threshold (-target)
+    // -stop-offlawn <um>: end the run (stop_reason OFF_LAWN) once the filament's lateral margin to the lawn
+    // y-edge falls below -<um>, i.e. part of it has left the lawn and binding decays for want of motors, not
+    // motor physics. Checked on the CKPT_EVERY trajectory row. NaN = off (default; historical behaviour).
+    static double OFFLAWN_STOP_UM = Double.NaN;
+    // -kprofile <n>: DIAGNOSTIC. After 200 warm steps, run <n> steps with the TornadoVM profiler (SILENT) and print
+    // the per-task device kernel time, total device-kernel time, bytes copied and wall per step. Default 0 = off.
+    static int KPROF = 0;
     static final int    CKPT_EVERY = 10_000;                       // progress.json + trajectory row
     static final int    STATE_EVERY = 25_000;                      // resumable binary checkpoint
     static final int    VIZ_STRIDE_DEFAULT = 250;                  // decimated long movie
@@ -299,6 +309,11 @@ public class SiteNormalLongGlideHarness {
                 // -viz-postsub 1 emits EVERY motor as an anchor post so the lawn is actually visible.
                 case "-viz-showr" -> SHOW_R = Double.parseDouble(args[++i]);
                 case "-viz-postsub" -> POST_SUB = Math.max(1, Integer.parseInt(args[++i]));
+                case "-kprofile" -> KPROF = Integer.parseInt(args[++i]);
+                case "-leanreadback" -> ExplicitCompleteMatHarness.GLIDE_LEAN = true;
+                case "-chunkocc" -> ExplicitCompleteMatHarness.CHUNK_OCC = true;
+                case "-resident" -> ExplicitCompleteMatHarness.GLIDE_RESIDENT = true;
+                case "-stop-offlawn" -> OFFLAWN_STOP_UM = Double.parseDouble(args[++i]);
                 case "-target" -> TARGET_UM = Double.parseDouble(args[++i]);   // skip the per-step pre-trigger ring (~2x on viz runs)
                 // DIAGNOSTIC: enable the rigor mechanical-rupture pathway. RUPTURE_MODE's *parsed* default is 1
                 // (canon v2), but that parse lives in ExplicitCompleteMatHarness.runProductionCell, which this
@@ -492,6 +507,17 @@ public class SiteNormalLongGlideHarness {
                 : "native (phi_pre, psiActin, chi=0)");
         System.out.printf(Locale.US, "  max %d steps = %.3f s simulated ; STOP at |forward| >= %.3f um%n",
                 STEPS, STEPS * DT, TARGET_UM);
+        System.out.println("  OCC RESOLVERS = " + (ExplicitCompleteMatHarness.CHUNK_OCC
+                ? "BLOCK-SKIPPING (-chunkocc, " + ChiralSiteSystem.OCC_CHUNK + "-motor blocks; decision-identical)"
+                : "FULL SERIAL SCAN (historical)"));
+        System.out.println("  READBACK      = " + (ExplicitCompleteMatHarness.GLIDE_LEAN
+                ? "LEAN (-leanreadback: per-step only what the loop reads; frame/checkpoint state pulled on demand)"
+                : "FULL every step (historical)"));
+        System.out.println("  DEVICE STATE  = " + (ExplicitCompleteMatHarness.GLIDE_RESIDENT
+                ? "RESIDENT (-resident: motor/filament state uploaded once, copied back each step)"
+                : "RE-UPLOADED EVERY STEP (historical validation-mode transfers)"));
+        System.out.println(Double.isNaN(OFFLAWN_STOP_UM) ? "  OFF-LAWN STOP = off"
+                : String.format(Locale.US, "  OFF-LAWN STOP = yMargin < -%.3f um", OFFLAWN_STOP_UM));
         System.out.println();
     }
 
@@ -837,6 +863,7 @@ public class SiteNormalLongGlideHarness {
         // Averaged over segments = the filament's net twist. Reported as turns and as turns per um of travel,
         // the metric the viscosity/mirror twirling work uses.
         double rollAcc = 0; double[][] prevY = new double[nSeg][3];
+        double lastYMargin = Double.POSITIVE_INFINITY;
         for (int s2 = 0; s2 < nSeg; s2++) ChiralSiteHarness.seedPrevY(G.fil, s2, prevY[s2]);
         // force-excursion telemetry
         long fx12 = 0, fx50 = 0, fx200 = 0, fxEpisodes = 0; boolean inExcursion = false;
@@ -845,6 +872,17 @@ public class SiteNormalLongGlideHarness {
         int forceStrikes = 0;
         int[] prevBs = new int[N], age = new int[N], prevNu = new int[N];
         for (int m = 0; m < N; m++) { prevBs[m] = G.mot.boundSeg.get(m); prevNu[m] = G.mot.nucleotideState.get(m); age[m] = -1; }
+        // CENSUS BLOCK-SKIP (-chunkocc): every census quantity comes from motors bound NOW or bound LAST step. The
+        // device's per-block "any bound" bits (siteStats tail, computed after the last bind and before any unbind,
+        // copied back each step) are a superset of NOW; prevBlk carries LAST. Blocks are visited in ascending motor
+        // order, so every floating-point sum accumulates in the same order: byte-identical rows. A motor bound in
+        // neither step needs no update (its prevBs/age are already -1; its prevNu is only read after a bound step).
+        final int CCH = ChiralSiteSystem.OCC_CHUNK, nCBlk = (N + CCH - 1) / CCH;
+        final boolean censusSkip = ExplicitCompleteMatHarness.chunkOccWired() && ExplicitCompleteMatHarness.chiralOn()
+                && e.siteStats.getSize() == 4 + nCBlk && !HEADAXIS_CLI;
+        boolean[] visitBlk = new boolean[nCBlk], prevBlk = new boolean[nCBlk];
+        for (int m = 0; m < N; m++) if (prevBs[m] >= 0) prevBlk[m / CCH] = true;
+        System.out.println("  CENSUS        = " + (censusSkip ? "BLOCK-SKIP (bound-now | bound-last blocks only)" : "FULL SCAN"));
         double[] cPrev = c0.clone();
         ArrayDeque<double[]> win = new ArrayDeque<>();     // rolling (t, fwd) for the windowed velocity
         List<double[]> milestones = new ArrayList<>();
@@ -871,7 +909,9 @@ public class SiteNormalLongGlideHarness {
                 int rs = ExplicitCompleteMatHarness.rngSeed(SEED);
                 e.matc.set(0, t); e.matc.set(1, rs);
                 G.mot.setCounts(t, rs, nSeg); G.fil.counts.set(1, t); G.fil.counts.set(2, rs);
-                gpuPlan.execute();
+                if (KPROF > 0 && t >= t0 + 200 && t < t0 + 200 + KPROF) LAST_RES = kprofStep(gpuPlan, t - t0 - 200);
+                else LAST_RES = gpuPlan.execute();
+                LAST_T = t;
                 if ((t & 1023) == 0) drainPlanResults(gpuPlan);
                 // TornadoExecutionPlan.execute() UNCONDITIONALLY builds a trace String
                 // (getTraceExecutionPlan -> GridScheduler.toString) and appends the result to its internal
@@ -894,8 +934,13 @@ public class SiteNormalLongGlideHarness {
             // ---- per-step motor census -------------------------------------------------------------
             int nb = 0; double faxSum = 0, faxP = 0, faxN2 = 0, maxFstep = 0; int maxFm = -1;
             java.util.HashSet<Integer> sites = new java.util.HashSet<>();
+            if (censusSkip) {
+                for (int b = 0; b < nCBlk; b++) { visitBlk[b] = prevBlk[b] || (e.siteStats.get(4 + b) & 2) != 0; prevBlk[b] = false; }
+            }
             for (int m = 0; m < N; m++) {
+                if (censusSkip && !visitBlk[m / CCH]) { m = (m / CCH) * CCH + CCH - 1; continue; }
                 int bs = G.mot.boundSeg.get(m), nu = G.mot.nucleotideState.get(m);
+                if (censusSkip && bs >= 0) prevBlk[m / CCH] = true;
                 if (bs >= 0 && prevBs[m] < 0) captures++;
                 if (bs < 0 && prevBs[m] >= 0) {
                     detach++;
@@ -1089,6 +1134,7 @@ public class SiteNormalLongGlideHarness {
         double wall = (System.currentTimeMillis() - wall0) / 1000.0;
                 double vfit = lsSlope(sN, sT, sT2, sX, sTX), vwin = slope(win);
                 double avgB = (double) boundStepsAcc / (t - t0 + 1);
+                lastYMargin = yMargin(G, c);
                 String row = String.format(Locale.US,
                         "%d\t%.6f\t%.1f\t%.5f\t%.5f\t%.5f\t%.5f\t%.5f\t%.4f\t%.4f\t%.4f\t%d\t%d\t"
                       + "%.4f\t%.4f\t%.4f\t%.4f\t%d\t%d\t%d\t%d\t%.4f\t%.4f\t%.4f\t"
@@ -1098,7 +1144,7 @@ public class SiteNormalLongGlideHarness {
                         captures, detach, strokes, detachAtp,
                         faxN > 0 ? faxAcc/faxN*1e12 : 0, faxPos*1e12/Math.max(1,t-t0+1), faxNeg*1e12/Math.max(1,t-t0+1),
                         azOcc[0], azOcc[1], azOcc[2], sites.size(), angleDeg(G), zmin, zmax, contour(G), e2e(G), bendDeg(G),
-                        cp.lastActive, invalid, solverFail, rollAcc, rollAcc/(2*Math.PI), yMargin(G, c));
+                        cp.lastActive, invalid, solverFail, rollAcc, rollAcc/(2*Math.PI), lastYMargin);
                 Files.writeString(Path.of(OUT, "trajectory_summary.csv"), row,
                         java.nio.file.StandardOpenOption.APPEND);
                 writeProgress(t, t0, wall, fwd_um, dist(c, c0), vfit, vwin, avgB, nb, maxNb, captures, detach,
@@ -1115,6 +1161,7 @@ public class SiteNormalLongGlideHarness {
             // ---- PHASE 5 stop rule -------------------------------------------------------------------
             if (fwd_um >= TARGET_UM) { stop = "TARGET_REACHED"; break; }
             if (fwd_um <= -TARGET_UM) { stop = "POLARITY_REVERSAL"; break; }
+            if (!Double.isNaN(OFFLAWN_STOP_UM) && lastYMargin < -OFFLAWN_STOP_UM) { stop = "OFF_LAWN"; break; }
         }
 
         double wall = (System.currentTimeMillis() - wall0) / 1000.0;
@@ -1310,6 +1357,48 @@ public class SiteNormalLongGlideHarness {
      * MEASURED wander (sqrt(2*D_y*T) + yaw), never from binding reach.
      */
     static boolean yWarned = false;
+    static final java.util.TreeMap<String, long[]> KPROF_NS = new java.util.TreeMap<>();
+    static long kpDev = 0, kpIn = 0, kpOut = 0, kpWall = 0;
+    static TornadoExecutionResult kprofStep(TornadoExecutionPlan plan, int k) {
+        long w0 = System.nanoTime();
+        TornadoExecutionResult res = plan.withProfiler(ProfilerMode.SILENT).execute();
+        TornadoProfilerResult pr = res.getProfilerResult();
+        kpWall += System.nanoTime() - w0;
+        String jl = pr.getProfileLog();
+        if (k == 0) try { Files.writeString(Path.of(OUT, "kprof_sample.json"), jl == null ? "null" : jl); } catch (IOException ex) { }
+        java.util.regex.Matcher mt = java.util.regex.Pattern.compile("\"(glide\\.[A-Za-z0-9_]+)\"").matcher(jl == null ? "" : jl);
+        // getProfileLog() ACCUMULATES every execute since the plan was built, so read only the LAST record.
+        int last = jl == null ? -1 : jl.lastIndexOf("\"TOTAL_TASK_GRAPH_TIME\"");
+        String rec = last < 0 ? "" : jl.substring(last);
+        mt = java.util.regex.Pattern.compile("\"(glide\\.[A-Za-z0-9_]+)\"").matcher(rec);
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        while (mt.find()) {
+            String nm = mt.group(1).substring(6);
+            if (!seen.add(nm)) continue;
+            long ns = ExplicitCompleteMatHarness.parseTaskNs(rec, "glide.", nm);
+            KPROF_NS.computeIfAbsent(nm, x -> new long[1])[0] += ns;
+        }
+        kpDev += pr.getDeviceKernelTime(); kpIn += pr.getTotalBytesCopyIn(); kpOut += pr.getTotalBytesCopyOut();
+        if (k == KPROF - 1) {
+            plan.withoutProfiler();
+            System.out.printf(Locale.US, "%n=== KERNEL PROFILE over %d steps: wall %.3f ms/step | device-kernel %.3f ms/step | bytes in %d out %d /step ===%n",
+                    KPROF, kpWall / 1e6 / KPROF, kpDev / 1e6 / KPROF, kpIn / KPROF, kpOut / KPROF);
+            KPROF_NS.entrySet().stream().sorted((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]))
+                    .forEach(en -> System.out.printf(Locale.US, "  KPROF %-12s %8.3f ms/step%n", en.getKey(), en.getValue()[0] / 1e6 / KPROF));
+            System.out.println();
+        }
+        plan.clearProfiles();
+        return res;
+    }
+    // -leanreadback: the last execute's result, and a lazy pull of the UNDER_DEMAND buffers. Every host consumer of
+    // non-per-step state (frameJson, writeState, writeMilestoneSnapshot, writeCoverage) calls pullDemand() first.
+    static TornadoExecutionResult LAST_RES = null;
+    static int LAST_T = -1, PULLED_T = -2;
+    static void pullDemand() {
+        if (!ExplicitCompleteMatHarness.GLIDE_LEAN || LAST_RES == null || PULLED_T == LAST_T) return;
+        LAST_RES.transferToHost(ExplicitCompleteMatHarness.LEAN_DEMAND);
+        PULLED_T = LAST_T;
+    }
     static double yMargin(TwoBodyConverterMotor.Glide2D G, double[] c) {
         double yaw = Math.toRadians(angleDeg(G));
         double endOff = Math.abs(c[1]) + 0.5 * e2e(G) * Math.abs(Math.sin(yaw));
@@ -1355,6 +1444,7 @@ public class SiteNormalLongGlideHarness {
         return best * 1e3;
     }
     static void writeCoverage(String rel, TwoBodyConverterMotor.Glide2D G, ExplicitCompleteMatHarness.ExMat e) {
+        pullDemand();
         int[] per = perSegCandidates(G, e);
         StringBuilder cov = new StringBuilder("seg\tcandidates\tcx\tcy\tcz\n");
         for (int s = 0; s < G.nSeg; s++)
@@ -1431,6 +1521,7 @@ public class SiteNormalLongGlideHarness {
 
     static void writeMilestoneSnapshot(TwoBodyConverterMotor.Glide2D G, ExplicitCompleteMatHarness.ExMat e,
                                        double ms, int t, double fwd, int nb, double faxSum) {
+        pullDemand();
         StringBuilder b = new StringBuilder();
         b.append(String.format(Locale.US, "# milestone %.2f um  step %d  t %.6f s  forward %.5f um  bound %d  faxSum %.4f pN%n",
                 ms, t, t*DT, fwd, nb, faxSum*1e12));
@@ -1454,6 +1545,7 @@ public class SiteNormalLongGlideHarness {
 
     /** Resumable state: everything the step reads that is not recomputed within the step. */
     static void writeState(TwoBodyConverterMotor.Glide2D G, ExplicitCompleteMatHarness.ExMat e, int t) {
+        pullDemand();
         try {
             Path tmp = Path.of(OUT, "checkpoint.bin.tmp");
             try (var o = new java.io.DataOutputStream(new java.io.BufferedOutputStream(Files.newOutputStream(tmp)))) {
@@ -1523,6 +1615,7 @@ public class SiteNormalLongGlideHarness {
      * the F8 point. Distant motors render as anchor posts (subsampled) so the lawn extent stays visible.
      */
     static String frameJson(TwoBodyConverterMotor.Glide2D G, ExplicitCompleteMatHarness.ExMat e, double t, boolean nearOnly) {
+        pullDemand();
         var f = G.fil; int nSeg = G.nSeg, N = G.N, M = e.M, nodeStride = 3*(M+1);
         double Ract = ExplicitCompleteMatHarness.R_ACTIN_NM * 1e-3;
         StringBuilder b = new StringBuilder(1 << 19);

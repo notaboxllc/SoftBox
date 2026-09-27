@@ -266,6 +266,34 @@ public final class ChiralSiteSystem {
         }
     }
 
+    /** Block size for the -chunkocc skip flags (see occChunkFlags). */
+    public static final int OCC_CHUNK = 256;
+
+    /**
+     * -chunkocc PRE-PASS for the two single-thread serial resolvers (siteOccupancyResolve, matSurfaceStericPrune).
+     * Those scan ALL N motors on ONE GPU thread every step to find the few fresh binds, then scan all N again per
+     * candidate for bound heads: ~5 ms each at N = 96k, latency-bound (profiled 2026-09-26). This kernel, parallel
+     * over blocks of OCC_CHUNK motors, writes per-block bits into the TAIL of each stats array (index 4 + block):
+     * bit0 = the block holds a fresh bind (justBound == 1 and bound), bit1 = it holds any bound head. The resolvers
+     * skip blocks whose bit is clear; they still test every condition on every motor they visit and visit in the
+     * same ascending order, so their decisions are IDENTICAL. Must run after the last kernel that can BIND and before
+     * the resolvers; kernels in between may only UNBIND, which leaves the flags a safe superset. Stats arrays of
+     * size 4 (every other caller) ⇒ nCh = 0 ⇒ the resolvers run exactly as before.
+     */
+    public static void occChunkFlags(IntArray boundSeg, IntArray justBound, IntArray flagsA, IntArray flagsB, IntArray counts) {
+        int N = counts.get(0);
+        int nCh = flagsA.getSize() - 4;
+        for (@Parallel int c = 0; c < nCh; c++) {
+            int fl = 0;
+            int hi = (c + 1) * OCC_CHUNK; if (hi > N) hi = N;
+            for (int m = c * OCC_CHUNK; m < hi; m++) {
+                if (boundSeg.get(m) >= 0) { fl = fl | 2; if (justBound.get(m) == 1) fl = fl | 1; }
+            }
+            flagsA.set(4 + c, fl);
+            flagsB.set(4 + c, fl);
+        }
+    }
+
     /**
      * EXCLUSIVE discrete-site occupancy (single-thread serial, ascending head id, lowest id wins — the
      * validated {@code matSurfaceStericPrune} / {@code matOccupancyResolve} pattern). A freshly-bound head
@@ -277,16 +305,19 @@ public final class ChiralSiteSystem {
             IntArray bindSite, IntArray segFilId, IntArray occStats, DoubleArray chiP, IntArray counts) {
         int N = counts.get(0);
         int on = (int) chiP.get(12);
+        int nCh = occStats.getSize() - 4;   // >0 only when the -chunkocc block flags were allocated (occChunkFlags)
         for (@Parallel int gid = 0; gid < 1; gid++) {
             int cand = 0, rej = 0, conf = 0;
             if (on != 0) {
                 for (int m = 0; m < N; m++) {
+                    if (nCh > 0 && (occStats.get(4 + m / OCC_CHUNK) & 1) == 0) { m = (m / OCC_CHUNK) * OCC_CHUNK + OCC_CHUNK - 1; continue; }
                     if (justBound.get(m) != 1) continue;
                     int s = boundSeg.get(m); if (s < 0) continue;
                     cand++;
                     int myFil = segFilId.get(s), mySite = bindSite.get(m);
                     boolean reject = false, byFresh = false;
                     for (int b = 0; b < N; b++) {
+                        if (nCh > 0 && (occStats.get(4 + b / OCC_CHUNK) & 2) == 0) { b = (b / OCC_CHUNK) * OCC_CHUNK + OCC_CHUNK - 1; continue; }
                         if (b == m) continue;
                         int bsg = boundSeg.get(b); if (bsg < 0) continue;
                         if (justBound.get(b) == 1 && b > m) continue;

@@ -821,9 +821,12 @@ public final class TwoBodyBeamAnalyticGpu {
             DoubleArray stericP, IntArray occStats, IntArray counts) {
         int N = counts.get(0), nSeg = counts.get(3);
         double Ractin = stericP.get(0), excl = stericP.get(1), tol = stericP.get(2), thr = excl - tol;
+        int nCh = occStats.getSize() - 4;   // >0 only with the -chunkocc block flags (ChiralSiteSystem.occChunkFlags)
+        final int CH = ChiralSiteSystem.OCC_CHUNK;
         for (@Parallel int gid = 0; gid < 1; gid++) {
             int cand = 0, rej = 0, conf = 0;
             for (int m = 0; m < N; m++) {
+                if (nCh > 0 && (occStats.get(4 + m / CH) & 1) == 0) { m = (m / CH) * CH + CH - 1; continue; }
                 if (justBound.get(m) != 1) continue;
                 int s = boundSeg.get(m); if (s < 0) continue;
                 cand++;
@@ -841,6 +844,7 @@ public final class TwoBodyBeamAnalyticGpu {
                 int candFil = segFilId.get(s);
                 boolean reject = false, byFresh = false;
                 for (int b = 0; b < N; b++) {
+                    if (nCh > 0 && (occStats.get(4 + b / CH) & 2) == 0) { b = (b / CH) * CH + CH - 1; continue; }
                     if (b == m) continue;
                     int bsg = boundSeg.get(b); if (bsg < 0) continue;
                     if (justBound.get(b) == 1 && b > m) continue;                  // higher-id fresh doesn't block lower-id

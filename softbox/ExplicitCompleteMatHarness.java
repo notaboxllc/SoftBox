@@ -361,7 +361,25 @@ public final class ExplicitCompleteMatHarness {
     // rather than silently run, so the device path stays refused until this is explicitly set and the whole-step
     // CPU/GPU equivalence gate has passed. The isolated lowering risk is already retired
     // (ExplicitMatSolveTiltHarness: the 15x16 tilt solver lowers, 1.7e-09 um / 4.3e-07 rad vs the CPU runner).
-    static boolean SITE_NORMAL_DEVICE_OK = false;   // -sitenormal-device (experimental opt-in)
+    static boolean SITE_NORMAL_DEVICE_OK = false;
+    // GLIDE_RESIDENT (-resident on SiteNormalLongGlideHarness; default false = historical behaviour): on the
+    // non-prod gliding graph, upload the motor/filament state ONCE (FIRST_EXECUTION, as prod does) instead of
+    // re-uploading it EVERY step. Valid only when the host never writes those buffers between executes -- true of
+    // the long-glide loop, which only READS them for its census. The per-step copy-outs are unchanged, so host
+    // mirrors stay current. Profiled 2026-09-26: the redundant per-step H->D copy was ~57% of host time at 96k motors.
+    static boolean GLIDE_RESIDENT = false;
+    // CHUNK_OCC (-chunkocc; default false = historical): allocate block flags in the tail of occStats/siteStats and
+    // run ChiralSiteSystem.occChunkFlags before the serial occupancy/steric resolvers so they skip empty blocks.
+    // Decision-identical by construction; see occChunkFlags. Both runners.
+    static boolean CHUNK_OCC = false;
+    // GLIDE_LEAN (-leanreadback on SiteNormalLongGlideHarness; default false = historical): the non-prod gliding graph
+    // copies back EVERY step only the buffers the long-glide loop reads (~6 MB at 96k motors instead of ~41 MB) and
+    // declares the rest UNDER_DEMAND; the harness pulls LEAN_DEMAND via the last TornadoExecutionResult immediately
+    // before any frame / checkpoint / milestone / coverage write. Kernels and upload modes unchanged.
+    static boolean GLIDE_LEAN = false;
+    static Object[] LEAN_DEMAND = new Object[0];
+    static boolean chunkOccWired() { return CHUNK_OCC && (siteOn() || siteAwareOn() || surfOn()); }
+    static int occTail(int N) { return CHUNK_OCC ? (N + ChiralSiteSystem.OCC_CHUNK - 1) / ChiralSiteSystem.OCC_CHUNK : 0; }   // -sitenormal-device (experimental opt-in)
     // DEVICE_CULL — run the production per-segment UNION cull ON THE DEVICE (matCull + matCullTag as graph tasks)
     // instead of solving the whole mat every step. The CPU path has always culled; the device path did not, which
     // is why the GPU wall-clock win was only ~5.6x despite ~110x the motor-step throughput (it was solving 21000
@@ -863,7 +881,7 @@ public final class ExplicitCompleteMatHarness {
         e.segCumArc = new FloatArray(nSeg); e.segFilId = new IntArray(nSeg);
         TwoBodyBeamAnalyticGpu.computeMaterialMaps(G.fil, nSeg, e.segCumArc, e.segFilId);
         e.occP = DoubleArray.fromElements(OCC_EXCL_NM, OCC_TOL_NM);   // exclusion + tol in nm (kernel converts sep µm→nm)
-        e.occStats = new IntArray(4); e.occStats.init(0);
+        e.occStats = new IntArray(4 + occTail(N)); e.occStats.init(0);
         // helical surface binding scratch/params (noncanonical, default-off ⇒ never wired ⇒ byte-identical)
         e.prevBound = new IntArray(N); e.prevBound.init(-1);
         e.justBound = new IntArray(N); e.justBound.init(0);
@@ -1059,7 +1077,7 @@ public final class ExplicitCompleteMatHarness {
                     1.0/Math.cos(0.5*Math.toRadians(CONV_AZ_DEG))) + ")" : "OFF");
         e.bindSite = new IntArray(N); e.bindSite.init(-1);
         e.prevNuc = new IntArray(N); for (int m = 0; m < N; m++) e.prevNuc.set(m, G.mot.nucleotideState.get(m));
-        e.siteStats = new IntArray(4); e.siteStats.init(0);
+        e.siteStats = new IntArray(4 + occTail(N)); e.siteStats.init(0);
         e.headRef = new FloatArray(3 * N); e.headRef.init(0f);   // 0 ⇒ the kernel's deterministic first-use seed
         e.headOmega = new FloatArray(2 * N); e.headOmega.init(0f);   // [0..N) head roll about eBind; [N..2N) A4 axial registry
         e.headTau = new FloatArray(N); e.headTau.init(0f);
@@ -1465,8 +1483,11 @@ public final class ExplicitCompleteMatHarness {
             TwoBodyBeamAnalyticGpu.matBindExplicit(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
         if (tzOn())   // Vilfan target-zone angular hazard — applied to the geometric candidate BEFORE it persists
             TwoBodyBeamAnalyticGpu.matTargetZone(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, mot.bindPsi0, e.tzP, e.tzDiag, e.matc, e.exCounts);
+        if (chunkOccWired() && siteAwareOn())   // flags after the last BIND, before the resolvers
+            ChiralSiteSystem.occChunkFlags(mot.boundSeg, e.justBound, e.siteStats, e.occStats, e.exCounts);
         if (siteOn() && !siteAwareOn()) {   // legacy: snap the fresh centreline bind onto the nearest lattice site
             ChiralSiteSystem.siteSnap(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, mot.bindArc, mot.bindAzim, e.bindSite, e.chiP, e.exCounts);
+            if (chunkOccWired()) ChiralSiteSystem.occChunkFlags(mot.boundSeg, e.justBound, e.siteStats, e.occStats, e.exCounts);
             ChiralSiteSystem.siteOccupancyResolve(mot.boundSeg, e.justBound, e.prevBound, e.bindSite, e.segFilId, e.siteStats, e.chiP, e.exCounts);
         } else if (siteAwareOn())   // site-aware capture already latched the site + bookkeeping; occupancy still applies
             ChiralSiteSystem.siteOccupancyResolve(mot.boundSeg, e.justBound, e.prevBound, e.bindSite, e.segFilId, e.siteStats, e.chiP, e.exCounts);
@@ -1478,6 +1499,8 @@ public final class ExplicitCompleteMatHarness {
         if (surfOn()) {   // select+retain the material azimuth at the bind transition (canonical bindArc kept), then 3D steric
             if (!tzOn() && !siteOn())  // target-zone / discrete-site modes select + retain the azimuth themselves
                 TwoBodyBeamAnalyticGpu.matSurfaceAzim(mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, e.surfP, e.exCounts);
+            if (chunkOccWired() && !siteOn() && !siteAwareOn())   // surface-only path: justBound is final after surfAzim
+                ChiralSiteSystem.occChunkFlags(mot.boundSeg, e.justBound, e.siteStats, e.occStats, e.exCounts);
             TwoBodyBeamAnalyticGpu.matSurfaceStericPrune(mot.boundSeg, e.justBound, e.prevBound, mot.bindArc, mot.bindAzim, f.coord, f.uVec, f.yVec, f.segLength, e.segFilId, e.stericP, e.occStats, e.exCounts);
         }
         MatSoaSlice.matCock(mot.nucleotideState, e.q, e.cockP, e.exCounts);
@@ -1566,7 +1589,7 @@ public final class ExplicitCompleteMatHarness {
                 f.end1NbrSlot, f.end1NbrSide, f.end2NbrSlot, f.end2NbrSide,
                 mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.forceMag,
                 G.xbParams, G.segCount, G.segOff, G.segMyo);
-        if (prod) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
+        if (prod || GLIDE_RESIDENT) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
         if (rollSpringOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, rollP, f.yVec);
         if (f8TanOn())      tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, hcP);
         if (occOn()) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, e.candInt, e.candArc, e.segCumArc, e.segFilId, e.occP, e.occStats);
@@ -1591,7 +1614,7 @@ public final class ExplicitCompleteMatHarness {
         if (RIGOR_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.rigorParams, mot.ruptureStats);
         if (ADP_RUP_ON) tg.transferToDevice(DataTransferMode.FIRST_EXECUTION, mot.adpRuptureParams, mot.adpRuptureStats);
         tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.matc, mot.counts, f.counts);
-        if (!prod) tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
+        if (!prod && !GLIDE_RESIDENT) tg.transferToDevice(DataTransferMode.EVERY_EXECUTION, e.q, mot.boundSeg, mot.bindArc, mot.nucleotideState, mot.forceDotFil, f.coord, G.bondData);
         // DEVICE CULL — the production per-segment UNION cull as graph tasks, FIRST in the chain exactly as
         // matCull is first in stepGlidingCPU. It reads the PREVIOUS step's filament pose on both runners.
         // The three buffers mirror MatCullPlan's (site is static; cullP/mc are constants).
@@ -1626,14 +1649,19 @@ public final class ExplicitCompleteMatHarness {
             tg.task("bind", TwoBodyBeamAnalyticGpu::matBindExplicit, e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
         if (tzOn())   // Vilfan target-zone angular hazard — immediately after the canonical bind, before it persists
             tg.task("tzone", TwoBodyBeamAnalyticGpu::matTargetZone, mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, mot.bindPsi0, e.tzP, e.tzDiag, e.matc, e.exCounts);
-        if (siteOn() && !siteAwareOn())   // legacy: snap fresh centreline binds onto the lattice, then exclusive occupancy
-            tg.task("siteSnap", ChiralSiteSystem::siteSnap, mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, mot.bindArc, mot.bindAzim, e.bindSite, e.chiP, e.exCounts)
-              .task("siteOcc", ChiralSiteSystem::siteOccupancyResolve, mot.boundSeg, e.justBound, e.prevBound, e.bindSite, e.segFilId, e.siteStats, e.chiP, e.exCounts);
-        else if (siteAwareOn())   // site-aware capture latched the site itself; exclusive occupancy still applies
+        if (siteOn() && !siteAwareOn()) {   // legacy: snap fresh centreline binds onto the lattice, then exclusive occupancy
+            tg.task("siteSnap", ChiralSiteSystem::siteSnap, mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, mot.bindArc, mot.bindAzim, e.bindSite, e.chiP, e.exCounts);
+            if (chunkOccWired()) tg.task("occFlags", ChiralSiteSystem::occChunkFlags, mot.boundSeg, e.justBound, e.siteStats, e.occStats, e.exCounts);
             tg.task("siteOcc", ChiralSiteSystem::siteOccupancyResolve, mot.boundSeg, e.justBound, e.prevBound, e.bindSite, e.segFilId, e.siteStats, e.chiP, e.exCounts);
+        } else if (siteAwareOn()) {   // site-aware capture latched the site itself; exclusive occupancy still applies
+            if (chunkOccWired()) tg.task("occFlags", ChiralSiteSystem::occChunkFlags, mot.boundSeg, e.justBound, e.siteStats, e.occStats, e.exCounts);
+            tg.task("siteOcc", ChiralSiteSystem::siteOccupancyResolve, mot.boundSeg, e.justBound, e.prevBound, e.bindSite, e.segFilId, e.siteStats, e.chiP, e.exCounts);
+        }
         if (surfOn()) {   // helical surface binding: azimuth-select at bind (parallel) → 3D steric prune (single-thread serial)
             if (!tzOn() && !siteOn())
                 tg.task("surfAzim", TwoBodyBeamAnalyticGpu::matSurfaceAzim, mot.boundSeg, e.prevBound, e.justBound, e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, mot.bindArc, mot.bindAzim, e.surfP, e.exCounts);
+            if (chunkOccWired() && !siteOn() && !siteAwareOn())   // surface-only path: justBound is final after surfAzim
+                tg.task("occFlags", ChiralSiteSystem::occChunkFlags, mot.boundSeg, e.justBound, e.siteStats, e.occStats, e.exCounts);
             tg.task("surfPrune", TwoBodyBeamAnalyticGpu::matSurfaceStericPrune, mot.boundSeg, e.justBound, e.prevBound, mot.bindArc, mot.bindAzim, f.coord, f.uVec, f.yVec, f.segLength, e.segFilId, e.stericP, e.occStats, e.exCounts);
         }
         if (ADP_RUP_ON) tg.task("chem", NucleotideCycleSystem::cycleLymnTaylorRuptureAll, mot.nucleotideState, mot.boundSeg, mot.forceDotFil, mot.forceDotAvg, mot.avgInit, mot.cooldown, mot.stats, mot.nucParams, mot.kinParams, mot.counts, mot.rigorParams, mot.ruptureStats, mot.adpRuptureParams, mot.adpRuptureStats);
@@ -1719,6 +1747,27 @@ public final class ExplicitCompleteMatHarness {
             // BOUND-CYCLE IMPULSE BUDGET (measurement-only, default-off): the motor-internal state the episode
             // ledger stratifies on. Transfers only — no kernel, no ordering, no device work added.
             if (EPISODE_TELEM) tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.q, e.nodes, e.outGeom);
+        }
+        else if (GLIDE_LEAN) {   // -leanreadback: per-step copy-back of ONLY what the long-glide loop reads; the rest on demand
+            java.util.LinkedHashSet<Object> ev = new java.util.LinkedHashSet<>(), dem = new java.util.LinkedHashSet<>();
+            java.util.Collections.addAll(ev, e.redOut, f.coord, f.uVec, f.yVec, mot.boundSeg, mot.nucleotideState, G.bondData);
+            if (siteNormalOn() || chiralOn()) java.util.Collections.addAll(ev, e.bindSite, mot.bindAzim);
+            if (chiralOn()) ev.add(e.siteStats);
+            if (occOn()) ev.add(e.occStats);
+            if (tzOn()) java.util.Collections.addAll(ev, e.tzDiag, mot.bindAzim, mot.bindPsi0);
+            if (CONV_DIAG) ev.add(e.q);
+            if (HEADAXIS_DIAG) ev.add(e.outGeom);
+            // on demand: frames (nodes/outGeom/active), checkpoints (the full resumable state), milestones, coverage
+            java.util.Collections.addAll(dem, e.nodes, e.q, e.outGeom, mot.forceDotFil, mot.bindArc, mot.forceDotAvg, mot.avgInit, mot.cooldown);
+            if (headTiltOn()) dem.add(e.chiHead);
+            if (siteNormalOn()) dem.add(e.restC);
+            if (chiralOn()) java.util.Collections.addAll(dem, e.headRef, e.headOmega, e.headTau, e.headMis, e.prevNuc, e.prevBound, e.justBound);
+            if (convSkewOn()) dem.add(e.convF);
+            if (DEVICE_CULL) dem.add(e.active);
+            dem.removeAll(ev);
+            tg.transferToHost(DataTransferMode.EVERY_EXECUTION, ev.toArray());
+            tg.transferToHost(DataTransferMode.UNDER_DEMAND, dem.toArray());
+            LEAN_DEMAND = dem.toArray();
         }
         else {    tg.transferToHost(DataTransferMode.EVERY_EXECUTION, e.nodes, e.q, e.redOut, f.coord, mot.boundSeg, mot.nucleotideState, mot.forceDotFil, G.bondData);
                   // chi is a live generalized coordinate on the tilt path — it must come back or a CPU/GPU
