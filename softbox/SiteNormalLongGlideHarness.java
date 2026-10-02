@@ -227,6 +227,10 @@ public class SiteNormalLongGlideHarness {
                 case "-noviz" -> VIZ = false;
                 case "-3js" -> { VIZ = true; VIZ_DIR = args[++i]; }
                 case "-eta" -> ETA = Double.parseDouble(args[++i]);
+                // Assay [ATP] (µM). Reuses ChiralSiteHarness.applyAtp, which build() already calls: scales ONLY
+                // nucParams[1] (atpOn, NONE->ATP) by [ATP]/2000 µM. Absent (<0, default) => exact no-op.
+                // docs/twirling/LOW_ATP_GLIDING_TWIRLING_FINDINGS.md s2 for the anchor and its caveats.
+                case "-atp-uM", "-atp-um" -> ChiralSiteHarness.ATP_UM = Double.parseDouble(args[++i]);
                 case "-dt" -> DT = Double.parseDouble(args[++i]);
                 case "-resume" -> RESUME = true;
                 case "-gate-a" -> { GATE_A = true; }
@@ -315,13 +319,12 @@ public class SiteNormalLongGlideHarness {
                 case "-resident" -> ExplicitCompleteMatHarness.GLIDE_RESIDENT = true;
                 case "-stop-offlawn" -> OFFLAWN_STOP_UM = Double.parseDouble(args[++i]);
                 case "-target" -> TARGET_UM = Double.parseDouble(args[++i]);   // skip the per-step pre-trigger ring (~2x on viz runs)
-                // DIAGNOSTIC: enable the rigor mechanical-rupture pathway. RUPTURE_MODE's *parsed* default is 1
-                // (canon v2), but that parse lives in ExplicitCompleteMatHarness.runProductionCell, which this
-                // lineage never calls — so the field initializer 0 wins and rigor bonds have NO force-dependent
-                // escape. Tests whether that is what produces the 500+ pN excursions.
-                case "-rupture" -> { ExplicitCompleteMatHarness.RUPTURE_MODE = 1;
-                                     ExplicitCompleteMatHarness.RIGOR_ON = true;
-                                     ExplicitCompleteMatHarness.ADP_RUP_ON = false; }
+                // Rigor mechanical rupture: canonical default ON since 2026-10-01 (ChiralSiteHarness.RUPTURE,
+                // applied in build()). Before that this lineage never got canon v2's mode 1 (the parse lives in
+                // ExplicitCompleteMatHarness.runProductionCell) and ran with NO force-dependent rigor escape.
+                // -no-rupture reproduces those runs byte-identically.
+                case "-rupture" -> ChiralSiteHarness.RUPTURE = true;
+                case "-no-rupture" -> ChiralSiteHarness.RUPTURE = false;
                 case "-randbase-seed" -> ExplicitCompleteMatHarness.RAND_BASE_SEED = Integer.parseInt(args[++i]);
                 // SAME lawn, DIFFERENT noise stream — the control for whether matched-lawn pairing works.
                 case "-noise-seed" -> ExplicitCompleteMatHarness.NOISE_SEED = Integer.parseInt(args[++i]);
@@ -490,6 +493,10 @@ public class SiteNormalLongGlideHarness {
         System.out.printf(Locale.US, "  SITE_NORMAL_BIND ON, g6 RETIRED, g2 RETIRED, every4 sparse helical sites%n");
         System.out.printf(Locale.US, "  RAND_BASE_AZ %s%s, no phenomenological twirl torque, no steric%n",
                 RANDBASE ? "ON" : "OFF", RANDBASE ? " (seed " + ExplicitCompleteMatHarness.RAND_BASE_SEED + ")" : "");
+        System.out.printf(Locale.US, "  [ATP]           = %s -> atpOn %.4g /s%n",
+                ChiralSiteHarness.atpLabel(), ChiralSiteHarness.atpOnFor(ChiralSiteHarness.ATP_UM));
+        System.out.println("  RIGOR RUPTURE   = " + (ChiralSiteHarness.RUPTURE
+                ? "ON (canonical mode 1, Guo-Guilford rigor-only)" : "OFF (-no-rupture: pre-2026-10-01 behaviour)"));
         System.out.printf(Locale.US, "  STROKE SKEW eps = %+.3f deg (EPS_STROKE_DEG, mirror-coupled) | MIRROR = %+.1f%n",
                 STROKE_SKEW_DEG, MIRROR);
         System.out.printf(Locale.US, "  CONVERTER SKEW  = %+.3f deg (CONV_SKEW_DEG, ramp %s)%n",
@@ -584,12 +591,9 @@ public class SiteNormalLongGlideHarness {
                 SEED, ExplicitCompleteMatHarness.rngSeed(SEED),
                 ExplicitCompleteMatHarness.rngSeed(SEED) != SEED ? "  (-noise-seed: SAME LAWN, DIFFERENT NOISE)" : "");
         var Gs = ChiralSiteHarness.build(seed);
-        // The rigor kernel gates on the DATA field rigorParams[0] (NucleotideCycleSystem:519), not on the Java
-        // static RIGOR_ON — setting the static alone dispatches the rigor kernel but it then takes the branch its
-        // own comment calls "BYTE-IDENTICAL to cycleLymnTaylorRigor NONE block". installRigor writes the frozen
-        // Guo-Guilford constants; it is called ONLY from runProductionCell and the HMM-dimer harnesses, never
-        // from this lineage, which is why rigor rupture has been inert here.
-        if (ExplicitCompleteMatHarness.RIGOR_ON) ExplicitCompleteMatHarness.installRigor(Gs.mot, DT);
+        // Rigor rupture: the kernel gates on the DATA field rigorParams[0] (NucleotideCycleSystem:519), not on the
+        // static RIGOR_ON, so the params must be installed. ChiralSiteHarness.build() -> applyRupture() now does
+        // that (canonical default ON); before 2026-10-01 nothing in this lineage did, so rupture was inert.
         if (FIL_X0 != 0.0) {
             var ff = Gs.fil; int ns = Gs.nSeg;
             for (int s2 = 0; s2 < ns; s2++) ff.coord.set(ff.planeX(s2), (float) (ff.coord.get(ff.planeX(s2)) + FIL_X0));
@@ -1474,7 +1478,13 @@ public class SiteNormalLongGlideHarness {
     static void writeRunConfig(TwoBodyConverterMotor.Glide2D G, ExplicitCompleteMatHarness.ExMat e,
                                double[] c0, double[] fwd, double[] pol0) {
         String j = String.format(Locale.US,
-                "{\n  \"assay\": \"site-normal long gliding\",\n  \"runner\": \"CPU sequential (site-normal has no validated device path)\",\n"
+                "{\n  \"assay\": \"site-normal long gliding\",\n  \"runner\": \""
+              + (GPU_MODE ? "GPU device-resident EXPERIMENTAL site-normal graph (-gpu; bound-branch CPU/GPU gate not green)"
+                          : "CPU sequential (site-normal has no validated device path)") + "\",\n"
+              + "  \"atp_uM\": " + (ChiralSiteHarness.ATP_UM < 0 ? "null" : String.format(Locale.US, "%.6g", ChiralSiteHarness.ATP_UM))
+              + String.format(Locale.US, ",\n  \"atpOn_per_s_as_built\": %.6g,\n", (double) G.mot.nucParams.get(1))
+              + "  \"rigor_rupture\": " + (ExplicitCompleteMatHarness.RIGOR_ON ? "\"mode1\"" : "\"off\"")
+              + String.format(Locale.US, ",\n  \"rigorParams0_as_built\": %.6g,\n", (double) G.mot.rigorParams.get(0))
               + "  \"seed\": %d,\n  \"max_steps\": %d,\n  \"dt_s\": %.6e,\n  \"eta_Pa_s\": %.6g,\n"
               + "  \"mat_x_um\": %.4f,\n  \"mat_y_um\": %.4f,\n  \"density_heads_per_um2\": %.1f,\n  \"n_motors\": %d,\n"
               + "  \"fil_segments\": %d,\n  \"contour_um\": %.6f,\n  \"beam_nodes_M\": %d,\n  \"queryR_nm\": %.3f,\n"

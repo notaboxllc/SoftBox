@@ -1,5 +1,66 @@
 # Soft Box Project Journal
 
+### 2026-10-01 — RIGOR RUPTURE WAS OFF in the whole twirl lineage; now default ON; low-[ATP] d200 relaunched (2 lawns)
+
+**The defect.** Canon v2 (2026-07-22) promoted rigor rupture mode 1 (force-dependent detachment of nucleotide-free
+heads, Guo-Guilford catch-slip) to default ON, but only inside `ExplicitCompleteMatHarness.runProductionCell`'s arg
+parse, and the kernel gates on the DATA field `rigorParams[0]`, which only `installRigor` writes. `ChiralSiteHarness`
+/ `SiteNormalLongGlideHarness` build through `ChiralSiteHarness.build()` and never called it, so **every ChiralSite
+and site-normal run before today (viscosity, mirror, low-ATP, all twirl campaigns, both long structural runs) had
+rupture OFF.** Little effect at saturating ATP (an ATP head leaves in ~50 us anyway); dominant at 10 uM, where rigor
+heads pile up and drag (the d800 and d400 low-ATP "stalls" were this).
+**Fix.** `build()` -> `applyRupture()` installs mode 1 by default; `-no-rupture` restores the old path. Rupture-ON
+record ids (atp/atpden/etamap/s2map/zsm/lat) carry a `_rup` suffix so a report can never mix the two.
+**Gates** (`TWIRL_LOWATP/rupture_gates.sh`): G1 `-no-rupture` == pre-change binary, 12 rows byte-identical; G2
+saturating ATP d800, 30k steps: avgBound 9.98 -> 9.34, captures 55 -> 60 (small, as expected); G3 10 uM d200 50 ms
+pilot: **avgBound 16.0 -> 7.5, glide ~0.26 -> ~0.64 um/s**.
+**Stopped/superseded (rupture OFF):** d400 (stalled, ~0.02 um/s at 1.5 s); three extra d200 lawns (stopped at
+0.004 s); the original d200 arm died at 1.58 s (0.16 um glided, avgBound 12.5) with no clean exit, most likely when
+its launching session ended -- background runs die with the Claude session that started them.
+**Relaunched** `scripts/twirl_long_lowatp.sh` DENS=200, rupture ON, seeds 20260901 and 20260902 (`*_rup` dirs), 3.5 s,
+probe frames every 1 ms; review at 12-18 h before adding lawns. Not parked on CPU: ~8 days/arm, it would slow the
+host-bound GPU arms, and the CPU runner orders surfPrune/chem differently.
+
+### 2026-09-30 — run 2 through a virtual microscope: invisible at video rate; low-[ATP] reruns launched
+
+**Microscope emulation of `d800_epsM1p25_fdt_maty6`** (probe roll from the 1 ms frames, matches the harness roll
+counter at r = 0.999997; scripts in its `scope_analysis/`). Thermal roll ~25 deg/ms SD on a ~4 deg/ms drift, so
+exposure averaging kills the orientation signal: noise-free, full-360 readout recovers **+1.3 of 38.5 turns at
+80 ms** (Beausang's polTIRF cycle), +1.9 at 33 ms, 22.7 at 10 ms, 38.7 at 2 ms. A real experimentalist would
+score this filament a NON-twirler. The rendered movie still shows the probe circling (1 ms snapshots, no blur).
+**Beausang 2008 could see twirl only because they slowed filaments** (5-20 uM MgATP, 0.1-0.5 um/s, ~1 turn/s;
+they state >0.25 um/s was "difficult"). So run 2 (3.6 um/s, ~11 turns/s) is not in their regime.
+
+**Low-[ATP] reruns of the structural run.** New `-atp-uM` on `SiteNormalLongGlideHarness` (sets
+`ChiralSiteHarness.ATP_UM`; build() already applies it to atpOn only). Gate: no flag == `-atp-uM 2000`,
+trajectory rows byte-identical. run_config now records atp_uM, the as-built atpOn, and the real runner (it said
+"CPU sequential" on GPU runs). 50 ms pilots at 10 uM, 6 x 4 um lawn, rupture off (as run 2):
+**d800 STALLS** (38 bound, 90 % rigor; ~34 rigor heads drag +0.15 pN each vs ~4 post-stroke heads push -1.35 pN
+-- a rigor tug-of-war); **d400 +0.11 um/s** (22 bound); **d200 +0.24 um/s** (16 bound, +0.28 turns in 50 ms).
+The July density ladder (ChiralSite lineage, eps 15, 10 uM) glided at d200 (0.44) and d400 (0.28); d800 was
+not tested there.
+**Launched** `scripts/twirl_long_lowatp.sh` DENS=200 and DENS=400, 3.5 s each, in parallel on the GPU
+(experimental site-normal graph, ~210 steps/s each, ~36 h), frames every 1 ms with probes. Both reproduce their
+pilots exactly at step 10000. The question: does rotation slow with glide here (Beausang: pitch insensitive to
+velocity), or does the pitch collapse as it did in July?
+
+### 2026-09-28 — long twirl run 2 FINISHED: a persistent left-handed roll over 3.5 s, rate not steady
+
+`d800_epsM1p25_fdt_maty6` (eps -1.25 structural, roll Brownian ON, 20 x 6 um lawn, 96k motors, all four speed
+flags): 28M steps / **3.5 s in 39.2 h** (~199 steps/s), 0 invalid / 0 solverFail, stayed on the lawn (min lateral
+margin 2.29 um), 12.9 um glided at 3.68 um/s, avgBound 5.64. 3500 probe frames (4.5 GB) in `simviewer/longrun`.
+
+**Roll: +38.6 turns left-handed; +11.0 +/- 3.2 turns/s (3.5 sigma, blocked SE still rising at the largest block
+=> optimistic); +2.99 +/- 0.86 turns/um.** Run 1 (other lawn, 1.72 s on-lawn) gave +1.94 +/- 0.86; naive pooled
+~2.5 +/- 0.6 turns/um vs the structural prediction ~1.7-2.0 and Beausang 2008 ~2.1 (twirlers-only, skeletal
+myosin II). Consistent, two lawns, NOT a measurement of the population.
+
+**Would an experimentalist call it persistent? At seconds, yes; frame by frame, no.** Fraction of windows rolling
+left-handed / directedness (net / mean |roll|): 33 ms 69% / 0.64; 100 ms 82% / 0.85; 250 ms 92% / 0.98; 500 ms and
+1 s 100% / 1.00. **The RATE is not steady:** per 0.5 s, turns/um = 6.7, 4.0, 3.0, 2.1, 0.4, 4.3, -0.3 -- fast early,
+two ~0.5 s stalls late. Run 1 was jittier (100 ms directedness 0.59). Note ~11 turns/s is ~0.37 turns per 30 fps
+frame -- resolvable, but run 2's early ~28 turns/s would alias at video rates.
+
 ### 2026-09-26 (later) — long-glide GPU path 5.7x faster (35 -> 199 steps/s at 96k motors), all byte-identical
 
 Profiled the 96k-motor twirl run (stack sampling + a new `-kprofile <n>` per-task TornadoVM profile; the profile

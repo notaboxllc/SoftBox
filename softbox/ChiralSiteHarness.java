@@ -119,6 +119,22 @@ public final class ChiralSiteHarness {
     static final double ATP_REF_UM = 2000.0;  // the declared saturating-ATP reference the frozen atpOn represents
     static double  ATP_UM = -1.0;             // -atp-uM <c>;  < 0 ⇒ feature absent (exact no-op)
     static double  ATP_ON_EFF = Double.NaN;   // the realized nucParams[1] of the last build (for records/logging)
+    // RIGOR MECHANICAL RUPTURE — CANONICAL DEFAULT ON (2026-10-01). Canon v2 (2026-07-22) promoted rupture mode 1
+    // (rigor-only, Guo-Guilford constants) to default ON, but only through ExplicitCompleteMatHarness.
+    // runProductionCell's arg parse. This lineage builds through build() and never got it, so EVERY ChiralSite and
+    // site-normal run before 2026-10-01 had rupture OFF (the July low-ATP study §2.7 kept it off on purpose for
+    // comparability). It matters little at saturating ATP and dominates at low ATP. -no-rupture reproduces those
+    // runs byte-identically AND finds their cached records; rupture-ON record ids carry a "_rup" suffix, so a
+    // report mode can never mix the two.
+    static boolean RUPTURE = true;
+    static String rupTag() { return RUPTURE ? "_rup" : ""; }
+    /** Set the rupture statics and install the canonical rigor params. OFF ⇒ untouched (historical path). */
+    static void applyRupture(Glide2D G) {
+        ExplicitCompleteMatHarness.RUPTURE_MODE = RUPTURE ? 1 : 0;
+        ExplicitCompleteMatHarness.RIGOR_ON = RUPTURE;
+        ExplicitCompleteMatHarness.ADP_RUP_ON = false;
+        if (RUPTURE) ExplicitCompleteMatHarness.installRigor(G.mot, DTR);
+    }
     static double[] ATP_MAP = { 2000.0, 20.0, 10.0, 5.0 };   // -atp-map ladder (reference FIRST)
     static double  ATP_MIRROR = 1.0;          // -atp-mirror ⇒ −1: the same arms on a MIRRORED actin lattice
     static double  ATP_EPS_DEG = 15.0;        // the frozen ±ε converter skew of this study
@@ -346,6 +362,8 @@ public final class ChiralSiteHarness {
                                         for (int k = 0; k < p.length; k++) ETA_MAP[k] = Double.parseDouble(p[k]); }
                 // ---- LOW-[ATP] STUDY ----
                 case "-atp-uM", "-atp-um" -> ATP_UM = Double.parseDouble(args[++i]);
+                case "-rupture" -> RUPTURE = true;          // canonical default; explicit form accepted
+                case "-no-rupture" -> RUPTURE = false;      // reproduce pre-2026-10-01 runs / read their records
                 case "-atp-fixtures" -> atpFix = true;
                 case "-atp-equiv" -> atpEquiv = true;
                 case "-atp-equiv-steps" -> ATP_EQUIV_STEPS = Integer.parseInt(args[++i]);
@@ -558,6 +576,7 @@ public final class ChiralSiteHarness {
             ExplicitCompleteMatHarness.applyS2Lawn(G);   // §S2-FIXTURE quenched per-motor free S2 length (default-off)
             applyEta(G);                                 // §VISCOSITY coherent whole-system solvent viscosity (default-off)
             applyAtp(G);                                 // §LOW-ATP assay concentration (default-ABSENT ⇒ exact no-op)
+            applyRupture(G);                             // canonical rigor rupture (default ON; -no-rupture ⇒ historical)
             return G;
         } finally { TwoBodyConverterMotor.G4_NSEG_RUN = saved; }
     }
@@ -2533,7 +2552,7 @@ public final class ChiralSiteHarness {
             long tb = 0, ta = 0; for (int k = 0; k < 4; k++) { tb += occB[k]; ta += occA[k]; }
             for (int k = 0; k < 4; k++) { r.occBound[k] = tb > 0 ? (double) occB[k]/tb : 0;
                                           r.occAll[k]   = ta > 0 ? (double) occA[k]/ta : 0; }
-            if (ExplicitCompleteMatHarness.RIGOR_ON) {          // structurally OFF in this lineage; recorded either way
+            if (ExplicitCompleteMatHarness.RIGOR_ON) {          // canonical default ON since 2026-10-01 (-no-rupture: off)
                 long ev = 0, wr = 0;
                 for (int m = 0; m < N; m++) { ev += G.mot.ruptureStats.get(2*m); wr += G.mot.ruptureStats.get(2*m + 1); }
                 r.ruptureEvents = ev; r.rateCapWarns = wr;
@@ -4764,9 +4783,9 @@ public final class ChiralSiteHarness {
         if (ATP_DENS_ON)
             return String.format(Locale.US, "atpden_r%06.1f_u%07.2f_d%08d_%s%s%d", DENSITY, uM,
                     Math.round(durS * 1e6), mirror < 0 ? "m_" : "",
-                    sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed);
+                    sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed) + rupTag();
         return String.format(Locale.US, "atp_u%07.2f_d%08d_%s%s%d", uM, Math.round(durS * 1e6),
-                mirror < 0 ? "m_" : "", sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed);
+                mirror < 0 ? "m_" : "", sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed) + rupTag();
     }
     static String atpProvenance(double uM, double durS) {
         return powProvenance() + String.format(Locale.US,
@@ -5848,7 +5867,7 @@ public final class ChiralSiteHarness {
     static String etaId(double eta, int sgn, int seed, double mirror) {
         int base = ETA_BASE_STEPS > 0 ? ETA_BASE_STEPS : STEPS;
         return String.format(Locale.US, "etamap_s%d_e%04.0f_%s%s%d", base, eta*10000,
-                mirror < 0 ? "m_" : "", sgn > 0 ? "" : "n_", seed);
+                mirror < 0 ? "m_" : "", sgn > 0 ? "" : "n_", seed) + rupTag();
     }
     static double[] etaOdd(double eta, String key) {
         int ki = POWK(key); double[] o = new double[SEEDS];
@@ -5874,8 +5893,8 @@ public final class ChiralSiteHarness {
 
     static String s2Id(double L, int sgn, int seed) {
         String pre = DTR < DT * 0.9 ? "s2maph" : "s2map";      // "h" = half dt; ids can never collide
-        return sgn > 0 ? String.format(Locale.US, "%s_L%.0f_%d", pre, L, seed)
-                       : String.format(Locale.US, "%s_L%.0f_n_%d", pre, L, seed);
+        return (sgn > 0 ? String.format(Locale.US, "%s_L%.0f_%d", pre, L, seed)
+                        : String.format(Locale.US, "%s_L%.0f_n_%d", pre, L, seed)) + rupTag();
     }
     /** Per-seed eps-ODD response at length L; NaN unless BOTH signs of that seed are complete. */
     static double[] s2Odd(double L, String key) {
@@ -7722,7 +7741,7 @@ public final class ChiralSiteHarness {
     static boolean ZSM_EPISODES = true;          // persist the raw per-episode records for mechanism analysis
 
     static String zsmId(int seed, double mirror, int steps) {
-        return String.format(Locale.US, "zsm_%s_s%d_n%d", mirror < 0 ? "mirror" : "native", seed, steps);
+        return String.format(Locale.US, "zsm_%s_s%d_n%d", mirror < 0 ? "mirror" : "native", seed, steps) + rupTag();
     }
 
     /** One arm's scalar summary, as an ordered name→value map (robust to later additions). */
@@ -8188,11 +8207,11 @@ public final class ChiralSiteHarness {
     static double LAT_MIRROR = 1.0;              // -lattice-mirror
     static String latId(String lat, int sgn, int seed) {
         return String.format(Locale.US, "%slat_%s_e%s_s%d_n%d", LAT_MIRROR < 0 ? "m_" : "", lat,
-                sgn > 0 ? "p" : (sgn < 0 ? "m" : "0"), seed, STEPS);
+                sgn > 0 ? "p" : (sgn < 0 ? "m" : "0"), seed, STEPS) + rupTag();
     }
     static String latIdM(String lat, int sgn, int seed, double mirror) {
         return String.format(Locale.US, "%slat_%s_e%s_s%d_n%d", mirror < 0 ? "m_" : "", lat,
-                sgn > 0 ? "p" : (sgn < 0 ? "m" : "0"), seed, STEPS);
+                sgn > 0 ? "p" : (sgn < 0 ? "m" : "0"), seed, STEPS) + rupTag();
     }
     static double[] latRead(String id) {
         java.io.File f = new java.io.File(LAT_DIR, id + ".tsv");

@@ -610,6 +610,16 @@ consistent with but NOT demonstrated by these data), η > 0.1 (Part I's knee is 
 ./scripts/run_chiral_sites.sh -eta-mirror-report -eta-points 0.01 -seeds 8 -steps 8000   # re-report from records
 ```
 
+**RIGOR RUPTURE IS NOW DEFAULT-ON IN THE TWIRL LINEAGE (2026-10-01; re-baselines it).** Canon v2 promoted rupture
+mode 1 (rigor-only, Guo-Guilford) to default ON, but only via `ExplicitCompleteMatHarness.runProductionCell`'s arg
+parse; `ChiralSiteHarness` / `SiteNormalLongGlideHarness` build through `ChiralSiteHarness.build()` and NEVER got it —
+**every ChiralSite / site-normal run before 2026-10-01 (viscosity, low-ATP, mirror, all twirl campaigns) had rupture
+OFF.** Negligible at saturating ATP (rupture competes with a 50 µs ATP wait); DOMINANT at low ATP (rupture off ⇒ a
+d800 10 µM filament rigor-arrests). Now `build()` → `applyRupture()` installs it by default. **`-no-rupture`
+reproduces old runs byte-identically** (gated vs a pre-change binary) **and is REQUIRED to re-report old cached
+records**: rupture-ON record ids (atp/atpden/etamap/s2map/zsm/lat) carry a `_rup` suffix so a report mode can never
+mix the two. Post-hoc scripts that regex these filenames will not match `_rup` ids.
+
 **S2 FIXTURE HETEROGENEITY (new study, 2026-07-26) — AUDIT ONLY.** Separately bounded investigation of the
 assay fixture *mechanically free S2 length*: does a heterogeneous lawn change the core GLIDING predictions,
 their variability or their density dependence? (Twirling is auxiliary and never selects a distribution.)
