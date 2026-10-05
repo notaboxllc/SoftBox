@@ -4507,7 +4507,7 @@ public final class TwoBodyConverterMotor {
             G.nSeg=1; int mc=Math.max(1,(int)Math.round(G4_NSEG*segLen/Constants.actinMonoRadius)-1);   // one rod, same end-to-end
             FilamentStore f=new FilamentStore(1); f.monomerCount.set(0,mc);
             f.setUVec(0,1f,0f,0f); f.setYVec(0,0f,1f,0f); f.setCoord(0,0f,0f,0f);
-            f.brownTransScale.set(0,(float)Constants.BTransCoeff); f.brownRotScale.set(0,(float)Constants.BRotCoeff);
+            f.brownTransScale.set(0,(float)Constants.BTransCoeff); f.brownRotScale.set(0,(float)RIGID_BROT);
             DragTensorSystem.run(f); f.setParams(dt,Constants.brownianForceMag(dt)); f.setCounts(0,seed);
             DerivedGeometrySystem.derive(f.coord,f.uVec,f.yVec,f.zVec,f.end1,f.end2,f.segLength,f.counts);
             G.fil=f;
@@ -4785,6 +4785,12 @@ public final class TwoBodyConverterMotor {
     // ============================================================================================
 
     /** 4D-ii: uniform CSR grid over the FIXED motor sites (built once) for the per-segment union query. */
+    // Rotational Brownian amplitude scale for the RIGID single-rod filament (rigid branch of buildS2Mat). Historical
+    // value Constants.BRotCoeff = 0.5 is a v1 chain-END-segment persistence-length knob, "NOT part of the FDT
+    // relation" (Constants.java); on a rigid rod it quarters every rotational diffusion coefficient, roll included.
+    // ChiralSiteHarness.build() sets it to 1.0 (FDT) by default since 2026-10-04; -legacy-rod-brot restores 0.5.
+    // Default here stays 0.5 so every other caller is byte-identical.
+    static double RIGID_BROT = Constants.BRotCoeff;
     static void initMatGrid(Glide2D G){
         int N=G.N; if(N==0){ G.gnx=1; G.gny=1; G.cellStart=new int[]{0,0}; G.cellMotor=new int[0]; return; }
         G.gcell=Math.max(G.queryR,0.02);

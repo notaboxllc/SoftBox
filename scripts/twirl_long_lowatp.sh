@@ -18,6 +18,9 @@
 # 20260901, launched 2026-09-30) ran rupture OFF; reproduce it with EXTRA=-no-rupture. New arms are rupture ON.
 # MORE LAWNS (2026-10-01): d400 stalled (~0.02 um/s at 1.5 s) and was stopped; three more d200 lawns via SEED
 # (each seed lays a different motor lawn -- the existence gate). The default seed keeps the original output path.
+# PROBES (2026-10-04): one rhodamine-style probe per filament segment (default 1 for the rigid -filsegs 1 rod;
+# on a rigid rod extra probes all rotate identically). Runs before this date used 8.
+PROBES=${PROBES:-1}
 set -u
 DENS=${DENS:-200}
 SEED=${SEED:-20260901}
@@ -34,5 +37,5 @@ exec ./scripts/run_gpu_monitored.sh ./scripts/run_site_normal_glide_gpu.sh \
     -run -gpu -devicecull -nohires -matx 6.0 -maty 4.0 -filx 1.5 -eta 0.01 -dt 1.25e-7 \
     -steps "$STEPS" -target 16.0 -filsegs 1 -triad -convaz-nocomp -seed "$SEED" \
     -density "$DENS" -stroke-skew -1.25 -atp-uM 10 \
-    -probes 8 -probe-radius 0.04 -viz-stride 8000 -stop-offlawn 0.1 -resident -chunkocc -leanreadback \
+    -probes "$PROBES" -probe-radius 0.04 -viz-stride 8000 -stop-offlawn 0.1 -resident -chunkocc -leanreadback \
     $EXTRA -out "$OUT"

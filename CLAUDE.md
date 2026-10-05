@@ -620,6 +620,29 @@ reproduces old runs byte-identically** (gated vs a pre-change binary) **and is R
 records**: rupture-ON record ids (atp/atpden/etamap/s2map/zsm/lat) carry a `_rup` suffix so a report mode can never
 mix the two. Post-hoc scripts that regex these filenames will not match `_rup` ids.
 
+**REALISM AUDIT DEFAULTS FOR THE SITE-NORMAL GLIDING/TWIRL HARNESS (2026-10-04; re-baselines it).** After the rupture
+gap, a code + literature audit (Beausang 2008 low-[ATP] twirl) found four more unrealistic defaults in
+`SiteNormalLongGlideHarness` (via `ChiralSiteHarness.build()`). Each is now DEFAULT ON with an exact opt-out; all four
+opt-outs together reproduce the pre-audit binary byte-identically (GPU, 11/11 rows):
+1. **Random motor orientation** (`RANDBASE`, seed = lawn seed unless `-randbase-seed`; `-no-randbase`). Before, every
+   motor shared bhat=+x/econv=+y: a perfectly polarized, filament-aligned lawn. **SiteNormal only** — `ChiralSiteHarness`
+   campaign modes still pass a per-arm `randBase` (single-motor geometry gates rely on the fixed frame).
+2. **Rigid-rod rotational Brownian at FDT** (`TwoBodyConverterMotor.RIGID_BROT` = 1.0, set in `ChiralSiteHarness.build()`;
+   `-legacy-rod-brot`). The old 0.5 = `Constants.BRotCoeff`, a v1 chain-END Lp knob, quartered roll/pitch/yaw
+   diffusion (measured new/legacy D_roll ratio 3.83 vs 4). **Every pre-2026-10-04 roll SE, the "diffusive roll matches
+   theory" claim (2026-09-23) and the virtual-microscope result were made in a 4x-too-quiet thermal roll.**
+3. **ATP binding from a measured constant** (`-atp-uM` ⇒ atpOn = min(2e4, k·[ATP]), k = `ATP_K_PER_UM_S` = 2.4 /µM/s,
+   rabbit fast-skeletal acto-S1, Ritchie 1993 via Deacon 2012; `-atp-k`, `-atp-legacy-linear`). The old linear map from
+   a 2 mM anchor implied 10 /µM/s: "10 µM" behaved like ~40 µM. Without `-atp-uM` the frozen saturating 2e4 is
+   untouched; note `-atp-uM 2000` now gives 4800 /s, not 2e4 (the frozen canon is itself ~4x the measured k at 2 mM).
+4. **Filament height from the hard z-slab** (`-z-slab on`, default; `-z-slab off` = legacy harmonic well, RMS 1.4 nm).
+   Also: cull sites now rotate with randomized motors (`-legacy-cullsites`); measured harmless (stale sites still ≥55 nm
+   clear of capture).
+**Open:** CPU-runner Gate W (1 vs 8 workers bit-identity) FAILS in the all-legacy config (~8e-10) and with the slab on
+(~8e-13), passes with the slab off — pre-existing, CPU-only, decorrelates long chaotic CPU runs across worker counts.
+**Stated limitations kept (not fixed):** single-headed motors (Beausang: two-headed whole skeletal myosin), rigid 2.1 µm
+rod, η = 0.01 Pa·s, uncalibrated `k_det`, sparse every4 site lattice, GPU site-normal path not validated for bound heads.
+
 **S2 FIXTURE HETEROGENEITY (new study, 2026-07-26) — AUDIT ONLY.** Separately bounded investigation of the
 assay fixture *mechanically free S2 length*: does a heterogeneous lawn change the core GLIDING predictions,
 their variability or their density dependence? (Twirling is auxiliary and never selects a distribution.)

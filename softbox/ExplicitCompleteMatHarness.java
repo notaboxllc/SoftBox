@@ -427,6 +427,11 @@ public final class ExplicitCompleteMatHarness {
     static boolean HEAD_TILT_AXIS_FIX = true;
     static boolean RAND_BASE_AZ = false;     // -randomize-motor-base-azimuth (SCENE control, not physics)
     static int     RAND_BASE_SEED = 20260724;
+    // RANDBASE_CULL_FIX (default true since 2026-10-04; -legacy-cullsites => false): rotate the cull's ideal head site
+    // (G.siteX/siteY, used ONLY by the device cull, the CPU cull plan and the motor cell grid) with the motor it
+    // belongs to. Without it the cull keeps the pre-rotation site, up to ~22 nm stale against queryR = 80 nm.
+    // No effect unless RAND_BASE_AZ is on.
+    static boolean RANDBASE_CULL_FIX = true;
     // NOISE_SEED (-noise-seed) — key the per-step RNG (Brownian + chemistry) on a DIFFERENT integer from the
     // one that lays the motor lawn. build(seed) keeps the lawn; only the (slot, step, runSeed) RNG keying moves.
     //
@@ -1107,7 +1112,12 @@ public final class ExplicitCompleteMatHarness {
                 double gx = e.frame.get(9 * N + m) - Px, gy = e.frame.get(10 * N + m) - Py, gz = e.frame.get(11 * N + m) - Pz;
                 double[] rg = rotAbout(gx, gy, gz, ex0, ey0, ez0, c, s);
                 e.frame.set(9 * N + m, Px + rg[0]); e.frame.set(10 * N + m, Py + rg[1]); e.frame.set(11 * N + m, Pz + rg[2]);
+                if (RANDBASE_CULL_FIX && G.siteX != null && m < G.siteX.length) {   // the cull's site moves with its motor
+                    double[] rs = rotAbout(G.siteX[m] - Px, G.siteY[m] - Py, -Pz, ex0, ey0, ez0, c, s);
+                    G.siteX[m] = Px + rs[0]; G.siteY[m] = Py + rs[1];
+                }
             }
+            if (RANDBASE_CULL_FIX && G.siteX != null) TwoBodyConverterMotor.initMatGrid(G);   // re-bin the moved sites
         }
         // ---- CONVERTER TRANSVERSE OFFSET (diagnostic, default-off): roll each motor's base triad about its OWN b̂.
         // b̂ is invariant, so the AXIAL stroke direction is untouched; (econv, ê_up) tilt, which displaces the

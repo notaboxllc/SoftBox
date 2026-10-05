@@ -119,6 +119,20 @@ public final class ChiralSiteHarness {
     static final double ATP_REF_UM = 2000.0;  // the declared saturating-ATP reference the frozen atpOn represents
     static double  ATP_UM = -1.0;             // -atp-uM <c>;  < 0 ⇒ feature absent (exact no-op)
     static double  ATP_ON_EFF = Double.NaN;   // the realized nucParams[1] of the last build (for records/logging)
+    // ATP BINDING FROM A MEASURED SECOND-ORDER CONSTANT (default since 2026-10-04). With -atp-uM given, atpOn =
+    // min(frozen saturating 2e4 /s, ATP_K_PER_UM_S * [ATP]). ATP_K_PER_UM_S = 2.4 /uM/s is acto-S1 ATP binding
+    // K1'k+2' for rabbit FAST-SKELETAL myosin (20 C, 100 mM KCl; Ritchie 1993 / Nyitrai 2006 via Deacon 2012
+    // PMC3375423) -- the myosin of Beausang 2008, and the same class as this model's Lymn-Taylor skeletal stitch.
+    // The old linear map from a 2 mM anchor implied 10 /uM/s (4x faster). -atp-legacy-linear restores it
+    // byte-identically. NOTE: at 2000 uM this gives 4800 /s, not the frozen 2e4; with NO -atp-uM flag the frozen
+    // saturating canon is untouched.
+    static double  ATP_K_PER_UM_S = 2.4;
+    static boolean ATP_LEGACY_LINEAR = false;
+    static String atpTag() { return (ATP_UM < 0 || ATP_LEGACY_LINEAR) ? "" : String.format(Locale.US, "_k%.3g", ATP_K_PER_UM_S); }
+    // RIGID-ROD ROTATIONAL BROWNIAN AT FDT (default since 2026-10-04): TwoBodyConverterMotor.RIGID_BROT = 1.0 for
+    // the -filsegs 1 rod, set in build(). The historical 0.5 (Constants.BRotCoeff, a v1 chain-end Lp knob) quartered
+    // roll/pitch/yaw diffusion. -legacy-rod-brot restores it.
+    static boolean ROD_FDT = true;
     // RIGOR MECHANICAL RUPTURE — CANONICAL DEFAULT ON (2026-10-01). Canon v2 (2026-07-22) promoted rupture mode 1
     // (rigor-only, Guo-Guilford constants) to default ON, but only through ExplicitCompleteMatHarness.
     // runProductionCell's arg parse. This lineage builds through build() and never got it, so EVERY ChiralSite and
@@ -362,6 +376,9 @@ public final class ChiralSiteHarness {
                                         for (int k = 0; k < p.length; k++) ETA_MAP[k] = Double.parseDouble(p[k]); }
                 // ---- LOW-[ATP] STUDY ----
                 case "-atp-uM", "-atp-um" -> ATP_UM = Double.parseDouble(args[++i]);
+                case "-atp-k" -> ATP_K_PER_UM_S = Double.parseDouble(args[++i]);
+                case "-atp-legacy-linear" -> ATP_LEGACY_LINEAR = true;
+                case "-legacy-rod-brot" -> ROD_FDT = false;
                 case "-rupture" -> RUPTURE = true;          // canonical default; explicit form accepted
                 case "-no-rupture" -> RUPTURE = false;      // reproduce pre-2026-10-01 runs / read their records
                 case "-atp-fixtures" -> atpFix = true;
@@ -566,7 +583,9 @@ public final class ChiralSiteHarness {
         // buildS2Mat(…, rigidFil) javadoc). Otherwise the canonical chain, with G4_NSEG_RUN honouring FIL_SEGS.
         boolean rigid = FIL_SEGS == 1;
         int saved = TwoBodyConverterMotor.G4_NSEG_RUN;
+        double savedBrot = TwoBodyConverterMotor.RIGID_BROT;
         if (!rigid) TwoBodyConverterMotor.G4_NSEG_RUN = FIL_SEGS;
+        TwoBodyConverterMotor.RIGID_BROT = ROD_FDT ? 1.0 : Constants.BRotCoeff;   // rigid-rod rotational FDT
         try {
             Glide2D G = TwoBodyConverterMotor.buildS2Mat(DENSITY, DTR, 40.0,
                     TwoBodyConverterMotor.EXPLICIT_GLIDE_SLACK_NM, seed, rigid);
@@ -578,7 +597,7 @@ public final class ChiralSiteHarness {
             applyAtp(G);                                 // §LOW-ATP assay concentration (default-ABSENT ⇒ exact no-op)
             applyRupture(G);                             // canonical rigor rupture (default ON; -no-rupture ⇒ historical)
             return G;
-        } finally { TwoBodyConverterMotor.G4_NSEG_RUN = saved; }
+        } finally { TwoBodyConverterMotor.G4_NSEG_RUN = saved; TwoBodyConverterMotor.RIGID_BROT = savedBrot; }
     }
 
     /** COHERENT whole-system solvent viscosity — see the ETA field block. r==1 ⇒ exact no-op. */
@@ -605,6 +624,12 @@ public final class ChiralSiteHarness {
     static void applyAtp(Glide2D G) {
         ATP_ON_EFF = G.mot.nucParams.get(1);                   // as built = the frozen saturating-ATP rate
         if (ATP_UM < 0) return;                                // feature ABSENT ⇒ byte-identical to every existing path
+        if (!ATP_LEGACY_LINEAR) {
+            float eff = (float) Math.min(G.mot.nucParams.get(1), ATP_K_PER_UM_S * ATP_UM);
+            G.mot.nucParams.set(1, eff);
+            ATP_ON_EFF = eff;
+            return;
+        }
         double s = ATP_UM / ATP_REF_UM;
         if (s == 1.0) return;                                  // explicit reference condition ⇒ exact identity
         float eff = (float) (G.mot.nucParams.get(1) * s);
@@ -612,7 +637,8 @@ public final class ChiralSiteHarness {
         ATP_ON_EFF = eff;
     }
     /** The effective NONE→ATP hazard (1/s) a given [ATP] produces, without building a scene. */
-    static double atpOnFor(double uM) { return uM < 0 ? 2.0e4 : 2.0e4 * (uM / ATP_REF_UM); }
+    static double atpOnFor(double uM) { return uM < 0 ? 2.0e4
+            : (ATP_LEGACY_LINEAR ? 2.0e4 * (uM / ATP_REF_UM) : Math.min(2.0e4, ATP_K_PER_UM_S * uM)); }
     static String atpLabel() { return ATP_UM < 0 ? "absent (frozen saturating)" : String.format(Locale.US, "%.4g µM", ATP_UM); }
 
     // ============================================================ STAGE 0/1 — viscosity + FDT + timestep audit
@@ -4783,9 +4809,9 @@ public final class ChiralSiteHarness {
         if (ATP_DENS_ON)
             return String.format(Locale.US, "atpden_r%06.1f_u%07.2f_d%08d_%s%s%d", DENSITY, uM,
                     Math.round(durS * 1e6), mirror < 0 ? "m_" : "",
-                    sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed) + rupTag();
+                    sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed) + rupTag() + atpTag();
         return String.format(Locale.US, "atp_u%07.2f_d%08d_%s%s%d", uM, Math.round(durS * 1e6),
-                mirror < 0 ? "m_" : "", sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed) + rupTag();
+                mirror < 0 ? "m_" : "", sgn > 0 ? "p_" : (sgn < 0 ? "n_" : "z_"), seed) + rupTag() + atpTag();
     }
     static String atpProvenance(double uM, double durS) {
         return powProvenance() + String.format(Locale.US,

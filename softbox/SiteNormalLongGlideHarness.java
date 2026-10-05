@@ -97,7 +97,19 @@ public class SiteNormalLongGlideHarness {
     // i.e. ~1500x between captures), but the neck axis n1 and the binding-plane normal econv are built from the
     // STORED base triad (neckFrame / eBindOf) and no amount of beam flexing rotates them. This flag is the only
     // lever on that channel. Default OFF ⇒ the historical path is byte-identical.
-    static boolean RANDBASE = false;
+    //
+    // CANONICAL DEFAULT ON since 2026-10-04 (jba): with it off, every motor shares ONE lab-fixed base frame
+    // (bhat=+x along the filament, econv=+y) -- a perfectly polarized, filament-aligned lawn, which no
+    // nitrocellulose/silane HMM lawn is. The orientation seed now follows the LAWN seed (-seed), so each lawn gets
+    // its own independent orientations, unless -randbase-seed is given. -no-randbase restores the historical
+    // shared frame (gated byte-identical). ChiralSiteHarness campaign modes are NOT changed (their cfg() calls pass
+    // a per-arm randBase, and single-motor geometry gates rely on the fixed frame).
+    static boolean RANDBASE = true;
+    static boolean RANDBASE_SEED_SET = false;
+    // FILAMENT z SUPPORT: the validated hard slab (MatSoaSlice.matZSlab, flat interior, walls lawn..lawn+80 nm; CPU==GPU;
+    // docs/attachment/FILAMENT_Z_SLAB_AND_ACCESSIBILITY_RERUN.md) is DEFAULT since 2026-10-04 in this harness: the
+    // filament height emerges from the motors. -z-slab off restores the legacy harmonic well (Fz=-kz*z, RMS 1.4 nm).
+    static boolean Z_SLAB_CLI = true;
     // CANONICAL DEFAULT since 2026-08-17: the DETACHED head rests collinear with the neck
     // (ExplicitCompleteMatHarness.STRAIGHT_REST). -straightrest is retained as an accepted no-op so existing
     // command lines keep working; -nativerest reproduces the superseded (phi_pre, psiActin, chi=0) pose.
@@ -231,10 +243,17 @@ public class SiteNormalLongGlideHarness {
                 // nucParams[1] (atpOn, NONE->ATP) by [ATP]/2000 µM. Absent (<0, default) => exact no-op.
                 // docs/twirling/LOW_ATP_GLIDING_TWIRLING_FINDINGS.md s2 for the anchor and its caveats.
                 case "-atp-uM", "-atp-um" -> ChiralSiteHarness.ATP_UM = Double.parseDouble(args[++i]);
+                // 2026-10-04 realism fixes, each default-ON with an exact opt-out (see ChiralSiteHarness / EXCM):
+                case "-atp-k" -> ChiralSiteHarness.ATP_K_PER_UM_S = Double.parseDouble(args[++i]);
+                case "-atp-legacy-linear" -> ChiralSiteHarness.ATP_LEGACY_LINEAR = true;
+                case "-legacy-rod-brot" -> ChiralSiteHarness.ROD_FDT = false;
+                case "-legacy-cullsites" -> ExplicitCompleteMatHarness.RANDBASE_CULL_FIX = false;
+                case "-z-slab" -> Z_SLAB_CLI = args[++i].equals("on");
                 case "-dt" -> DT = Double.parseDouble(args[++i]);
                 case "-resume" -> RESUME = true;
                 case "-gate-a" -> { GATE_A = true; }
                 case "-randbase" -> RANDBASE = true;
+                case "-no-randbase" -> RANDBASE = false;
                 case "-straightrest" -> STRAIGHTREST = true;   // now the default; kept so old invocations still parse
                 case "-nativerest" -> STRAIGHTREST = false;    // the superseded pre-2026-08-17 rest pose
                 case "-bothstrands" -> ExplicitCompleteMatHarness.TWO_STRAND_SITES = true;  // now default; kept so old invocations parse
@@ -312,6 +331,7 @@ public class SiteNormalLongGlideHarness {
                 // motors the -3js frame writer emits). -viz-showr raises the full-articulation radius,
                 // -viz-postsub 1 emits EVERY motor as an anchor post so the lawn is actually visible.
                 case "-viz-showr" -> SHOW_R = Double.parseDouble(args[++i]);
+                case "-viz-lawn" -> VIZ_LAWN = true;
                 case "-viz-postsub" -> POST_SUB = Math.max(1, Integer.parseInt(args[++i]));
                 case "-kprofile" -> KPROF = Integer.parseInt(args[++i]);
                 case "-leanreadback" -> ExplicitCompleteMatHarness.GLIDE_LEAN = true;
@@ -325,7 +345,7 @@ public class SiteNormalLongGlideHarness {
                 // -no-rupture reproduces those runs byte-identically.
                 case "-rupture" -> ChiralSiteHarness.RUPTURE = true;
                 case "-no-rupture" -> ChiralSiteHarness.RUPTURE = false;
-                case "-randbase-seed" -> ExplicitCompleteMatHarness.RAND_BASE_SEED = Integer.parseInt(args[++i]);
+                case "-randbase-seed" -> { ExplicitCompleteMatHarness.RAND_BASE_SEED = Integer.parseInt(args[++i]); RANDBASE_SEED_SET = true; }
                 // SAME lawn, DIFFERENT noise stream — the control for whether matched-lawn pairing works.
                 case "-noise-seed" -> ExplicitCompleteMatHarness.NOISE_SEED = Integer.parseInt(args[++i]);
                 // A silently-swallowed unknown flag has now cost two campaign relaunches (a stale build
@@ -337,6 +357,7 @@ public class SiteNormalLongGlideHarness {
             }
         }
         if (!gates && !run && !report) { gates = true; run = true; }
+        if (RANDBASE && !RANDBASE_SEED_SET) ExplicitCompleteMatHarness.RAND_BASE_SEED = SEED;   // for the banner; scene() re-keys
         banner();
         Files.createDirectories(Path.of(OUT));
         if (gates) { if (!runGates()) { System.out.println("\n*** GATES FAILED — the long run is NOT started. ***"); return; } }
@@ -495,6 +516,9 @@ public class SiteNormalLongGlideHarness {
                 RANDBASE ? "ON" : "OFF", RANDBASE ? " (seed " + ExplicitCompleteMatHarness.RAND_BASE_SEED + ")" : "");
         System.out.printf(Locale.US, "  [ATP]           = %s -> atpOn %.4g /s%n",
                 ChiralSiteHarness.atpLabel(), ChiralSiteHarness.atpOnFor(ChiralSiteHarness.ATP_UM));
+        System.out.println("  ROD ROT BROWN   = " + (ChiralSiteHarness.ROD_FDT ? "FDT (scale 1.0)" : "LEGACY BRotCoeff " + Constants.BRotCoeff + " (-legacy-rod-brot)")
+                + " | Z SUPPORT = " + (Z_SLAB_CLI ? "hard slab (lawn..lawn+80 nm)" : "LEGACY harmonic well (-z-slab off)")
+                + " | CULL SITES = " + (ExplicitCompleteMatHarness.RANDBASE_CULL_FIX ? "rotated with motor" : "LEGACY stale"));
         System.out.println("  RIGOR RUPTURE   = " + (ChiralSiteHarness.RUPTURE
                 ? "ON (canonical mode 1, Guo-Guilford rigor-only)" : "OFF (-no-rupture: pre-2026-10-01 behaviour)"));
         System.out.printf(Locale.US, "  STROKE SKEW eps = %+.3f deg (EPS_STROKE_DEG, mirror-coupled) | MIRROR = %+.1f%n",
@@ -517,6 +541,8 @@ public class SiteNormalLongGlideHarness {
         System.out.println("  OCC RESOLVERS = " + (ExplicitCompleteMatHarness.CHUNK_OCC
                 ? "BLOCK-SKIPPING (-chunkocc, " + ChiralSiteSystem.OCC_CHUNK + "-motor blocks; decision-identical)"
                 : "FULL SERIAL SCAN (historical)"));
+        System.out.println("  VIEWER LAWN   = " + (VIZ_LAWN ? "FULL (-viz-lawn: every motor written, far-field as state anchor)"
+                : "near-filament motors + every " + POST_SUB + "th anchor post"));
         System.out.println("  READBACK      = " + (ExplicitCompleteMatHarness.GLIDE_LEAN
                 ? "LEAN (-leanreadback: per-step only what the loop reads; frame/checkpoint state pulled on demand)"
                 : "FULL every step (historical)"));
@@ -545,6 +571,7 @@ public class SiteNormalLongGlideHarness {
         // Default RAMP_OFF is preserved when no converter skew is requested, so -conv-skew 0 is an exact no-op.
         ChiralSiteHarness.EPS_CONV_ARM = CONV_SKEW_DEG;
         if (CONV_SKEW_DEG != 0.0) ChiralSiteHarness.CONV_RAMP = ChiralSiteSystem.RAMP_LINEAR;
+        if (RANDBASE && !RANDBASE_SEED_SET) ExplicitCompleteMatHarness.RAND_BASE_SEED = seed;   // orientations follow the lawn
         ChiralSiteHarness.cfg(ChiralSiteHarness.PATH_B_SITE_MODE, true, 0.0, 0.0, STROKE_SKEW_DEG, RANDBASE, MIRROR, true);
         // AFTER cfg(): cfg -> resetChiral() clears REG_K / REG_SWITCH_DEG too, so assert them here.
         ExplicitCompleteMatHarness.REG_K = REG_K_NM;
@@ -580,6 +607,7 @@ public class SiteNormalLongGlideHarness {
         }
         // AFTER cfg(): cfg -> resetChiral() clears STRAIGHT_REST, so it must be asserted here, not before.
         ExplicitCompleteMatHarness.STRAIGHT_REST = STRAIGHTREST;
+        ExplicitCompleteMatHarness.Z_SLAB = Z_SLAB_CLI;            // AFTER cfg(), BEFORE build()/packExMat
         // SAME TRAP for the Brownian channels: cfg() ends with setBrownianPolicy(FIL_BROWN x4, ...), which
         // overwrites anything the CLI set during arg parsing. Re-assert AFTER cfg() and BEFORE build() (build ->
         // packExMat is what freezes e.brChan). Defaults (both true) reproduce cfg()'s own call exactly, so this
@@ -1502,7 +1530,10 @@ public class SiteNormalLongGlideHarness {
                               REG_SWITCH_DEG, REG_K_NM)
               + String.format(Locale.US, "  \"s2_catch_factor\": %.4f,\n  \"s2_loadcatch_factor\": %.4f,\n  \"s2_loadcatch_F0_pN\": %.4f,\n  \"two_point_bond\": %s,\n  \"two_point_foot_nm\": %.4f,\n", S2_CATCH, S2_LOADCATCH, S2_LOADF0_PN, TWO_POINT ? "true" : "false", TWO_POINT_FOOT_NM)
               + "  \"steric\": false,\n"
-              + "  \"z_support\": \"matZConfine (z-slab off)\",\n  \"filament_brownian\": true,\n  \"motor_brownian\": true,\n"
+              + "  \"z_support\": \"" + (ExplicitCompleteMatHarness.zSlabOn() ? "matZSlab (hard slab, lawn..lawn+80 nm)" : "matZConfine (legacy harmonic well)") + "\",\n"
+              + "  \"rod_rot_brownian_scale\": " + (FIL_SEGS == 1 ? (ChiralSiteHarness.ROD_FDT ? "1.0" : String.valueOf(Constants.BRotCoeff)) : "\"chain (BRotCoeff ends, 0 interior)\"") + ",\n"
+              + "  \"atp_binding\": \"" + (ChiralSiteHarness.ATP_UM < 0 ? "frozen saturating" : ChiralSiteHarness.ATP_LEGACY_LINEAR ? "legacy linear from 2 mM" : String.format(Locale.US, "k=%.4g /uM/s", ChiralSiteHarness.ATP_K_PER_UM_S)) + "\",\n"
+              + "  \"randbase_cull_sites\": " + (ExplicitCompleteMatHarness.RANDBASE_CULL_FIX ? "\"rotated\"" : "\"legacy (stale)\"") + ",\n  \"filament_brownian\": true,\n  \"motor_brownian\": true,\n"
               + "  \"capture_tol_deg\": 25.0,\n  \"target_um\": %.3f,\n"
               + "  \"centroid0\": [%.6f, %.6f, %.6f],\n  \"barbed_dir0\": [%.6f, %.6f, %.6f],\n"
               + "  \"expected_forward_dir\": [%.6f, %.6f, %.6f]\n}\n",
@@ -1615,7 +1646,14 @@ public class SiteNormalLongGlideHarness {
 
     // ================================================================================== PHASE 14 viewer
     static double SHOW_R   = 0.030;   // full articulation radius from ANY live segment (µm) — union, no midpoint
-    static int    POST_SUB = 24;      // far-field anchor-post subsampling (keeps the 7 µm lawn visible)
+    static int    POST_SUB = 24;
+    // -viz-lawn: write EVERY motor of the lawn (publication renders). Motors outside the articulation set are
+    // emitted as state "anchor" (so the viewer's "Lawn shown" slider thins them and the viewer can grey them):
+    // rod = the S2 beam chord (node 0 -> pivot node M), lever = pivot -> converter, head sphere. Far-field motors
+    // are culled, so their pose is the last one computed (frozen); if a head was never computed (zero / far from
+    // the pivot), it is drawn as the straight-rest continuation of the S2 chord. Replaces the subsampled posts.
+    // Articulated (near / bound) motors are unchanged and keep their nucleotide colours. Default off.
+    static boolean VIZ_LAWN = false;      // far-field anchor-post subsampling (keeps the 7 µm lawn visible)
 
     /**
      * One canonical {@code sim_viewer_boa.html} frame. Articulation is chosen by the PER-SEGMENT UNION rule
@@ -1747,7 +1785,31 @@ public class SiteNormalLongGlideHarness {
                     N + m, hx, hy, hz, fx, fy, fz, hx, hy, hz, fx, fy, fz, fx, fy, fz, fx, fy, fz,
                     bnd ? "NONE" : "ATP"));
         }
-        if (!nearOnly) {                                          // far-field anchor posts (subsampled)
+        if (!nearOnly && VIZ_LAWN) {                              // the FULL lawn, every non-articulated motor
+            boolean[] isArtic = new boolean[N];
+            for (int i = 0; i < nArtic; i++) isArtic[artic[i]] = true;
+            for (int m = 0; m < N; m++) {
+                if (isArtic[m]) continue;
+                double Ax = e.nodes.get(m), Ay = e.nodes.get(N+m), Az = e.nodes.get(2*N+m);
+                double Px = e.nodes.get((3*M)*N+m), Py = e.nodes.get((3*M+1)*N+m), Pz = e.nodes.get((3*M+2)*N+m);
+                double Cx = e.outGeom.get(m), Cy = e.outGeom.get(N+m), Cz = e.outGeom.get(2*N+m);
+                double hx = e.outGeom.get(3*N+m), hy = e.outGeom.get(4*N+m), hz = e.outGeom.get(5*N+m);
+                double dh = Math.sqrt((hx-Px)*(hx-Px) + (hy-Py)*(hy-Py) + (hz-Pz)*(hz-Pz));
+                if (!(dh > 1e-4 && dh < 0.03)) {                   // never computed: straight-rest continuation
+                    double sx = Px-Ax, sy = Py-Ay, sz = Pz-Az, sl = Math.sqrt(sx*sx + sy*sy + sz*sz);
+                    if (sl < 1e-9) { sx = 0; sy = 0; sz = 1; sl = 1; }
+                    hx = Px + 0.010*sx/sl; hy = Py + 0.010*sy/sl; hz = Pz + 0.010*sz/sl;
+                    Cx = Px; Cy = Py; Cz = Pz;
+                }
+                if (!first) b.append(','); first = false;
+                b.append(String.format(Locale.US,
+                        "{\"id\":%d,\"bound\":false,\"rod\":{\"end1\":[%.4g,%.4g,%.4g],\"end2\":[%.4g,%.4g,%.4g],\"r\":0.0009},"
+                      + "\"lever\":{\"end1\":[%.4g,%.4g,%.4g],\"end2\":[%.4g,%.4g,%.4g],\"r\":0.0011},"
+                      + "\"motor\":{\"end1\":[%.4g,%.4g,%.4g],\"end2\":[%.4g,%.4g,%.4g],\"r\":%.4g,\"state\":\"anchor\"}}",
+                        2*N + m, Ax, Ay, Az, Px, Py, Pz, Px, Py, Pz, Cx, Cy, Cz, hx, hy, hz, hx, hy, hz, HEAD_DRAW_R));
+            }
+        }
+        if (!nearOnly && !VIZ_LAWN) {                             // far-field anchor posts (subsampled)
             for (int m = 0; m < N; m += POST_SUB) {
                 double[] A = G.A[m];
                 if (!first) b.append(','); first = false;

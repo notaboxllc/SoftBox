@@ -36,6 +36,9 @@
 # (profiled: 10.5 of 12.4 ms/step of GPU kernel time at 96k motors). Byte-identical on GPU (43 captures).
 # -leanreadback (2026-09-26): copy back per step only what the loop reads (~6 of 41 MB at 96k motors); frame
 # and checkpoint state pulled on demand. Rows + frames byte-identical; 16k-motor scene 119 -> 162 steps/s.
+# PROBES (2026-10-04): one rhodamine-style probe per filament segment (default 1 for the rigid -filsegs 1 rod;
+# on a rigid rod extra probes all rotate identically). Runs before this date used 8.
+PROBES=${PROBES:-1}
 set -u
 MATY=${MATY:-6.0}
 OUT=${OUT:-RUN_LOGS/motor_audit/campaigns_2026-09/TWIRL_LONG_STRUCTURAL/d800_epsM1p25_fdt_maty6}
@@ -47,5 +50,5 @@ exec ./scripts/run_gpu_monitored.sh ./scripts/run_site_normal_glide_gpu.sh \
     -run -gpu -devicecull -nohires -matx 20.0 -maty "$MATY" -filx 8.5 -eta 0.01 -dt 1.25e-7 \
     -steps "$STEPS" -target 16.0 -filsegs 1 -triad -convaz-nocomp -seed 20260901 \
     -density 800 -stroke-skew -1.25 \
-    -probes 8 -probe-radius 0.04 -viz-stride 8000 -stop-offlawn 0.1 -resident -chunkocc -leanreadback \
+    -probes "$PROBES" -probe-radius 0.04 -viz-stride 8000 -stop-offlawn 0.1 -resident -chunkocc -leanreadback \
     -out "$OUT"

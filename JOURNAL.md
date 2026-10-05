@@ -1,5 +1,68 @@
 # Soft Box Project Journal
 
+### 2026-10-04 — d800 low-[ATP] lawns split; virtual microscope; REALISM AUDIT => four new defaults; canon2 relaunch
+
+**Polarized d800, 10 uM (old ATP map), rupture ON.** Lawn 20260901 (10x4): clean persistent LEFT-handed twirl, +8.1
+turns / 2.78 s, +2.90 +/- 0.38 turns/s, +6.1 turns/um, directedness 0.76-1.00 (stopped at 2.78 s to free the GPU).
+Lawn 20260902 (6x4): **no twirl** (+0.07 +/- 0.81 at 1.1 s; ~3 sigma different) -- the lawn switches the phenotype.
+Virtual microscope on lawn 20260901 (`scope_analysis/`): thermal roll 6.3 deg/ms; at Beausang's 80 ms polTIRF cycle
+the 2.75 turns/s twirl reads +0.17 +/- 0.20 (aliased, invisible); 40 ms 66 %, <=20 ms full.
+**Then jba spotted every motor facing the same way.** `RAND_BASE_AZ` was off: one lab-fixed base frame
+(bhat=+x along the filament, econv=+y) for the whole lawn. A code audit (subagent, file:line) and a literature audit
+(Beausang 2008, Sase 1997, Lewis 2012, Vilfan 2009, Deacon 2012) then found, and this session fixed, as DEFAULT ON
+with exact opt-outs (all opt-outs together == pre-audit binary, GPU 11/11 rows; details in CLAUDE.md):
+random motor orientation (seed = lawn seed); **rigid-rod rotational Brownian at FDT** (old 0.5 = v1 chain-end Lp
+knob quartered rotational diffusion; free-rod D_roll new/legacy = 3.83); **ATP binding k = 2.4 /uM/s** (rabbit
+fast-skeletal acto-S1; old map implied 10); hard z-slab instead of the harmonic well; cull sites rotate with motors
+(measured harmless: stale sites stayed >= 55 nm clear). **Every roll SE and twirl number before today was made in
+a 4x-too-quiet thermal roll on a polarized lawn.** Gate W (CPU 1 vs 8 workers) FAILS pre-existing (all-legacy) and with
+the slab; CPU only. Viewer: `-viz-lawn` writes every motor (far-field as grey `anchor`; BoA viewer edit for grey
+heads/levers). Launch scripts default to 1 probe (8 identical probes on a rigid rod).
+**Pilots (50 ms, new defaults, 10 uM = 24/s):** rigor 83-91 % of bound time and ~90 % of detachments by RUPTURE
+(residence ~5 ms vs ~42 ms ATP-limited) -- open question whether rupture makes low-ATP gliding too ATP-independent
+(test: v vs [ATP]). **Launched (canon2, ~42 h):** d800 lawn 20260901 at the MATCHED atpOn 100/s (clean test: do the
+fixes kill the twirl?) and lawn 20260902 at 5 uM (12/s), both 10x4, full-lawn frames.
+
+### 2026-10-03 — low-[ATP] d200 pair FINISHED (3.5 s, 2 lawns): the twirl does NOT slow in proportion -- it is ~absent
+
+`d200_atp10_epsM1p25_fdt{,_s20260902}_rup` (10 uM, eta 0.01, rupture ON, eps -1.25, roll Brownian ON, 6 x 4 um):
+both 3.5 s, 0 invalid, on-lawn (min margin 1.60 / 1.07 um). Glide **0.46 / 0.50 um/s** (in Beausang's window),
+avgBound 6.0 / 5.9, ~1400 strokes/s (high ATP d800: 8200/s).
+**Roll:** lawn 1 +1.58 turns, +0.45 +/- 0.60 t/s (SE plateaued), +0.98 +/- 1.30 turns/um; lawn 2 -4.27 turns,
+-1.22 +/- 1.10 t/s (SE still RISING at the largest block => optimistic), -2.44 +/- 2.19 turns/um. **Pooled
++0.06 +/- 0.53 turns/s, +0.09 +/- 1.12 turns/um.** "Slowed in proportion" predicts ~1.3-1.7 turns/s (~2-3 turns/um)
+=> **~2.4-3 sigma short** (less, given lawn 2's SE). Roll per stroke: +0.12 +/- 0.15 and -0.32 +/- 0.28 deg vs
++0.48 +/- 0.14 at high ATP (~2.4 sigma). Persistence: directedness +0.09..+0.31 (lawn 1) and -0.22..-0.59 (lawn 2,
+drifting RIGHT-handed late) -- no observer would call either a twirler.
+**What changed with ATP -- rigor occupancy.** Bound head-time NONE/ADP.Pi/ADP: **high ATP 7 / 15 / 78 %**,
+**low ATP 81 / 2 / 17 %** (both lawns). Of ~6 bound heads, ~5 sit in rigor; 65 % of detachments are rupture.
+Glide per stroke fell only ~25 % (0.45 -> 0.33-0.37 nm) while roll per stroke fell to ~0. HYPOTHESIS (untested):
+rupture releases rigor heads under axial load, so they resist the glide less than they resist the roll. Test: the
+queued d800 (avgBound ~22, also rigor-dominated) and a roll-per-stroke vs rigor-count breakdown (needs a per-row
+rigor count, not in trajectory_summary today). Caveats: two lawns; 2.1 um rigid filament (thermal roll unchanged).
+**d800 launched** from the queue at 06:21 (10 x 4 um lawn, 32k motors, stop at 3.5 s or 6 um).
+**UPDATE (12:40, d800 at 0.60 s of 3.5 s, ONE lawn, early):** avgBound 22, 0.49 um/s, roll **+3.2 +/- 0.7 turns/s
+(4.3 sigma, SE plateaued), +6.7 +/- 1.5 turns/um, directedness +0.96 at 33 ms** -- a clean persistent left-handed
+twirl at the same [ATP]. This argues AGAINST the rigor-brake hypothesis above (d800 is at least as rigor-dominated)
+and FOR detectability: ~6 bound heads cannot hold a 2.1 um filament's roll against thermal tumbling; ~22 can.
+
+### 2026-10-02 — low-[ATP] interim: no resolved twirl yet at 1.4 s; eta=0.1 arm null; d800 GLIDES with rupture ON
+
+**d200, 10 uM, eta 0.01, rupture ON (2 lawns, 1.39 s of 3.5 s):** 0.48 / 0.41 um/s (inside Beausang's window),
+avgBound 6.1 / 5.3; roll -0.44 +/- 0.97 and +1.18 +/- 1.01 turns/s (blocked SE PLATEAUED), pooled +0.35 +/- 0.70.
+If the twirl simply slowed with the glide (high-ATP pitch ~3 turns/um, or ~1300 strokes/s x the high-ATP +0.48
+deg/stroke) expect ~1.3-1.7 turns/s => currently ~1.5-2 sigma short. Directedness 0.1-0.3 at 33-250 ms (high ATP:
+0.85 at 100 ms). Roll per stroke: lawn 2 +0.44 deg (= high ATP's +0.48), lawn 1 -0.06. Full runs => pooled SE ~0.4,
+~3-4 sigma between "slowed in proportion" and "gone". If gone: detectability (a 2.1 um rod's thermal roll does not
+slow with ATP) vs mechanism (rigor heads holding/unwinding roll) -- split roll/stroke by rigor-bound count.
+**eta 0.1, d200, 10 uM, lawn 20260901, 3.5 s (dt 1.25e-6, 2.8M steps, 4.5 h on GPU):** 0.28 um/s, avgBound 1.9
+(engagement -3x for glide -1.6x, as in July), roll -0.73 +/- 0.58 turns/s, -2.7 +/- 2.1 turns/um -- unresolved;
+~2.2 sigma from "geared" (+2), ~1.4 sigma from "drag-limited" (+0.2-0.3). The July eta^-0.97 is on a PRE-triad,
+pre-site-normal motor and does not automatically transfer; a saturating-ATP pair would test it cleanly.
+**d800, 10 uM, rupture ON, 10 x 4 um lawn (100 ms probe, then stopped as agreed):** GLIDES ~0.46 um/s (2nd half),
+avgBound 21.6, 2/3 of detachments by rupture -- vs the rupture-OFF pilot's stall (avgBound 38, ~0 um/s). The d800
+stall was the missing rupture. A third GPU arm cut all arms to ~122 steps/s (two arms: ~258 each).
+
 ### 2026-10-01 — RIGOR RUPTURE WAS OFF in the whole twirl lineage; now default ON; low-[ATP] d200 relaunched (2 lawns)
 
 **The defect.** Canon v2 (2026-07-22) promoted rigor rupture mode 1 (force-dependent detachment of nucleotide-free
