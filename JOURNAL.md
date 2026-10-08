@@ -1,5 +1,29 @@
 # Soft Box Project Journal
 
+### 2026-10-07 — rod TILTED THROUGH the slab (centre-only walls); end-contact walls; dt check; 10 uM density sweep
+
+**d1600 (matched 100/s and 5 uM, new defaults, 8x4 lawn, stopped at 2.2 s).** Matched: steady 0.65 um/s glider,
+roll +1.43 +/- 0.78 turns/s (1.8 sigma), pitch -0.49 um/rev (Beausang -0.47) but unresolved and DECLINING by quarter
+(+2.5, +2.1, +1.1, +0.3 turns/s) as engagement fell 24 -> ~16 heads. 5 uM: erratic (11 heads, 2x lateral, 3x heading
+jitter), +4.1 +/- 1.3 turns/s, pitch -0.13 um/rev; glides 0.50 um/s for 8x slower ATP binding (93 % of detachments by
+rupture) -- the rupture-pacing flag, two lawns.
+**RETRACTED (same day):** the "filament rises to a +16 nm steady height over ~1 s / start-up transient" story -- it was the
+midpoint of the trajectory's `zmin`/`zmax`, which are RUNNING EXTREMES since t=0. The frames show the truth: the rigid
+rod PITCHES, with one end up to ~120-290 nm above the +70 nm ceiling and the other up to ~60-220 nm below the lawn
+plane (an end beyond a wall in 36-67 % of frames). Cause: `matZSlab` pushes the segment CENTRE only (no torque) --
+validated on 0.18 um chain segments, not a 2.1 um rod -- and full-FDT pitch diffusion (~37 deg RMS/s free) now tips
+it once engagement dips. The viewer's 0.2 um box (+/-100 nm, drawing only) hid most of it (jba watched it "inside the box").
+**Fix (`MatSoaSlice.matZSlabEnds`, default in SiteNormal; `-z-slab-centre` legacy):** each END's surface tested and
+pushed there with a levelling torque; per-end gain from the combined translation+rotation mobility. Gates: legacy
+flags reproduce the old binary 10/10 rows; free rod (d2, 0.1 s): worst penetration 0.2 nm (legacy 231 nm). Ceiling now
+floor + 70 nm (jba; numerical only). Frames carry `bounds.zMin/zMax`; the BoA viewer draws the box at the walls.
+**dt check (d1600, 6x4, matched rate, 0.1 s, old centre walls):** heads bound 23.2 +/- 1.0 (dt) / 27.2 +/- 0.7 (dt/2) /
+29.6 +/- 1.1 (dt/4) => ~first-order, extrapolated ~31-32: **production dt under-binds ~25 %**. Glide speed, lateral and
+heading jitter show no dt trend. jba's call: keep dt 1.25e-7, record the bias (a binding sub-step is the remedy if ever needed).
+**Launched: density sweep at TRUE 10 uM (24/s)** -- d1600/d2400/d3200, lawn 20260901, 6x4, end-contact walls, full
+lawn frames every 2 ms; ~77 steps/s each (~4 days for 3.5 s; judged along the way). Voided runs' frames (~93 GB)
+moved to removeMe (emptied by jba); trajectories/logs kept.
+
 ### 2026-10-04 — d800 low-[ATP] lawns split; virtual microscope; REALISM AUDIT => four new defaults; canon2 relaunch
 
 **Polarized d800, 10 uM (old ATP map), rupture ON.** Lawn 20260901 (10x4): clean persistent LEFT-handed twirl, +8.1

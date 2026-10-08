@@ -636,6 +636,14 @@ opt-outs together reproduce the pre-audit binary byte-identically (GPU, 11/11 ro
    a 2 mM anchor implied 10 /µM/s: "10 µM" behaved like ~40 µM. Without `-atp-uM` the frozen saturating 2e4 is
    untouched; note `-atp-uM 2000` now gives 4800 /s, not 2e4 (the frozen canon is itself ~4x the measured k at 2 mM).
 4. **Filament height from the hard z-slab** (`-z-slab on`, default; `-z-slab off` = legacy harmonic well, RMS 1.4 nm).
+   **Walls act at the rod ENDS** (2026-10-06, `MatSoaSlice.matZSlabEnds`, default in SiteNormal; `-z-slab-centre` =
+   legacy): `matZSlab` pushes the segment CENTRE only (no torque), so the 2.1 µm rigid rod pitched through both walls
+   (36–67 % of frames had an end below the floor / above the ceiling, by up to ~230 nm). Now each end's surface is
+   tested and pushed there (force + levelling torque, gain from the end's combined mobility). Free-rod gate: worst
+   penetration 0.2 nm (legacy 231 nm); `-z-slab-centre -z-slab-hi-nm 80` reproduces the old binary byte-identically.
+   **Ceiling = floor + 70 nm** (`-z-slab-hi-nm`; numerical only). Frames now carry `bounds.zMin/zMax` = the walls and
+   the viewer draws the box there. **Trap:** trajectory `zmin`/`zmax` are RUNNING EXTREMES since t=0, not the current
+   height — use the frames' segment end z for height.
    Also: cull sites now rotate with randomized motors (`-legacy-cullsites`); measured harmless (stale sites still ≥55 nm
    clear of capture).
 **Open:** CPU-runner Gate W (1 vs 8 workers bit-identity) FAILS in the all-legacy config (~8e-10) and with the slab on

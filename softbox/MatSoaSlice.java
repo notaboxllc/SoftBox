@@ -503,6 +503,54 @@ public final class MatSoaSlice {
         }
     }
 
+    // KERNEL — matZSlabEnds: the slab walls applied WHERE THE ROD TOUCHES THEM (2026-10-06). matZSlab pushes the
+    // segment CENTRE only (no torque), so a long tilted rod can penetrate both walls at once with the two pushes
+    // cancelling: a 2.1 um rigid rod was seen with one end ~120 nm above the ceiling and the other ~60-115 nm below
+    // the lawn plane. Here each END's lowest/highest surface point (end-cap disc: zEnd -/+ R*sqrt(1-uz^2)) is tested
+    // against the walls and the push acts AT THAT END: lab z force plus torque r x F, r = +/- half*u. The per-end
+    // gain removes `frac` of the penetration in one step through the end's COMBINED mobility (translation 1e6/gt +
+    // rotation 1e-6*half^2/gr, um per N per s), so it cannot overshoot via the rotational channel (which is ~3x the
+    // translational one for a long rod). Same zsP as matZSlab. Both ends in contact on a level rod => their torques
+    // cancel and each supplies part of the translation (under-corrects, never overshoots).
+    public static void matZSlabEnds(FloatArray filCoord, FloatArray filUVec, FloatArray filSegLength,
+                                    FloatArray filBTransGam, FloatArray filBRotGam, FloatArray filForceSum,
+                                    FloatArray filTorqueSum, FloatArray zsP, IntArray counts) {
+        int nSeg = counts.get(3);
+        float zLo = zsP.get(0), zHi = zsP.get(1), Ract = zsP.get(2), frac = zsP.get(3), dt = zsP.get(4);
+        for (@Parallel int s = 0; s < nSeg; s++) {
+            int ix = s, iy = nSeg + s, iz = 2 * nSeg + s;
+            float ux = filUVec.get(ix), uy = filUVec.get(iy), uz = filUVec.get(iz);
+            float half = 0.5f * filSegLength.get(s);
+            float perp2 = 1.0f - uz * uz; if (perp2 < 0.0f) perp2 = 0.0f;
+            float rr = Ract * (float) Math.sqrt(perp2);
+            float zc = filCoord.get(iz);
+            float gt = filBTransGam.get(iy), gr = filBRotGam.get(iy);
+            float mob = 1.0e6f / gt + 1.0e-6f * half * half / gr;          // um of end travel per (N*s)
+            float kEnd = frac / (dt * mob);                                 // N per um of penetration
+            float fzTot = 0.0f, txTot = 0.0f, tyTot = 0.0f;
+            for (int e = 0; e < 2; e++) {
+                float sg = (e == 0) ? -1.0f : 1.0f;
+                float zE = zc + sg * half * uz;
+                float penLo = zLo - (zE - rr);
+                float penHi = (zE + rr) - zHi;
+                float f = 0.0f;
+                if (penLo > 0.0f) f += kEnd * penLo;
+                if (penHi > 0.0f) f -= kEnd * penHi;
+                if (f != 0.0f) {
+                    float rx = sg * half * 1.0e-6f * ux, ry = sg * half * 1.0e-6f * uy;   // lever arm (m)
+                    fzTot += f;
+                    txTot += ry * f;                                        // r x (0,0,f) = (ry f, -rx f, 0)
+                    tyTot -= rx * f;
+                }
+            }
+            if (fzTot != 0.0f || txTot != 0.0f || tyTot != 0.0f) {
+                filForceSum.set(iz, filForceSum.get(iz) + fzTot);
+                filTorqueSum.set(ix, filTorqueSum.get(ix) + txTot);
+                filTorqueSum.set(iy, filTorqueSum.get(iy) + tyTot);
+            }
+        }
+    }
+
     // KERNEL — Stage 9: matReduce. Single-thread reduced measurements: [0]=nBound [1..3]=COM [4]=Σ forceDotFil [5]=nActive.
     public static void matReduce(IntArray boundSeg, IntArray active, FloatArray forceDotFil, FloatArray filCoord,
                                  IntArray counts, DoubleArray redOut) {

@@ -110,6 +110,12 @@ public class SiteNormalLongGlideHarness {
     // docs/attachment/FILAMENT_Z_SLAB_AND_ACCESSIBILITY_RERUN.md) is DEFAULT since 2026-10-04 in this harness: the
     // filament height emerges from the motors. -z-slab off restores the legacy harmonic well (Fz=-kz*z, RMS 1.4 nm).
     static boolean Z_SLAB_CLI = true;
+    // Walls act at the rod ENDS with a levelling torque (MatSoaSlice.matZSlabEnds), DEFAULT since 2026-10-06: the
+    // centre-only matZSlab let the 2.1 um rigid rod tilt through both walls. -z-slab-centre restores it.
+    static boolean Z_SLAB_ENDS_CLI = true;
+    // Ceiling, nm above the floor (= lawn plane). 70 nm since 2026-10-06 (jba); it has no physical counterpart this
+    // close (a real flow cell is ~100 um tall) -- a numerical bound only. -z-slab-hi-nm overrides.
+    static double  Z_SLAB_HI_CLI = 70.0;
     // CANONICAL DEFAULT since 2026-08-17: the DETACHED head rests collinear with the neck
     // (ExplicitCompleteMatHarness.STRAIGHT_REST). -straightrest is retained as an accepted no-op so existing
     // command lines keep working; -nativerest reproduces the superseded (phi_pre, psiActin, chi=0) pose.
@@ -249,6 +255,8 @@ public class SiteNormalLongGlideHarness {
                 case "-legacy-rod-brot" -> ChiralSiteHarness.ROD_FDT = false;
                 case "-legacy-cullsites" -> ExplicitCompleteMatHarness.RANDBASE_CULL_FIX = false;
                 case "-z-slab" -> Z_SLAB_CLI = args[++i].equals("on");
+                case "-z-slab-centre", "-z-slab-center" -> Z_SLAB_ENDS_CLI = false;
+                case "-z-slab-hi-nm" -> Z_SLAB_HI_CLI = Double.parseDouble(args[++i]);
                 case "-dt" -> DT = Double.parseDouble(args[++i]);
                 case "-resume" -> RESUME = true;
                 case "-gate-a" -> { GATE_A = true; }
@@ -517,7 +525,8 @@ public class SiteNormalLongGlideHarness {
         System.out.printf(Locale.US, "  [ATP]           = %s -> atpOn %.4g /s%n",
                 ChiralSiteHarness.atpLabel(), ChiralSiteHarness.atpOnFor(ChiralSiteHarness.ATP_UM));
         System.out.println("  ROD ROT BROWN   = " + (ChiralSiteHarness.ROD_FDT ? "FDT (scale 1.0)" : "LEGACY BRotCoeff " + Constants.BRotCoeff + " (-legacy-rod-brot)")
-                + " | Z SUPPORT = " + (Z_SLAB_CLI ? "hard slab (lawn..lawn+80 nm)" : "LEGACY harmonic well (-z-slab off)")
+                + " | Z SUPPORT = " + (Z_SLAB_CLI ? String.format(Locale.US, "hard slab, floor = lawn plane, ceiling +%.0f nm, %s", Z_SLAB_HI_CLI,
+                        Z_SLAB_ENDS_CLI ? "contact at rod ENDS (+torque)" : "LEGACY centre-only (-z-slab-centre)") : "LEGACY harmonic well (-z-slab off)")
                 + " | CULL SITES = " + (ExplicitCompleteMatHarness.RANDBASE_CULL_FIX ? "rotated with motor" : "LEGACY stale"));
         System.out.println("  RIGOR RUPTURE   = " + (ChiralSiteHarness.RUPTURE
                 ? "ON (canonical mode 1, Guo-Guilford rigor-only)" : "OFF (-no-rupture: pre-2026-10-01 behaviour)"));
@@ -608,6 +617,8 @@ public class SiteNormalLongGlideHarness {
         // AFTER cfg(): cfg -> resetChiral() clears STRAIGHT_REST, so it must be asserted here, not before.
         ExplicitCompleteMatHarness.STRAIGHT_REST = STRAIGHTREST;
         ExplicitCompleteMatHarness.Z_SLAB = Z_SLAB_CLI;            // AFTER cfg(), BEFORE build()/packExMat
+        ExplicitCompleteMatHarness.Z_SLAB_ENDS = Z_SLAB_ENDS_CLI;
+        ExplicitCompleteMatHarness.Z_SLAB_HI_NM = Z_SLAB_HI_CLI;
         // SAME TRAP for the Brownian channels: cfg() ends with setBrownianPolicy(FIL_BROWN x4, ...), which
         // overwrites anything the CLI set during arg parsing. Re-assert AFTER cfg() and BEFORE build() (build ->
         // packExMat is what freezes e.brChan). Defaults (both true) reproduce cfg()'s own call exactly, so this
@@ -1530,7 +1541,7 @@ public class SiteNormalLongGlideHarness {
                               REG_SWITCH_DEG, REG_K_NM)
               + String.format(Locale.US, "  \"s2_catch_factor\": %.4f,\n  \"s2_loadcatch_factor\": %.4f,\n  \"s2_loadcatch_F0_pN\": %.4f,\n  \"two_point_bond\": %s,\n  \"two_point_foot_nm\": %.4f,\n", S2_CATCH, S2_LOADCATCH, S2_LOADF0_PN, TWO_POINT ? "true" : "false", TWO_POINT_FOOT_NM)
               + "  \"steric\": false,\n"
-              + "  \"z_support\": \"" + (ExplicitCompleteMatHarness.zSlabOn() ? "matZSlab (hard slab, lawn..lawn+80 nm)" : "matZConfine (legacy harmonic well)") + "\",\n"
+              + "  \"z_support\": \"" + (ExplicitCompleteMatHarness.zSlabOn() ? String.format(Locale.US, "%s (hard slab, lawn..lawn+%.0f nm)", ExplicitCompleteMatHarness.Z_SLAB_ENDS ? "matZSlabEnds" : "matZSlab", ExplicitCompleteMatHarness.Z_SLAB_HI_NM) : "matZConfine (legacy harmonic well)") + "\",\n"
               + "  \"rod_rot_brownian_scale\": " + (FIL_SEGS == 1 ? (ChiralSiteHarness.ROD_FDT ? "1.0" : String.valueOf(Constants.BRotCoeff)) : "\"chain (BRotCoeff ends, 0 interior)\"") + ",\n"
               + "  \"atp_binding\": \"" + (ChiralSiteHarness.ATP_UM < 0 ? "frozen saturating" : ChiralSiteHarness.ATP_LEGACY_LINEAR ? "legacy linear from 2 mM" : String.format(Locale.US, "k=%.4g /uM/s", ChiralSiteHarness.ATP_K_PER_UM_S)) + "\",\n"
               + "  \"randbase_cull_sites\": " + (ExplicitCompleteMatHarness.RANDBASE_CULL_FIX ? "\"rotated\"" : "\"legacy (stale)\"") + ",\n  \"filament_brownian\": true,\n  \"motor_brownian\": true,\n"
@@ -1667,6 +1678,13 @@ public class SiteNormalLongGlideHarness {
         var f = G.fil; int nSeg = G.nSeg, N = G.N, M = e.M, nodeStride = 3*(M+1);
         double Ract = ExplicitCompleteMatHarness.R_ACTIN_NM * 1e-3;
         StringBuilder b = new StringBuilder(1 << 19);
+        // bounds: with the slab on, the drawn box IS the slab (zMin..zMax = the walls); otherwise the legacy 0.2 um box.
+        if (ExplicitCompleteMatHarness.zSlabOn() && !Double.isNaN(ExplicitCompleteMatHarness.Z_LAWN_UM)) {
+            double zMin = ExplicitCompleteMatHarness.Z_LAWN_UM + ExplicitCompleteMatHarness.Z_SLAB_LO_NM * 1e-3;
+            double zMax = ExplicitCompleteMatHarness.Z_LAWN_UM + ExplicitCompleteMatHarness.Z_SLAB_HI_NM * 1e-3;
+            b.append(String.format(Locale.US, "{\"frame\":0,\"t\":%.7g,\"bounds\":{\"xDim\":%.4g,\"yDim\":%.4g,\"zDim\":%.5g,\"zMin\":%.5g,\"zMax\":%.5g},\"segments\":[",
+                    t, MX, MY, zMax - zMin, zMin, zMax));
+        } else
         b.append(String.format(Locale.US, "{\"frame\":0,\"t\":%.7g,\"bounds\":{\"xDim\":%.4g,\"yDim\":%.4g,\"zDim\":0.2},\"segments\":[",
                 t, MX, MY));
         int sid = 0;

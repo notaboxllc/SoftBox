@@ -97,6 +97,9 @@ public final class ExplicitCompleteMatHarness {
     static double  Z_SLAB_FRAC = 0.9;
     static double  Z_LAWN_UM = Double.NaN;             // the resolved lawn plane (µm), recorded by packExMat
     static boolean zSlabOn() { return Z_SLAB; }
+    // Z_SLAB_ENDS (2026-10-06; default false here = historical centre-only matZSlab; SiteNormalLongGlideHarness turns it
+    // ON): apply the walls at the rod ENDS with a levelling torque (MatSoaSlice.matZSlabEnds). See that kernel.
+    static boolean Z_SLAB_ENDS = false;
 
     // SITE-AWARE CAPTURE (noncanonical, DEFAULT-OFF). ON  ⇒ the legacy `matBindExplicit -> siteSnap`
     // pair is replaced by `ChiralSiteSystem.siteGateA + siteCommitB`, which gate the real discrete helical
@@ -1542,7 +1545,8 @@ public final class ExplicitCompleteMatHarness {
         CrossBridgeSystem.segGather(G.segOff, G.segMyo, G.bondData, f.forceSum, f.torqueSum, mot.counts);
         if (!G.rigid) ChainBendingForceSystem.chainForces(f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
         if (!G.rigid && rollSpringOn()) RollSpringSystem.rollForces(f.uVec, f.yVec, f.end2NbrSlot, f.end1NbrSlot, f.bRotGam, f.torqueSum, rollP, f.counts);
-        if (zSlabOn()) MatSoaSlice.matZSlab(f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, e.zsP, e.exCounts);
+        if (zSlabOn()) { if (Z_SLAB_ENDS) MatSoaSlice.matZSlabEnds(f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, e.zsP, e.exCounts);
+                         else MatSoaSlice.matZSlab(f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, e.zsP, e.exCounts); }
         else           MatSoaSlice.matZConfine(f.coord, f.forceSum, e.zP, e.exCounts);
         BrownianForceSystem.brownianForce(f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
         if (brownChanOn())   // per-channel filament Brownian ablation mask (noncanonical; not wired when all channels ON)
@@ -1713,7 +1717,8 @@ public final class ExplicitCompleteMatHarness {
           .task("chain", ChainBendingForceSystem::chainForces, f.coord, f.uVec, f.segLength, f.end2NbrSlot, f.end2NbrSide, f.end1NbrSlot, f.end1NbrSide, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, f.chainParams, f.counts);
         if (rollSpringOn()) tg.task("rollSpring", RollSpringSystem::rollForces, f.uVec, f.yVec, f.end2NbrSlot, f.end1NbrSlot, f.bRotGam, f.torqueSum, rollP, f.counts);
         // FILAMENT z BOUNDARY: exactly one of the two is wired. Default = the legacy harmonic well.
-        if (zSlabOn()) tg.task("zslab", MatSoaSlice::matZSlab, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, e.zsP, e.exCounts);
+        if (zSlabOn()) { if (Z_SLAB_ENDS) tg.task("zslab", MatSoaSlice::matZSlabEnds, f.coord, f.uVec, f.segLength, f.bTransGam, f.bRotGam, f.forceSum, f.torqueSum, e.zsP, e.exCounts);
+                         else tg.task("zslab", MatSoaSlice::matZSlab, f.coord, f.uVec, f.segLength, f.bTransGam, f.forceSum, e.zsP, e.exCounts); }
         else           tg.task("zconf", MatSoaSlice::matZConfine, f.coord, f.forceSum, e.zP, e.exCounts);
         tg
           .task("brown", BrownianForceSystem::brownianForce, f.randForce, f.randTorque, f.bTransGam, f.bRotGam, f.brownTransScale, f.brownRotScale, f.params, f.counts);
