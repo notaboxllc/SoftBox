@@ -435,6 +435,20 @@ public final class ExplicitCompleteMatHarness {
     // belongs to. Without it the cull keeps the pre-rotation site, up to ~22 nm stale against queryR = 80 nm.
     // No effect unless RAND_BASE_AZ is on.
     static boolean RANDBASE_CULL_FIX = true;
+    // S2 DEPARTURE FROM ONE SURFACE THROUGH A SOFT HINGE (2026-10-07; all default-off here => historical; the
+    // site-normal gliding harness turns them on). Literature: the myosin rod bends at 44/76 nm sites "to various
+    // degrees" with no preferred head-tail angle (Walker, Knight & Trinick 1985); HMM sits tail-down with heads 20-30
+    // nm up (Persson 2010). No measured departure angle exists, so none is imposed.
+    //   S2_ONE_SURFACE: the S2 beam's floor (params[14]) = the SAME plane the filament's slab floor uses (the S2
+    //     emergence plane), instead of 50 nm below it -- no S2 node can sit below the coverslip.
+    //   S2_HINGE_PM: S2 base-joint bending stiffness in per-mille of the beam's kb (matc[5]); 1000 = clamped as before,
+    //     0 = free hinge.
+    //   S2_LIFT_INIT: each motor's S2 starts lifted about its emergence point by its own elevation, sin(elev) ~ U(0,1)
+    //     (uniform over the upper hemisphere = the free-hinge equilibrium), keyed (motor, RAND_BASE_SEED). Matters
+    //     because far-field motors are culled and frozen in their initial pose.
+    static boolean S2_ONE_SURFACE = false;
+    static int     S2_HINGE_PM = 1000;
+    static boolean S2_LIFT_INIT = false;
     // NOISE_SEED (-noise-seed) — key the per-step RNG (Brownian + chemistry) on a DIFFERENT integer from the
     // one that lays the motor lawn. build(seed) keeps the lawn; only the (slot, step, runSeed) RNG keying moves.
     //
@@ -843,7 +857,7 @@ public final class ExplicitCompleteMatHarness {
         // [3] = binding-state Brownian mask (0 = canonical); [4] = F8 generalized-force axis for the TILT solver
         // ONLY (1 = econv, the geometry's exact Jacobian; 0 = the legacy eup convention — see the report's AXIS
         // section). matS2SolveStep never reads [4], so the default path is untouched.
-        e.matc = IntArray.fromElements(0, 0, brownOn, motorBrownPolicy(), f8AxisFlag());
+        e.matc = IntArray.fromElements(0, 0, brownOn, motorBrownPolicy(), f8AxisFlag(), S2_HINGE_PM);
         e.eupP = DoubleArray.fromElements(G.eup[0], G.eup[1], G.eup[2]);
         e.noBind = new IntArray(N); for (int m = 0; m < N; m++) e.noBind.set(m, G.noBind[m] ? 1 : 0);
         // bind gate thresholds (Tol defaults) + constants — the DETERMINISTIC 8-gate contract.
@@ -1121,6 +1135,36 @@ public final class ExplicitCompleteMatHarness {
                 }
             }
             if (RANDBASE_CULL_FIX && G.siteX != null) TwoBodyConverterMotor.initMatGrid(G);   // re-bin the moved sites
+        }
+        if (S2_ONE_SURFACE || S2_LIFT_INIT) {
+            double ex0 = G.eup[0], ey0 = G.eup[1], ez0 = G.eup[2];
+            double lawnZ = 0.0; for (int m = 0; m < N; m++) lawnZ += G.g4E[m][0]*ex0 + G.g4E[m][1]*ey0 + G.g4E[m][2]*ez0; lawnZ /= Math.max(1, N);
+            for (int m = 0; m < N; m++) {
+                if (S2_ONE_SURFACE) e.params.set(14 * N + m, lawnZ);   // one substrate: the emergence plane (filament floor)
+                if (!S2_LIFT_INIT) continue;
+                long h = (m * 0x9E3779B97F4A7C15L) ^ ((long) RAND_BASE_SEED * 0x632BE59BD9B4E019L) ^ 0x5332_4C49_4654L;   // "S2LIFT"
+                h ^= (h >>> 31); h *= 0xBF58476D1CE4E5B9L; h ^= (h >>> 29);
+                double u = ((h >>> 11) & ((1L << 53) - 1)) / (double) (1L << 53);
+                double sa = u, ca = Math.sqrt(1.0 - u * u);                // elevation: sin ~ U(0,1)
+                double Ex = e.nodes.get(m), Ey = e.nodes.get(N + m), Ez = e.nodes.get(2 * N + m);
+                double bx = e.frame.get(m), by = e.frame.get(N + m), bz = e.frame.get(2 * N + m);   // this motor's bhat
+                double bp = bx*ex0 + by*ey0 + bz*ez0; bx -= bp*ex0; by -= bp*ey0; bz -= bp*ez0;
+                double bl = Math.sqrt(bx*bx + by*by + bz*bz); if (bl < 1e-12) continue; bx /= bl; by /= bl; bz /= bl;
+                double Px0 = e.nodes.get((3*M)*N + m), Py0 = e.nodes.get((3*M+1)*N + m);
+                for (int j = 1; j <= M; j++) {                             // rotate in the (bhat, eup) plane about E
+                    double dx = e.nodes.get((3*j)*N + m) - Ex, dy = e.nodes.get((3*j+1)*N + m) - Ey, dz = e.nodes.get((3*j+2)*N + m) - Ez;
+                    double dpar = dx*bx + dy*by + dz*bz, dup = dx*ex0 + dy*ey0 + dz*ez0;
+                    double ox = dx - dpar*bx - dup*ex0, oy = dy - dpar*by - dup*ey0, oz = dz - dpar*bz - dup*ez0;   // out-of-plane part kept
+                    double np = dpar*ca - dup*sa, nu = dpar*sa + dup*ca;
+                    e.nodes.set((3*j)*N + m,   Ex + np*bx + nu*ex0 + ox);
+                    e.nodes.set((3*j+1)*N + m, Ey + np*by + nu*ey0 + oy);
+                    e.nodes.set((3*j+2)*N + m, Ez + np*bz + nu*ez0 + oz);
+                }
+                if (G.siteX != null && m < G.siteX.length) {               // the cull site follows the pivot
+                    G.siteX[m] += e.nodes.get((3*M)*N + m) - Px0; G.siteY[m] += e.nodes.get((3*M+1)*N + m) - Py0;
+                }
+            }
+            if (S2_LIFT_INIT && G.siteX != null) TwoBodyConverterMotor.initMatGrid(G);
         }
         // ---- CONVERTER TRANSVERSE OFFSET (diagnostic, default-off): roll each motor's base triad about its OWN b̂.
         // b̂ is invariant, so the AXIAL stroke direction is untouched; (econv, ê_up) tilt, which displaces the

@@ -646,6 +646,12 @@ opt-outs together reproduce the pre-audit binary byte-identically (GPU, 11/11 ro
    height — use the frames' segment end z for height.
    Also: cull sites now rotate with randomized motors (`-legacy-cullsites`); measured harmless (stale sites still ≥55 nm
    clear of capture).
+**S2 ONE SURFACE + SOFT BASE HINGE (2026-10-08; re-baselines engagement/height).** The explicit-S2 base was clamped
+horizontal with its floor 50 nm below the filament floor (51 % of near-filament heads below the glass). SiteNormal
+defaults now: S2 floor = filament floor, base joint `-s2-hinge 0.1` x kb (unmeasured; scan deferred by jba), per-motor
+hemisphere initial lift; `-s2-floor-legacy -s2-hinge 1 -s2-lift-init off` reproduces the old binary. ~1.5x engagement at
+d1600. Pre-2026-10-08 absolute engagement, density curves and height on explicit-S2 are superseded. Open items ranked in
+`docs/twirling/MODEL_ASSUMPTION_SURVEY_2026-10-08.md` (notably: the eps SIGN is chosen, so twirl handedness is an input).
 **Open:** CPU-runner Gate W (1 vs 8 workers bit-identity) FAILS in the all-legacy config (~8e-10) and with the slab on
 (~8e-13), passes with the slab off — pre-existing, CPU-only, decorrelates long chaotic CPU runs across worker counts.
 **Stated limitations kept (not fixed):** single-headed motors (Beausang: two-headed whole skeletal myosin), rigid 2.1 µm

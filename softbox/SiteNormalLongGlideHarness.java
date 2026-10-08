@@ -113,6 +113,16 @@ public class SiteNormalLongGlideHarness {
     // Walls act at the rod ENDS with a levelling torque (MatSoaSlice.matZSlabEnds), DEFAULT since 2026-10-06: the
     // centre-only matZSlab let the 2.1 um rigid rod tilt through both walls. -z-slab-centre restores it.
     static boolean Z_SLAB_ENDS_CLI = true;
+    // S2 departure (2026-10-07, jba): ONE surface for S2 and filament + a FREE hinge at the S2 base + per-motor
+    // hemisphere initial lift -- DEFAULT here. -s2-floor-legacy (S2 floor 50 nm below), -s2-hinge <x> (base stiffness as
+    // a fraction of kb; 1 = the old clamp), -s2-lift-init off. All three legacy settings reproduce the old binary.
+    static boolean S2_ONE_SURFACE_CLI = true;
+    // 0.1 x kb (jba 2026-10-07, "reasonably soft"): ~45 deg RMS departure about the tail direction. UNMEASURED --
+    // literature brackets it between a semiflexible rod without a hinge (Hvidt 1982) and sharp bends of varying
+    // degree at the 44/76 nm sites (Walker 1985). A sensitivity scan (0, 0.01, 0.1, 1) is deferred until gliding and
+    // twirl are re-established on the new geometry.
+    static double  S2_HINGE_CLI = 0.1;
+    static boolean S2_LIFT_INIT_CLI = true;
     // Ceiling, nm above the floor (= lawn plane). 70 nm since 2026-10-06 (jba); it has no physical counterpart this
     // close (a real flow cell is ~100 um tall) -- a numerical bound only. -z-slab-hi-nm overrides.
     static double  Z_SLAB_HI_CLI = 70.0;
@@ -128,6 +138,15 @@ public class SiteNormalLongGlideHarness {
     // (measured ~half the device step cost); a run that will not reach the 1.00/2.00 um milestones gains ~2x.
     // The decimated -3js movie and the milestone bookkeeping itself are UNAFFECTED.
     static boolean NO_HIRES = false;
+    /** -cullprobe <stride>: CULL REACH DIAGNOSTIC (2026-10-08, measurement only). Meant for a NO-cull run (drop
+     *  -devicecull): every <stride> steps it asks, for motors whose SITE is beyond queryR (the motors the cull
+     *  would freeze), whether their live head point xF8 came within capture reach of the filament, and whether any
+     *  NEW bind since the last sample came from such a motor. Both counts must be 0 for the cull to be safe on
+     *  the current (soft-hinge) S2 geometry. Writes cullprobe.tsv. No physics change. */
+    static int CULL_PROBE = 0;
+    static boolean[] cpWasBound;
+    static long cpNewBinds, cpNewBeyond, cpFarSamples, cpFarReach, cpFar10;
+    static double cpMaxNewSite = 0, cpMinFarHead = 1e9;
     // -filx <um>: translate the whole filament along +x after the scene is built, so it starts near the
     // DOWNSTREAM-most edge and has the full mat to glide across. The assay glides -x (pointed-leading), so a
     // POSITIVE offset puts the filament at the right edge and maximises runway. SCENE placement only: the mat,
@@ -256,6 +275,9 @@ public class SiteNormalLongGlideHarness {
                 case "-legacy-cullsites" -> ExplicitCompleteMatHarness.RANDBASE_CULL_FIX = false;
                 case "-z-slab" -> Z_SLAB_CLI = args[++i].equals("on");
                 case "-z-slab-centre", "-z-slab-center" -> Z_SLAB_ENDS_CLI = false;
+                case "-s2-floor-legacy" -> S2_ONE_SURFACE_CLI = false;
+                case "-s2-hinge" -> S2_HINGE_CLI = Double.parseDouble(args[++i]);
+                case "-s2-lift-init" -> S2_LIFT_INIT_CLI = args[++i].equals("on");
                 case "-z-slab-hi-nm" -> Z_SLAB_HI_CLI = Double.parseDouble(args[++i]);
                 case "-dt" -> DT = Double.parseDouble(args[++i]);
                 case "-resume" -> RESUME = true;
@@ -269,6 +291,7 @@ public class SiteNormalLongGlideHarness {
                 case "-gpu" -> GPU_MODE = true;
                 case "-devicecull" -> ExplicitCompleteMatHarness.DEVICE_CULL = true;
                 case "-nohires" -> NO_HIRES = true;
+                case "-cullprobe" -> CULL_PROBE = Integer.parseInt(args[++i]);
                 case "-filx" -> FIL_X0 = Double.parseDouble(args[++i]);
                 case "-filsegs" -> FIL_SEGS = Integer.parseInt(args[++i]);
                 // FILAMENT BROWNIAN ABLATION (noncanonical, default-off, diagnostic). Reaches the existing,
@@ -528,6 +551,10 @@ public class SiteNormalLongGlideHarness {
                 + " | Z SUPPORT = " + (Z_SLAB_CLI ? String.format(Locale.US, "hard slab, floor = lawn plane, ceiling +%.0f nm, %s", Z_SLAB_HI_CLI,
                         Z_SLAB_ENDS_CLI ? "contact at rod ENDS (+torque)" : "LEGACY centre-only (-z-slab-centre)") : "LEGACY harmonic well (-z-slab off)")
                 + " | CULL SITES = " + (ExplicitCompleteMatHarness.RANDBASE_CULL_FIX ? "rotated with motor" : "LEGACY stale"));
+        System.out.println(String.format(Locale.US, "  S2 DEPARTURE    = floor %s | base joint %s | initial pose %s",
+                S2_ONE_SURFACE_CLI ? "= coverslip (one surface)" : "LEGACY 50 nm below (-s2-floor-legacy)",
+                S2_HINGE_CLI == 0.0 ? "FREE hinge" : (S2_HINGE_CLI == 1.0 ? "CLAMPED (legacy, kb)" : String.format(Locale.US, "%.3g x kb", S2_HINGE_CLI)),
+                S2_LIFT_INIT_CLI ? "per-motor hemisphere lift" : "flat (legacy)"));
         System.out.println("  RIGOR RUPTURE   = " + (ChiralSiteHarness.RUPTURE
                 ? "ON (canonical mode 1, Guo-Guilford rigor-only)" : "OFF (-no-rupture: pre-2026-10-01 behaviour)"));
         System.out.printf(Locale.US, "  STROKE SKEW eps = %+.3f deg (EPS_STROKE_DEG, mirror-coupled) | MIRROR = %+.1f%n",
@@ -619,6 +646,9 @@ public class SiteNormalLongGlideHarness {
         ExplicitCompleteMatHarness.Z_SLAB = Z_SLAB_CLI;            // AFTER cfg(), BEFORE build()/packExMat
         ExplicitCompleteMatHarness.Z_SLAB_ENDS = Z_SLAB_ENDS_CLI;
         ExplicitCompleteMatHarness.Z_SLAB_HI_NM = Z_SLAB_HI_CLI;
+        ExplicitCompleteMatHarness.S2_ONE_SURFACE = S2_ONE_SURFACE_CLI;
+        ExplicitCompleteMatHarness.S2_HINGE_PM = (int) Math.round(1000.0 * S2_HINGE_CLI);
+        ExplicitCompleteMatHarness.S2_LIFT_INIT = S2_LIFT_INIT_CLI;
         // SAME TRAP for the Brownian channels: cfg() ends with setBrownianPolicy(FIL_BROWN x4, ...), which
         // overwrites anything the CLI set during arg parsing. Re-assert AFTER cfg() and BEFORE build() (build ->
         // packExMat is what freezes e.brChan). Defaults (both true) reproduce cfg()'s own call exactly, so this
@@ -861,7 +891,8 @@ public class SiteNormalLongGlideHarness {
         StringBuilder csv = new StringBuilder(
                 "step\tt_s\twall_s\tfwd_um\tdisp_um\tcx\tcy\tcz\tvfit_um_s\tvwin_um_s\tavgBound\tnbNow\tmaxNb\t"
               + "f0\tf1\tf2p\tf5p\tcaptures\tdetach\tstrokes\tdetachAtp\tfaxMean_pN\tfaxPos_pN\tfaxNeg_pN\t"
-              + "azLo\tazSide\tazUp\tdistinctSites\tangDeg\tzmin\tzmax\tcontour_um\te2e_um\tbendDeg\tactive\tinvalid\tsolverFail\trollRad\trollTurns\tyMargin_um\n");
+              + "azLo\tazSide\tazUp\tdistinctSites\tangDeg\tzmin\tzmax\tcontour_um\te2e_um\tbendDeg\tactive\tinvalid\tsolverFail\trollRad\trollTurns\tyMargin_um"
+              + "\tz_now_nm\tz_end1_nm\tz_end2_nm\ttilt_deg\tfloor_clearance_nm\tz_mean_nm\tz_sd_nm\tfloor_contact_frac\tceiling_contact_frac\n");
         Files.writeString(Path.of(OUT, "trajectory_summary.csv"), csv.toString());
 
         // -------- accumulators ------------------------------------------------------------------------
@@ -897,6 +928,11 @@ public class SiteNormalLongGlideHarness {
         double sT = 0, sT2 = 0, sX = 0, sTX = 0; long sN = 0;   // full-run LS on (t, fwd)
         int invalid = 0, solverFail = 0;
         double zmin = 1e9, zmax = -1e9, maxFaxPn = 0, worstForcePn = 0;
+        // FILAMENT HEIGHT TRACKING (2026-10-07). zmin/zmax above are RUNNING EXTREMES since t=0 (kept for continuity);
+        // these give the CURRENT height at each row plus per-interval statistics accumulated every step:
+        // centre z mean/SD, and the fraction of steps whose lowest (highest) SURFACE point is within 0.5 nm of the
+        // slab floor (ceiling). Appended columns only -- every existing column is unchanged.
+        double hzSum = 0, hzSum2 = 0; long hzN = 0, hzFloor = 0, hzCeil = 0;
         // ---- TWIRL: body-fixed axial roll of the filament ------------------------------------------------
         // angleDeg() is atan2 on the POLARITY vector = yaw in the xy-plane; it says nothing about rotation
         // about the filament's OWN axis. Twirl needs the material frame, so accumulate the per-step
@@ -1064,6 +1100,14 @@ public class SiteNormalLongGlideHarness {
             for (int s = 0; s < nSeg; s++) rollStep += ChiralSiteHarness.rollIncrementTransported(G.fil, s, prevY[s]);
             rollAcc += rollStep / nSeg;
             for (int s = 0; s < nSeg; s++) { double z = G.fil.coord.get(2*nSeg+s); zmin = Math.min(zmin, z); zmax = Math.max(zmax, z); }
+            {   double[] hz = filHeight(G);                      // [centre z, lowest surface, highest surface, ...] (um)
+                hzSum += hz[0]; hzSum2 += hz[0] * hz[0]; hzN++;
+                if (ExplicitCompleteMatHarness.zSlabOn() && !Double.isNaN(ExplicitCompleteMatHarness.Z_LAWN_UM)) {
+                    double zLo = ExplicitCompleteMatHarness.Z_LAWN_UM + ExplicitCompleteMatHarness.Z_SLAB_LO_NM * 1e-3;
+                    double zHi = ExplicitCompleteMatHarness.Z_LAWN_UM + ExplicitCompleteMatHarness.Z_SLAB_HI_NM * 1e-3;
+                    if (hz[1] - zLo <= 5e-4) hzFloor++;
+                    if (zHi - hz[2] <= 5e-4) hzCeil++;
+                } }
 
             // ---- PHASE 9 health: finiteness is NOT enough ---------------------------------------------
             // The η = 0.01 / dt = 2.5e-6 failure (§ report) stayed finite the whole way while a single bond
@@ -1158,6 +1202,7 @@ public class SiteNormalLongGlideHarness {
                 }
                 if (t % VIZ_STRIDE == 0) { writeFrame(vizDir, vizFrames++, frameJson(G, e, t*DT, false)); }
             }
+            if (CULL_PROBE > 0 && t % CULL_PROBE == 0) cullProbe(G, e, t);
 
             // ---- checkpoint --------------------------------------------------------------------------
             if ((t % CKPT_EVERY == 0 || (t - t0 < 20_000 && t % 2_000 == 0)) && t > t0) {
@@ -1188,6 +1233,17 @@ public class SiteNormalLongGlideHarness {
                         faxN > 0 ? faxAcc/faxN*1e12 : 0, faxPos*1e12/Math.max(1,t-t0+1), faxNeg*1e12/Math.max(1,t-t0+1),
                         azOcc[0], azOcc[1], azOcc[2], sites.size(), angleDeg(G), zmin, zmax, contour(G), e2e(G), bendDeg(G),
                         cp.lastActive, invalid, solverFail, rollAcc, rollAcc/(2*Math.PI), lastYMargin);
+                {   double[] hz = filHeight(G);
+                    double floorClr = Double.NaN;
+                    if (ExplicitCompleteMatHarness.zSlabOn() && !Double.isNaN(ExplicitCompleteMatHarness.Z_LAWN_UM))
+                        floorClr = hz[1] - (ExplicitCompleteMatHarness.Z_LAWN_UM + ExplicitCompleteMatHarness.Z_SLAB_LO_NM * 1e-3);
+                    double mz = hzN > 0 ? hzSum / hzN : Double.NaN;
+                    double sz = hzN > 1 ? Math.sqrt(Math.max(0, hzSum2 / hzN - mz * mz)) : Double.NaN;
+                    row = row.substring(0, row.length() - System.lineSeparator().length())
+                        + String.format(Locale.US, "\t%.3f\t%.3f\t%.3f\t%.4f\t%.3f\t%.3f\t%.3f\t%.4f\t%.4f%n",
+                            1000 * hz[0], 1000 * hz[3], 1000 * hz[4], hz[5], 1000 * floorClr, 1000 * mz, 1000 * sz,
+                            hzN > 0 ? (double) hzFloor / hzN : Double.NaN, hzN > 0 ? (double) hzCeil / hzN : Double.NaN);
+                    hzSum = 0; hzSum2 = 0; hzN = 0; hzFloor = 0; hzCeil = 0; }
                 Files.writeString(Path.of(OUT, "trajectory_summary.csv"), row,
                         java.nio.file.StandardOpenOption.APPEND);
                 writeProgress(t, t0, wall, fwd_um, dist(c, c0), vfit, vwin, avgB, nb, maxNb, captures, detach,
@@ -1301,6 +1357,12 @@ public class SiteNormalLongGlideHarness {
                 nByNuc[3]>0 && fmagByNuc[3]>0 ? faxByNuc[3]/fmagByNuc[3] : 0.0,
                 nByNuc[0]>0 ? fmagByNuc[0]/nByNuc[0]*1e12 : 0.0, nByNuc[0]>0 ? faxByNuc[0]/nByNuc[0]*1e12 : 0.0,
                 nByNuc[0]>0 && fmagByNuc[0]>0 ? faxByNuc[0]/fmagByNuc[0] : 0.0);
+        }
+        if (CULL_PROBE > 0) {
+            String cs = String.format(Locale.US, "CULL PROBE (queryR %.1f nm, reach = R_actin + g0 = %.2f nm): new binds %d, from motors with site beyond queryR %d (max new-bind site distance %.2f nm); far-site unbound motor-samples %d, head within reach %d, head within 10 nm %d, closest far head %.2f nm  =>  %s%n",
+                G.queryR*1e3, Constants.radius*1e3 + e.sbP.get(0), cpNewBinds, cpNewBeyond, cpMaxNewSite, cpFarSamples, cpFarReach, cpFar10, cpMinFarHead,
+                (cpNewBeyond == 0 && cpFarReach == 0) ? "CULL SAFE" : "CULL MISSES REACHABLE MOTORS");
+            sum.append(cs); System.out.print(cs);
         }
         Files.writeString(Path.of(OUT, "summary.txt"), sum.toString());
         System.out.println();
@@ -1442,6 +1504,23 @@ public class SiteNormalLongGlideHarness {
         LAST_RES.transferToHost(ExplicitCompleteMatHarness.LEAN_DEMAND);
         PULLED_T = LAST_T;
     }
+    /** Filament height (um): [0] mean segment-centre z, [1] lowest SURFACE point, [2] highest surface point,
+     *  [3] end1 axis z (first segment), [4] end2 axis z (last segment), [5] tilt of end1->end2 from the plane (deg). */
+    static double[] filHeight(TwoBodyConverterMotor.Glide2D G) {
+        var f = G.fil; int n = G.nSeg; double zc = 0, lo = 1e9, hi = -1e9, R = Constants.radius;
+        for (int s = 0; s < n; s++) {
+            double z = f.coord.get(2*n+s), uz = f.uVec.get(2*n+s), h = 0.5 * f.segLength.get(s);
+            double rr = R * Math.sqrt(Math.max(0, 1 - uz*uz));
+            zc += z;
+            for (int sg = -1; sg <= 1; sg += 2) { double ze = z + sg*h*uz; lo = Math.min(lo, ze - rr); hi = Math.max(hi, ze + rr); }
+        }
+        double h0 = 0.5 * f.segLength.get(0), hn = 0.5 * f.segLength.get(n-1);
+        double[] e1 = { f.coord.get(0) - h0*f.uVec.get(0), f.coord.get(n) - h0*f.uVec.get(n), f.coord.get(2*n) - h0*f.uVec.get(2*n) };
+        double[] e2 = { f.coord.get(n-1) + hn*f.uVec.get(n-1), f.coord.get(2*n-1) + hn*f.uVec.get(2*n-1), f.coord.get(3*n-1) + hn*f.uVec.get(3*n-1) };
+        double dx = e2[0]-e1[0], dy = e2[1]-e1[1], dz = e2[2]-e1[2];
+        double tilt = Math.toDegrees(Math.atan2(dz, Math.sqrt(dx*dx + dy*dy)));
+        return new double[]{ zc / n, lo, hi, e1[2], e2[2], tilt };
+    }
     static double yMargin(TwoBodyConverterMotor.Glide2D G, double[] c) {
         double yaw = Math.toRadians(angleDeg(G));
         double endOff = Math.abs(c[1]) + 0.5 * e2e(G) * Math.abs(Math.sin(yaw));
@@ -1480,6 +1559,31 @@ public class SiteNormalLongGlideHarness {
             best = Math.min(best, Math.sqrt(qx*qx + qy*qy + qz*qz));
         }
         return best * 1e3;
+    }
+    static void cullProbe(TwoBodyConverterMotor.Glide2D G, ExplicitCompleteMatHarness.ExMat e, int t) throws IOException {
+        pullDemand();
+        int N = e.N; double qr = G.queryR * 1e3, reach = Constants.radius * 1e3 + e.sbP.get(0);
+        if (cpWasBound == null) { cpWasBound = new boolean[N]; for (int m = 0; m < N; m++) cpWasBound[m] = G.mot.boundSeg.get(m) >= 0; }
+        long nb = 0, nbFar = 0, far = 0, farReach = 0, far10 = 0; double maxSite = 0, minHead = 1e9;
+        for (int m = 0; m < N; m++) {
+            boolean b = G.mot.boundSeg.get(m) >= 0;
+            double sd = siteToFilNm(G, m);
+            if (b && !cpWasBound[m]) { nb++; maxSite = Math.max(maxSite, sd); if (sd > qr) nbFar++; }
+            if (!b && sd > qr) {
+                far++;
+                double hd = pointToFilNm(G, e.outGeom.get(6*N+m), e.outGeom.get(7*N+m), e.outGeom.get(8*N+m));
+                minHead = Math.min(minHead, hd);
+                if (hd < reach) farReach++;
+                if (hd < 10.0) far10++;
+            }
+            cpWasBound[m] = b;
+        }
+        cpNewBinds += nb; cpNewBeyond += nbFar; cpFarSamples += far; cpFarReach += farReach; cpFar10 += far10;
+        cpMaxNewSite = Math.max(cpMaxNewSite, maxSite); cpMinFarHead = Math.min(cpMinFarHead, minHead);
+        Path p = Path.of(OUT, "cullprobe.tsv");
+        if (!Files.exists(p)) Files.writeString(p, "step\tt_s\tnew_binds\tnew_binds_site_beyond_queryR\tmax_new_bind_site_nm\tfar_unbound\tfar_head_within_reach\tfar_head_within_10nm\tmin_far_head_nm\n");
+        Files.writeString(p, String.format(Locale.US, "%d\t%.6f\t%d\t%d\t%.2f\t%d\t%d\t%d\t%.2f%n", t, t*DT, nb, nbFar, maxSite, far, farReach, far10, minHead),
+                java.nio.file.StandardOpenOption.APPEND);
     }
     static double siteToFilNm(TwoBodyConverterMotor.Glide2D G, int m) {
         double best = 1e9;
@@ -1544,6 +1648,7 @@ public class SiteNormalLongGlideHarness {
               + "  \"z_support\": \"" + (ExplicitCompleteMatHarness.zSlabOn() ? String.format(Locale.US, "%s (hard slab, lawn..lawn+%.0f nm)", ExplicitCompleteMatHarness.Z_SLAB_ENDS ? "matZSlabEnds" : "matZSlab", ExplicitCompleteMatHarness.Z_SLAB_HI_NM) : "matZConfine (legacy harmonic well)") + "\",\n"
               + "  \"rod_rot_brownian_scale\": " + (FIL_SEGS == 1 ? (ChiralSiteHarness.ROD_FDT ? "1.0" : String.valueOf(Constants.BRotCoeff)) : "\"chain (BRotCoeff ends, 0 interior)\"") + ",\n"
               + "  \"atp_binding\": \"" + (ChiralSiteHarness.ATP_UM < 0 ? "frozen saturating" : ChiralSiteHarness.ATP_LEGACY_LINEAR ? "legacy linear from 2 mM" : String.format(Locale.US, "k=%.4g /uM/s", ChiralSiteHarness.ATP_K_PER_UM_S)) + "\",\n"
+              + "  \"s2_one_surface\": " + S2_ONE_SURFACE_CLI + ",\n  \"s2_hinge_frac_of_kb\": " + S2_HINGE_CLI + ",\n  \"s2_lift_init\": " + S2_LIFT_INIT_CLI + ",\n"
               + "  \"randbase_cull_sites\": " + (ExplicitCompleteMatHarness.RANDBASE_CULL_FIX ? "\"rotated\"" : "\"legacy (stale)\"") + ",\n  \"filament_brownian\": true,\n  \"motor_brownian\": true,\n"
               + "  \"capture_tol_deg\": 25.0,\n  \"target_um\": %.3f,\n"
               + "  \"centroid0\": [%.6f, %.6f, %.6f],\n  \"barbed_dir0\": [%.6f, %.6f, %.6f],\n"

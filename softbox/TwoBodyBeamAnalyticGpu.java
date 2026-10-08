@@ -1143,8 +1143,11 @@ public final class TwoBodyBeamAnalyticGpu {
                         addK(sys,base,W, ri+p, rj+qq,-kb2); addK(sys,base,W, rj+p, ri+qq,-kb2);
                     }
                 }
-                // BEND clamped joint 0
+                // BEND clamped joint 0. kbend0 = kbend * (matc[5]/1000): the S2 BASE-JOINT stiffness relative to the
+                // beam (2026-10-07). Absent or 1000 => exactly kbend (x1.0, bit-identical); 0 => a free hinge at the
+                // emergence point, where the S2 leaves the adsorbed tail (departure set by Brownian motion + the floor).
                 {
+                    double kbend0 = kbend * (matc.getSize() > 5 ? matc.get(5) * 1.0e-3 : 1.0);
                     double b0x = nodes.get(3*nM+m)-nodes.get(m), b0y = nodes.get((4)*nM+m)-nodes.get(nM+m), b0z = nodes.get(5*nM+m)-nodes.get(2*nM+m);
                     double lbb = Math.sqrt(b0x*b0x+b0y*b0y+b0z*b0z);
                     if (lbb > 1e-12) {
@@ -1152,7 +1155,7 @@ public final class TwoBodyBeamAnalyticGpu {
                         double th = dacos(c), A1=a1(th), A2=a2(th); double clb2=c*ilb*ilb;
                         double g0x=gTx*ilb-clb2*b0x, g0y=gTy*ilb-clb2*b0y, g0z=gTz*ilb-clb2*b0z;
                         int r1=0;
-                        addF(sys,base,W,n, r1+0, kbend*A1*1e6*g0x); addF(sys,base,W,n, r1+1, kbend*A1*1e6*g0y); addF(sys,base,W,n, r1+2, kbend*A1*1e6*g0z);
+                        addF(sys,base,W,n, r1+0, kbend0*A1*1e6*g0x); addF(sys,base,W,n, r1+1, kbend0*A1*1e6*g0y); addF(sys,base,W,n, r1+2, kbend0*A1*1e6*g0z);
                         double ilb2=ilb*ilb, ilb3=ilb2*ilb, ilb4=ilb2*ilb2;
                         for (int p=0;p<3;p++) for(int qq=0;qq<3;qq++){
                             double b0p=(p==0)?b0x:((p==1)?b0y:b0z), b0q=(qq==0)?b0x:((qq==1)?b0y:b0z);
@@ -1160,7 +1163,7 @@ public final class TwoBodyBeamAnalyticGpu {
                             double id=(p==qq)?1.0:0.0;
                             double Hc = -(b0p*tq+tp*b0q)*ilb3 - c*id*ilb2 + 3.0*c*b0p*b0q*ilb4;
                             double gp=(p==0)?g0x:((p==1)?g0y:g0z), gq=(qq==0)?g0x:((qq==1)?g0y:g0z);
-                            addK(sys,base,W, r1+p, r1+qq, 1e12*kbend*(A2*gp*gq - A1*Hc));
+                            addK(sys,base,W, r1+p, r1+qq, 1e12*kbend0*(A2*gp*gq - A1*Hc));
                         }
                     }
                 }
@@ -1534,8 +1537,11 @@ public final class TwoBodyBeamAnalyticGpu {
                         addK(sys,base,W, ri+p, rj+qq,-kb2); addK(sys,base,W, rj+p, ri+qq,-kb2);
                     }
                 }
-                // BEND clamped joint 0
+                // BEND clamped joint 0. kbend0 = kbend * (matc[5]/1000): the S2 BASE-JOINT stiffness relative to the
+                // beam (2026-10-07). Absent or 1000 => exactly kbend (x1.0, bit-identical); 0 => a free hinge at the
+                // emergence point, where the S2 leaves the adsorbed tail (departure set by Brownian motion + the floor).
                 {
+                    double kbend0 = kbend * (matc.getSize() > 5 ? matc.get(5) * 1.0e-3 : 1.0);
                     double b0x = nodes.get(3*nM+m)-nodes.get(m), b0y = nodes.get((4)*nM+m)-nodes.get(nM+m), b0z = nodes.get(5*nM+m)-nodes.get(2*nM+m);
                     double lbb = Math.sqrt(b0x*b0x+b0y*b0y+b0z*b0z);
                     if (lbb > 1e-12) {
@@ -1543,7 +1549,7 @@ public final class TwoBodyBeamAnalyticGpu {
                         double th = dacos(c), A1=a1(th), A2=a2(th); double clb2=c*ilb*ilb;
                         double g0x=gTx*ilb-clb2*b0x, g0y=gTy*ilb-clb2*b0y, g0z=gTz*ilb-clb2*b0z;
                         int r1=0;
-                        addF(sys,base,W,n, r1+0, kbend*A1*1e6*g0x); addF(sys,base,W,n, r1+1, kbend*A1*1e6*g0y); addF(sys,base,W,n, r1+2, kbend*A1*1e6*g0z);
+                        addF(sys,base,W,n, r1+0, kbend0*A1*1e6*g0x); addF(sys,base,W,n, r1+1, kbend0*A1*1e6*g0y); addF(sys,base,W,n, r1+2, kbend0*A1*1e6*g0z);
                         double ilb2=ilb*ilb, ilb3=ilb2*ilb, ilb4=ilb2*ilb2;
                         for (int p=0;p<3;p++) for(int qq=0;qq<3;qq++){
                             double b0p=(p==0)?b0x:((p==1)?b0y:b0z), b0q=(qq==0)?b0x:((qq==1)?b0y:b0z);
@@ -1551,7 +1557,7 @@ public final class TwoBodyBeamAnalyticGpu {
                             double id=(p==qq)?1.0:0.0;
                             double Hc = -(b0p*tq+tp*b0q)*ilb3 - c*id*ilb2 + 3.0*c*b0p*b0q*ilb4;
                             double gp=(p==0)?g0x:((p==1)?g0y:g0z), gq=(qq==0)?g0x:((qq==1)?g0y:g0z);
-                            addK(sys,base,W, r1+p, r1+qq, 1e12*kbend*(A2*gp*gq - A1*Hc));
+                            addK(sys,base,W, r1+p, r1+qq, 1e12*kbend0*(A2*gp*gq - A1*Hc));
                         }
                     }
                 }

@@ -1,5 +1,31 @@
 # Soft Box Project Journal
 
+### 2026-10-08 — S2 one surface + soft base hinge; height columns; d800 S2FIX pair; MODEL ASSUMPTION SURVEY
+
+**S2 geometry fixed (SiteNormal defaults; `-s2-floor-legacy -s2-hinge 1 -s2-lift-init off` = legacy, gated 10/10 rows
+identical vs the pre-change sweep).** Found while tracking height: the S2 base was CLAMPED to a horizontal departure
+(`g4Tan = bhat`, every explicit-S2 builder) and its floor sat 50 nm BELOW the filament floor, so **51 % of unbound
+near-filament heads hung below the "glass"** (filament rested on the floor, 1-2 nm clearance). Not a buried flag: the
+old articulated GlidingHarness motor stood its rod vertical; the explicit-S2 motor laid S2 flat implicitly. Now: one
+surface (S2 floor = filament floor = lawn plane), base joint **0.1 x kb** (jba "reasonably soft"; unmeasured; scan
+deferred), per-motor hemisphere initial lift (`matc[5]` per-mille, joint-0 bend block of `matS2SolveStep*`).
+Pilots d1600 10 uM 0.05 s, one lawn: heads below floor 51 % -> 8-10 % (heads still lack own exclusion); bound now
+~36 vs ~21-27 old (**~1.5x engagement**, not the 2x a 10 ms look suggested); free hinge == 0.1 x kb in engagement;
+filament ~9 nm clear of the floor. **All absolute engagement / density-curve / height numbers on explicit-S2 before
+this are superseded; same-geometry A/B effects (triad base, mirror, viscosity scaling) stand.** 10 uM density sweep
+stopped as voided. New: 9 height columns in the trajectory (z_now/ends/tilt/floor clearance/contact fractions),
+`scripts/filament_height.py` (frame-based; `zmin`/`zmax` remain running extremes).
+**Launched (2026-10-08): `campaigns_2026-10/TWIRL_S2FIX/` d800 x {10 uM 6x4 lawn, 2 mM 20x6 lawn (measured k =>
+4800 /s, not the frozen 2e4)}, lawn 20260901, 3.5 s, GPU experimental path, probes 1, frames every 1 ms.**
+**MODEL ASSUMPTION SURVEY (`docs/twirling/MODEL_ASSUMPTION_SURVEY_2026-10-08.md`).** Four read-only reviews. Tier 1:
+(1) **twirl handedness is an INPUT** -- eps -1.25 deg magnitude from cryo-EM at 1.2 sigma (+1.25 measured), sign
+CHOSEN left-handed; (2) rigor rupture (k0 140 /s extrapolated to zero load) is the main low-ATP rigor exit and a
+ruptured head cannot rebind until ATP + hydrolysis -- untested at low ATP; (3) one linear-implicit Newton step on
+kbind (a ~1.7) holds bound-head orientation variance at ~0.54x equipartition, and the filament roll reaction is
+explicit. Tier 2: cull radius sized for the clamped S2 (new `-cullprobe` diagnostic running on a no-cull d800 2 mM
+GPU run, `TWIRL_S2FIX/cullcheck/`), actin radius 3.5 nm (moment arm, roll drag), no near-wall drag, `leverRest0`
+from the build pose, homogeneous lawn, uncalibrated kF8/kconv/kbind, Beausang conditions unrecorded.
+
 ### 2026-10-07 — rod TILTED THROUGH the slab (centre-only walls); end-contact walls; dt check; 10 uM density sweep
 
 **d1600 (matched 100/s and 5 uM, new defaults, 8x4 lawn, stopped at 2.2 s).** Matched: steady 0.65 um/s glider,
