@@ -429,6 +429,18 @@ public final class ExplicitCompleteMatHarness {
     // -legacy-f8axis clears it (byte-reproduces pre-repair runs).
     static boolean HEAD_TILT_AXIS_FIX = true;
     static boolean RAND_BASE_AZ = false;     // -randomize-motor-base-azimuth (SCENE control, not physics)
+    // POLARITY_GATE (2026-10-08, jba): stereospecific capture -- a head binds only if its stroke axis bhat points toward
+    // the actin barbed end within POLARITY_TOL_DEG (90 = reject any backward stroke). Default off here (every other
+    // harness unchanged); SiteNormal turns it on. Motors keep their full random orientation; the GATE does the sorting.
+    static boolean POLARITY_GATE = false;
+    static double  POLARITY_TOL_DEG = 90.0;
+    // S2_SWIVEL (2026-10-08, jba option a): the S2 and everything above it (lever, converter, head) turn together about
+    // the vertical at the soft base joint, which now resists ELEVATION only (azimuth free). The stroke frame follows
+    // the S2 (TwoBodyBeamAnalyticGpu.matSwivelFrame), so a motor laid down facing backward can swing round and bind
+    // forward; the polarity gate still refuses a backward-facing bind. The cull is then centred on the FIXED base
+    // point E (a swivelling head can sit anywhere within reach of E) with SWIVEL_QUERYR_NM.
+    static boolean S2_SWIVEL = false;
+    static double  SWIVEL_QUERYR_NM = 100.0;
     static int     RAND_BASE_SEED = 20260724;
     // RANDBASE_CULL_FIX (default true since 2026-10-04; -legacy-cullsites => false): rotate the cull's ideal head site
     // (G.siteX/siteY, used ONLY by the device cull, the CPU cull plan and the motor cell grid) with the motor it
@@ -449,6 +461,7 @@ public final class ExplicitCompleteMatHarness {
     static boolean S2_ONE_SURFACE = false;
     static int     S2_HINGE_PM = 1000;
     static boolean S2_LIFT_INIT = false;
+    static double CULL_QUERYR_NM = 0.0;   // >0 overrides G.queryR in packExMat (SiteNormal default 110 nm)
     // NOISE_SEED (-noise-seed) — key the per-step RNG (Brownian + chemistry) on a DIFFERENT integer from the
     // one that lays the motor lawn. build(seed) keeps the lawn; only the (slot, step, runSeed) RNG keying moves.
     //
@@ -825,7 +838,7 @@ public final class ExplicitCompleteMatHarness {
         // per-motor params block by ONE slot (the head's sphere-only rotational drag). OFF ⇒ the historical sizes.
         int nodeStride = 3 * (M + 1);
         int sysStride = headTiltOn() ? (3 * M + 3) * (3 * M + 4) : (3 * M + 2) * (3 * M + 3);
-        int nParam = headTiltOn() ? 19 : 18;   // row 17 = S2->lever rest angle; row 18 = head gamma_r (tilt only)
+        int nParam = 25;   // row 17 = S2->lever rest angle; row 18 = head gamma_r (tilt only); rows 19..21 = stroke axis bhat (polarity gate); rows 22..24 = swivel reference   // row 17 = S2->lever rest angle; row 18 = head gamma_r (tilt only)
         e.nodes = new DoubleArray(nodeStride * N); e.frame = new DoubleArray(15 * N); e.params = new DoubleArray(nParam * N);
         e.sys = new DoubleArray(sysStride * N); e.q = new DoubleArray(4 * N); e.sys.init(0.0);
         // outGeom rows 0..8 = C / xH / xF8 (canonical). Rows 9..11 carry the HEAD-LOCAL +x AXIS xHeadHat,
@@ -857,7 +870,7 @@ public final class ExplicitCompleteMatHarness {
         // [3] = binding-state Brownian mask (0 = canonical); [4] = F8 generalized-force axis for the TILT solver
         // ONLY (1 = econv, the geometry's exact Jacobian; 0 = the legacy eup convention — see the report's AXIS
         // section). matS2SolveStep never reads [4], so the default path is untouched.
-        e.matc = IntArray.fromElements(0, 0, brownOn, motorBrownPolicy(), f8AxisFlag(), S2_HINGE_PM);
+        e.matc = IntArray.fromElements(0, 0, brownOn, motorBrownPolicy(), f8AxisFlag(), S2_HINGE_PM, S2_SWIVEL ? 1 : 0);
         e.eupP = DoubleArray.fromElements(G.eup[0], G.eup[1], G.eup[2]);
         e.noBind = new IntArray(N); for (int m = 0; m < N; m++) e.noBind.set(m, G.noBind[m] ? 1 : 0);
         // bind gate thresholds (Tol defaults) + constants — the DETERMINISTIC 8-gate contract.
@@ -969,7 +982,9 @@ public final class ExplicitCompleteMatHarness {
         double kF8u = e.params.get(5 * N);
         for (int m = 1; m < N; m++) if (e.params.get(5 * N + m) != kF8u)
             throw new IllegalStateException("site-aware capture requires a scene-uniform kF8 (motor " + m + " differs)");
-        e.sbP = new DoubleArray(36);
+        e.sbP = new DoubleArray(38);
+        e.sbP.set(36, POLARITY_GATE ? 1.0 : 0.0);                        // g9 stereospecific polarity (siteCommitB)
+        e.sbP.set(37, Math.cos(Math.toRadians(POLARITY_TOL_DEG)));
         for (int i = 0; i < 13; i++) e.sbP.set(i, e.bindP.get(i));
         e.sbP.set(13, G.eup[0]); e.sbP.set(14, G.eup[1]); e.sbP.set(15, G.eup[2]);
         e.sbP.set(16, siteRise(SITE_MODE)); e.sbP.set(17, chiTwist); e.sbP.set(18, chiStair); e.sbP.set(19, Ract);
@@ -1166,6 +1181,26 @@ public final class ExplicitCompleteMatHarness {
             }
             if (S2_LIFT_INIT && G.siteX != null) TwoBodyConverterMotor.initMatGrid(G);
         }
+        for (int m = 0; m < N; m++) {   // stroke axis for the g9 polarity gate (after every frame rotation above)
+            e.params.set(19 * N + m, e.frame.get(m)); e.params.set(20 * N + m, e.frame.get(N + m)); e.params.set(21 * N + m, e.frame.get(2 * N + m));
+        }
+        for (int m = 0; m < N; m++) {   // swivel reference: horizontal direction of the S2's last segment (else bhat)
+            double ex = e.frame.get(6 * N + m), ey = e.frame.get(7 * N + m), ez = e.frame.get(8 * N + m);
+            double sx = e.nodes.get((3 * M) * N + m) - e.nodes.get((3 * (M - 1)) * N + m), sy = e.nodes.get((3 * M + 1) * N + m) - e.nodes.get((3 * (M - 1) + 1) * N + m),
+                   sz = e.nodes.get((3 * M + 2) * N + m) - e.nodes.get((3 * (M - 1) + 2) * N + m);
+            double su = sx * ex + sy * ey + sz * ez, hx = sx - su * ex, hy = sy - su * ey, hz = sz - su * ez, hn = Math.sqrt(hx * hx + hy * hy + hz * hz);
+            if (!(hn > 1e-12)) { hx = e.frame.get(m); hy = e.frame.get(N + m); hz = e.frame.get(2 * N + m); hn = Math.sqrt(hx * hx + hy * hy + hz * hz); }
+            e.params.set(22 * N + m, hx / hn); e.params.set(23 * N + m, hy / hn); e.params.set(24 * N + m, hz / hn);
+        }
+        if (S2_SWIVEL && G.siteX != null) {   // cull centred on the fixed base point E
+            for (int m = 0; m < N && m < G.siteX.length; m++) { G.siteX[m] = e.frame.get(9 * N + m); G.siteY[m] = e.frame.get(10 * N + m); }
+            G.queryR = SWIVEL_QUERYR_NM * 1e-3; TwoBodyConverterMotor.initMatGrid(G);
+        }
+        // CULL_QUERYR_NM > 0: override the cull reach (site->filament xy distance below which a motor is solved).
+        // The builder's 30 + L + 10 nm (= 80 nm) was derived for the clamped S2; with the soft base hinge a head can
+        // reach farther (2026-10-08 -cullprobe: binds from sites up to 77.7 nm, far heads within capture reach 3x in
+        // 15M samples). 0 = keep the builder value (every other harness unchanged).
+        if (CULL_QUERYR_NM > 0) { G.queryR = CULL_QUERYR_NM * 1e-3; if (G.siteX != null) TwoBodyConverterMotor.initMatGrid(G); }
         // ---- CONVERTER TRANSVERSE OFFSET (diagnostic, default-off): roll each motor's base triad about its OWN b̂.
         // b̂ is invariant, so the AXIAL stroke direction is untouched; (econv, ê_up) tilt, which displaces the
         // converter JOINT C = P + lb·(ê_up cosφ + b̂ sinφ) out of the motor's axial plane while the S2 pivot P and
@@ -1519,6 +1554,7 @@ public final class ExplicitCompleteMatHarness {
             }
             cp.activeAcc += na; cp.activeSteps++; cp.lastActive = na; cp.maxActive = Math.max(cp.maxActive, na);
         }
+        if (S2_SWIVEL) TwoBodyBeamAnalyticGpu.matSwivelFrame(e.nodes, e.frame, e.params, mot.boundSeg, e.exCounts);
         if (convSkewOn())   // TRUE converter-stroke-plane rotation: build the per-motor converter frame FIRST, so
             ChiralSiteSystem.convFrameStep(mot.boundSeg, f.uVec, f.yVec, mot.bindAzim, e.frame, e.params, e.q,
                     e.convF, e.chiP, e.exCounts);   // geometry, gates, bond and solve all see ONE frame this step
@@ -1535,7 +1571,7 @@ public final class ExplicitCompleteMatHarness {
             ChiralSiteSystem.siteGateA(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom,
                     f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
             ChiralSiteSystem.siteCommitB(mot.boundSeg, mot.nucleotideState, e.q, e.params, e.sbP,
-                    e.candInt, e.candArc, e.candAzim, mot.bindArc, mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+                    e.candInt, e.candArc, e.candAzim, mot.bindArc, mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts, f.uVec);
         } else
             TwoBodyBeamAnalyticGpu.matBindExplicit(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
         if (tzOn())   // Vilfan target-zone angular hazard — applied to the geometric candidate BEFORE it persists
@@ -1686,6 +1722,7 @@ public final class ExplicitCompleteMatHarness {
             if (headTiltOn())   // publish the decision into restC row 8, the tag matS2SolveStepTilt skips on
                 tg.task("cullTag", MatSoaSlice::matCullTag, e.active, e.restC, mot.forceDotFil, mot.forceMag, e.exCounts);
         }
+        if (S2_SWIVEL) tg.task("swivel", TwoBodyBeamAnalyticGpu::matSwivelFrame, e.nodes, e.frame, e.params, mot.boundSeg, e.exCounts);
         if (convSkewOn())   // TRUE converter-stroke-plane rotation — FIRST in the chain, before the geometry
             tg.task("convFrame", ChiralSiteSystem::convFrameStep, mot.boundSeg, f.uVec, f.yVec, mot.bindAzim,
                     e.frame, e.params, e.q, e.convF, e.chiP, e.exCounts);
@@ -1702,7 +1739,7 @@ public final class ExplicitCompleteMatHarness {
             tg.task("siteGate", ChiralSiteSystem::siteGateA, e.active, e.noBind, mot.boundSeg, mot.nucleotideState,
                       e.outGeom, f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts)
               .task("siteBind", ChiralSiteSystem::siteCommitB, mot.boundSeg, mot.nucleotideState, e.q, e.params, e.sbP,
-                      e.candInt, e.candArc, e.candAzim, mot.bindArc, mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+                      e.candInt, e.candArc, e.candAzim, mot.bindArc, mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts, f.uVec);
         } else
             tg.task("bind", TwoBodyBeamAnalyticGpu::matBindExplicit, e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom, e.q, f.coord, f.uVec, f.segLength, e.params, e.bindP, e.eupP, mot.bindArc, e.exCounts);
         if (tzOn())   // Vilfan target-zone angular hazard — immediately after the canonical bind, before it persists
@@ -1823,6 +1860,7 @@ public final class ExplicitCompleteMatHarness {
             if (chiralOn()) java.util.Collections.addAll(dem, e.headRef, e.headOmega, e.headTau, e.headMis, e.prevNuc, e.prevBound, e.justBound);
             if (convSkewOn()) dem.add(e.convF);
             if (DEVICE_CULL) dem.add(e.active);
+            if (S2_SWIVEL) java.util.Collections.addAll(dem, e.frame, e.params);
             dem.removeAll(ev);
             tg.transferToHost(DataTransferMode.EVERY_EXECUTION, ev.toArray());
             tg.transferToHost(DataTransferMode.UNDER_DEMAND, dem.toArray());
@@ -1856,6 +1894,7 @@ public final class ExplicitCompleteMatHarness {
         if (s2CatchOn()) addW(glSched, "glide.s2Catch", pn);
         if (s2LoadOn())  addW(glSched, "glide.s2Load", pn);
         if (DEVICE_CULL) { addW(glSched, "glide.cull", pn); if (headTiltOn()) addW(glSched, "glide.cullTag", pn); }
+        if (S2_SWIVEL) addW(glSched, "glide.swivel", pn);   // stroke-frame follows the S2 azimuth: parallel over motors
         if (brownChanOn()) addW(glSched, "glide.brChan", ps);   // per-channel filament Brownian mask: parallel over segments
         addW(glSched, "glide.csrZero", ((Math.max(1, nCh * nSeg) + 63) / 64) * 64);
         addW(glSched, "glide.csrHist", ((nCh + 63) / 64) * 64); addW(glSched, "glide.csrScatter", ((nCh + 63) / 64) * 64);

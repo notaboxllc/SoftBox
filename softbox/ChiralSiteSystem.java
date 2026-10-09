@@ -910,8 +910,14 @@ public final class ChiralSiteSystem {
     public static void siteCommitB(IntArray boundSeg, IntArray nuc, DoubleArray q, DoubleArray params,
             DoubleArray sbP, IntArray candInt, DoubleArray candArc, DoubleArray candAzim,
             FloatArray bindArc, FloatArray bindAzim, IntArray bindSite,
-            IntArray prevBound, IntArray justBound, IntArray counts) {
-        int N = counts.get(0);
+            IntArray prevBound, IntArray justBound, IntArray counts, FloatArray filUVec) {
+        int N = counts.get(0), nSeg = counts.get(3);
+        // g9 STEREOSPECIFIC POLARITY (2026-10-08, jba): a head may bind only if its head-neck (converter) frame would
+        // stroke toward the actin BARBED end, i.e. its stroke axis bhat (params rows 19..21) projects onto the
+        // candidate segment's barbed direction uVec by at least cos(tol). sbP[36] = enable, sbP[37] = cos(tol).
+        // Absent (sbP size 36) or 0 => no gate, byte-identical.
+        int polOn = (sbP.getSize() > 37) ? (int) sbP.get(36) : 0;
+        double cosPol = (sbP.getSize() > 37) ? sbP.get(37) : -2.0;
         double psiDeg = sbP.get(1), phiDeg = sbP.get(2), thetaDeg = sbP.get(3), energyKt = sbP.get(5);
         double PHI_PRE = sbP.get(7), kT = sbP.get(9);
         int orientOn = (int) sbP.get(11);
@@ -948,7 +954,14 @@ public final class ChiralSiteSystem {
                 boolean g2 = orientOn == 0 || (orientSite != 0 && keepG2 == 0) || phiErr < phiDeg;
                 boolean g3 = orientOn == 0 || thetaErr < thetaDeg;
                 boolean g5 = orientOn == 0 || eKt < energyKt;
-                if (g1 && g2 && g3 && g5) {
+                boolean g9 = true;
+                if (polOn != 0) {
+                    int cs = candInt.get(m);
+                    double pd = params.get(19 * N + m) * filUVec.get(cs) + params.get(20 * N + m) * filUVec.get(nSeg + cs)
+                              + params.get(21 * N + m) * filUVec.get(2 * nSeg + cs);
+                    g9 = pd >= cosPol;
+                }
+                if (g1 && g2 && g3 && g5 && g9) {
                     bs = candInt.get(m);
                     boundSeg.set(m, bs);
                     bindArc.set(m, (float) candArc.get(m));

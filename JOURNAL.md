@@ -1,5 +1,46 @@
 # Soft Box Project Journal
 
+### 2026-10-08 (later) — low-ATP STALL was a model artifact: POLARITY GATE + S2 SWIVEL; cull 110 nm; rupture literature
+
+**Cull reach (`-cullprobe`).** No-cull d800 2 mM 0.02 s: 0/168 binds from sites beyond the 80 nm cull, but the farthest
+bind site was 77.7 nm and far heads entered capture reach 3x in 15M samples => SiteNormal cull now 110 nm
+(`-cull-queryr`, `-legacy-cull-queryr` = 80); legacy reproduces the running d800 rows 10/10; cost unchanged.
+**Backward strokers.** The 2026-10-04 random-orientation default rotated the WHOLE motor frame (stroke axis bhat/econv,
+`matBeamGeomTilt`), and the site-normal capture gate is polarity-blind (radial only) => ~half the lawn bound and stroked
+BACKWARD. Rupture off (d800 10 uM): 84-96 heads bound, symmetric ~74 vs 74 pN tug-of-war, net glide ~0 over 0.1 s.
+With rupture ON the signed rigor law ripped backward (assisting-load) heads off at ~800 /s => the glide direction came
+from KINETIC RECTIFICATION. The two d800 S2FIX long runs were stopped (`*_BACKWARDSTROKERS_stopped`).
+**Fix 1 — g9 STEREOSPECIFIC POLARITY GATE** (`ChiralSiteSystem.siteCommitB`, bhat in params rows 19..21, sbP[36..37];
+SiteNormal default 90 deg, `-polarity-gate-deg`, `-no-polarity-gate` reproduces old rows 9/9). Alone: moved ~18 nm then
+stalled (only ~half the motors can ever bind: their head-neck azimuth was fixed).
+**Fix 2 — S2 SWIVEL (jba option a)**: base joint resists ELEVATION only (azimuth free; exact Hessian term added), the
+stroke frame follows the S2's last-segment azimuth while UNBOUND and is held while bound (`TwoBodyBeamAnalyticGpu.
+matSwivelFrame`, needs its WorkerGrid -- without it the kernel cost 77 ms/step); cull centred on the fixed base point E,
+100 nm (`-swivel-queryr`); frame+params checkpointed. `-no-swivel` reproduces the gate-only rows. CPU vs GPU short run:
+aggregate agreement only (as before; bound-branch gate not green).
+**Result (d800 10 uM, rupture OFF, one lawn, 0.1 s):** steady **0.17-0.25 um/s**, ~87 heads bound (95.8 % of bound time
+rigor), per-episode force balance ~0 (ADP +2.3 pN push, rigor -0.065 pN drag) = classic detachment-limited gliding
+(v ~ stroke x k_ATP[ATP]), Beausang's range. Gate-only: same rigor drag (-0.063 pN) reached at ~0.03 um/s => each
+waiting rigor head ~5x less "sticky" with swivel (the S2 pivots with the filament until ATP releases the head), plus
+~2x more usable motors. New `-episodes <stride>` + `scripts/episode_forces.py` (per-attachment impulse by state and
+orientation; NB the all-episode mean is ~0 by force balance in ANY steady state -- compare drag vs SPEED, not drag alone).
+**Saturating ATP (2 mM, gate + swivel, rupture on):** ~12 um/s, ~5 bound (same geometry with backward strokers: ~2.7).
+Earlier "biological" high-ATP speeds were partly propped up by backward strokers; the model now runs near its own
+unloaded ceiling. **jba: NO speed tuning** (speed has been chased both ways for months).
+**Rigor rupture — OPEN, default unchanged (ON).** Guo & Guilford 2006 (full text): loads PERPENDICULAR to actin, positive
+magnitudes only; their own 0.07 pN rigor lifetime 3.8 s (model 7 ms); loading-history dependent. The model's signed
+axial reading (fast release of dragged = assisting-load heads) is an extrapolation. Axial three-bead data (cardiac/slow
+skeletal, 10 uM ATP, PMC11657034): assisting load does NOT accelerate rigor detachment; >=5 pN SLOWS it. Nishizaka 2000:
+opposing-load slip, tau0 ~65 s. jba: likely a real effect, direction uncertain. Low-ATP gliding no longer needs it.
+**Beausang 2008 conditions** (arXiv 0810.3925): whole rabbit skeletal myosin on poly-L-lysine, dead heads removed and
+capped, 0.1 % methylcellulose at <=0.1 mg/ml, 25 mM KCl, 22-23 C, 5-20 uM ATP chosen only to slow filaments; only
+**~20 %** of filaments twirled (94/97 left-handed), pitch -0.47 +/- 0.2 um among twirlers => compare twirl FRACTION.
+**Swivel literature:** Toyoshima 1989, Sellers & Kachar 1990 (direction set by actin polarity on random lawns), Tanaka
+1998 (antiparallel heads step ~half, correct direction), Gundapaneni 2005 / Nishizaka 2000 (S2 torsionally floppy). Free
+azimuth may OVERstate backward-tail motors' contribution (Tanaka) -- recorded, not acted on.
+Survey + addenda: `docs/twirling/MODEL_ASSUMPTION_SURVEY_2026-10-08.md`. Runs: `campaigns_2026-10/TWIRL_S2FIX/{cullcheck,
+polarity,swivel2}`. Twirl handedness: eps sign is a deliberate input (jba). All pilots eps = -1.25 deg.
+
 ### 2026-10-08 — S2 one surface + soft base hinge; height columns; d800 S2FIX pair; MODEL ASSUMPTION SURVEY
 
 **S2 geometry fixed (SiteNormal defaults; `-s2-floor-legacy -s2-hinge 1 -s2-lift-init off` = legacy, gated 10/10 rows

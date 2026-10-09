@@ -652,6 +652,14 @@ defaults now: S2 floor = filament floor, base joint `-s2-hinge 0.1` x kb (unmeas
 hemisphere initial lift; `-s2-floor-legacy -s2-hinge 1 -s2-lift-init off` reproduces the old binary. ~1.5x engagement at
 d1600. Pre-2026-10-08 absolute engagement, density curves and height on explicit-S2 are superseded. Open items ranked in
 `docs/twirling/MODEL_ASSUMPTION_SURVEY_2026-10-08.md` (notably: the eps SIGN is chosen, so twirl handedness is an input).
+**POLARITY GATE + S2 SWIVEL + CULL (2026-10-08; re-baselines the site-normal lineage).** The 2026-10-04 random
+orientation rotated each motor's STROKE axis and the site-normal capture gate was polarity-blind, so ~half the lawn stroked
+backward (rupture-off low ATP stalled; rupture-on glided only by kinetic rectification). SiteNormal defaults now: g9
+stereospecific polarity gate (`-polarity-gate-deg 90`; `-no-polarity-gate`), S2 swivel (base joint azimuth-free, stroke
+frame follows the S2 while unbound, held while bound; `-no-swivel`), cull centred on each motor's base, 100 nm
+(`-swivel-queryr`; non-swivel cull 110 nm, `-legacy-cull-queryr`). Low ATP now glides without rupture (detachment-limited,
+~0.2 um/s at 10 uM, d800); 2 mM runs ~12 um/s (no tuning, jba). Rigor-rupture default UNCHANGED but its fast drag-release
+is unsupported by the axial literature (JOURNAL 2026-10-08). Diagnostics: `-episodes`, `scripts/episode_forces.py`.
 **Open:** CPU-runner Gate W (1 vs 8 workers bit-identity) FAILS in the all-legacy config (~8e-10) and with the slab on
 (~8e-13), passes with the slab off — pre-existing, CPU-only, decorrelates long chaotic CPU runs across worker counts.
 **Stated limitations kept (not fixed):** single-headed motors (Beausang: two-headed whole skeletal myosin), rigid 2.1 µm

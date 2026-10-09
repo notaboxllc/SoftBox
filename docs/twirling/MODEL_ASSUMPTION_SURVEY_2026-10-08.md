@@ -45,21 +45,51 @@ chemistry/kinetics, numerics/runner. The high-ranked claims were spot-checked by
 
 ### Tier 1: could decide the result
 
-**1. Twirl handedness is an INPUT (stroke skew ε = −1.25°).** Verified by hand.
+**1. Twirl handedness is an INPUT (stroke skew ε = −1.25°). RESOLVED as DELIB (jba, 2026-10-08).**
 - **Magnitude.** It comes from cryo-EM: the motor-side residues holding the F8 bond shift tangentially by +0.77 ± 3.34 Å
-  between the two states, which is ε_equiv **+1.25°** at **1.2σ, unresolved**.
-  - Source: `docs/twirl/ACTIN_SITE_LATTICE_LITERATURE_BASIS.md:600-611`.
-- **Sign.** It was *chosen* to give a left-handed roll.
-  - Source: `JOURNAL.md:200`, "sign chosen LEFT-handed".
-  - No one has established whether the structure's "+" corresponds to the model's "+".
-- **Calibration.** The calibration of ε against Beausang's pitch is marked INVALIDATED (`JOURNAL.md:430`), yet −1.25° is still the
-  production value (`SiteNormalLongGlideHarness:162`).
-- **Consequence.** Current runs can measure twirl *magnitude and persistence at an imposed handedness*. They cannot test handedness.
-  The July viscosity mirror control (sign flips with the mirror) was a different lineage and does not settle this.
-- **Action (jba's call).** Either work out the sign mapping from the structure to the model's bind-azimuth convention, or treat
-  handedness as a free input and run the +ε mirror as a long run.
+  between the two states, which is ε_equiv **+1.25°** at **1.2σ, unresolved** (`docs/twirl/ACTIN_SITE_LATTICE_LITERATURE_BASIS.md:600-611`).
+- **Sign.** It was chosen to give a left-handed roll (`JOURNAL.md:200`).
+- **jba's ruling.** The model lacks the structural detail to predict handedness, and handedness is not a target. The structure
+  check only asked whether any imaging could plausibly be read as a conformation change of about the right magnitude. It can.
+  The sign is a deliberate input.
+- **Consequence.** Twirl results are magnitude, persistence and pitch at an imposed handedness. No action.
 
 **2. Rigor rupture now sets low-[ATP] rigor lifetime, and the mode was promoted on saturating-ATP evidence only.**
+- **LITERATURE CHECK (2026-10-08): the zero-load rate is ~10⁴× too fast.**
+  - Unloaded rigor acto-S1 dissociation in solution: ~0.0085–0.012 /s at 20 °C (Takeuchi & Tonomura 1984; transient kinetics,
+    PMID 8274637).
+  - Single-molecule optical tweezers, rabbit skeletal S1/HMM, rigor (Nishizaka 1995 Nature; Nishizaka 2000): τ(0) ≈ 62–67 s
+    (k0 ≈ 0.015 /s), a pure slip bond with d ≈ 2.4 nm, mean unbinding force 9.2 pN at ~12 pN/s.
+  - The model's k0 = 140 /s comes from Guo & Guilford 2006 (rapid, perpendicular loading, catch bond with a lifetime maximum near
+    6 pN). It disagrees with both of the above at low load by about four orders of magnitude.
+  - **LOAD-DIRECTION CAVEAT (jba, 2026-10-08).** Nishizaka pulled the actin **barbed end**, which is an OPPOSING load (the model's
+    F > 0, catch side). Rigor heads DRAGGED in gliding carry ASSISTING load (F < 0). On that side the model's catch term grows as
+    e^{|F|·1.5 nm/kT}: 273 /s at −2 pN, 793 /s at −5 pN, 4900 /s at −10 pN. Neither source measures that side; Guo & Guilford's
+    abstract does not state the direction. Only the ZERO-load comparison (solution 0.01 /s vs model 140 /s) is like-for-like.
+  - **Consequence.** The model's fast release of dragged heads comes almost entirely from the large k0. With a literature-size k0
+    (~0.015 /s), a 1.5 nm assisting sensitivity gives only ~0.1 /s at −5 pN. Fast drag release would need d ≈ 6–7 nm on the
+    assisting side, or a different mechanism. The rupture-off pilot removed both the zero-load rate AND the assisting release, so it
+    is not a fair stand-in for Nishizaka either.
+  - **Guo & Guilford 2006 full text (read 2026-10-08).**
+    - Loads were applied PERPENDICULAR to the actin axis (their Fig. 2A, Discussion), with positive magnitudes only (1.8–26.4 pN).
+      The model's signed-axial reading, and its fast negative-F branch, has no basis in the paper.
+    - Their own near-zero-load rigor lifetime is **3.8 ± 0.7 s** at 0.07 pN, not the model's 7 ms. The two-pathway fit
+      (Table 2) describes step loads only.
+    - Lifetime depends on loading history: ramp loads give ~5× higher rupture forces than step-load kinetics predict. Gliding
+      drag is ramp-like (~300 pN/s); the Table 1 ramp barriers are rigor 0.2 /s @ 2.1 nm and 0.9 /s @ 0.51 nm.
+    - The same issue applies to the frozen ADP-release catch: xCatch = 2.5 nm is GG's ADP *bond* catch distance, applied as a
+      signed-axial ADP *release* rate.
+  - **Axial assisting-load data (2026-10-08).** Three-bead assay, axial loads ±15 pN, 10 µM ATP, cardiac and slow-skeletal
+    myosin II, ~22 °C (PMC11657034, 2024): assisting load does **NOT** accelerate rigor-limited detachment, and high assisting load
+    (≥5 pN) SLOWS it about 10× (ks ≈ 3.9 → 0.4 /s). For fast skeletal myosin (Capitanio 2012, Nat Methods, 15 µM ATP, ±7 pN) the
+    numbers were inaccessible (paywall). A secondary source says both directions slow detachment; unverified.
+  - ⇒ The model's fast release of dragged rigor heads is opposite in sign to the only direct axial data found.
+    Classic detachment-limited gliding (v ≈ d·k_T[ATP], ~0.1–0.2 µm/s at 10 µM, density-independent) needs no force-driven
+    release at all. So the rupture-off STALL is not what biology predicts, and the model may make bound heads net-resisting for
+    some other reason. Diagnose before changing the law.
+  - jba's note: recharging a detached apo head is plain biochemistry (ATP binding at the set [ATP] and measured k, then
+    hydrolysis), not a model defect. The no-apo-rebinding rule matters only if rupture is frequent; with a Nishizaka-type law it
+    would be rare.
 - **The rates.** Mode 1 (Guo & Guilford 2006 rigor fit): k0 = 140 /s at zero load; catch 0.9071 @ 1.5 nm, slip 0.0929 @ 0.5 nm.
   - Source: `ExplicitCompleteMatHarness.java:2381`, `ChiralSiteHarness.java:146-151`, `NucleotideCycleSystem.java:546-558`.
 - **Where it was justified.** Promotion relied on rupture being <2% of detachments at saturating ATP.
@@ -109,6 +139,13 @@ chemistry/kinetics, numerics/runner. The high-ranked claims were spot-checked by
 - **Check RUNNING (2026-10-08).**
   - `-cullprobe` on a no-cull GPU run (d800, 2 mM, 6×4 lawn, 0.02 s): `RUN_LOGS/motor_audit/campaigns_2026-10/TWIRL_S2FIX/cullcheck/`.
   - It counts new binds by motors whose site is beyond queryR, and far-site heads within capture reach. Both must be 0.
+- **RESULT (2026-10-08): marginal, now fixed for future runs.**
+  - 168 binds; **0** from sites beyond 80 nm, but the farthest bind site was **77.7 nm**.
+  - A far head was inside capture reach 3 times in 15M motor-samples (closest 3.2 nm); none bound.
+  - Estimated loss is likely ≲1% of attachments, so the running d800 pair was kept.
+  - **SiteNormal default cull reach is now 110 nm** (`-cull-queryr <nm>`; `-legacy-cull-queryr` = the builder's 80 nm).
+  - Gates: `-legacy-cull-queryr` reproduces the running d800 10 µM run's rows 10/10 (all columns but wall time). The 110 nm run
+    costs the same wall time (277.9 vs 277.7 s at 20k steps).
 
 **5. Actin radius 3.5 nm (`Constants.java:38-39`).**
 - **Provenance.** INH from v1 `Env.java:530` (actinWidth 7 nm). F-actin is ~7–10 nm across, and the repo's own literature doc uses
@@ -179,7 +216,7 @@ chemistry/kinetics, numerics/runner. The high-ranked claims were spot-checked by
 ## Implications for the runs started 2026-10-08
 
 `campaigns_2026-10/TWIRL_S2FIX/d800_atp10_s2fix` and `d800_atp2000_s2fix`:
-- **Handedness:** both twirl at the handedness imposed by item 1.
+- **Handedness:** imposed by item 1 by design (jba: not a prediction target).
 - **Low-ATP arm:** its glide and twirl depend on item 2's rupture extrapolation and the no-rebind rule.
 - **Engagement:** both depend on item 4 until the cull probe reports.
 - **Comparisons:** the saturating vs low-ATP difference is a fair comparison at fixed model assumptions. Absolute pitch vs Beausang
@@ -193,3 +230,56 @@ chemistry/kinetics, numerics/runner. The high-ranked claims were spot-checked by
 3. **Item 3.** Matched-lawn dt/2 roll and variance check.
 4. **Items 5 and 6.** Sensitivity checks.
 5. **Item 7 and Tier 3.** Record, then fix opportunistically.
+
+---
+
+## Addendum (2026-10-08): Beausang 2008 conditions vs the model
+
+Source: arXiv 0810.3925 (accepted manuscript, Biophys J 95:5820).
+
+| | Beausang 2008 | model |
+|---|---|---|
+| Motor | **whole** two-headed rabbit fast-skeletal myosin II; dead heads removed by actin-affinity spin, residual dead heads capped with sheared unlabelled actin | single-headed explicit-S2 motor |
+| Surface | quartz + **poly-L-lysine**, myosin loaded from high salt | "lawn plane" + adsorbed-tail assumption |
+| Loading | 0.03–3.2 mg/ml; **most data 0.1 mg/ml** (surface density not measured) | d800 heads/µm² |
+| Additive | **0.1% methylcellulose** at ≤0.1 mg/ml myosin (keeps sparse-lawn filaments down) | none (η = 0.01 Pa·s, ~10× water) |
+| Buffer | 25 mM KCl, 20 mM Hepes, 5 mM MgCl₂, pH 7.4, **22–23 °C** | kT at 25 °C; ATP k from 100 mM KCl, 20 °C |
+| [ATP] | 5–20 µM, chosen only so filaments move slowly enough (0.1–0.5 µm/s) for the 1.8 µm APD spot; most data 10 µM | 10 µM (24 /s) |
+| Velocity | rises with myosin loading at fixed ATP | — |
+| Filament length | 1–50 µm | 2.1 µm rigid rod |
+| Readout | one rhodamine; 80 ms cycle; 2–7 s traces | probe, 1 ms frames |
+| **Twirl fraction** | **~20%** of analysable filaments twirled (97 of ~550–650; 94 left-handed) | — |
+| Pitch | −0.47 ± 0.2 µm (SD, n=94, twirlers only; selected for near-constant ω, ≥180°, ≥1.6 s) | — |
+| Pitch dependence | insensitive to myosin loading, [ATP] and length; ω vs v correlated but the fit does not pass through zero | — |
+
+**Readings that change how we compare.**
+- (a) Twirling is a **minority** phenotype: ~80% of gliding filaments did not twirl measurably. Expecting a clear persistent twirl
+  on every lawn/run over-reads the experiment; the right comparison is a twirl FRACTION plus the pitch of the twirlers.
+- (b) Low [ATP] was an instrument choice (slow enough to track), not a condition for twirling. Pitch is [ATP]-insensitive.
+- (c) The lawn is likely **sparser** than d800, and filaments are held down by methylcellulose, not by dense engagement. Our
+  lateral-jitter problem at low engagement is what methylcellulose suppresses in the experiment.
+- (d) Whole myosin has a long adsorbed tail on polylysine (more compliant tether than HMM-on-nitrocellulose).
+- (e) Real filaments glide at 10 µM with whole myosin without stalling, consistent with detachment-limited gliding.
+
+---
+
+## Addendum (2026-10-08, late): what the survey led to
+
+1. **Release-pathway audit.** A bound rigor head has only two exits: ATP binding (load-independent, immediate detach) and
+   rigor rupture. There is no strain or distance limit, and the 12 pN cap, ADP rupture and surface prune are off. The
+   stroke direction was set by each motor's base frame, and the capture gates were polarity-blind.
+2. **Fix: g9 polarity gate + S2 swivel** (see CLAUDE.md / JOURNAL 2026-10-08). Low-ATP rupture-off d800: stall →
+   steady 0.17–0.25 µm/s detachment-limited gliding. Per attachment, ADP heads push +2.3 pN and rigor heads drag
+   −0.065 pN. Without swivel the same drag is reached at ~5× lower speed.
+3. **Saturating ATP now ~12 µm/s** (was ~2.7 with backward strokers). Recorded, not tuned (jba).
+4. **Rigor rupture: open.** Default unchanged. Literature: Guo & Guilford loaded perpendicular to actin; axial assisting
+   load slows rigor detachment (PMC11657034); Nishizaka slip under opposing load, τ0 ≈ 65 s.
+5. **Still open from Tier 1–3:**
+   - item 3, the single implicit Newton step on kbind;
+   - actin radius;
+   - near-wall drag;
+   - `leverRest0`;
+   - lawn homogeneity;
+   - stiffness provenance;
+   - Beausang conditions vs model (methylcellulose, salt, whole myosin);
+   - free swivel may overstate backward-tail motors' contribution (Tanaka 1998).

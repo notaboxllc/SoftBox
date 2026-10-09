@@ -396,6 +396,54 @@ public final class TwoBodyBeamAnalyticGpu {
     }
 
     /**
+     * S2 SWIVEL (2026-10-08, jba): the head-neck unit turns WITH its S2 about the vertical. Each step the motor's stroke
+     * frame (bhat = frame rows 0..2, econv = rows 3..5, and the polarity-gate copy of bhat in params rows 19..21) is
+     * rotated about eup by the change in azimuth of the S2's LAST segment (node M-1 -> M) since the previous step
+     * (params rows 22..24 hold that previous horizontal unit direction). A near-vertical last segment (horizontal part
+     * < 20 % of its length) holds the frame. While BOUND the frame is held (the head is fixed by actin; the S2 swivels
+     * under it) and only the reference direction is tracked. Pure kinematics, no RNG; identical on both runners.
+     */
+    public static void matSwivelFrame(DoubleArray nodes, DoubleArray frame, DoubleArray params, IntArray boundSeg, IntArray counts) {
+        int nM = counts.get(0), M = counts.get(2);
+        for (@Parallel int m = 0; m < nM; m++) {
+            double ex = frame.get(6*nM+m), ey = frame.get(7*nM+m), ez = frame.get(8*nM+m);
+            double sx = nodes.get((3*M)*nM+m) - nodes.get((3*(M-1))*nM+m);
+            double sy = nodes.get((3*M+1)*nM+m) - nodes.get((3*(M-1)+1)*nM+m);
+            double sz = nodes.get((3*M+2)*nM+m) - nodes.get((3*(M-1)+2)*nM+m);
+            double sl = Math.sqrt(sx*sx + sy*sy + sz*sz);
+            double su = sx*ex + sy*ey + sz*ez;
+            double hx = sx - su*ex, hy = sy - su*ey, hz = sz - su*ez;
+            double hn = Math.sqrt(hx*hx + hy*hy + hz*hz);
+            if (hn > 0.2 * sl && hn > 1e-15) {
+                hx = hx / hn; hy = hy / hn; hz = hz / hn;
+                if (boundSeg.get(m) >= 0) {   // BOUND: the head is held stereospecifically by actin; the S2 swivels
+                    params.set(22*nM+m, hx); params.set(23*nM+m, hy); params.set(24*nM+m, hz);   // under it freely,
+                    continue;                                                                     // so track, don't rotate
+                }
+                double px = params.get(22*nM+m), py = params.get(23*nM+m), pz = params.get(24*nM+m);
+                double ca = px*hx + py*hy + pz*hz;
+                double sa = ex*(py*hz - pz*hy) + ey*(pz*hx - px*hz) + ez*(px*hy - py*hx);
+                // bhat (rows 0..2)
+                double vx = frame.get(m), vy = frame.get(nM+m), vz = frame.get(2*nM+m);
+                double ev = ex*vx + ey*vy + ez*vz;
+                double nx = vx*ca + (ey*vz - ez*vy)*sa + ex*ev*(1.0 - ca);
+                double ny = vy*ca + (ez*vx - ex*vz)*sa + ey*ev*(1.0 - ca);
+                double nz = vz*ca + (ex*vy - ey*vx)*sa + ez*ev*(1.0 - ca);
+                frame.set(m, nx); frame.set(nM+m, ny); frame.set(2*nM+m, nz);
+                params.set(19*nM+m, nx); params.set(20*nM+m, ny); params.set(21*nM+m, nz);
+                // econv (rows 3..5)
+                double wx = frame.get(3*nM+m), wy = frame.get(4*nM+m), wz = frame.get(5*nM+m);
+                double ew = ex*wx + ey*wy + ez*wz;
+                double qx = wx*ca + (ey*wz - ez*wy)*sa + ex*ew*(1.0 - ca);
+                double qy = wy*ca + (ez*wx - ex*wz)*sa + ey*ew*(1.0 - ca);
+                double qz = wz*ca + (ex*wy - ey*wx)*sa + ez*ew*(1.0 - ca);
+                frame.set(3*nM+m, qx); frame.set(4*nM+m, qy); frame.set(5*nM+m, qz);
+                params.set(22*nM+m, hx); params.set(23*nM+m, hy); params.set(24*nM+m, hz);
+            }
+        }
+    }
+
+    /**
      * NECK–HEAD TILT (noncanonical, DEFAULT-OFF): {@link #matBeamGeom} plus ONE additional orientational
      * coordinate {@code chi} that rotates the HEAD — and only the head — about the neck–head joint C.
      *
@@ -1150,18 +1198,36 @@ public final class TwoBodyBeamAnalyticGpu {
                     double kbend0 = kbend * (matc.getSize() > 5 ? matc.get(5) * 1.0e-3 : 1.0);
                     double b0x = nodes.get(3*nM+m)-nodes.get(m), b0y = nodes.get((4)*nM+m)-nodes.get(nM+m), b0z = nodes.get(5*nM+m)-nodes.get(2*nM+m);
                     double lbb = Math.sqrt(b0x*b0x+b0y*b0y+b0z*b0z);
+                    // S2 SWIVEL (matc[6] = 1, 2026-10-08): the base joint resists ELEVATION only; azimuth is free. The rest
+                    // tangent becomes the horizontal projection h of the first segment, so c = |h|/|b0| = cos(elevation).
+                    // The gradient of c with that moving tangent equals the fixed-tangent formula below; the exact Hessian
+                    // adds a_az a_az^T / (|h| |b0|) (a_az = eup x h-hat), applied through swAz.
+                    double swAz = 0.0, azx = 0.0, azy = 0.0, azz = 0.0;
+                    double tgx = gTx, tgy = gTy, tgz = gTz;
+                    if (matc.getSize() > 6 && matc.get(6) == 1 && lbb > 1e-12) {
+                        double eux = frame.get(6*nM+m), euy = frame.get(7*nM+m), euz = frame.get(8*nM+m);
+                        double bu = b0x*eux + b0y*euy + b0z*euz;
+                        double hx = b0x - bu*eux, hy = b0y - bu*euy, hz = b0z - bu*euz;
+                        double hn = Math.sqrt(hx*hx + hy*hy + hz*hz);
+                        if (hn > 1e-3 * lbb) {
+                            tgx = hx/hn; tgy = hy/hn; tgz = hz/hn;
+                            azx = euy*tgz - euz*tgy; azy = euz*tgx - eux*tgz; azz = eux*tgy - euy*tgx;
+                            swAz = 1.0 / (hn * lbb);
+                        }
+                    }
                     if (lbb > 1e-12) {
-                        double ilb=1.0/lbb, c = gTx*b0x+gTy*b0y+gTz*b0z; c*=ilb; if(c>1)c=1; if(c<-1)c=-1;
+                        double ilb=1.0/lbb, c = tgx*b0x+tgy*b0y+tgz*b0z; c*=ilb; if(c>1)c=1; if(c<-1)c=-1;
                         double th = dacos(c), A1=a1(th), A2=a2(th); double clb2=c*ilb*ilb;
-                        double g0x=gTx*ilb-clb2*b0x, g0y=gTy*ilb-clb2*b0y, g0z=gTz*ilb-clb2*b0z;
+                        double g0x=tgx*ilb-clb2*b0x, g0y=tgy*ilb-clb2*b0y, g0z=tgz*ilb-clb2*b0z;
                         int r1=0;
                         addF(sys,base,W,n, r1+0, kbend0*A1*1e6*g0x); addF(sys,base,W,n, r1+1, kbend0*A1*1e6*g0y); addF(sys,base,W,n, r1+2, kbend0*A1*1e6*g0z);
                         double ilb2=ilb*ilb, ilb3=ilb2*ilb, ilb4=ilb2*ilb2;
                         for (int p=0;p<3;p++) for(int qq=0;qq<3;qq++){
                             double b0p=(p==0)?b0x:((p==1)?b0y:b0z), b0q=(qq==0)?b0x:((qq==1)?b0y:b0z);
-                            double tp=(p==0)?gTx:((p==1)?gTy:gTz), tq=(qq==0)?gTx:((qq==1)?gTy:gTz);
+                            double tp=(p==0)?tgx:((p==1)?tgy:tgz), tq=(qq==0)?tgx:((qq==1)?tgy:tgz);
                             double id=(p==qq)?1.0:0.0;
-                            double Hc = -(b0p*tq+tp*b0q)*ilb3 - c*id*ilb2 + 3.0*c*b0p*b0q*ilb4;
+                            double ap=(p==0)?azx:((p==1)?azy:azz), aq=(qq==0)?azx:((qq==1)?azy:azz);
+                            double Hc = -(b0p*tq+tp*b0q)*ilb3 - c*id*ilb2 + 3.0*c*b0p*b0q*ilb4 + swAz*ap*aq;
                             double gp=(p==0)?g0x:((p==1)?g0y:g0z), gq=(qq==0)?g0x:((qq==1)?g0y:g0z);
                             addK(sys,base,W, r1+p, r1+qq, 1e12*kbend0*(A2*gp*gq - A1*Hc));
                         }
@@ -1544,18 +1610,36 @@ public final class TwoBodyBeamAnalyticGpu {
                     double kbend0 = kbend * (matc.getSize() > 5 ? matc.get(5) * 1.0e-3 : 1.0);
                     double b0x = nodes.get(3*nM+m)-nodes.get(m), b0y = nodes.get((4)*nM+m)-nodes.get(nM+m), b0z = nodes.get(5*nM+m)-nodes.get(2*nM+m);
                     double lbb = Math.sqrt(b0x*b0x+b0y*b0y+b0z*b0z);
+                    // S2 SWIVEL (matc[6] = 1, 2026-10-08): the base joint resists ELEVATION only; azimuth is free. The rest
+                    // tangent becomes the horizontal projection h of the first segment, so c = |h|/|b0| = cos(elevation).
+                    // The gradient of c with that moving tangent equals the fixed-tangent formula below; the exact Hessian
+                    // adds a_az a_az^T / (|h| |b0|) (a_az = eup x h-hat), applied through swAz.
+                    double swAz = 0.0, azx = 0.0, azy = 0.0, azz = 0.0;
+                    double tgx = gTx, tgy = gTy, tgz = gTz;
+                    if (matc.getSize() > 6 && matc.get(6) == 1 && lbb > 1e-12) {
+                        double eux = frame.get(6*nM+m), euy = frame.get(7*nM+m), euz = frame.get(8*nM+m);
+                        double bu = b0x*eux + b0y*euy + b0z*euz;
+                        double hx = b0x - bu*eux, hy = b0y - bu*euy, hz = b0z - bu*euz;
+                        double hn = Math.sqrt(hx*hx + hy*hy + hz*hz);
+                        if (hn > 1e-3 * lbb) {
+                            tgx = hx/hn; tgy = hy/hn; tgz = hz/hn;
+                            azx = euy*tgz - euz*tgy; azy = euz*tgx - eux*tgz; azz = eux*tgy - euy*tgx;
+                            swAz = 1.0 / (hn * lbb);
+                        }
+                    }
                     if (lbb > 1e-12) {
-                        double ilb=1.0/lbb, c = gTx*b0x+gTy*b0y+gTz*b0z; c*=ilb; if(c>1)c=1; if(c<-1)c=-1;
+                        double ilb=1.0/lbb, c = tgx*b0x+tgy*b0y+tgz*b0z; c*=ilb; if(c>1)c=1; if(c<-1)c=-1;
                         double th = dacos(c), A1=a1(th), A2=a2(th); double clb2=c*ilb*ilb;
-                        double g0x=gTx*ilb-clb2*b0x, g0y=gTy*ilb-clb2*b0y, g0z=gTz*ilb-clb2*b0z;
+                        double g0x=tgx*ilb-clb2*b0x, g0y=tgy*ilb-clb2*b0y, g0z=tgz*ilb-clb2*b0z;
                         int r1=0;
                         addF(sys,base,W,n, r1+0, kbend0*A1*1e6*g0x); addF(sys,base,W,n, r1+1, kbend0*A1*1e6*g0y); addF(sys,base,W,n, r1+2, kbend0*A1*1e6*g0z);
                         double ilb2=ilb*ilb, ilb3=ilb2*ilb, ilb4=ilb2*ilb2;
                         for (int p=0;p<3;p++) for(int qq=0;qq<3;qq++){
                             double b0p=(p==0)?b0x:((p==1)?b0y:b0z), b0q=(qq==0)?b0x:((qq==1)?b0y:b0z);
-                            double tp=(p==0)?gTx:((p==1)?gTy:gTz), tq=(qq==0)?gTx:((qq==1)?gTy:gTz);
+                            double tp=(p==0)?tgx:((p==1)?tgy:tgz), tq=(qq==0)?tgx:((qq==1)?tgy:tgz);
                             double id=(p==qq)?1.0:0.0;
-                            double Hc = -(b0p*tq+tp*b0q)*ilb3 - c*id*ilb2 + 3.0*c*b0p*b0q*ilb4;
+                            double ap=(p==0)?azx:((p==1)?azy:azz), aq=(qq==0)?azx:((qq==1)?azy:azz);
+                            double Hc = -(b0p*tq+tp*b0q)*ilb3 - c*id*ilb2 + 3.0*c*b0p*b0q*ilb4 + swAz*ap*aq;
                             double gp=(p==0)?g0x:((p==1)?g0y:g0z), gq=(qq==0)?g0x:((qq==1)?g0y:g0z);
                             addK(sys,base,W, r1+p, r1+qq, 1e12*kbend0*(A2*gp*gq - A1*Hc));
                         }

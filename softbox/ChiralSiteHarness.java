@@ -8632,7 +8632,7 @@ public final class ChiralSiteHarness {
             ChiralSiteSystem.siteGateA(e.active, e.noBind, G.mot.boundSeg, G.mot.nucleotideState, e.outGeom,
                     f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
             ChiralSiteSystem.siteCommitB(G.mot.boundSeg, G.mot.nucleotideState, e.q, e.params, e.sbP,
-                    e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+                    e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts, f.uVec);
             if (G.mot.boundSeg.get(0) < 0 || e.bindSite.get(0) != t.k) continue;
             worst = Math.max(worst, Math.abs(e.candAzim.get(0) - t.phi));
             tested++;
@@ -8711,7 +8711,7 @@ public final class ChiralSiteHarness {
             ChiralSiteSystem.siteGateA(e.active, e.noBind, G.mot.boundSeg, G.mot.nucleotideState, e.outGeom,
                     f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
             ChiralSiteSystem.siteCommitB(G.mot.boundSeg, G.mot.nucleotideState, e.q, e.params, e.sbP,
-                    e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+                    e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts, f.uVec);
             int bs = G.mot.boundSeg.get(0);
             // how many of the ENUMERATED sites are geometrically acceptable from this pose (the honest
             // candidate count; the kernel commits at most one, so "exactly one" is the fixture-A requirement)
@@ -8745,7 +8745,7 @@ public final class ChiralSiteHarness {
         ChiralSiteSystem.siteGateA(e.active, e.noBind, G.mot.boundSeg, G.mot.nucleotideState, e.outGeom,
                 f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
         ChiralSiteSystem.siteCommitB(G.mot.boundSeg, G.mot.nucleotideState, e.q, e.params, e.sbP,
-                e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+                e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts, f.uVec);
         int kBound = e.bindSite.get(0); float arc0 = G.mot.bindArc.get(0), az0 = G.mot.bindAzim.get(0);
         double[] am = new double[5];
         ChiralSiteSystem.accessMetrics(f.coord, f.uVec, f.yVec, f.segLength, G.mot.bindArc, G.mot.bindAzim,
@@ -8832,7 +8832,7 @@ public final class ChiralSiteHarness {
                 ChiralSiteSystem.siteGateA(e.active, e.noBind, G.mot.boundSeg, G.mot.nucleotideState, e.outGeom,
                         f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
                 ChiralSiteSystem.siteCommitB(G.mot.boundSeg, G.mot.nucleotideState, e.q, e.params, e.sbP,
-                        e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+                        e.candInt, e.candArc, e.candAzim, G.mot.bindArc, G.mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts, f.uVec);
                 int b0 = G.mot.boundSeg.get(0), b1 = G.mot.boundSeg.get(1);
                 int s0 = e.bindSite.get(0), s1 = e.bindSite.get(1);
                 ChiralSiteSystem.siteOccupancyResolve(G.mot.boundSeg, e.justBound, e.prevBound, e.bindSite,
@@ -9310,7 +9310,7 @@ public final class ChiralSiteHarness {
             ChiralSiteSystem.siteGateA(e.active, e.noBind, mot.boundSeg, mot.nucleotideState, e.outGeom,
                     f.coord, f.uVec, f.yVec, f.segLength, e.segCumArc, e.sbP, e.candInt, e.candArc, e.candAzim, e.exCounts);
             ChiralSiteSystem.siteCommitB(mot.boundSeg, mot.nucleotideState, e.q, e.params, e.sbP,
-                    e.candInt, e.candArc, e.candAzim, mot.bindArc, mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts);
+                    e.candInt, e.candArc, e.candAzim, mot.bindArc, mot.bindAzim, e.bindSite, e.prevBound, e.justBound, e.exCounts, G.fil.uVec);
             ChiralSiteSystem.siteOccupancyResolve(mot.boundSeg, e.justBound, e.prevBound, e.bindSite,
                     e.segFilId, e.siteStats, e.chiP, e.exCounts);
             TwoBodyBeamAnalyticGpu.matPlaceHeadExplicit(e.outGeom, mot.boundSeg, e.eupP, e.exCounts, body.coord, body.uVec, body.yVec);
