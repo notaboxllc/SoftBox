@@ -434,13 +434,15 @@ public final class ExplicitCompleteMatHarness {
     // harness unchanged); SiteNormal turns it on. Motors keep their full random orientation; the GATE does the sorting.
     static boolean POLARITY_GATE = false;
     static double  POLARITY_TOL_DEG = 90.0;
+    static boolean S2DIR_GATE = false;        // DIAGNOSTIC (2026-10-10): refuse binds whose S2 points toward the pointed end
+    static double  S2DIR_TOL_DEG = 90.0;
     // S2_SWIVEL (2026-10-08, jba option a): the S2 and everything above it (lever, converter, head) turn together about
     // the vertical at the soft base joint, which now resists ELEVATION only (azimuth free). The stroke frame follows
     // the S2 (TwoBodyBeamAnalyticGpu.matSwivelFrame), so a motor laid down facing backward can swing round and bind
     // forward; the polarity gate still refuses a backward-facing bind. The cull is then centred on the FIXED base
     // point E (a swivelling head can sit anywhere within reach of E) with SWIVEL_QUERYR_NM.
     static boolean S2_SWIVEL = false;
-    static double  SWIVEL_QUERYR_NM = 100.0;
+    static double  SWIVEL_QUERYR_NM = 110.0;   // 2026-10-09: = the value every swivel run so far actually used (the 110 nm cull override used to win)
     static int     RAND_BASE_SEED = 20260724;
     // RANDBASE_CULL_FIX (default true since 2026-10-04; -legacy-cullsites => false): rotate the cull's ideal head site
     // (G.siteX/siteY, used ONLY by the device cull, the CPU cull plan and the motor cell grid) with the motor it
@@ -982,9 +984,11 @@ public final class ExplicitCompleteMatHarness {
         double kF8u = e.params.get(5 * N);
         for (int m = 1; m < N; m++) if (e.params.get(5 * N + m) != kF8u)
             throw new IllegalStateException("site-aware capture requires a scene-uniform kF8 (motor " + m + " differs)");
-        e.sbP = new DoubleArray(38);
+        e.sbP = new DoubleArray(40);
         e.sbP.set(36, POLARITY_GATE ? 1.0 : 0.0);                        // g9 stereospecific polarity (siteCommitB)
         e.sbP.set(37, Math.cos(Math.toRadians(POLARITY_TOL_DEG)));
+        e.sbP.set(38, S2DIR_GATE ? 1.0 : 0.0);                           // g10 S2-direction gate (DIAGNOSTIC)
+        e.sbP.set(39, Math.cos(Math.toRadians(S2DIR_TOL_DEG)));
         for (int i = 0; i < 13; i++) e.sbP.set(i, e.bindP.get(i));
         e.sbP.set(13, G.eup[0]); e.sbP.set(14, G.eup[1]); e.sbP.set(15, G.eup[2]);
         e.sbP.set(16, siteRise(SITE_MODE)); e.sbP.set(17, chiTwist); e.sbP.set(18, chiStair); e.sbP.set(19, Ract);
@@ -1200,7 +1204,7 @@ public final class ExplicitCompleteMatHarness {
         // The builder's 30 + L + 10 nm (= 80 nm) was derived for the clamped S2; with the soft base hinge a head can
         // reach farther (2026-10-08 -cullprobe: binds from sites up to 77.7 nm, far heads within capture reach 3x in
         // 15M samples). 0 = keep the builder value (every other harness unchanged).
-        if (CULL_QUERYR_NM > 0) { G.queryR = CULL_QUERYR_NM * 1e-3; if (G.siteX != null) TwoBodyConverterMotor.initMatGrid(G); }
+        if (CULL_QUERYR_NM > 0 && !S2_SWIVEL) { G.queryR = CULL_QUERYR_NM * 1e-3; if (G.siteX != null) TwoBodyConverterMotor.initMatGrid(G); }   // swivel: SWIVEL_QUERYR_NM about E (set above) governs
         // ---- CONVERTER TRANSVERSE OFFSET (diagnostic, default-off): roll each motor's base triad about its OWN b̂.
         // b̂ is invariant, so the AXIAL stroke direction is untouched; (econv, ê_up) tilt, which displaces the
         // converter JOINT C = P + lb·(ê_up cosφ + b̂ sinφ) out of the motor's axial plane while the S2 pivot P and

@@ -152,8 +152,22 @@ public class SiteNormalLongGlideHarness {
      *  cos(S2 chord E->P, barbed direction). Detachment-limited gliding predicts a ~zero mean force per episode at
      *  steady speed; episodes that are net-negative are the drag that stalls the filament. */
     static int EPISODES = 0;
+    /** -dump-motors <id,id,...>: build the scene exactly as -run would (all CLI flags), print each listed motor's
+     *  as-built geometry (base point E, pivot P, stroke axis, S2 direction, cull site) and exit. No stepping, no GPU. */
+    static String DUMP_MOTORS = null;
+    /** -s2-len <nm>: every motor's free S2 length (nm) at fixed beam M, via ExplicitCompleteMatHarness.applyS2Lawn
+     *  (EA/EI fixed, l0 = L/M). 0 = canonical 40 nm builder path (untouched). Sensitivity control (2026-10-09). */
+    static double S2_LEN_NM_CLI = 0.0;
+    /** -s2dir-gate-deg <deg>: DIAGNOSTIC, default OFF. Refuse a bind unless the S2 points within <deg> of the actin
+     *  barbed direction (90 = no S2 pointing toward the pointed end). Tests whether tether direction alone makes the
+     *  low-ATP jam; NOT proposed as biology (Tanaka 1998: antiparallel heads still bind and step, at ~half). */
+    static double S2DIR_GATE_CLI = -1.0;
     static double[] epT0, epSumF, epSumF0, epSumF2, epSumF3, epSumF12, epCosStroke, epCosS2;
     static int[] epN, epN0, epN2, epN3; static boolean[] epOn;
+    // TETHER CURVE: for bound RIGOR heads, mean push vs s = (P - E).(-u): the pivot's offset from the motor base along the
+    // GLIDE direction (nm). s > 0: the S2 points along the glide (anchor geometry); s < 0: against it (muscle geometry).
+    static final int TC_BINS = 24; static final double TC_LO = -60.0, TC_W = 5.0;
+    static double[] tcSumF = new double[TC_BINS], tcSumF3 = new double[TC_BINS]; static long[] tcN = new long[TC_BINS], tcN3 = new long[TC_BINS];
     /** -cull-queryr <nm> (default 110): the cull reach. -legacy-cull-queryr keeps the builder's 80 nm (30 + L + 10,
      *  derived for the CLAMPED S2). 2026-10-08 -cullprobe on the soft-hinge geometry found binds from sites up to
      *  77.7 nm and far heads inside capture reach, so 80 nm had no margin. */
@@ -166,7 +180,7 @@ public class SiteNormalLongGlideHarness {
      *  base joint (azimuth free, elevation still 0.1 x kb); the stroke frame follows the S2. -no-swivel = legacy (stroke
      *  direction fixed per motor by its initial azimuth). -swivel-queryr <nm>: cull radius about the base point E. */
     static boolean SWIVEL_CLI = true;
-    static double  SWIVEL_QUERYR_CLI = 100.0;
+    static double  SWIVEL_QUERYR_CLI = 110.0;   // all swivel runs to 2026-10-09 ran at 110 nm about E (banner said 100)
     static boolean[] cpWasBound;
     static long cpNewBinds, cpNewBeyond, cpFarSamples, cpFarReach, cpFar10;
     static double cpMaxNewSite = 0, cpMinFarHead = 1e9;
@@ -316,6 +330,9 @@ public class SiteNormalLongGlideHarness {
                 case "-nohires" -> NO_HIRES = true;
                 case "-cullprobe" -> CULL_PROBE = Integer.parseInt(args[++i]);
                 case "-episodes" -> EPISODES = Integer.parseInt(args[++i]);
+                case "-dump-motors" -> DUMP_MOTORS = args[++i];
+                case "-s2dir-gate-deg" -> S2DIR_GATE_CLI = Double.parseDouble(args[++i]);
+                case "-s2-len" -> S2_LEN_NM_CLI = Double.parseDouble(args[++i]);   // uniform free S2 length (nm), via the S2-lawn path
                 case "-cull-queryr" -> CULL_QUERYR_CLI = Double.parseDouble(args[++i]);
                 case "-legacy-cull-queryr" -> CULL_QUERYR_CLI = 0.0;
                 case "-polarity-gate-deg" -> { POLARITY_CLI = true; POLARITY_TOL_CLI = Double.parseDouble(args[++i]); }
@@ -325,6 +342,7 @@ public class SiteNormalLongGlideHarness {
                 case "-swivel-queryr" -> SWIVEL_QUERYR_CLI = Double.parseDouble(args[++i]);
                 case "-filx" -> FIL_X0 = Double.parseDouble(args[++i]);
                 case "-filsegs" -> FIL_SEGS = Integer.parseInt(args[++i]);
+                case "-rigid-len-segs" -> TwoBodyConverterMotor.G4_NSEG_RIGID = Integer.parseInt(args[++i]);   // rigid rod contour = n x 0.1755 um
                 // FILAMENT BROWNIAN ABLATION (noncanonical, default-off, diagnostic). Reaches the existing,
                 // fixture-verified BrownianForceSystem.brownChannelMask through ExplicitCompleteMatHarness's
                 // BR_FIL_* policy - no new physics, no new RNG, no kernel edit. -norollbrownian kills ONLY the
@@ -422,6 +440,7 @@ public class SiteNormalLongGlideHarness {
         if (RANDBASE && !RANDBASE_SEED_SET) ExplicitCompleteMatHarness.RAND_BASE_SEED = SEED;   // for the banner; scene() re-keys
         banner();
         Files.createDirectories(Path.of(OUT));
+        if (DUMP_MOTORS != null) { dumpMotors(); return; }
         if (gates) { if (!runGates()) { System.out.println("\n*** GATES FAILED — the long run is NOT started. ***"); return; } }
         if (run) runLong();
         if (report && !run) reportOnly();
@@ -583,6 +602,7 @@ public class SiteNormalLongGlideHarness {
                         Z_SLAB_ENDS_CLI ? "contact at rod ENDS (+torque)" : "LEGACY centre-only (-z-slab-centre)") : "LEGACY harmonic well (-z-slab off)")
                 + " | CULL SITES = " + (ExplicitCompleteMatHarness.RANDBASE_CULL_FIX ? "rotated with motor" : "LEGACY stale")
                 + " | S2 SWIVEL = " + (SWIVEL_CLI ? String.format(Locale.US, "ON (azimuth free at base joint; cull %.0f nm about base)", SWIVEL_QUERYR_CLI) : "OFF (legacy)")
+                + (S2DIR_GATE_CLI >= 0 ? String.format(Locale.US, " | S2-DIR GATE (DIAGNOSTIC) = within %.0f deg of barbed", S2DIR_GATE_CLI) : "")
                 + " | POLARITY GATE = " + (POLARITY_CLI ? String.format(Locale.US, "stroke within %.0f deg of barbed", POLARITY_TOL_CLI) : "OFF (legacy, polarity-blind)")
                 + " | CULL REACH = " + (CULL_QUERYR_CLI > 0 ? String.format(Locale.US, "%.0f nm", CULL_QUERYR_CLI) : "LEGACY builder (30 + L + 10 nm)"));
         System.out.println(String.format(Locale.US, "  S2 DEPARTURE    = floor %s | base joint %s | initial pose %s",
@@ -687,6 +707,8 @@ public class SiteNormalLongGlideHarness {
         ExplicitCompleteMatHarness.POLARITY_GATE = POLARITY_CLI;
         ExplicitCompleteMatHarness.POLARITY_TOL_DEG = POLARITY_TOL_CLI;
         ExplicitCompleteMatHarness.S2_SWIVEL = SWIVEL_CLI;
+        ExplicitCompleteMatHarness.S2DIR_GATE = S2DIR_GATE_CLI >= 0; if (S2DIR_GATE_CLI >= 0) ExplicitCompleteMatHarness.S2DIR_TOL_DEG = S2DIR_GATE_CLI;
+        if (S2_LEN_NM_CLI > 0) ExplicitCompleteMatHarness.S2_LAWN_NM = new double[]{ S2_LEN_NM_CLI };
         ExplicitCompleteMatHarness.SWIVEL_QUERYR_NM = SWIVEL_QUERYR_CLI;
         // SAME TRAP for the Brownian channels: cfg() ends with setBrownianPolicy(FIL_BROWN x4, ...), which
         // overwrites anything the CLI set during arg parsing. Re-assert AFTER cfg() and BEFORE build() (build ->
@@ -1616,6 +1638,21 @@ public class SiteNormalLongGlideHarness {
         }
         return best * 1e3;
     }
+    static void dumpMotors() {
+        var G = scene(SEED, DENS, MX, MY);
+        var e = ExplicitCompleteMatHarness.packExMat(G, 1);
+        int N = e.N, M = e.M;
+        System.out.println("motor\tEx_um\tEy_um\tEz_nm\tPx_um\tPy_um\tPz_nm\tbhat_x\tbhat_y\tS2dir_x\tS2dir_y\tS2_elev_deg\tsiteX_um\tsiteY_um");
+        for (String tok : DUMP_MOTORS.split(",")) {
+            int m = Integer.parseInt(tok.trim());
+            double Ex = e.frame.get(9 * N + m), Ey = e.frame.get(10 * N + m), Ez = e.frame.get(11 * N + m);
+            double Px = e.nodes.get((3 * M) * N + m), Py = e.nodes.get((3 * M + 1) * N + m), Pz = e.nodes.get((3 * M + 2) * N + m);
+            double dx = Px - Ex, dy = Py - Ey, dz = Pz - Ez, dh = Math.sqrt(dx * dx + dy * dy);
+            System.out.printf(Locale.US, "%d\t%.5f\t%.5f\t%.2f\t%.5f\t%.5f\t%.2f\t%.3f\t%.3f\t%.3f\t%.3f\t%.1f\t%.5f\t%.5f%n",
+                m, Ex, Ey, Ez * 1e3, Px, Py, Pz * 1e3, e.frame.get(m), e.frame.get(N + m), dx / dh, dy / dh,
+                Math.toDegrees(Math.atan2(dz, dh)), G.siteX[m], G.siteY[m]);
+        }
+    }
     static void episodes(TwoBodyConverterMotor.Glide2D G, ExplicitCompleteMatHarness.ExMat e, int t) throws IOException {
         int N = e.N, nSeg = e.nSeg, M = e.M;
         if (epOn == null) {
@@ -1647,6 +1684,13 @@ public class SiteNormalLongGlideHarness {
                 epSumF12[m] += G.bondData.get(13 * m + 12) * 1e12;
                 int nuc = G.mot.nucleotideState.get(m);
                 epSumF[m] += F; epN[m]++;
+                if (nuc == MotorStore.NUC_NONE || nuc == MotorStore.NUC_ADP) {
+                    if (!pulled) { pullDemand(); pulled = true; }
+                    double sx = (e.nodes.get((3 * M) * N + m) - e.frame.get(9 * N + m)) * ux0 + (e.nodes.get((3 * M + 1) * N + m) - e.frame.get(10 * N + m)) * uy0
+                              + (e.nodes.get((3 * M + 2) * N + m) - e.frame.get(11 * N + m)) * uz0;
+                    int b = (int) Math.floor((-sx * 1e3 - TC_LO) / TC_W);
+                    if (b >= 0 && b < TC_BINS) { if (nuc == MotorStore.NUC_NONE) { tcSumF[b] += F; tcN[b]++; } else { tcSumF3[b] += F; tcN3[b]++; } }
+                }
                 if (nuc == MotorStore.NUC_ADPPI) { epSumF2[m] += F; epN2[m]++; }
                 else if (nuc == MotorStore.NUC_ADP) { epSumF3[m] += F; epN3[m]++; }
                 else { epSumF0[m] += F; epN0[m]++; }
@@ -1656,6 +1700,7 @@ public class SiteNormalLongGlideHarness {
             }
         }
         if (out.length() > 0) Files.writeString(p, out.toString(), java.nio.file.StandardOpenOption.APPEND);
+        if ((t / EPISODES) % 250 == 0) tetherCurveWrite();
     }
     static void epRow(StringBuilder out, int m, double dur, int censored) {
         int n = Math.max(1, epN[m]);
@@ -1671,6 +1716,15 @@ public class SiteNormalLongGlideHarness {
         StringBuilder out = new StringBuilder();
         for (int m = 0; m < epOn.length; m++) if (epOn[m]) epRow(out, m, tEnd - epT0[m], 1);
         if (out.length() > 0) Files.writeString(Path.of(OUT, "episodes.tsv"), out.toString(), java.nio.file.StandardOpenOption.APPEND);
+        tetherCurveWrite();
+    }
+    static void tetherCurveWrite() throws IOException {
+        StringBuilder tc = new StringBuilder("s_glide_nm\tn_rigor\tmeanF_rigor_pN\tn_ADP\tmeanF_ADP_pN\n");
+        for (int b = 0; b < TC_BINS; b++)
+            tc.append(String.format(Locale.US, "%.1f\t%d\t%s\t%d\t%s%n", TC_LO + (b + 0.5) * TC_W, tcN[b],
+                    tcN[b] > 0 ? String.format(Locale.US, "%.4f", tcSumF[b] / tcN[b]) : "NA", tcN3[b],
+                    tcN3[b] > 0 ? String.format(Locale.US, "%.4f", tcSumF3[b] / tcN3[b]) : "NA"));
+        Files.writeString(Path.of(OUT, "tether_curve.tsv"), tc.toString());
     }
     static void cullProbe(TwoBodyConverterMotor.Glide2D G, ExplicitCompleteMatHarness.ExMat e, int t) throws IOException {
         pullDemand();
@@ -1751,7 +1805,9 @@ public class SiteNormalLongGlideHarness {
               + "  \"cull\": \"per-segment UNION (MatSoaSlice.matCull)\",\n  \"s2_workers\": %d,\n"
               + "  \"site_normal_bind\": true,\n  \"head_tilt_3d\": true,\n  \"g6_retired\": true,\n  \"g2_retired\": true,\n"
               + "  \"site_lattice\": \"" + (ExplicitCompleteMatHarness.TWO_STRAND_SITES ? "every4+partner(two-strand)" : "every4")
-              + "\",\n  \"s2_swivel\": " + (SWIVEL_CLI ? "true" : "false")
+              + "\",\n  \"s2dir_gate_deg\": " + (S2DIR_GATE_CLI >= 0 ? String.valueOf(S2DIR_GATE_CLI) : "null")
+              + ",\n  \"s2_len_nm\": " + (S2_LEN_NM_CLI > 0 ? String.valueOf(S2_LEN_NM_CLI) : "40.0")
+              + ",\n  \"s2_swivel\": " + (SWIVEL_CLI ? "true" : "false")
               + ",\n  \"polarity_gate_deg\": " + (POLARITY_CLI ? String.valueOf(POLARITY_TOL_CLI) : "null")
               + ",\n  \"rand_base_azimuth\": " + (RANDBASE ? "true" : "false")
               + ",\n  \"rand_base_seed\": " + (RANDBASE ? String.valueOf(ExplicitCompleteMatHarness.RAND_BASE_SEED) : "null")

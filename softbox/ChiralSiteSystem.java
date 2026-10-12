@@ -961,6 +961,16 @@ public final class ChiralSiteSystem {
                               + params.get(21 * N + m) * filUVec.get(2 * nSeg + cs);
                     g9 = pd >= cosPol;
                 }
+                // g10 S2-DIRECTION GATE (DIAGNOSTIC, default off; sbP[38] enable, sbP[39] cos(tol)): refuse a bind when the
+                // S2's last segment (horizontal direction, params rows 22..24, kept current by matSwivelFrame) points
+                // toward the POINTED end, i.e. along the glide -- the tether orientation in which the stroke slackens the
+                // S2 and forward drag pulls it taut (the "anchor" heads of the 2026-10-10 jam analysis).
+                if (sbP.getSize() > 39 && sbP.get(38) > 0.5) {
+                    int cs2 = candInt.get(m);
+                    double sd = params.get(22 * N + m) * filUVec.get(cs2) + params.get(23 * N + m) * filUVec.get(nSeg + cs2)
+                              + params.get(24 * N + m) * filUVec.get(2 * nSeg + cs2);
+                    if (!(sd >= sbP.get(39))) g9 = false;
+                }
                 if (g1 && g2 && g3 && g5 && g9) {
                     bs = candInt.get(m);
                     boundSeg.set(m, bs);

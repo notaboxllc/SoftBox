@@ -4455,6 +4455,7 @@ public final class TwoBodyConverterMotor {
     static double       G4_MX=G4_MATX, G4_MY=G4_MATY; // MUTABLE mat dims (4D-ii may enlarge; default = the 4D constants ⇒ 4D unchanged)
     static final int    G4_MONO=64;                  // monomers/segment (canonical MONOMER_CT) ⇒ segLen ≈ 0.176 µm
     static final int    G4_NSEG=12;                  // ~2.1 µm contour (semiflexible; canonical bending, Lp≈17 µm)
+    static int          G4_NSEG_RIGID=G4_NSEG;       // rigid single-rod contour in segment-lengths (default 12 ⇒ 2.106 µm; -rigid-len-segs)
     static int          G4_NSEG_RUN=G4_NSEG;         // runtime filament-length override for the canonical length sweep (default = G4_NSEG ⇒ existing paths unchanged)
     static final double G4_KZ=2.0;                   // z-only surface confinement (pN/nm) — the coverslip normal
     static final double G4_MARGIN=0.03;              // active-set margin around the filament bbox (µm)
@@ -4504,7 +4505,7 @@ public final class TwoBodyConverterMotor {
         G.xbParams=ref.xbParams;
         double segLen=(G4_MONO+1)*Constants.actinMonoRadius;   // ≈ 0.176 µm
         if(rigid){
-            G.nSeg=1; int mc=Math.max(1,(int)Math.round(G4_NSEG*segLen/Constants.actinMonoRadius)-1);   // one rod, same end-to-end
+            G.nSeg=1; int mc=Math.max(1,(int)Math.round(G4_NSEG_RIGID*segLen/Constants.actinMonoRadius)-1);   // one rod, same end-to-end
             FilamentStore f=new FilamentStore(1); f.monomerCount.set(0,mc);
             f.setUVec(0,1f,0f,0f); f.setYVec(0,0f,1f,0f); f.setCoord(0,0f,0f,0f);
             f.brownTransScale.set(0,(float)Constants.BTransCoeff); f.brownRotScale.set(0,(float)RIGID_BROT);

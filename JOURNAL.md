@@ -1,5 +1,50 @@
 # Soft Box Project Journal
 
+### 2026-10-12 — low-ATP "jam" is a slow CREEP; anchors; k_ATP 5 at 20 uM glides in Beausang's range; twirl NOT resolved
+
+Handoff for a fresh session: `docs/twirling/HANDOFF_2026-10-12.md`. All runs SiteNormal GPU (experimental site-normal
+graph), eta 0.01, dt 1.25e-7, rupture OFF, swivel + polarity gate, eps -1.25, `-noise-seed 11`, mat 6x4 um, 2.1 um rod.
+**Long low-ATP runs slow down after ~0.1-0.3 s** (10 uM, k 2.4). Every rupture-off run taken long drops from the
+0.13-0.29 um/s of the first 0.1 s to a CREEP of 0.03-0.09 um/s (not a stop; "jam" was too strong). The 0.1 s pilots that
+gave "steady 0.17-0.25 um/s" (2026-10-08) were too short: that claim is RETRACTED as a steady state.
+**Mechanism (episodes + frames).** Balance of ~13-15 pN spread over 40-60 heads; thermal force noise per head ~+-2 pN, so
+a force cap cannot select the draggers. ANCHORS = forward-stroking heads whose S2 points toward the POINTED end: mean
+-0.3..-0.5 pN over the attachment vs +0.1..+0.2 pN for the others. Stroke-axis vs S2-direction alignment decorrelates
+over ~0.3 s (corr +0.59 -> -0.05) = the slowdown time. Tether curve (rigor force vs glide offset): within +-0.5 pN over
++-35 nm, stiff only at the ends (+1.4 pN at -42 nm, -3.5 pN at +42 nm) => many weak pulls, no wall.
+**Sensitivity pilots, seed 20260901, d400 unless stated, speed fitted after 0.1 s (um/s, to ~0.5 s):** baseline 0.061
+(48 bound); S2-direction gate 90 deg 0.090 (41); base hinge 1.0 x kb 0.062 (47); 12-segment flexible filament 0.064
+(53); k_ATP 5 0.082 (34); S2 60 nm ~0.04-0.08; d800 ~0.04-0.09; d200 ~0; d50 0.034 +- 0.05 (9); d25 0.18 +- 0.30 (4).
+Block scatter +-0.02-0.03 => NONE separated from baseline on one lawn. The S2-direction gate only MOVED the drag (strongly
+wrong-way episodes 66 -> 8, but the mildly wrong-way group's impulse -781 -> -1126 pN.ms). Sparse lawns unresolved.
+**High ATP demonstration (2 mM, d400, rupture off, 0.3 s, one lawn):** 2.29 um travelled, 7.4 +- 0.5 um/s after 0.1 s,
+~3 bound. The model glides at saturating ATP (the earlier 0.1 s run read ~12 um/s).
+**k_ATP 5 /uM/s at 20 uM (jba's choice; release 100 /s), d400, FOUR lawns (seeds 20260901..04), 1.0 s each:**
+lawn 02 0.114 +- 0.05, lawn 03 0.142 +- 0.04, lawn 04 0.172 +- 0.02 um/s (after 0.1 s; 22-26 bound; 180-211 nm
+travelled); lawn 01 0.13 +- 0.09 to 0.40 s (OOM-killed, resumed 2026-10-12). Mean ~0.14 um/s = bottom of Beausang's
+0.1-0.5 range, ~1/5 of the detachment-limited ideal (7 nm x 100 /s = 0.7). No decay to zero after 0.3 s. Force balance as
+at 10 uM: 92 % of bound time rigor at -0.07 pN, ADP +0.9 pN for 7 %, mean attachment 10.8 ms.
+**Evidence for k_ATP ~5:** Capitanio 2012 raw data (PMC6565606), fast skeletal S1, 15 uM: 76 /s at zero load => ~5
+/uM/s; flat under assisting load. Ours (2.4) is solution acto-S1 (Ritchie 1993 via Deacon 2012). Beausang's 25 mM KCl
+would favour faster; no number found. DEFAULT UNCHANGED (2.4) -- jba decision pending.
+**Twirl vs Beausang (pitch 0.47 +- 0.2 um, ~2 turns/um, ~20 % of filaments): NOT RESOLVED.** Net roll after 0.1 s: +0.4 to
++2.1 turns on 0.13 um of travel (all four positive), pooled drift 1.6 +- 0.8 turns/s (2 sigma) against roll diffusion
+~0.73 turns^2/s (~1 turn rms in 0.77 s). If real it is ~11 turns/um, ~5x tighter than experiment. LEAD (unchecked): with
+~25 heads bound the filament still rolls ~1 turn/s diffusively => bound heads barely restrain roll. Resolving 0.3 turns/s
+at 3 sigma needs ~150 s simulated; the mirror (eps sign) pair on the same lawns is the affordable test.
+**Infrastructure.** (1) HOST OOM: four concurrent long runs grow to ~8 GB each (-Xmx12G) on the 31 GB host; the kernel
+killed lawn 01 (exit 137) at 0.40 s. Run <= 3 at once or find the growth. (2) GPU throughput is shared: 1 run ~250
+steps/s, 4 runs ~90 each, 7 runs ~50 each -- concurrency buys nothing. (3) `-resume` works but REWRITES
+trajectory_summary.csv / episodes and RESETS the roll and avgBound accumulators: back up first and stitch (lawn 01 backup
+in `katp5_atp20/lawn01_pre_resume_backup/`, resumed at step 3225000, roll offset +0.28 turns). (4) `run_in_background`
+is killed at ~30 min: launch `setsid nohup ./scripts/run_gpu_monitored.sh ... &`. (5) Viewer: single-threaded
+sim_server hangs on Chrome preconnects => `scripts/sim_server_threaded.py` (wrapper; sim_server.py untouched). (6) An
+NVIDIA unattended upgrade broke WebGL until reboot (CUDA unaffected).
+**New flags (UNCOMMITTED):** `-s2dir-gate-deg`, `-s2-len`, `-rigid-len-segs`, `-dump-motors`, tether curve
+(`tether_curve.tsv`), swivel cull label 110 nm (CLAUDE.md still says 100).
+**Open (jba):** rupture default; k_ATP 2.4 vs 5; ADP catch distance 2.5 vs ~0.8 nm; whether real assays release rigor heads
+by something the model lacks; high-ATP robustness panel (deferred); roll restraint by bound heads; mirror twirl pair.
+
 ### 2026-10-08 (later) — low-ATP STALL was a model artifact: POLARITY GATE + S2 SWIVEL; cull 110 nm; rupture literature
 
 **Cull reach (`-cullprobe`).** No-cull d800 2 mM 0.02 s: 0/168 binds from sites beyond the 80 nm cull, but the farthest

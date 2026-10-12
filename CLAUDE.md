@@ -656,7 +656,7 @@ d1600. Pre-2026-10-08 absolute engagement, density curves and height on explicit
 orientation rotated each motor's STROKE axis and the site-normal capture gate was polarity-blind, so ~half the lawn stroked
 backward (rupture-off low ATP stalled; rupture-on glided only by kinetic rectification). SiteNormal defaults now: g9
 stereospecific polarity gate (`-polarity-gate-deg 90`; `-no-polarity-gate`), S2 swivel (base joint azimuth-free, stroke
-frame follows the S2 while unbound, held while bound; `-no-swivel`), cull centred on each motor's base, 100 nm
+frame follows the S2 while unbound, held while bound; `-no-swivel`), cull centred on each motor's base, 110 nm
 (`-swivel-queryr`; non-swivel cull 110 nm, `-legacy-cull-queryr`). Low ATP now glides without rupture (detachment-limited,
 ~0.2 um/s at 10 uM, d800); 2 mM runs ~12 um/s (no tuning, jba). Rigor-rupture default UNCHANGED but its fast drag-release
 is unsupported by the axial literature (JOURNAL 2026-10-08). Diagnostics: `-episodes`, `scripts/episode_forces.py`.
