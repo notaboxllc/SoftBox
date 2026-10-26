@@ -1,5 +1,10 @@
 package softbox;
 
+import uk.ac.manchester.tornado.api.TaskGraph;
+import uk.ac.manchester.tornado.api.GridScheduler;
+import uk.ac.manchester.tornado.api.WorkerGrid;
+import uk.ac.manchester.tornado.api.WorkerGrid1D;
+import uk.ac.manchester.tornado.api.enums.DataTransferMode;
 import uk.ac.manchester.tornado.api.TornadoExecutionPlan;
 import uk.ac.manchester.tornado.api.TornadoProfilerResult;
 import uk.ac.manchester.tornado.api.TornadoExecutionResult;
@@ -155,6 +160,7 @@ public class SiteNormalLongGlideHarness {
     /** -dump-motors <id,id,...>: build the scene exactly as -run would (all CLI flags), print each listed motor's
      *  as-built geometry (base point E, pivot P, stroke axis, S2 direction, cull site) and exit. No stepping, no GPU. */
     static String DUMP_MOTORS = null;
+    static boolean STROKE_FIX = false, FIX_SEARCH = false; static int FIX_RELAX = 8000, FIX_AZIM = 7, FIX_JS_STRIDE = 160; static String FIX_JS = null;
     /** -s2-len <nm>: every motor's free S2 length (nm) at fixed beam M, via ExplicitCompleteMatHarness.applyS2Lawn
      *  (EA/EI fixed, l0 = L/M). 0 = canonical 40 nm builder path (untouched). Sensitivity control (2026-10-09). */
     static double S2_LEN_NM_CLI = 0.0;
@@ -176,6 +182,7 @@ public class SiteNormalLongGlideHarness {
      *  <deg> of the actin barbed direction (90 = no backward strokes). -no-polarity-gate = legacy (polarity-blind). */
     static boolean POLARITY_CLI = true;
     static double  POLARITY_TOL_CLI = 90.0;
+    static boolean POLARITY_TOL_SET = false;   // -swivel-dock defaults the stroke-axis capture tolerance to the long-axis 25 deg
     /** S2 swivel (default ON, 2026-10-08, jba option a): S2 + lever + head turn together about the vertical at the soft
      *  base joint (azimuth free, elevation still 0.1 x kb); the stroke frame follows the S2. -no-swivel = legacy (stroke
      *  direction fixed per motor by its initial azimuth). -swivel-queryr <nm>: cull radius about the base point E. */
@@ -256,6 +263,7 @@ public class SiteNormalLongGlideHarness {
     static boolean CONV_AZ_COMP_CLI = true;  // -convaz-nocomp: drop the stroke-amplitude compensation
     static double  STROKE_SWING_CLI = Double.NaN;  // -stroke-swing <deg>: 60=canonical, 0=OFF, -60=REVERSED
     static double  STROKE_PHASE_CLI = Double.NaN;  // -stroke-phase <deg>: rotate the stroke window (re-aim)
+    static double  STROKE_WINDOW_PRE_CLI = Double.NaN, STROKE_WINDOW_POST_CLI = Double.NaN;   // -stroke-window pre,post (deg)
     // -kbind-bound-only: wire matKbindGate so the head-orientation stiffness params[7] is BOUND-STATE GATED
     // (bound -> kBind, detached -> the much weaker kDet). WITHOUT this the gate never runs and params[7] keeps
     // whatever it was filled with for EVERY motor, bound or free -- so -soft-kbind silently stiffens the
@@ -288,7 +296,25 @@ public class SiteNormalLongGlideHarness {
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "-gates" -> gates = true;
+                case "-stroke-fixture" -> STROKE_FIX = true;   // 2026-10-24: Brownian-off pre-attached stroke on THIS scene (CPU)
+                case "-fix-relax" -> FIX_RELAX = Integer.parseInt(args[++i]);
+                case "-fix-azim" -> FIX_AZIM = Integer.parseInt(args[++i]);
+                case "-fix-free-only" -> SiteFrameStrokeAudit.FIX_FREE_ONLY = true;
+                case "-fix-place" -> { String[] w = args[++i].split(","); SiteFrameStrokeAudit.PLACE_BETA = new double[w.length];
+                    for (int k = 0; k < w.length; k++) SiteFrameStrokeAudit.PLACE_BETA[k] = Double.parseDouble(w[k]); }
+                case "-fix-axial-only" -> SiteFrameStrokeAudit.AXIAL_ONLY = true;
+                case "-f8-tip-fix" -> ExplicitCompleteMatHarness.F8_TIP_FIX = true;
+                case "-fix-freeze-chem" -> SiteFrameStrokeAudit.FREEZE_CHEM = true;
+                case "-fix-prerelax" -> SiteFrameStrokeAudit.PLACE_PRERELAX = Integer.parseInt(args[++i]);
+                case "-fix-search" -> FIX_SEARCH = true;   // 2026-10-25: natural search, capture, stroke, release (one motor)
+                case "-fix-search-max" -> SiteFrameStrokeAudit.SEARCH_MAX = Integer.parseInt(args[++i]);
+                case "-fix-bound-stride" -> SiteFrameStrokeAudit.SEARCH_BOUND_STRIDE = Integer.parseInt(args[++i]);
+                case "-fix-motor-rank" -> SiteFrameStrokeAudit.MOTOR_RANK = Integer.parseInt(args[++i]);
+                case "-fix-search-post" -> SiteFrameStrokeAudit.SEARCH_POST = Integer.parseInt(args[++i]);
+                case "-fix-3js" -> FIX_JS = args[++i];
+                case "-fix-3js-stride" -> FIX_JS_STRIDE = Integer.parseInt(args[++i]);
                 case "-run" -> run = true;
+                case "-chain-equiv" -> CHAIN_EQUIV = Integer.parseInt(args[++i]);   // CPU vs GPU, head chain, same scene
                 case "-report" -> report = true;
                 case "-out" -> OUT = args[++i];
                 case "-seed" -> SEED = Integer.parseInt(args[++i]);
@@ -335,11 +361,31 @@ public class SiteNormalLongGlideHarness {
                 case "-s2-len" -> S2_LEN_NM_CLI = Double.parseDouble(args[++i]);   // uniform free S2 length (nm), via the S2-lawn path
                 case "-cull-queryr" -> CULL_QUERYR_CLI = Double.parseDouble(args[++i]);
                 case "-legacy-cull-queryr" -> CULL_QUERYR_CLI = 0.0;
-                case "-polarity-gate-deg" -> { POLARITY_CLI = true; POLARITY_TOL_CLI = Double.parseDouble(args[++i]); }
+                case "-polarity-gate-deg" -> { POLARITY_CLI = true; POLARITY_TOL_CLI = Double.parseDouble(args[++i]); POLARITY_TOL_SET = true; }
                 case "-no-polarity-gate" -> POLARITY_CLI = false;
+                case "-head-chain" -> HeadChainSystem.ON = true;   // 2026-10-25: converter axis fixed in the head (CPU only)
+                case "-pliant-kappa" -> HeadChainSystem.KAPPA_PN_NM = Double.parseDouble(args[++i]);
+                case "-weak-bind" -> WeakBindSystem.ON = true;   // 2026-10-25: two-stage weak -> strong capture (CPU only)
+                case "-weak-k" -> WeakBindSystem.K_W_PN_NM = Double.parseDouble(args[++i]);
+                case "-weak-koff" -> WeakBindSystem.K_OFF0 = Double.parseDouble(args[++i]);
+                case "-weak-rbreak" -> WeakBindSystem.R_BREAK_NM = Double.parseDouble(args[++i]);
+                case "-weak-debug" -> { WeakBindSystem.DEBUG = 3; WeakBindSystem.DEBUG2 = Integer.parseInt(args[++i]); }
+                case "-weak-kws" -> WeakBindSystem.K_WS = Double.parseDouble(args[++i]);
+                case "-weak-alpha" -> WeakBindSystem.ALPHA = Double.parseDouble(args[++i]);
+                case "-weak-f8" -> WeakBindSystem.LOOP2 = false;   // legacy F8-to-site weak tether (A/B vs the loop-2 tether)
+                case "-weak-weight" -> WeakBindSystem.WEIGHT = Integer.parseInt(args[++i]);   // 0 none, 1 facing, 2 facing+theta+mu
+                case "-weak-l2-sign" -> WeakBindSystem.L2_SIGN = Double.parseDouble(args[++i]);
+                case "-capture-lit" -> ExplicitCompleteMatHarness.CAPTURE_LIT = true;   // 2026-10-25: Steffen-alpha orientation charge, no capture polarity gate
+                case "-capture-alpha" -> ExplicitCompleteMatHarness.CAPTURE_ALPHA = Double.parseDouble(args[++i]);
                 case "-no-swivel" -> SWIVEL_CLI = false;
                 case "-swivel" -> SWIVEL_CLI = true;
                 case "-swivel-queryr" -> SWIVEL_QUERYR_CLI = Double.parseDouble(args[++i]);
+                case "-swivel-restore" -> ExplicitCompleteMatHarness.SWIVEL_RESTORE = true;
+                case "-swivel-floppy" -> ExplicitCompleteMatHarness.SWIVEL_FLOPPY = true;
+                case "-swivel-dock" -> ExplicitCompleteMatHarness.SWIVEL_DOCK = true;
+                case "-fil-z0-nm" -> FIL_Z0_NM = Double.parseDouble(args[++i]);   // initial filament lift (nm)
+                case "-motor-steric" -> ExplicitCompleteMatHarness.MOTOR_STERIC = true;   // motor-actin excluded volume (2026-10-18)
+                case "-head-floor" -> ExplicitCompleteMatHarness.HEAD_FLOOR = true;       // glass floor on head + lever end
                 case "-filx" -> FIL_X0 = Double.parseDouble(args[++i]);
                 case "-filsegs" -> FIL_SEGS = Integer.parseInt(args[++i]);
                 case "-rigid-len-segs" -> TwoBodyConverterMotor.G4_NSEG_RIGID = Integer.parseInt(args[++i]);   // rigid rod contour = n x 0.1755 um
@@ -375,6 +421,8 @@ public class SiteNormalLongGlideHarness {
                 case "-convaz" -> CONV_AZ_CLI = Double.parseDouble(args[++i]);
                 case "-stroke-swing" -> STROKE_SWING_CLI = Double.parseDouble(args[++i]);   // 60=canonical, 0=off, -60=reversed
                 case "-stroke-phase" -> STROKE_PHASE_CLI = Double.parseDouble(args[++i]);   // RE-AIM: rotate the stroke window, swing fixed
+                case "-stroke-window" -> { String[] w = args[++i].split(",");
+                    STROKE_WINDOW_PRE_CLI = Double.parseDouble(w[0]); STROKE_WINDOW_POST_CLI = Double.parseDouble(w[1]); }
                 case "-dtheta" -> throw new IllegalArgumentException(
                         "-dtheta is REMOVED: it wrote TwoBodyConverterMotor.DTHETA_MOTOR, which the mat path "
                       + "never reads, so it was silently INERT. Use -stroke-swing <deg> (60=canonical, 0=off, -60=reversed).");
@@ -441,6 +489,22 @@ public class SiteNormalLongGlideHarness {
         banner();
         Files.createDirectories(Path.of(OUT));
         if (DUMP_MOTORS != null) { dumpMotors(); return; }
+        if (STROKE_FIX) {   // deterministic: every Brownian channel OFF (filament channels here, motor via packExMat(G, 0))
+            FIL_BROWN_ALL = false; ROLL_BROWN = false;
+            SiteFrameStrokeAudit.FIX_DT = DT;
+            if (FIX_SEARCH) {
+                System.out.println("=== SEARCH-AND-STROKE on the gliding scene (CPU, one motor, natural capture + chemistry) ===");
+                SiteFrameStrokeAudit.searchOnScene(() -> scene(SEED, DENS, MX, MY), SEED, -1.0, OUT, FIX_JS, FIX_JS_STRIDE);
+                return;
+            }
+            System.out.println("=== STROKE FIXTURE on the gliding scene (CPU, Brownian OFF, one motor pre-attached) ===");
+            SiteFrameStrokeAudit.fixtureOnScene(() -> scene(SEED, DENS, MX, MY), SEED, FIX_RELAX, FIX_AZIM,
+                    -1.0,   // read the scene's own polarity tolerance after it is built
+                    OUT, FIX_JS, FIX_JS_STRIDE);
+            System.out.println("  BROWNIAN POLICY (as run): " + ExplicitCompleteMatHarness.brownianPolicyString());
+            return;
+        }
+        if (CHAIN_EQUIV > 0) { chainEquiv(CHAIN_EQUIV); return; }
         if (gates) { if (!runGates()) { System.out.println("\n*** GATES FAILED — the long run is NOT started. ***"); return; } }
         if (run) runLong();
         if (report && !run) reportOnly();
@@ -597,11 +661,14 @@ public class SiteNormalLongGlideHarness {
                 RANDBASE ? "ON" : "OFF", RANDBASE ? " (seed " + ExplicitCompleteMatHarness.RAND_BASE_SEED + ")" : "");
         System.out.printf(Locale.US, "  [ATP]           = %s -> atpOn %.4g /s%n",
                 ChiralSiteHarness.atpLabel(), ChiralSiteHarness.atpOnFor(ChiralSiteHarness.ATP_UM));
+        if (ExplicitCompleteMatHarness.SWIVEL_DOCK && !POLARITY_TOL_SET) { POLARITY_CLI = true; POLARITY_TOL_CLI = ExplicitCompleteMatHarness.SITE_NORMAL_TOL_DEG; }
         System.out.println("  ROD ROT BROWN   = " + (ChiralSiteHarness.ROD_FDT ? "FDT (scale 1.0)" : "LEGACY BRotCoeff " + Constants.BRotCoeff + " (-legacy-rod-brot)")
                 + " | Z SUPPORT = " + (Z_SLAB_CLI ? String.format(Locale.US, "hard slab, floor = lawn plane, ceiling +%.0f nm, %s", Z_SLAB_HI_CLI,
                         Z_SLAB_ENDS_CLI ? "contact at rod ENDS (+torque)" : "LEGACY centre-only (-z-slab-centre)") : "LEGACY harmonic well (-z-slab off)")
                 + " | CULL SITES = " + (ExplicitCompleteMatHarness.RANDBASE_CULL_FIX ? "rotated with motor" : "LEGACY stale")
-                + " | S2 SWIVEL = " + (SWIVEL_CLI ? String.format(Locale.US, "ON (azimuth free at base joint; cull %.0f nm about base)", SWIVEL_QUERYR_CLI) : "OFF (legacy)")
+                + " | S2 SWIVEL = " + (SWIVEL_CLI ? String.format(Locale.US, "ON (azimuth free at base joint; cull %.0f nm about base)", SWIVEL_QUERYR_CLI) : "OFF (legacy)") + (ExplicitCompleteMatHarness.SWIVEL_RESTORE ? " + RESTORE (head returns to rest vs S2 on release)" : "") + (ExplicitCompleteMatHarness.SWIVEL_FLOPPY ? " + FLOPPY (unbound head azimuth diffuses at FDT)" : "") + (ExplicitCompleteMatHarness.SWIVEL_DOCK ? " + DOCK (head azimuth free vs S2; bound head docked to actin axis, k=k_bind)" : "")
+                + (ExplicitCompleteMatHarness.MOTOR_STERIC ? " | MOTOR-ACTIN STERICS ON (head/lever/S2 vs actin)" : "")
+                + (ExplicitCompleteMatHarness.HEAD_FLOOR ? " | HEAD+LEVER FLOOR ON" : "")
                 + (S2DIR_GATE_CLI >= 0 ? String.format(Locale.US, " | S2-DIR GATE (DIAGNOSTIC) = within %.0f deg of barbed", S2DIR_GATE_CLI) : "")
                 + " | POLARITY GATE = " + (POLARITY_CLI ? String.format(Locale.US, "stroke within %.0f deg of barbed", POLARITY_TOL_CLI) : "OFF (legacy, polarity-blind)")
                 + " | CULL REACH = " + (CULL_QUERYR_CLI > 0 ? String.format(Locale.US, "%.0f nm", CULL_QUERYR_CLI) : "LEGACY builder (30 + L + 10 nm)"));
@@ -642,6 +709,154 @@ public class SiteNormalLongGlideHarness {
         System.out.println(Double.isNaN(OFFLAWN_STOP_UM) ? "  OFF-LAWN STOP = off"
                 : String.format(Locale.US, "  OFF-LAWN STOP = yMargin < -%.3f um", OFFLAWN_STOP_UM));
         System.out.println();
+    }
+
+    // ============================================================================ head-chain CPU/GPU equivalence
+    static int CHAIN_EQUIV = 0;
+    /**
+     * -chain-equiv <steps> (2026-10-26, the head-chain GPU port): the SAME scene built twice, stepped on the CPU runner
+     * (no cull, every motor solved) and on the device graph (no device cull, validation-mode transfers), compared every
+     * step. Decisions (boundSeg, nucleotide) must agree; the continuous state is reported as max |difference|.
+     */
+    static DoubleArray cpD(DoubleArray a) { DoubleArray b = new DoubleArray(a.getSize()); for (int i = 0; i < a.getSize(); i++) b.set(i, a.get(i)); return b; }
+    static FloatArray cpF(FloatArray a) { FloatArray b = new FloatArray(a.getSize()); for (int i = 0; i < a.getSize(); i++) b.set(i, a.get(i)); return b; }
+    static IntArray cpI(IntArray a) { IntArray b = new IntArray(a.getSize()); for (int i = 0; i < a.getSize(); i++) b.set(i, a.get(i)); return b; }
+    /** worst |a-b| and its index over [0, len). */
+    static double[] worst(DoubleArray a, DoubleArray b, int len) { double w = 0; int at = -1;
+        for (int i = 0; i < len; i++) { double d = Math.abs(a.get(i) - b.get(i)); if (!(d <= w)) { w = d; at = i; } } return new double[]{ w, at }; }
+    /** Isolated one-task device graphs for HeadChainSystem.geom / sync / solve on the REAL scene state, vs the same call on the CPU. */
+    static void chainKernelProbe(ExplicitCompleteMatHarness.ExMat e, TwoBodyConverterMotor.Glide2D G) {
+        int N = e.N, M = e.M;
+        ExplicitCompleteMatHarness.stepGlidingCPU(e, 0, SEED, null);   // populates hc, bondData, restC
+        { double es = 0, ec2 = 0, el = 0, ea = 0, eas = 0;
+          for (int i = -200000; i <= 200000; i++) { double x = i * 1.3e-4; es = Math.max(es, Math.abs(HeadChainSystem.dsin(x) - Math.sin(x))); ec2 = Math.max(ec2, Math.abs(HeadChainSystem.dcos(x) - Math.cos(x))); }
+          for (int i = 1; i <= 400000; i++) { double x = Math.pow(10, -8 + 16.0 * i / 400000); el = Math.max(el, Math.abs(HeadChainSystem.dlog(x) - Math.log(x)) / Math.max(1, Math.abs(Math.log(x)))); }
+          for (int i = -100000; i <= 100000; i++) { double x = i * 1e-5; ea = Math.max(ea, Math.abs(HeadChainSystem.dacosH(x) - Math.acos(x))); eas = Math.max(eas, Math.abs(HeadChainSystem.asinH(x) - Math.asin(x))); }
+          System.out.printf(Locale.US, "  DMATH accuracy vs java.lang.Math: sin %.2e  cos %.2e  log(rel) %.2e  acos %.2e  asin %.2e%n", es, ec2, el, ea, eas); }
+        int pn = ((N + 63) / 64) * 64;
+        for (int mask : new int[]{ -1 }) {
+        // ---- solve
+        DoubleArray nA = cpD(e.nodes), fA = cpD(e.frame), qA = cpD(e.q), pA = cpD(e.params), sA = new DoubleArray(e.hsys.getSize()), oA = cpD(e.outGeom), hA = cpD(e.hc), rA = cpD(e.restC);
+        DoubleArray nB = cpD(e.nodes), fB = cpD(e.frame), qB = cpD(e.q), pB = cpD(e.params), sB = new DoubleArray(e.hsys.getSize()), oB = cpD(e.outGeom), hB = cpD(e.hc), rB = cpD(e.restC);
+        sA.init(0.0); sB.init(0.0);
+        if (rA.getSize() >= 46 * N) for (int m = 0; m < N; m++) { rA.set(45*N+m, 0.0); rB.set(45*N+m, 0.0); }   // normal (mode-0) solve for every motor
+        FloatArray bd = cpF(G.bondData), dA = new FloatArray(N), mA = new FloatArray(N), dB = new FloatArray(N), mB = new FloatArray(N);
+        IntArray bs = cpI(G.mot.boundSeg), mc = cpI(e.matc), ct = cpI(e.exCounts);
+        DoubleArray hp = cpD(e.hp);
+        if ("nobrown".equals(System.getenv("CHAIN_PROBE"))) mc.set(2, 0);
+        System.out.println("  PROBE matc = " + java.util.Arrays.toString(mc.toHeapArray()) + "  counts = " + java.util.Arrays.toString(ct.toHeapArray()));
+        HeadChainSystem.solve(nA, fA, qA, bd, bs, pA, sA, oA, dA, mA, mc, ct, hA, hp, rA);
+        TaskGraph tg = new TaskGraph("hcp" + mask)
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, nB, fB, qB, bd, bs, pB, sB, oB, dB, mB, mc, ct, hB, hp, rB)
+            .task("solve", HeadChainSystem::solve, nB, fB, qB, bd, bs, pB, sB, oB, dB, mB, mc, ct, hB, hp, rB)
+            .transferToHost(DataTransferMode.EVERY_EXECUTION, nB, qB, oB, hB, rB, dB, mB, sB);
+        WorkerGrid wg = new WorkerGrid1D(pn); wg.setLocalWork(64, 1, 1);
+        new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(new GridScheduler("hcp" + mask + ".solve", wg)).execute();
+        double[] wn = worst(nA, nB, nA.getSize()), wh = worst(hA, hB, 9 * N), wq = worst(qA, qB, qA.getSize()), wo = worst(oA, oB, 9 * N);
+        int bad = 0; for (int m = 0; m < N; m++) { double d = 0; for (int r = 0; r < 9; r++) d = Math.max(d, Math.abs(hA.get(r*N+m) - hB.get(r*N+m))); if (d > 1e-9) bad++; }
+        System.out.printf(Locale.US, "  PROBE solve mask " + mask + ": max|dnodes| %.3g (idx %d)  max|dhc| %.3g (motor %d row %d)  max|dq| %.3g  max|doutGeom| %.3g ; motors with |dhc|>1e-9: %d / %d%n",
+                wn[0], (int) wn[1], wh[0], (int) wh[1] % N, (int) wh[1] / N, wq[0], wo[0], bad, N);
+        { int nn = 3 * M + 5, SS = HeadChainSystem.sysStride(M); StringBuilder sb = new StringBuilder("    scratch slots differing (max |d| / max |cpu|):");
+          for (int k = 0; k < 117; k++) { double d = 0, ref = 0; for (int m = 0; m < N; m++) { int ix = m * SS + nn * (nn + 1) + k; d = Math.max(d, Math.abs(sA.get(ix) - sB.get(ix))); ref = Math.max(ref, Math.abs(sA.get(ix))); }
+              if (d > 1e-9 * Math.max(ref, 1e-30)) sb.append(String.format(Locale.US, " %d:%.2g/%.2g", k, d, ref)); }
+          System.out.println(sb); }
+        if (wh[1] >= 0) { int m = (int) wh[1] % N;
+            System.out.printf(Locale.US, "    motor %d boundSeg %d restC8 %.0f restC45 %.0f : CPU hc a=(%.5f %.5f %.5f) L=(%.5f %.5f %.5f) | GPU a=(%.5f %.5f %.5f) L=(%.5f %.5f %.5f) | before a=(%.5f %.5f %.5f)%n",
+                m, bs.get(m), e.restC.get(8*N+m), e.restC.getSize() >= 46*N ? e.restC.get(45*N+m) : -9,
+                hA.get(m), hA.get(N+m), hA.get(2*N+m), hA.get(6*N+m), hA.get(7*N+m), hA.get(8*N+m),
+                hB.get(m), hB.get(N+m), hB.get(2*N+m), hB.get(6*N+m), hB.get(7*N+m), hB.get(8*N+m),
+                e.hc.get(m), e.hc.get(N+m), e.hc.get(2*N+m)); }
+        }
+        IntArray ct = cpI(e.exCounts);
+        // ---- geom + sync
+        DoubleArray oC = cpD(e.outGeom), oD = cpD(e.outGeom), fC = cpD(e.frame), fD = cpD(e.frame), pC = cpD(e.params), pD = cpD(e.params);
+        DoubleArray qC = cpD(e.q), qD = cpD(e.q), cC = cpD(e.chiHead), cD = cpD(e.chiHead), hC = cpD(e.hc), hD = cpD(e.hc), nC = cpD(e.nodes);
+        HeadChainSystem.geom(nC, pC, hC, ct, oC); HeadChainSystem.sync(hC, fC, pC, qC, cC, ct);
+        TaskGraph tg2 = new TaskGraph("hcg")
+            .transferToDevice(DataTransferMode.EVERY_EXECUTION, nC, pD, hD, ct, oD, fD, qD, cD)
+            .task("geom", HeadChainSystem::geom, nC, pD, hD, ct, oD)
+            .task("sync", HeadChainSystem::sync, hD, fD, pD, qD, cD, ct)
+            .transferToHost(DataTransferMode.EVERY_EXECUTION, oD, fD, qD, cD, hD, pD);
+        GridScheduler gs2 = new GridScheduler(); WorkerGrid w2 = new WorkerGrid1D(pn); w2.setLocalWork(64, 1, 1);
+        gs2.addWorkerGrid("hcg.geom", w2); gs2.addWorkerGrid("hcg.sync", w2);
+        new TornadoExecutionPlan(tg2.snapshot()).withGridScheduler(gs2).execute();
+        for (Object[] pr : new Object[][]{ {"frame", fC, fD}, {"q", qC, qD} }) {
+            DoubleArray X = (DoubleArray) pr[1], Y = (DoubleArray) pr[2]; int rows = X.getSize() / N; StringBuilder sb = new StringBuilder("    rows " + pr[0] + ":");
+            for (int r = 0; r < rows; r++) { double d = 0; int cnt = 0, at = -1; for (int m = 0; m < N; m++) { double v = Math.abs(X.get(r*N+m) - Y.get(r*N+m)); if (v > 1e-9) { cnt++; if (v > d) { d = v; at = m; } } }
+                if (cnt > 0) sb.append(String.format(Locale.US, " [r%d n=%d max %.3g @m%d cpu %.4g gpu %.4g]", r, cnt, d, at, X.get(r*N+at), Y.get(r*N+at))); }
+            System.out.println(sb); }
+        System.out.printf(Locale.US, "  PROBE geom+sync: max|doutGeom| %.3g  max|dframe| %.3g  max|dq| %.3g  max|dchi| %.3g  max|dparams| %.3g  max|dhc| %.3g%n",
+                worst(oC, oD, 9*N)[0], worst(fC, fD, fC.getSize())[0], worst(qC, qD, qC.getSize())[0], worst(cC, cD, cC.getSize())[0], worst(pC, pD, pC.getSize())[0], worst(hC, hD, hC.getSize())[0]);
+    }
+    static void chainEquiv(int steps) throws IOException {
+        if (!HeadChainSystem.ON) throw new IllegalStateException("-chain-equiv needs -head-chain");
+        ExplicitCompleteMatHarness.DEVICE_CULL = true;   // production cull on both runners (matCull on the previous step's pose)
+        var Gc = scene(SEED, DENS, MX, MY); var ec = ExplicitCompleteMatHarness.packExMat(Gc, 1);
+        var Gd = scene(SEED, DENS, MX, MY); var ed = ExplicitCompleteMatHarness.packExMat(Gd, 1);
+        if (System.getenv("CHAIN_PROBE") != null && !System.getenv("CHAIN_PROBE").isEmpty()) { chainKernelProbe(ec, Gc); return; }
+        int N = ec.N, nSeg = ec.nSeg;
+        var cpc = new ExplicitCompleteMatHarness.MatCullPlan(ec, 1);
+        // CONTROL (-chain-equiv with CHAIN_CPUCTL=<eps>): the "device" arm is a SECOND CPU runner whose head frame starts
+        // perturbed by eps, measuring the scene's intrinsic divergence rate (the yardstick for the CPU/GPU growth).
+        String ctl = System.getenv("CHAIN_CPUCTL");
+        boolean cpuCtl = ctl != null && !ctl.isEmpty();
+        ExplicitCompleteMatHarness.MatCullPlan cpd = null;
+        TornadoExecutionPlan plan = null;
+        if (cpuCtl) {
+            ExplicitCompleteMatHarness.DEVICE_CULL = false;
+            cpd = new ExplicitCompleteMatHarness.MatCullPlan(ed, 1);
+            ExplicitCompleteMatHarness.headChainInit(ed);
+            double eps = Double.parseDouble(ctl);
+            for (int k = 0; k < 9 * N; k++) ed.hc.set(k, ed.hc.get(k) + eps);
+            System.out.printf(Locale.US, "  CONTROL: second arm = CPU runner, head frame perturbed by %.1e%n", eps);
+        } else {
+            ExplicitCompleteMatHarness.SITE_NORMAL_DEVICE_OK = true;
+            plan = ExplicitCompleteMatHarness.buildGlidingGraph(ed, false);
+        }
+        StringBuilder log = new StringBuilder(String.format(Locale.US,
+                "# Head-chain CPU/GPU equivalence\n\nscene seed %d, %d motors, density %.0f, %.1f x %.1f um, dt %.3g s, eta %.3g, %d steps\n\n"
+              + "| step | boundSeg mism | nuc mism | bound now (CPU) | bound-steps (CPU) | max|d hc| | max|d nodes| um | max|d fil| um |\n|---:|---:|---:|---:|---:|---:|---:|---:|\n",
+                SEED, N, DENS, MX, MY, DT, ETA, steps));
+        System.out.printf(Locale.US, "  CHAIN EQUIV: %d motors, %d segments, %d steps%n", N, nSeg, steps);
+        long boundSteps = 0; int firstDec = -1; double wHc = 0, wNode = 0, wFil = 0;
+        long w0 = System.currentTimeMillis();
+        for (int t = 0; t < steps; t++) {
+            ExplicitCompleteMatHarness.stepGlidingCPU(ec, t, SEED, cpc);
+            int rs = ExplicitCompleteMatHarness.rngSeed(SEED);
+            ed.matc.set(0, t); ed.matc.set(1, rs);
+            Gd.mot.setCounts(t, rs, nSeg); Gd.fil.counts.set(1, t); Gd.fil.counts.set(2, rs);
+            if (cpuCtl) ExplicitCompleteMatHarness.stepGlidingCPU(ed, t, SEED, cpd);
+            else { plan.execute(); plan.clearProfiles(); }
+            int bm = 0, nm = 0, bNow = 0;
+            for (int m = 0; m < N; m++) {
+                if (Gc.mot.boundSeg.get(m) != Gd.mot.boundSeg.get(m)) bm++;
+                if (Gc.mot.nucleotideState.get(m) != Gd.mot.nucleotideState.get(m)) nm++;
+                if (Gc.mot.boundSeg.get(m) >= 0) bNow++;
+            }
+            boundSteps += bNow;
+            double dh = 0; for (int k = 0; k < 9 * N; k++) dh = Math.max(dh, Math.abs(ec.hc.get(k) - ed.hc.get(k)));
+            double dn = maxAbsDiff(ec.nodes, ed.nodes), df = maxAbsDiff(Gc.fil.coord, Gd.fil.coord);
+            wHc = Math.max(wHc, dh); wNode = Math.max(wNode, dn); wFil = Math.max(wFil, df);
+            if (t < 3) for (Object[] pr : new Object[][]{ {"hc", ec.hc, ed.hc}, {"nodes", ec.nodes, ed.nodes}, {"q", ec.q, ed.q}, {"outGeom", ec.outGeom, ed.outGeom}, {"restC", ec.restC, ed.restC}, {"frame", ec.frame, ed.frame} }) {
+                DoubleArray X = (DoubleArray) pr[1], Y = (DoubleArray) pr[2]; int rows = X.getSize() / N; StringBuilder sb = new StringBuilder("    t=" + t + " rows " + pr[0] + ":");
+                for (int r = 0; r < rows; r++) { double d = 0; int cnt = 0, at = -1; for (int m = 0; m < N; m++) { double v = Math.abs(X.get(r*N+m) - Y.get(r*N+m)); if (v > 1e-9) { cnt++; if (v > d) { d = v; at = m; } } }
+                    if (cnt > 0) sb.append(String.format(Locale.US, " [r%d n=%d max %.3g @m%d cpu %.4g gpu %.4g]", r, cnt, d, at, X.get(r*N+at), Y.get(r*N+at))); }
+                System.out.println(sb); }
+            boolean dec = bm > 0 || nm > 0;
+            if (dec && firstDec < 0) firstDec = t;
+            if (t % 200 == 0 || t == steps - 1 || (dec && firstDec == t)) {
+                String row = String.format(Locale.US, "| %d | %d | %d | %d | %d | %.3g | %.3g | %.3g |%n", t, bm, nm, bNow, boundSteps, dh, dn, df);
+                log.append(row);
+                System.out.printf(Locale.US, "  t=%6d  boundSeg mism %d  nuc mism %d  bound %d (bound-steps %d)  max|dhc| %.3g  max|dnodes| %.3g  max|dfil| %.3g  (%.0f s)%n",
+                        t, bm, nm, bNow, boundSteps, dh, dn, df, (System.currentTimeMillis() - w0) / 1e3);
+                Files.writeString(Path.of(OUT, "chain_equiv.md"), log.toString());
+            }
+        }
+        log.append(String.format(Locale.US, "%nfirst decision mismatch: %s ; worst max|d hc| %.3g, max|d nodes| %.3g um, max|d fil| %.3g um ; CPU bound motor-steps %d%n",
+                firstDec < 0 ? "none" : ("t=" + firstDec), wHc, wNode, wFil, boundSteps));
+        Files.writeString(Path.of(OUT, "chain_equiv.md"), log.toString());
+        System.out.println(log.substring(log.lastIndexOf("first decision")));
+        cpc.shutdown(); if (cpd != null) cpd.shutdown();
     }
 
     // ============================================================================ the scene, built ONE way
@@ -690,6 +905,8 @@ public class SiteNormalLongGlideHarness {
         ExplicitCompleteMatHarness.CONV_AZ_COMP  = CONV_AZ_COMP_CLI;
         ExplicitCompleteMatHarness.STROKE_SWING_DEG = STROKE_SWING_CLI;   // AFTER cfg()
         ExplicitCompleteMatHarness.STROKE_PHASE_DEG = STROKE_PHASE_CLI;   // AFTER cfg()
+        ExplicitCompleteMatHarness.STROKE_WINDOW_PRE_DEG = STROKE_WINDOW_PRE_CLI;    // AFTER cfg()
+        ExplicitCompleteMatHarness.STROKE_WINDOW_POST_DEG = STROKE_WINDOW_POST_CLI;
         if (FLIP_HELIX_CLI) {   // AFTER cfg(): mirror the lattice, the only valid control at eps=0
             ExplicitCompleteMatHarness.TWIST_PER_MON_DEG = -ExplicitCompleteMatHarness.TWIST_PER_MON_DEG;
             System.out.printf(java.util.Locale.US, "  HELIX FLIPPED   = twistPerMon %+.1f deg (MIRRORED LATTICE)%n",
@@ -909,9 +1126,18 @@ public class SiteNormalLongGlideHarness {
     }
 
     // ============================================================================================ THE RUN
+    static double FIL_Z0_NM = 0.0;   // -fil-z0-nm: initial-condition lift of the filament (2026-10-18)
     static void runLong() throws IOException {
         long wall0 = System.currentTimeMillis();
         var G = scene(SEED, DENS, MX, MY);
+        if (FIL_Z0_NM != 0.0) {   // INITIAL CONDITION only: start the filament higher (it lands on the lawn from solution)
+            var f0 = G.fil; int n0 = G.nSeg; float dz0 = (float) (FIL_Z0_NM * 1e-3);
+            for (int q = 0; q < n0; q++) {
+                f0.coord.set(2*n0+q, f0.coord.get(2*n0+q) + dz0);
+                f0.end1.set(2*n0+q, f0.end1.get(2*n0+q) + dz0); f0.end2.set(2*n0+q, f0.end2.get(2*n0+q) + dz0);
+            }
+            System.out.printf(Locale.US, "  INITIAL FILAMENT LIFT = %+.1f nm (t = 0 only; height is free afterwards)%n", FIL_Z0_NM);
+        }
         var e = ExplicitCompleteMatHarness.packExMat(G, 1);
         final double[] swAz0 = swivelAzimuths(e);   // initial stroke-axis azimuths (for the end-of-run swivel summary)
         int N = e.N, nSeg = e.nSeg;
@@ -1317,6 +1543,17 @@ public class SiteNormalLongGlideHarness {
                       + "%.0f ms/step  ang=%.1f deg roll=%+.4f turns e2e=%.3f bend=%.1f z=[%.4f,%.4f]%n",
                         t, t*DT, wall, fwd_um, dist(c, c0), vfit, vwin, avgB, nb, maxNb, captures, detach, strokes,
                         cp.lastActive, invalid, solverFail, 1000.0*wall/(t-t0), angleDeg(G), rollAcc/(2*Math.PI), e2e(G), bendDeg(G), zmin, zmax);
+                if (ExplicitCompleteMatHarness.stericRowsOn()) {   // motor-actin steric telemetry (last solve's reactions)
+                    pullDemand();
+                    int Nm = e.N; double sfz = 0, sfx = 0, eS = 0; int nc = 0;
+                    for (int m = 0; m < Nm; m++) {
+                        double fz = e.restC.get(32*Nm+m) + e.restC.get(38*Nm+m), fx = e.restC.get(30*Nm+m) + e.restC.get(36*Nm+m);
+                        sfz += fz; sfx += fx; eS += e.restC.get(42*Nm+m); if (fz != 0.0 || fx != 0.0) nc++;
+                    }
+                    double fzc = 0; for (int q = 0; q < G.nSeg; q++) fzc += G.fil.coord.get(2*G.nSeg+q); fzc /= G.nSeg;
+                    System.out.printf(Locale.US, "    steric: motors in contact %d  sum Fz on filament %+.3f pN  Fx %+.3f pN  E %.2f kT  | filament axis z %.1f nm above lawn%n",
+                            nc, sfz*1e12, sfx*1e12, eS/4.11e-21, (fzc - ExplicitCompleteMatHarness.Z_LAWN_UM)*1e3);
+                }
             }
             if (t % STATE_EVERY == 0 && t > t0) writeState(G, e, t);
 
@@ -1808,12 +2045,24 @@ public class SiteNormalLongGlideHarness {
               + "\",\n  \"s2dir_gate_deg\": " + (S2DIR_GATE_CLI >= 0 ? String.valueOf(S2DIR_GATE_CLI) : "null")
               + ",\n  \"s2_len_nm\": " + (S2_LEN_NM_CLI > 0 ? String.valueOf(S2_LEN_NM_CLI) : "40.0")
               + ",\n  \"s2_swivel\": " + (SWIVEL_CLI ? "true" : "false")
+              + ",\n  \"s2_swivel_restore\": " + (ExplicitCompleteMatHarness.SWIVEL_RESTORE ? "true" : "false")
+              + ",\n  \"s2_swivel_floppy\": " + (ExplicitCompleteMatHarness.SWIVEL_FLOPPY ? "true" : "false")
+              + ",\n  \"s2_swivel_dock\": " + (ExplicitCompleteMatHarness.SWIVEL_DOCK ? "true" : "false")
+              + ",\n  \"motor_steric\": " + (ExplicitCompleteMatHarness.MOTOR_STERIC ? String.format(Locale.US,
+                    "{\"r_actin_nm\": %.2f, \"r_head_nm\": %.2f, \"r_lever_nm\": %.2f, \"r_s2_nm\": %.2f, \"k_pN_nm\": %.1f}",
+                    ExplicitCompleteMatHarness.STERIC_R_ACTIN_NM, ExplicitCompleteMatHarness.STERIC_R_HEAD_NM,
+                    ExplicitCompleteMatHarness.STERIC_R_LEVER_NM, ExplicitCompleteMatHarness.STERIC_R_S2_NM, ExplicitCompleteMatHarness.STERIC_K_PNNM) : "false")
+              + ",\n  \"fil_z0_nm\": " + String.format(Locale.US, "%.2f", FIL_Z0_NM)
+              + ",\n  \"head_floor\": " + (ExplicitCompleteMatHarness.HEAD_FLOOR ? "true" : "false")
               + ",\n  \"polarity_gate_deg\": " + (POLARITY_CLI ? String.valueOf(POLARITY_TOL_CLI) : "null")
               + ",\n  \"rand_base_azimuth\": " + (RANDBASE ? "true" : "false")
               + ",\n  \"rand_base_seed\": " + (RANDBASE ? String.valueOf(ExplicitCompleteMatHarness.RAND_BASE_SEED) : "null")
               + ",\n  \"detached_rest\": \"" + (STRAIGHTREST ? "straight-stick restC=(1,0,0)" : "native phi_pre/psiActin/chi0")
               + "\",\n  \"binding_skew_deg\": 0.0,\n"
               + String.format(Locale.US, "  \"stroke_skew_deg\": %.4f,\n  \"mirror_sign\": %+.1f,\n", STROKE_SKEW_DEG, MIRROR)
+              + String.format(Locale.US, "  \"stroke_window_deg\": [%s, %s],\n",
+                    Double.isNaN(STROKE_WINDOW_PRE_CLI) ? "null" : String.format(Locale.US, "%.2f", STROKE_WINDOW_PRE_CLI),
+                    Double.isNaN(STROKE_WINDOW_POST_CLI) ? "null" : String.format(Locale.US, "%.2f", STROKE_WINDOW_POST_CLI))
               + String.format(Locale.US, "  \"conv_skew_deg\": %.4f,\n  \"conv_skew_ramp\": \"%s\",\n",
                               CONV_SKEW_DEG, CONV_SKEW_DEG != 0.0 ? "linear" : "off")
               + String.format(Locale.US, "  \"registry_switch_deg\": %.4f,\n  \"registry_k_Nm_per_rad\": %.6e,\n",

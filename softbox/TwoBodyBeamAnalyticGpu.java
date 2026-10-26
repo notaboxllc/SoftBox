@@ -402,10 +402,24 @@ public final class TwoBodyBeamAnalyticGpu {
      * (params rows 22..24 hold that previous horizontal unit direction). A near-vertical last segment (horizontal part
      * < 20 % of its length) holds the frame. While BOUND the frame is held (the head is fixed by actin; the S2 swivels
      * under it) and only the reference direction is tracked. Pure kinematics, no RNG; identical on both runners.
+     * Modes (counts[5]): 0 default; 1 restore (snap back to the S2 on release); 2 floppy (unbound azimuth also
+     * diffuses at FDT, counter-based RNG from matc[t, seed], so still identical on both runners).
      */
-    public static void matSwivelFrame(DoubleArray nodes, DoubleArray frame, DoubleArray params, IntArray boundSeg, IntArray counts) {
-        int nM = counts.get(0), M = counts.get(2);
+    public static void matSwivelFrame(DoubleArray nodes, DoubleArray frame, DoubleArray params, IntArray boundSeg, IntArray counts,
+                                      IntArray matc) {
+        int nM = counts.get(0), M = counts.get(2), keepTwist = counts.get(5);
+        long tt = matc.get(0), seed = matc.get(1); int brownOn = matc.get(2), mPolicy = matc.get(3);
         for (@Parallel int m = 0; m < nM; m++) {
+            boolean bnd = boundSeg.get(m) >= 0;
+            // -swivel-floppy (mode 2): an UNBOUND head's azimuth about the vertical also diffuses at FDT, so the
+            // S1-S2 junction is a free azimuthal hinge with thermal motion. Drag about the vertical through the S2 tip
+            // is taken as gammaPhi + gammaPsi (lever swing about the tip + head self-rotation; an estimate).
+            double gc = 1.0, gs = 0.0;
+            if (keepTwist == 2 && !bnd && brownOn != 0 && (mPolicy & 2) == 0) {
+                double gAz = params.get(8*nM+m) + params.get(9*nM+m), dtm = params.get(10*nM+m);
+                double dth = brownTorqueD(gAz, dtm, seed, tt, SWIVEL_SALT + (long) m * 7919L) * dtm / gAz;
+                gc = Math.cos(dth); gs = Math.sin(dth);
+            }
             double ex = frame.get(6*nM+m), ey = frame.get(7*nM+m), ez = frame.get(8*nM+m);
             double sx = nodes.get((3*M)*nM+m) - nodes.get((3*(M-1))*nM+m);
             double sy = nodes.get((3*M+1)*nM+m) - nodes.get((3*(M-1)+1)*nM+m);
@@ -414,15 +428,20 @@ public final class TwoBodyBeamAnalyticGpu {
             double su = sx*ex + sy*ey + sz*ez;
             double hx = sx - su*ex, hy = sy - su*ey, hz = sz - su*ez;
             double hn = Math.sqrt(hx*hx + hy*hy + hz*hz);
-            if (hn > 0.2 * sl && hn > 1e-15) {
-                hx = hx / hn; hy = hy / hn; hz = hz / hn;
-                if (boundSeg.get(m) >= 0) {   // BOUND: the head is held stereospecifically by actin; the S2 swivels
+            boolean valid = hn > 0.2 * sl && hn > 1e-15;
+            if (valid || gs != 0.0) {
+                if (valid) { hx = hx / hn; hy = hy / hn; hz = hz / hn; }
+                if (bnd) {   // BOUND: the head is held stereospecifically by actin; the S2 swivels
+                    if (keepTwist == 1) continue;   // -swivel-restore: keep the PRE-BINDING reference, so the first unbound
+                                                    // step rotates the frame by the whole swing made while bound and the
+                                                    // head returns to its rest orientation relative to the S2 on release
                     params.set(22*nM+m, hx); params.set(23*nM+m, hy); params.set(24*nM+m, hz);   // under it freely,
                     continue;                                                                     // so track, don't rotate
                 }
                 double px = params.get(22*nM+m), py = params.get(23*nM+m), pz = params.get(24*nM+m);
-                double ca = px*hx + py*hy + pz*hz;
-                double sa = ex*(py*hz - pz*hy) + ey*(pz*hx - px*hz) + ez*(px*hy - py*hx);
+                double ca0 = 1.0, sa0 = 0.0;
+                if (valid) { ca0 = px*hx + py*hy + pz*hz; sa0 = ex*(py*hz - pz*hy) + ey*(pz*hx - px*hz) + ez*(px*hy - py*hx); }
+                double ca = ca0*gc - sa0*gs, sa = sa0*gc + ca0*gs;   // S2 increment composed with the thermal step
                 // bhat (rows 0..2)
                 double vx = frame.get(m), vy = frame.get(nM+m), vz = frame.get(2*nM+m);
                 double ev = ex*vx + ey*vy + ez*vz;
@@ -438,7 +457,111 @@ public final class TwoBodyBeamAnalyticGpu {
                 double qy = wy*ca + (ez*wx - ex*wz)*sa + ey*ew*(1.0 - ca);
                 double qz = wz*ca + (ex*wy - ey*wx)*sa + ez*ew*(1.0 - ca);
                 frame.set(3*nM+m, qx); frame.set(4*nM+m, qy); frame.set(5*nM+m, qz);
-                params.set(22*nM+m, hx); params.set(23*nM+m, hy); params.set(24*nM+m, hz);
+                if (valid) { params.set(22*nM+m, hx); params.set(23*nM+m, hy); params.set(24*nM+m, hz); }
+            }
+        }
+    }
+
+    /**
+     * STEREOSPECIFIC DOCK + FREE S1-S2 JUNCTION (2026-10-15, jba: "the motor will only bind in one conformation").
+     * Replaces {@link #matSwivelFrame} when {@code counts[5] == 3}. The stroke frame's azimuth about the vertical
+     * eup (frame rows 6..8) through the S2 tip is a real overdamped coordinate theta with drag gAz = gammaPhi +
+     * gammaPsi (params rows 8+9, the floppy-mode estimate) and FDT noise; the S2 exerts NO azimuthal torque on it
+     * (free junction), so it does NOT follow the S2.
+     * <pre>
+     *   UNBOUND : gAz dtheta = xi dt                                     (free rotational diffusion)
+     *   BOUND   : gAz dtheta = [ tauF8 + kDock (mis - dtheta) + xi ] dt
+     *     mis    = signed angle, about eup, from bhat_h to the bound segment's barbed direction u_h (horizontal parts)
+     *     tauF8  = eup . ((xF8 - P) x F_head)   the bond's moment about the S2 tip (stale by one step, like the solve)
+     * </pre>
+     * The dock term is backward-Euler; the F8 term is stabilized by its linearized stiffness kF8 |r_h|^2 in the
+     * denominator (Gauss-Newton, the semi-implicit asymmetry the F8 force already has in the solve). The dock
+     * potential's EXACT reaction -kDock (mis - dtheta) eup goes onto the filament through the segment-torque slot
+     * bondData[d+9..11] (summed by segGather), so it must run AFTER bondForces / siteCoupleStep. The stroke axis
+     * copy (params rows 19..21, read by the g9 gate) is kept current. Counter-based RNG: identical on both runners.
+     * dockP: [0] kDock (N.m/rad^2).
+     */
+    public static void matHeadDock(DoubleArray frame, DoubleArray params, IntArray boundSeg, FloatArray bondData,
+                                   DoubleArray outGeom, DoubleArray nodes, FloatArray filUVec, DoubleArray dockP,
+                                   IntArray counts, IntArray matc, DoubleArray restC) {
+        int nM = counts.get(0), M = counts.get(2), nSeg = counts.get(3);
+        long tt = matc.get(0), seed = matc.get(1); int brownOn = matc.get(2), mPolicy = matc.get(3);
+        double kDock = dockP.get(0);
+        for (@Parallel int m = 0; m < nM; m++) {
+            int s = boundSeg.get(m);
+            double ex = frame.get(6*nM+m), ey = frame.get(7*nM+m), ez = frame.get(8*nM+m);
+            double gAz = params.get(8*nM+m) + params.get(9*nM+m), dtm = params.get(10*nM+m);
+            double vx = frame.get(m), vy = frame.get(nM+m), vz = frame.get(2*nM+m);
+            double tau = 0.0, kEff = 0.0, mis = 0.0;
+            boolean dock = false;
+            // WEAK actin binding (matc[7]; last restC row = k_w): the weak spring's torque about eup acts on this
+            // azimuth exactly as the strong bond's does; no dock couple (the weak complex is non-stereospecific).
+            double kWk = (matc.getSize() > 7 && matc.get(7) != 0) ? restC.get((restC.getSize() / nM - 1) * nM + m) : 0.0;
+            if (s < 0 && kWk != 0.0) {
+                int wRowD = restC.getSize() / nM - 1;   // loop-2 offset o (rows -4..-2): the force acts at F8 + o
+                double rx = outGeom.get(6*nM+m) - nodes.get((3*M)*nM+m) + restC.get((wRowD - 3) * nM + m);
+                double ry = outGeom.get(7*nM+m) - nodes.get((3*M+1)*nM+m) + restC.get((wRowD - 2) * nM + m);
+                double rz = outGeom.get(8*nM+m) - nodes.get((3*M+2)*nM+m) + restC.get((wRowD - 1) * nM + m);
+                int d = m * 13;
+                double Fx = bondData.get(d), Fy = bondData.get(d+1), Fz = bondData.get(d+2);
+                tau = (ex*(ry*Fz - rz*Fy) + ey*(rz*Fx - rx*Fz) + ez*(rx*Fy - ry*Fx)) * 1e-6;
+                double er = ex*rx + ey*ry + ez*rz;
+                kEff = kWk * (rx*rx + ry*ry + rz*rz - er*er) * 1e-6;
+            }
+            if (s >= 0) {
+                double ev = ex*vx + ey*vy + ez*vz;
+                double bx = vx - ev*ex, by = vy - ev*ey, bz = vz - ev*ez;
+                double bn = Math.sqrt(bx*bx + by*by + bz*bz);
+                double ux = filUVec.get(s), uy = filUVec.get(nSeg+s), uz = filUVec.get(2*nSeg+s);
+                double eu = ex*ux + ey*uy + ez*uz;
+                double hx = ux - eu*ex, hy = uy - eu*ey, hz = uz - eu*ez;
+                double hn = Math.sqrt(hx*hx + hy*hy + hz*hz);
+                if (bn > 1e-12 && hn > 1e-12) {
+                    bx /= bn; by /= bn; bz /= bn; hx /= hn; hy /= hn; hz /= hn;
+                    double c = bx*hx + by*hy + bz*hz;
+                    if (c > 1.0) c = 1.0; if (c < -1.0) c = -1.0;
+                    double sn = ex*(by*hz - bz*hy) + ey*(bz*hx - bx*hz) + ez*(bx*hy - by*hx);
+                    mis = sn < 0.0 ? -dacos(c) : dacos(c);
+                    dock = kDock > 0.0;
+                }
+                double rx = outGeom.get(6*nM+m) - nodes.get((3*M)*nM+m);
+                double ry = outGeom.get(7*nM+m) - nodes.get((3*M+1)*nM+m);
+                double rz = outGeom.get(8*nM+m) - nodes.get((3*M+2)*nM+m);
+                int d = m * 13;
+                double Fx = bondData.get(d), Fy = bondData.get(d+1), Fz = bondData.get(d+2);
+                double tF8 = (ex*(ry*Fz - rz*Fy) + ey*(rz*Fx - rx*Fz) + ez*(rx*Fy - ry*Fx)) * 1e-6;   // um x N -> N.m
+                double er = ex*rx + ey*ry + ez*rz;
+                double rh2 = rx*rx + ry*ry + rz*rz - er*er;
+                tau = tF8 + (dock ? kDock * mis : 0.0);
+                kEff = params.get(5*nM+m) * rh2 * 1e-6 + (dock ? kDock : 0.0);                          // N/um x um^2 -> N.m
+            }
+            if (restC.getSize() >= 45 * nM) {   // motor-actin sterics on the head/lever: azimuth torque from the last solve
+                tau += restC.get(43*nM+m); kEff += restC.get(44*nM+m);
+            }
+            double xi = 0.0;
+            if (brownOn != 0 && (s >= 0 || (mPolicy & 2) == 0))
+                xi = brownTorqueD(gAz, dtm, seed, tt, DOCK_SALT + (long) m * 7919L);
+            double dth = (tau + xi) * dtm / (gAz + kEff * dtm);
+            if (dock) {   // EXACT equal-and-opposite reaction of the dock couple onto the bound segment
+                double tR = kDock * (mis - dth);
+                int d = m * 13;
+                bondData.set(d+9,  (float) (bondData.get(d+9)  - tR*ex));
+                bondData.set(d+10, (float) (bondData.get(d+10) - tR*ey));
+                bondData.set(d+11, (float) (bondData.get(d+11) - tR*ez));
+            }
+            if (dth != 0.0) {
+                double ca = Math.cos(dth), sa = Math.sin(dth);
+                double ev = ex*vx + ey*vy + ez*vz;
+                double nx = vx*ca + (ey*vz - ez*vy)*sa + ex*ev*(1.0 - ca);
+                double ny = vy*ca + (ez*vx - ex*vz)*sa + ey*ev*(1.0 - ca);
+                double nz = vz*ca + (ex*vy - ey*vx)*sa + ez*ev*(1.0 - ca);
+                frame.set(m, nx); frame.set(nM+m, ny); frame.set(2*nM+m, nz);
+                double wx = frame.get(3*nM+m), wy = frame.get(4*nM+m), wz = frame.get(5*nM+m);
+                double ew = ex*wx + ey*wy + ez*wz;
+                frame.set(3*nM+m, wx*ca + (ey*wz - ez*wy)*sa + ex*ew*(1.0 - ca));
+                frame.set(4*nM+m, wy*ca + (ez*wx - ex*wz)*sa + ey*ew*(1.0 - ca));
+                frame.set(5*nM+m, wz*ca + (ex*wy - ey*wx)*sa + ez*ew*(1.0 - ca));
+                params.set(19*nM+m, nx); params.set(20*nM+m, ny); params.set(21*nM+m, nz);
             }
         }
     }
@@ -955,7 +1078,9 @@ public final class TwoBodyBeamAnalyticGpu {
     // On REJECT the head is returned to the FREE pool (boundSeg=−1) and may retry next step: that finite
     // attachment kinetics + pool depletion is exactly what creates the leading/trailing attachment-flux asymmetry.
     // ===============================================================================================
-    static final long TZ_SALT = 0x545A4244L;   // "TZBD" — private target-zone accept stream
+    static final long TZ_SALT = 0x545A4244L;
+    static final long DOCK_SALT = 0x444F434BL;     // "DOCK" — stereospecific-dock head-azimuth stream
+    static final long SWIVEL_SALT = 0x53574656L;   // "SWFV" — swivel-floppy azimuth diffusion stream   // "TZBD" — private target-zone accept stream
 
     /** Stable arcsin (Taylor seed + 2 Newton steps) — the ChainBendingForceSystem form; PTX has no Math.asin. */
     static double tzAsin(double s) {
@@ -1531,7 +1656,16 @@ public final class TwoBodyBeamAnalyticGpu {
             int brownM = brownOn;
             if (bnd) { if ((mPolicy & 1) != 0) brownM = 0; }
             else     { if ((mPolicy & 2) != 0) brownM = 0; }
-            double f8x = bnd ? bondData.get(dB) : 0.0, f8y = bnd ? bondData.get(dB + 1) : 0.0, f8z = bnd ? bondData.get(dB + 2) : 0.0;
+            // WEAK actin binding (WeakBindSystem, matc[7] != 0; default absent => byte-identical): a weakly held head is
+            // UNBOUND for every term below except the F8 force, which carries the weak spring.
+            // The weak row carries k_w (N/um); it replaces kF8 in the F8 Hessian below, so the weak spring is treated
+            // with the same linearized-implicit scheme as the strong bond (stable at any k_w).
+            double kWk = (matc.getSize() > 7 && matc.get(7) != 0) ? restC.get((restC.getSize() / nM - 1) * nM + m) : 0.0;
+            boolean wkB = kWk != 0.0;
+            // loop-2 tether (WeakBindSystem.LOOP2): the weak force acts at F8 + o (o world, um; restC rows -4..-2, 0 = at F8)
+            int wRowT = restC.getSize() / nM - 1;
+            double owx = wkB ? restC.get((wRowT - 3) * nM + m) : 0.0, owy = wkB ? restC.get((wRowT - 2) * nM + m) : 0.0, owz = wkB ? restC.get((wRowT - 1) * nM + m) : 0.0;
+            double f8x = (bnd || wkB) ? bondData.get(dB) : 0.0, f8y = (bnd || wkB) ? bondData.get(dB + 1) : 0.0, f8z = (bnd || wkB) ? bondData.get(dB + 2) : 0.0;
             double phi = q.get(m), psi = q.get(nM + m), thetaS = q.get(2 * nM + m), psiActin = q.get(3 * nM + m);
             double chi = chiHead.get(m);
             double c1 = restC.get(m), c2 = restC.get(nM + m), c3 = restC.get(2 * nM + m);
@@ -1545,6 +1679,15 @@ public final class TwoBodyBeamAnalyticGpu {
             }
             int base = m * (n * W);
             int st = 0;
+            // motor-actin sterics (MotorStericSystem): an exact active-set step across THREE kernels. Mode 0 = trial solve
+            // with the contacts present at the start (records its own step); stericCheck undoes it and sets mode 2 if a NEW
+            // contact penetrated at the end, else mode 1; the second solve call redoes mode-2 motors with those contacts
+            // forced on (same Brownian draws) and skips mode 1. No loop-carried state is added here: an earlier in-loop
+            // phase machine was miscompiled by the PTX backend (angles wrong even with the branch untaken).
+            boolean stOn = restC.getSize() >= 45 * nM;
+            int stMode = stOn ? (int) restC.get(45 * nM + m) : 0;   // 0 trial, 1 done (skip), 2 redo with forced contacts
+            if (stMode == 1) continue;
+            int stForced = stOn ? (int) restC.get(46 * nM + m) : 0, stAct = 0;
             for (int it = 0; it < maxIt; it++) {
                 for (int i = 0; i < n; i++) for (int j = 0; j < W; j++) sys.set(base + i * W + j, 0.0);
                 double Px = nodes.get((3 * M) * nM + m), Py = nodes.get((3 * M + 1) * nM + m), Pz = nodes.get((3 * M + 2) * nM + m);
@@ -1700,6 +1843,122 @@ public final class TwoBodyBeamAnalyticGpu {
                             for(int qq=0;qq<3;qq++){ double eq=(qq==0)?ux:((qq==1)?uy:uz); addK(sys,base,W, r+p, r+qq, kfloor*ep*eq); } }
                     }
                 }
+                // ---- MOTOR–ACTIN EXCLUDED VOLUME + HEAD/LEVER FLOOR (MotorStericSystem; restC rows 9..44) -------
+                // Entered only when restC carries the steric rows (flag off => restC is 9 rows => byte-identical).
+                // One-sided harmonic on overlap, Gauss-Newton Hessian k (J n)(J n)^T, like the S2 floor above.
+                if (stOn) {
+                    int sB = 3*(M-1), sPhi = nF, sPsi = nF+1, sChi = nF+2;
+                    double kSt = restC.get(27*nM+m), rSH = restC.get(24*nM+m), rSL = restC.get(25*nM+m), rSS = restC.get(26*nM+m);
+                    double hfR = restC.get(28*nM+m), lfR = restC.get(29*nM+m);
+                    int skipSlot = (int) restC.get(23*nM+m);
+                    double sax = (axMode != 0) ? aex : gux, say = (axMode != 0) ? aey : guy, saz = (axMode != 0) ? aez : guz;
+                    double gcx = guy*cpz - guz*cpy, gcy = guz*cpx - gux*cpz, gcz = gux*cpy - guy*cpx;   // d C / d phi
+                    double Hx = Cx - hcx, Hy = Cy - hcy, Hz = Cz - hcz;                               // head centre
+                    double rpx = -hcx, rpy = -hcy, rpz = -hcz;                                         // H - C
+                    // ---- body points vs each actin slot ----
+                    for (int slot = 0; slot < 2; slot++) {
+                        int r0 = 9 + 7*slot;
+                        double hA = restC.get((r0+6)*nM+m);
+                        if (!(hA > 0.0) || !(kSt > 0.0)) continue;
+                        double acx = restC.get(r0*nM+m), acy = restC.get((r0+1)*nM+m), acz = restC.get((r0+2)*nM+m);
+                        double aux2 = restC.get((r0+3)*nM+m), auy2 = restC.get((r0+4)*nM+m), auz2 = restC.get((r0+5)*nM+m);
+                        double a0x = acx - hA*aux2, a0y = acy - hA*auy2, a0z = acz - hA*auz2;
+                        double d2x = 2.0*hA*aux2, d2y = 2.0*hA*auy2, d2z = 2.0*hA*auz2, eA = d2x*d2x + d2y*d2y + d2z*d2z;
+                        // body index: 0..M-1 S2 elements, M lever, M+1 head
+                        for (int bI = 0; bI <= M + 1; bI++) {
+                            if (bI == M + 1 && slot == skipSlot) continue;
+                            int cbit = 1 << (slot*(M+2) + bI);
+                            double p0x, p0y, p0z, p1x2, p1y2, p1z2, rSum;
+                            if (bI < M) {
+                                p0x = nodes.get((3*bI)*nM+m); p0y = nodes.get((3*bI+1)*nM+m); p0z = nodes.get((3*bI+2)*nM+m);
+                                p1x2 = nodes.get((3*(bI+1))*nM+m); p1y2 = nodes.get((3*(bI+1)+1)*nM+m); p1z2 = nodes.get((3*(bI+1)+2)*nM+m);
+                                rSum = rSS;
+                            } else if (bI == M) { p0x = Px; p0y = Py; p0z = Pz; p1x2 = Cx; p1y2 = Cy; p1z2 = Cz; rSum = rSL; }
+                            else { p0x = Hx; p0y = Hy; p0z = Hz; p1x2 = Hx; p1y2 = Hy; p1z2 = Hz; rSum = rSH; }
+                            // closest points: body segment p0 + sb (p1 - p0), actin a0 + ta d2  (Ericson 5.1.9)
+                            double d1x = p1x2 - p0x, d1y = p1y2 - p0y, d1z = p1z2 - p0z;
+                            double wx = p0x - a0x, wy = p0y - a0y, wz = p0z - a0z;
+                            double aa = d1x*d1x + d1y*d1y + d1z*d1z, bb = d1x*d2x + d1y*d2y + d1z*d2z;
+                            double cc = d1x*wx + d1y*wy + d1z*wz, ff = d2x*wx + d2y*wy + d2z*wz;
+                            double sb = 0.0, ta;
+                            if (aa > 1e-24) {
+                                double den = aa*eA - bb*bb;
+                                if (den > 1e-30) { sb = (bb*ff - cc*eA)/den; if (sb < 0) sb = 0; if (sb > 1) sb = 1; }
+                                ta = (bb*sb + ff)/eA;
+                                if (ta < 0) { ta = 0; sb = -cc/aa; if (sb < 0) sb = 0; if (sb > 1) sb = 1; }
+                                else if (ta > 1) { ta = 1; sb = (bb - cc)/aa; if (sb < 0) sb = 0; if (sb > 1) sb = 1; }
+                            } else { ta = ff/eA; if (ta < 0) ta = 0; if (ta > 1) ta = 1; }
+                            double xbx = p0x + sb*d1x, xby = p0y + sb*d1y, xbz = p0z + sb*d1z;
+                            double xax = a0x + ta*d2x, xay = a0y + ta*d2y, xaz = a0z + ta*d2z;
+                            double nx = xbx - xax, ny = xby - xay, nz = xbz - xaz;
+                            double dist = Math.sqrt(nx*nx + ny*ny + nz*nz);
+                            if (dist < 1e-12) continue;
+                            double del = rSum - dist;
+                            double idn = 1.0/dist; nx *= idn; ny *= idn; nz *= idn;
+                            if (del > 0.0) stAct |= cbit;
+                            boolean act = del > 0.0 || (stMode == 2 && (stForced & cbit) != 0);
+                            if (!act) continue;
+                            // linear contact spring (force k*del along n; del < 0 only for a forced contact, whose
+                            // end-of-step overlap del - n.J.dq is positive by construction)
+                            double fm = kSt*del*1e-6, Fx = fm*nx, Fy = fm*ny, Fz = fm*nz;
+                            if (bI < M) {   // S2 element: linear split onto its two nodes (node 0 is the fixed base)
+                                int ra = (bI >= 1) ? (bI-1)*3 : -1000, rb = bI*3;
+                                double wa = 1.0 - sb, wb = sb;
+                                addF(sys,base,W,n, ra+0, wa*Fx); addF(sys,base,W,n, ra+1, wa*Fy); addF(sys,base,W,n, ra+2, wa*Fz);
+                                addF(sys,base,W,n, rb+0, wb*Fx); addF(sys,base,W,n, rb+1, wb*Fy); addF(sys,base,W,n, rb+2, wb*Fz);
+                                for (int pp=0;pp<3;pp++){ double np=(pp==0)?nx:((pp==1)?ny:nz);
+                                    for (int qq=0;qq<3;qq++){ double nq=(qq==0)?nx:((qq==1)?ny:nz); double kv = kSt*np*nq;
+                                        addK(sys,base,W, ra+pp, ra+qq, wa*wa*kv); addK(sys,base,W, rb+pp, rb+qq, wb*wb*kv);
+                                        addK(sys,base,W, ra+pp, rb+qq, wa*wb*kv); addK(sys,base,W, rb+pp, ra+qq, wa*wb*kv); } }
+                            } else {        // lever point P + sb (C - P) or head centre: P node + phi (+ psi, chi for the head)
+                                double jsb = (bI == M + 1) ? 1.0 : sb;
+                                double Jn3 = jsb*(gcx*nx + gcy*ny + gcz*nz)*1e-6, Jn4 = 0.0, Jn5 = 0.0;
+                                if (bI == M + 1) {
+                                    double jpx = say*rpz - saz*rpy, jpy = saz*rpx - sax*rpz, jpz = sax*rpy - say*rpx;
+                                    double jcx = thy*rpz - thz*rpy, jcy = thz*rpx - thx*rpz, jcz = thx*rpy - thy*rpx;
+                                    Jn4 = (jpx*nx + jpy*ny + jpz*nz)*1e-6; Jn5 = (jcx*nx + jcy*ny + jcz*nz)*1e-6;
+                                }
+                                addF(sys,base,W,n, sB+0, Fx); addF(sys,base,W,n, sB+1, Fy); addF(sys,base,W,n, sB+2, Fz);
+                                addF(sys,base,W,n, sPhi, fm*Jn3); addF(sys,base,W,n, sPsi, fm*Jn4); addF(sys,base,W,n, sChi, fm*Jn5);
+                                for (int ii=0; ii<6; ii++){
+                                    double ji = (ii==0)?nx:((ii==1)?ny:((ii==2)?nz:((ii==3)?Jn3:((ii==4)?Jn4:Jn5))));
+                                    int di = (ii<3) ? (sB+ii) : (ii==3 ? sPhi : (ii==4 ? sPsi : sChi));
+                                    for (int jj=0; jj<6; jj++){
+                                        double jj2 = (jj==0)?nx:((jj==1)?ny:((jj==2)?nz:((jj==3)?Jn3:((jj==4)?Jn4:Jn5))));
+                                        int dj = (jj<3) ? (sB+jj) : (jj==3 ? sPhi : (jj==4 ? sPsi : sChi));
+                                        addK(sys,base,W, di, dj, kSt*ji*jj2); } }
+                            }
+                        }
+                    }
+                    // ---- head + lever floor (the S2 floor above acts on nodes only); glass takes no reaction ----
+                    for (int fI = 0; fI < 2; fI++) {
+                        double rF = (fI == 0) ? hfR : lfR;
+                        if (!(rF > 0.0)) continue;
+                        int cbit = 1 << (2*(M+2) + fI);
+                        double xx = (fI == 0) ? Hx : Cx, xy = (fI == 0) ? Hy : Cy, xz = (fI == 0) ? Hz : Cz;
+                        double zz = xx*ux + xy*uy + xz*uz;
+                        double del = floorZ - (zz - rF);
+                        if (del > 0.0) stAct |= cbit;
+                        if (!(del > 0.0 || (stMode == 2 && (stForced & cbit) != 0))) continue;
+                        double fm = kfloor*del*1e-6, Fx = fm*ux, Fy = fm*uy, Fz = fm*uz;
+                        double Jn3 = (gcx*ux + gcy*uy + gcz*uz)*1e-6, Jn4 = 0.0, Jn5 = 0.0;
+                        if (fI == 0) {
+                            double jpx = say*rpz - saz*rpy, jpy = saz*rpx - sax*rpz, jpz = sax*rpy - say*rpx;
+                            double jcx = thy*rpz - thz*rpy, jcy = thz*rpx - thx*rpz, jcz = thx*rpy - thy*rpx;
+                            Jn4 = (jpx*ux + jpy*uy + jpz*uz)*1e-6; Jn5 = (jcx*ux + jcy*uy + jcz*uz)*1e-6;
+                        }
+                        addF(sys,base,W,n, sB+0, Fx); addF(sys,base,W,n, sB+1, Fy); addF(sys,base,W,n, sB+2, Fz);
+                        addF(sys,base,W,n, sPhi, fm*Jn3); addF(sys,base,W,n, sPsi, fm*Jn4); addF(sys,base,W,n, sChi, fm*Jn5);
+                        for (int ii=0; ii<6; ii++){
+                            double ji = (ii==0)?ux:((ii==1)?uy:((ii==2)?uz:((ii==3)?Jn3:((ii==4)?Jn4:Jn5))));
+                            int di = (ii<3) ? (sB+ii) : (ii==3 ? sPhi : (ii==4 ? sPsi : sChi));
+                            for (int jj=0; jj<6; jj++){
+                                double jj2 = (jj==0)?ux:((jj==1)?uy:((jj==2)?uz:((jj==3)?Jn3:((jj==4)?Jn4:Jn5))));
+                                int dj = (jj<3) ? (sB+jj) : (jj==3 ? sPhi : (jj==4 ? sPsi : sChi));
+                                addK(sys,base,W, di, dj, kfloor*ji*jj2); } }
+                    }
+                    if (stMode == 0) restC.set(47*nM+m, (double) stAct);   // contacts present at the start of the trial
+                }
                 // node drag diagonal + node Brownian RHS
                 for (int r=0;r<nF;r++) addK(sys,base,W, r, r, aN);
                 if (brownM != 0) for (int j=1;j<=M;j++){ int fb=(j-1)*3;
@@ -1709,13 +1968,14 @@ public final class TwoBodyBeamAnalyticGpu {
                 int pB = 3*(M-1), iPhi = nF, iPsi = nF+1, iChi = nF+2;
                 double Jphix=guy*cpz-guz*cpy, Jphiy=guz*cpx-gux*cpz, Jphiz=gux*cpy-guy*cpx;
                 double Jpsix, Jpsiy, Jpsiz;
-                if (axMode != 0) { Jpsix=aey*fcz-aez*fcy; Jpsiy=aez*fcx-aex*fcz; Jpsiz=aex*fcy-aey*fcx; }
-                else             { Jpsix=guy*fcz-guz*fcy; Jpsiy=guz*fcx-gux*fcz; Jpsiz=gux*fcy-guy*fcx; }
-                double Jchix=thy*fcz-thz*fcy, Jchiy=thz*fcx-thx*fcz, Jchiz=thx*fcy-thy*fcx;
+                double fwx = fcx + owx, fwy = fcy + owy, fwz = fcz + owz;   // arm to the force point (= fc unless weak loop-2)
+                if (axMode != 0) { Jpsix=aey*fwz-aez*fwy; Jpsiy=aez*fwx-aex*fwz; Jpsiz=aex*fwy-aey*fwx; }
+                else             { Jpsix=guy*fwz-guz*fwy; Jpsiy=guz*fwx-gux*fwz; Jpsiz=gux*fwy-guy*fwx; }
+                double Jchix=thy*fwz-thz*fwy, Jchiy=thz*fwx-thx*fwz, Jchiz=thx*fwy-thy*fwx;
                 double J03=Jphix*1e-6,J04=Jpsix*1e-6,J05=Jchix*1e-6;
                 double J13=Jphiy*1e-6,J14=Jpsiy*1e-6,J15=Jchiy*1e-6;
                 double J23=Jphiz*1e-6,J24=Jpsiz*1e-6,J25=Jchiz*1e-6;
-                double kfSI=kF8Code*1e6;
+                double kfSI=(wkB ? kWk : kF8Code)*1e6;
                 for (int i=0;i<6;i++){
                     double Ji0=(i==0)?1:0, Ji1=(i==1)?1:0, Ji2=(i==2)?1:0;
                     if(i==3){Ji0=J03;Ji1=J13;Ji2=J23;} if(i==4){Ji0=J04;Ji1=J14;Ji2=J24;} if(i==5){Ji0=J05;Ji1=J15;Ji2=J25;}
@@ -1817,7 +2077,7 @@ public final class TwoBodyBeamAnalyticGpu {
                 addK(sys,base,W, iPhi,iPhi, aphi); addK(sys,base,W, iPsi,iPsi, gPsiChi/dt); addK(sys,base,W, iChi,iChi, gPsi/dt);
                 double th2 = psi - phi;
                 double caFx=cpy*f8z-cpz*f8y, caFy=cpz*f8x-cpx*f8z, caFz=cpx*f8y-cpy*f8x;
-                double fcFx=fcy*f8z-fcz*f8y, fcFy=fcz*f8x-fcx*f8z, fcFz=fcx*f8y-fcy*f8x;
+                double fcFx=(fcy+owy)*f8z-(fcz+owz)*f8y, fcFy=(fcz+owz)*f8x-(fcx+owx)*f8z, fcFz=(fcx+owx)*f8y-(fcy+owy)*f8x;
                 double QphiF8=(gux*caFx+guy*caFy+guz*caFz)*1e-6;
                 double QpsiF8 = (axMode != 0 ? (aex*fcFx+aey*fcFy+aez*fcFz) : (gux*fcFx+guy*fcFy+guz*fcFz))*1e-6;
                 double QchiF8=(thx*fcFx+thy*fcFy+thz*fcFz)*1e-6;
@@ -1885,14 +2145,19 @@ public final class TwoBodyBeamAnalyticGpu {
                 for (int j=1;j<=M;j++){ int fb=(j-1)*3;
                     for(int k=0;k<3;k++){ double dqm=sys.get(base+(fb+k)*W+n)/sys.get(base+(fb+k)*W+(fb+k));
                         double dnode=dqm*1e6; nodes.set((3*j+k)*nM+m, nodes.get((3*j+k)*nM+m)+dnode);
+                        if (stOn && stMode == 0) restC.set((48 + fb + k)*nM+m, dnode);
                         double amv=dnode<0?-dnode:dnode; if(amv>mv) mv=amv; } }
                 double dphi=sys.get(base+iPhi*W+n)/sys.get(base+iPhi*W+iPhi);
                 double dpsi=sys.get(base+iPsi*W+n)/sys.get(base+iPsi*W+iPsi);
                 double dchi=sys.get(base+iChi*W+n)/sys.get(base+iChi*W+iChi);
+                double chiB = chi;
                 phi+=dphi; psi+=dpsi; chi+=dchi;
                 if (chi >  1.5533430342749532) chi =  1.5533430342749532;   // |chi| <= 89 deg: keep away from the
                 if (chi < -1.5533430342749532) chi = -1.5533430342749532;   // spherical-coordinate pole
                 nodes.set(m, gEx); nodes.set(nM+m, gEy); nodes.set(2*nM+m, gEz);
+                if (stOn && stMode == 0) {   // the trial step, so MotorStericSystem.stericCheck can undo it exactly
+                    restC.set((48 + nF)*nM+m, dphi); restC.set((49 + nF)*nM+m, dpsi); restC.set((50 + nF)*nM+m, chi - chiB);
+                }
                 if (mv < tol) break;
             }
             // final geometry (chi-aware) → outGeom + reaction writeback

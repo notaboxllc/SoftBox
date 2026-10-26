@@ -960,6 +960,14 @@ public final class ChiralSiteSystem {
                     double pd = params.get(19 * N + m) * filUVec.get(cs) + params.get(20 * N + m) * filUVec.get(nSeg + cs)
                               + params.get(21 * N + m) * filUVec.get(2 * nSeg + cs);
                     g9 = pd >= cosPol;
+                    // STEREOSPECIFIC DOCK (sbP[40] on, sbP[41] kDock): the bound head will be held to the actin axis, so
+                    // capture is charged the dock energy 1/2 kDock mis^2 (mis = angle stroke axis -> barbed direction)
+                    // in the SAME g5 budget as the long-axis term -- no uncharged pre-stroke swing (the -headtilt lesson).
+                    if (sbP.getSize() > 41 && sbP.get(40) > 0.5) {
+                        double pc = pd > 1.0 ? 1.0 : (pd < -1.0 ? -1.0 : pd);
+                        double mi = cacos(pc);
+                        g5 = orientOn == 0 || (eKt + 0.5 * sbP.get(41) * mi * mi / kT) < energyKt;
+                    }
                 }
                 // g10 S2-DIRECTION GATE (DIAGNOSTIC, default off; sbP[38] enable, sbP[39] cos(tol)): refuse a bind when the
                 // S2's last segment (horizontal direction, params rows 22..24, kept current by matSwivelFrame) points
