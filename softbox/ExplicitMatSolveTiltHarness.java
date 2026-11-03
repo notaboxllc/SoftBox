@@ -37,7 +37,9 @@ public final class ExplicitMatSolveTiltHarness {
     static final double DT = 2.5e-6;
     static final String OUT = "RUN_LOGS/explicit_mats2_tilt";
 
+    static boolean STERIC = false, K0 = false, NOBROWN = false;   // -steric: exercise the motor-actin steric block (MotorStericSystem rows)
     public static void main(String[] args) {
+        for (String a : args) { if (a.equals("-steric")) STERIC = true; if (a.equals("-k0")) { STERIC = true; K0 = true; } if (a.equals("-nobrown")) NOBROWN = true; }
         try { Files.createDirectories(Path.of(OUT)); } catch (IOException e) { throw new UncheckedIOException(e); }
         if (!"false".equals(System.getProperty("tornado.recover.bailout")))
             System.out.println("!! run with -Dtornado.recover.bailout=false (else a bailout hides as a silent CPU fallback)");
@@ -83,7 +85,7 @@ public final class ExplicitMatSolveTiltHarness {
         FloatArray bond = new FloatArray(13 * K), forceDotFil = new FloatArray(K), forceMag = new FloatArray(K);
         IntArray boundSeg = new IntArray(K);
         // counts[4] = myWorker. restC row 8 must equal it or the motor is skipped as culled.
-        IntArray matc = IntArray.fromElements(t, seed, 1, 0, TwoBodyConverterMotor.F8_AXIS_LEGACY ? 0 : 1);
+        IntArray matc = IntArray.fromElements(t, seed, NOBROWN ? 0 : 1, 0, TwoBodyConverterMotor.F8_AXIS_LEGACY ? 0 : 1);
         IntArray counts = IntArray.fromElements(K, 1, M, 0, 0);
         DoubleArray convId = TwoBodyBeamAnalyticGpu.identityConvFrame(K);
 
@@ -106,7 +108,7 @@ public final class ExplicitMatSolveTiltHarness {
         // restC rows 0..2 = the detached target in the neck frame; (1,0,0) is the straight-stick value and is
         // well conditioned (all-zero would normalize a zero vector). Rows 3..7 = the site-normal bound target;
         // motors 1 and 3 carry flag row 6 = 1 so BOTH bound branches are exercised. Row 8 = worker tag = 0.
-        DoubleArray chiHead = new DoubleArray(K), restC = new DoubleArray(9 * K);
+        DoubleArray chiHead = new DoubleArray(K), restC = new DoubleArray((STERIC ? MotorStericSystem.rows(M) : 9) * K);
         chiHead.init(0.0); restC.init(0.0);
         for (int m = 0; m < K; m++) {
             chiHead.set(m, 0.15 * (m - 2));                       // -0.30 .. +0.30 rad
@@ -118,14 +120,26 @@ public final class ExplicitMatSolveTiltHarness {
                 restC.set(7 * K + m, 0.0);
             }
             restC.set(8 * K + m, 0.0);                            // worker tag == counts[4] == 0
+            if (STERIC) {   // one actin capsule along bhat, just above the S2 tip, overlapping lever/head/S2
+                double[] u = G.eup, b = G.bhat; double off = 0.002 + 0.001 * m;
+                for (int c = 0; c < 3; c++) {
+                    restC.set((9 + c) * K + m, nodes.get((3 * M + c) * K + m) + off * u[c]);
+                    restC.set((12 + c) * K + m, b[c]);
+                }
+                restC.set(15 * K + m, 0.05);  restC.set(22 * K + m, 0.0);   // slot 0 half-length; slot 1 unused
+                restC.set(23 * K + m, -1.0);
+                restC.set(24 * K + m, 0.0065); restC.set(25 * K + m, 0.0050); restC.set(26 * K + m, 0.0045);
+                restC.set(27 * K + m, K0 ? 0.0 : 0.02);   restC.set(28 * K + m, K0 ? 0.0 : 0.003);  restC.set(29 * K + m, K0 ? 0.0 : 0.0015);
+            }
         }
 
         // ---- CPU-mirror: the same kernel called directly (plain Java = the CPU runner) ------------------
         DoubleArray nMir = copy(nodes), qMir = copy(q), oMir = new DoubleArray(9 * K), chiMir = copy(chiHead);
         DoubleArray sMir = new DoubleArray(tiltStride * K); sMir.init(0.0);
         FloatArray fdfMir = new FloatArray(K), fmMir = new FloatArray(K);
+        DoubleArray rcMir = copy(restC);
         TwoBodyBeamAnalyticGpu.matS2SolveStepTilt(nMir, copy(frame), qMir, bond, boundSeg, copy(params), sMir,
-                oMir, fdfMir, fmMir, matc, counts, TwoBodyBeamAnalyticGpu.identityConvFrame(K), chiMir, copy(restC));
+                oMir, fdfMir, fmMir, matc, counts, TwoBodyBeamAnalyticGpu.identityConvFrame(K), chiMir, rcMir);
 
         // ---- §1 LOWERING PROBE -------------------------------------------------------------------------
         log.append("## 1. Lowering probe (single-task device TaskGraph, no silent fallback)\n\n");
@@ -139,7 +153,7 @@ public final class ExplicitMatSolveTiltHarness {
                 .transferToDevice(DataTransferMode.EVERY_EXECUTION, nGpu, frGpu, qGpu, bond, boundSeg, paGpu, sGpu, matc, counts, convId, chiGpu, rcGpu)
                 .task("s2tilt", TwoBodyBeamAnalyticGpu::matS2SolveStepTilt,
                         nGpu, frGpu, qGpu, bond, boundSeg, paGpu, sGpu, oGpu, fdfGpu, fmGpu, matc, counts, convId, chiGpu, rcGpu)
-                .transferToHost(DataTransferMode.EVERY_EXECUTION, nGpu, qGpu, oGpu, fdfGpu, fmGpu, chiGpu);
+                .transferToHost(DataTransferMode.EVERY_EXECUTION, nGpu, qGpu, oGpu, fdfGpu, fmGpu, chiGpu, rcGpu);
             WorkerGrid wg = new WorkerGrid1D(K); wg.setLocalWork(Math.min(64, K), 1, 1);
             GridScheduler gs = new GridScheduler("mats2tilt.s2tilt", wg);
             TornadoExecutionPlan plan = new TornadoExecutionPlan(tg.snapshot()).withGridScheduler(gs);
@@ -180,6 +194,20 @@ public final class ExplicitMatSolveTiltHarness {
             mxNode = Math.max(mxNode, dN); mxAng = Math.max(mxAng, Math.max(dPhi, Math.max(dPsi, dChi)));
             log.append(String.format(Locale.US, "| %d | %s | %+.3f | %.2e | %.2e | %.2e | %.2e | %.2e | %.2e |\n",
                     m, label[m], chiHead.get(m), dN, dPhi, dPsi, dChi, dFdf, dFm));
+        }
+        if (STERIC) {
+            for (int m = 0; m < K; m++) {
+                StringBuilder r = new StringBuilder();
+                double mx = 0;
+                for (int row = 30; row < rcMir.getSize() / K; row++) {
+                    double a = rcMir.get(row * K + m), g = rcGpu.get(row * K + m);
+                    double sc = Math.max(1e-30, Math.max(Math.abs(a), Math.abs(g)));
+                    if (Math.abs(a - g) / sc > 1e-6 && Math.abs(a - g) > 1e-25) r.append(String.format(Locale.US, " row%d cpu=%.4e gpu=%.4e", row, a, g));
+                    mx = Math.max(mx, Math.abs(a - g) / sc);
+                }
+                System.out.printf(Locale.US, "  STERIC motor %d: E cpu %.3e gpu %.3e | Fz cpu %+.3e gpu %+.3e | maxRel %.2e%s%n", m,
+                        rcMir.get(42 * K + m), rcGpu.get(42 * K + m), rcMir.get(32 * K + m), rcGpu.get(32 * K + m), mx, r.toString());
+            }
         }
         boolean faithful = mxNode < 1e-6 && mxAng < 1e-6 && nanG == 0;
         log.append(String.format(Locale.US,

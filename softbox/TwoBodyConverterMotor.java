@@ -6333,6 +6333,9 @@ public final class TwoBodyConverterMotor {
     static final double EXP4G_KAX_REF_PNNM = 70.0;   // axial stretch stiffness of the L_ref=60 nm free S2 (lit 60–80)
     static final double EXP4G_KLAT_REF_PNNM= 0.01;   // lateral endpoint (bending) stiffness of the L_ref=60 nm free S2
     static final double EXP4G_LREF_NM      = 60.0;   // reference free-S2 length for the MD scaling
+    /** PROBE-ONLY discretization override for buildS2Mat (0 = the canonical L/EXP4G_L0_NM). EI and EA are continuum
+     *  constants (kb = EI/l0, ks = EA/l0), so changing M refines the SAME rod; used by S2TetherProbe -s2-segs. */
+    static int S2_SEGS_OVERRIDE = 0;
     static final double EXP4G_L0_NM        = 10.0;   // beam segment (discretization) length — fixed across L
     static final double EXP4G_RNODE_NM     = 5.0;    // beam-node Stokes drag radius (lumps a 10 nm segment; sets bending-explicit stability)
     static final double EXP4G_EA_SI        = EXP4G_KAX_REF_PNNM*1e-3 * EXP4G_LREF_NM*1e-9;                 // 4.2e-9 N
@@ -6960,7 +6963,7 @@ public final class TwoBodyConverterMotor {
         // the graph wires the task unconditionally, so give it the caller's dt rather than a default.
         if(rigidFil) G.fil.setChainParams(dt);
         G.cullMode=1; G.queryR=G4_QUERYR + Lnm*1e-3 + 0.01; initMatGrid(G);
-        int M=Math.max(1,(int)Math.round(Lnm/EXP4G_L0_NM)); double L=Lnm*1e-3, slack=slackNm*1e-3;
+        int M=S2_SEGS_OVERRIDE>0 ? S2_SEGS_OVERRIDE : Math.max(1,(int)Math.round(Lnm/EXP4G_L0_NM)); double L=Lnm*1e-3, slack=slackNm*1e-3;
         G.g4On=true; G.g4M=M; G.g4l0=L/M; G.g4ks=EXP4G_EA_SI/(G.g4l0*1e-6); G.g4kb=EXP4G_EI_SI/(G.g4l0*1e-6);
         G.g4gammaNode=6*Math.PI*Constants.aeta*(EXP4G_RNODE_NM*1e-9); G.g4Tan=G.bhat.clone(); G.g4kfloor=20.0*1e-3;
         G.g4Node=new double[Math.max(1,G.N)][][]; G.g4E=new double[Math.max(1,G.N)][];

@@ -1,0 +1,23 @@
+# PAIRS chain coefficients (fracMove, fracR, fracMoveTorq) by condition. Read by softbox.PairsTable (-pairs-table).
+#
+# Why a table: the chain law relaxes a fixed fraction per step, so its effective stiffness is k = f*gamma/dt and a
+# coefficient set tuned at one (eta, dt) does not transfer to another. With gamma proportional to eta, the discrete
+# chain map depends on the condition only through dt/eta (per-step spring move = f*strain; per-step Brownian move =
+# sqrt(2kT*dt/gamma)), so a row matches any (eta, dt) with the same dt/eta, at the same monomers per segment.
+# That is the scaled-dt invariance (CLAUDE.md, viscosity Stage 1). Lookup never interpolates: no matching row is an error.
+#
+# Columns (tab-separated):
+#   mono        monomers per segment (segLength = (mono+1)*actinMonoRadius); SiteNormal uses 64
+#   eta_Pa_s    viscosity at which the set was tuned
+#   dt_s        stepping dt at which it was tuned
+#   brown_dt_s  Brownian dt at tuning. SoftBox applies Brownian every step, so only rows with brown_dt_s == dt_s match
+#   fracMove fracR fracMoveTorq
+#   lp_target_um   tuning target
+#   lp_softbox_um  Lp measured in SoftBox (DiffusionHarness -lp ... -pairs-table) at this row's condition; '-' = not yet
+#   source         where the numbers came from
+#
+# mono	eta_Pa_s	dt_s	brown_dt_s	fracMove	fracR	fracMoveTorq	lp_target_um	lp_softbox_um	source
+64	1.0	1.0e-4	1.0e-5	0.4	0.134	0.013685	15	-	BoA ParameterFiles/boa10-64Seg (Brownian sub-stepped; not usable in SoftBox)
+128	1.0	1.0e-4	1.0e-4	0.4	0.14	0.0976	15	-	BoA ParameterFiles/boa10-128Seg
+64	0.1	1.25e-6	1.25e-6	0.0035	1.5	0.001	?	-	jba 2026-10-30 (BoA tuning; brown_dt assumed = dt)
+64	0.01	1.25e-7	1.25e-7	0.1	1.0	0.003	10	9.7	SoftBox thermal scan 2026-11-01: bare 24-seg chain, Gittes cosine modes 3-10 after equilibration (eq. dt 1.25e-6 at eta 0.1); fracR 1 per jba

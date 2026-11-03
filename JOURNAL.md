@@ -1,5 +1,160 @@
 # Soft Box Project Journal
 
+### 2026-11-03 — CANON V3: model promoted to main under a manifest; psi = -4 deg (Klebl 2025), eps = 0, capture fix
+
+**Why.** The current model (head chain, rate capture, flexible PAIRS chain, roll spring, swing tilt) lived only in
+the uncommitted, non-git copy `~/Code/SoftBox-pairs` (11 new + 9 modified sources vs `ecdcb05`), and realism
+features had repeatedly been dropped silently. jba: promote it to `main` and add a manifest plus checks.
+
+**Import, gated.** The SoftBox-pairs sources and `params/pairs_table.tsv` were copied into the repo. The repo build
+replays flexT lawn 02 bit-identically (step, twist and steric lines through step 10,000; `CANON_V3/import_T0`). The
+sibling copies are now read-only history.
+
+**Manifest (`softbox/ModelCanon.java`, rules in `docs/MODEL_CANON.md`).**
+- 48 rows (MODEL / FIXTURE / NUMERICS), each with its canonical value, a getter that reads the RESOLVED value
+  (after `cfg()`) and its basis.
+- The canonical preset is prepended to every `-run`/`-chain-equiv`. An undeclared deviation stops the run before any
+  wall-clock (tested: `-stroke-skew -1.25` refused).
+- `-deviate <id>` declares a deviation; `-canon none` gives the old behaviour.
+- A kernel cross-check confirms kappa 23.4, dock 512, psi and capture k_ori 22.38 as packed in hp/sbP.
+- The manifest goes into the log and `run_config.json`.
+- Opt-outs added for the canonical on-switches: `-no-head-chain`, `-no-rate-bind`, `-no-swivel-dock`,
+  `-no-head-floor`, `-no-f8-tip-fix`, `-no-rollspring`, `-no-pairs`.
+- Scripts: `scripts/canon_glide.sh` (canonical reference assay; campaign scripts pass assay conditions only) and
+  `scripts/canon_gate.sh`, a golden trajectory of lawn 02 over 10k steps, `fixtures/canon/v3_lawn02_10k.golden`.
+  The gate re-ran bit-identical (PASS).
+
+**Decisions (jba).**
+- **psi = -4 deg canonical.** Klebl et al. 2025 (Nature 642:519, actomyosin-5a 8R9V/8RBF): the lever swings ~93 deg
+  "predominantly along the actin axis, and is displaced azimuthally by only 4° right-handed"; "a small (4°)
+  right-handed component to the lever swing". Their separate 7 deg is the tip azimuth at full lever length,
+  including a 2.5 deg lever torsion. Our own measurement on the deposited models (actin-CA superposition,
+  screw-operator axis; only ~2 nm of lever modelled):
+  - total swing 88-92 deg;
+  - psi = asin|omega.u| = 4.5-6.4 deg from the lever-helix direction;
+  - ~2 deg from the converter's rigid-body rotation axis;
+  - a 2-6 deg bracket, so 4 deg is central.
+  Caveats: myosin-5a, not II (no myosin II measurement found); and because the converter axis is fixed in the head,
+  psi rotates the whole docked head about its long axis. Sign = left-handed, matching Beausang's myosin II, as an
+  input. **Open:** Klebl's swing is right-handed, and a screw's handedness does not change when the frame is
+  swapped, so the myosin-5a structure taken literally predicts a RIGHT-handed twirl (psi > 0 here). Raised with jba.
+  The twirl rate is reported, not fitted to Beausang.
+- **eps (stroke skew) = 0 canonical.** Retired as the chirality input; the conserved-core contacts do not move
+  (-0.2 deg).
+- **Capture bookkeeping fixed.** Rate capture scored the stroke axis against the bare filament axis, while the bound
+  dock targets the psi-turned axis. `RateBindSystem.rateGate` now stores the drawn site's target (u turned by psi
+  about the head-axis target; rbC rows 8-10, sbP[47]) and `rateCommit` scores against it. It is bit-identical at
+  psi = 0 (`-canon none` flexT replay identical through 10k steps). At psi = -10 the old error was ~0.09 kT per
+  attachment, absorbed by the hinge.
+
+**Bugs found on the way (fixed).**
+- **eps = 0 on the GPU lean path crashed** at the first frame (`TornadoInternalError: invalid variable`). `prevNuc`
+  is read only by the strokeSkew task but was in the demand-pull list, so with eps = 0 the device never allocated it.
+  It is now pulled only when strokeSkew is wired. Every earlier GPU run had eps != 0, so this was latent.
+- `run_config.json` was invalid JSON (`"mirror_sign": +1.0`). Fixed.
+- The banner's stale "filament ~2.106 um" was removed, and the POLARITY GATE line now says the gate is NOT USED
+  under rate capture with the dock.
+
+**CPU/GPU (kernel changed).** `-chain-equiv 5000` at canon (5x0.6 um, 4800 motors, full readback): **0 boundSeg / nucleotide decision mismatches over 6287 bound motor-steps; filament <= 1.09e-6 um**;
+head frame decorrelates through the documented chaotic free-roll mode (max|dhc| 1.98) -- the same acceptance as the head-chain
+port and psi = -10 (`CANON_V3/equiv_canon.log`).
+A first attempt with `-resident -leanreadback` compared stale host copies (dnodes 0.03 um at t=200 with no bound
+motors). Lesson: chain-equiv needs full readback.
+
+**Not decided / unchanged.** Rigor rupture stays OFF (open; decide before the low-ATP canon). The GPU "EXPERIMENTAL /
+bound-branch gate not green" banner is kept. Next: canonical psi = -4 lawns 02-04 (twirl rate reported), then low-ATP.
+
+### 2026-11-03 — SWING-PLANE TILT positive control: psi = -10 deg gives a steady LEFT-HANDED twirl on every lawn
+
+**Mechanism (new flag, SoftBox-pairs).** `-swing-tilt <deg>` sets the head-chain stroke-axis rotation `hp[3]`
+(`HeadChainSystem.siteCouple` rotates the dock target cT about aT by psi, mirror-coupled like eps). This tilts the plane
+of the lever swing off the filament axis, so each stroke gets a sideways component ~stroke*sin(psi). It is distinct from
+`-stroke-skew` (eps moves only the F8 anchor azimuth, R*eps ~0.08 nm/stroke) and from any bias of the pliant-hinge rest
+(rotation about c moves the tip perpendicular to c, so it gives no sideways stroke). Guard: refuses without `-head-chain`.
+Banner + run_config carry psi. CPU/GPU check (reduced lawn 5x0.6, 4800 motors): 0 boundSeg/nucleotide decision
+mismatches over 3360 bound-steps to t=4000, filament <= 4.8e-7 um; head frame decorrelates via the documented chaotic
+free-roll mode (as in the head-chain port acceptance). Log `campaigns_2026-11/SWING_TILT/equiv_psi-10.log`.
+
+**Design.** flexP = flexT + `-swing-tilt -10` and nothing else (flag diff checked; both carry the inherited
+`-stroke-skew -1.25`, `-rollspring -rollstiff 40`, `-pairs 0.1 1.0 0.003`, d1600, 24 segs, eta 0.01, no rupture,
+saturating ATP). Same three lawns, 0.3 s each, GPU device-resident, run one at a time (13 ms/step alone vs 36 with 3).
+psi = -10 deg is a deliberately large positive control, not a structural value.
+
+| lawn | flexT turns/um | flexP turns/um | paired d | flexP v (flexT) um/s | flexP avgBound (flexT) |
+|---|---|---|---|---|---|
+| 02 | +0.78 | +3.02 | +2.24 | 5.40 (4.95) | 10.6 (8.4) |
+| 03 | -0.99 | +3.23 | +4.22 | 5.92 (5.39) | 11.5 (10.9) |
+| 04 | -0.24 | +3.24* | +3.48* | (5.68) | (10.7) |
+\* lawn 04 provisional at t = 0.267 s (1.33 um glided, +4.31 turns); final values to follow.
+
+- **Resolved at the lawn level:** mean paired d = +3.3 +/- 0.6 turns/um (~5.8 sigma, n = 3); same sign on all lawns;
+  flexP lawn-to-lawn spread ~0.1 turns/um, against flexT's ~+/-0.9 (flexT's roll is quenched lawn noise). Rolls
+  accumulate steadily from ~0.03 s (probe phase monotone), where flexT wanders and jumps.
+- **Tilt, not engagement:** lawn 04 had FEWER bound heads than flexT at ~0.25 s (8.4 vs 10.7) and the same twirl.
+- **Gliding unharmed:** velocity within +/-0.5 um/s of flexT, 0 invalid / solver failures; height (lawn 03 middle
+  23-29 nm, lawn 04 middle 31-38 nm, ends higher) and Lp at modes 4-8 (9-19 um) as in flexT.
+- **So the current model is not roll-suppressed:** given a sideways stroke component it twirls; the eps scheme alone
+  does not supply one.
+
+**Handedness trace (probe readout).** `SiteNormalLongGlideHarness` probe `phase = atan2(n_z, n_y)` of the label's
+radial unit vector in the lab frame, i.e. the azimuth about +x measured +y -> +z. Increasing phase = angular velocity
+along +x (right-hand rule). The filament glides pointed-end first toward -x (frames: `glideAxis` "pointed-leading = -x";
+centroid x 1.00 -> -0.22 um on lawn 02). omega . v < 0 => the label traces a **LEFT-HANDED** helix. This matches the
+sign predicted for psi < 0 and Beausang 2008's left-handed twirl (94/97 twirlers). Per the standing posture
+(handedness is an input in this coarse model), the sign is set by the sign of psi, not predicted. The harness log
+`roll=` agrees with the probe (+4.83 vs +4.82 turns, lawn 02).
+
+**Scale, not a fit.** Assuming the response is linear in psi (untested: one psi), k ~0.33 turns/um/deg. Beausang's
+twirlers (0.47 +/- 0.19 um left-handed, ~2.1 turns/um) would correspond to psi ~6-7 deg; their all-filament average
+(2.7 um pitch, ~0.37 turns/um) to ~1 deg. Caveats: Beausang is whole skeletal myosin at low ATP, ours single-headed
+NMII-parameterised at saturating ATP and eta 0.01; every one of our filaments twirls, only ~20 % of theirs do. jba
+(2026-11-03): the numerical psi is for structural/MD work; the coarse model is not asked to supply it.
+
+Runs: `RUN_LOGS/motor_audit/campaigns_2026-10/RATE_GLIDE_D800/flexP_fil24_d1600_lawn0{2,3,4}`, viewer
+`threejs_rate_flexP_fil24_d1600_lawn0{2,3,4}`. Open: lawn 04 final; whether the twirl is linear in psi (a
+psi = -5 arm would test it); low-ATP several-second runs (awaiting jba's choices on [ATP], k_ATP, rupture).
+
+### 2026-11-02 — TRIAD vs DOCK: triad stays OFF (decision, jba); stroke skew verified unchanged; flexible chain tuned
+
+**Decision (jba): no contact-patch triad; the head-chain dock stays the bound actomyosin interface.** The triad
+(`-triad`, opt-in) was dropped silently on 2026-10-25 when `-head-chain` came in (only record: a comment in
+`CHAIN_GLIDE/queue.sh`, "full-frame dock replaces it"); found today. As wired the two are incompatible: the head-chain
+solve reads only the bond's net force at the F8 point (`HeadChainSystem.solve`), so a triad couple would act on the
+filament with no reaction on the head. A head-chain triad was built (`HeadChainSystem.triadBond`: contacts fixed in
+the head's material frame, head offsets derived from the actin points through the dock target frame => exactly
+strain-free at the stereospecific pose; geometry gate PASS, max |f| 6e-28 N over 4 azimuths x 2 sgnS x 3 tilts,
+rotational k 5.0 / 9.7 pN.nm/rad^2 at k_F8 2) and then BACKED OUT unrun, because the literature makes it redundant:
+- rigor heads have ONE stereospecific orientation, FWHM ~15 deg (Thomas & Cooke 1980, SH1 spin label) => by
+  equipartition kappa >~ 330 pN.nm/rad^2 (lower bound, our reduction). The dock's 512 is consistent with that.
+- the interface is effectively rigid in series: whole rigor head 1.7 pN/nm (Lewalle 2008), compliance in the
+  converter/lever (Seebohm 2009, via Caremani & Reconditi 2022); MD domain contacts 10^2-10^3 pN/nm (Baker & Voth 2013).
+- a triad of F8-split springs (k_F8 1.0 pN/nm here) adds only 2.6-5 pN.nm/rad^2 (~1 % of the dock); alone it would
+  leave the bound head ~70 deg rms. As a rigid interface (no dock) it needs 26-43 pN/nm per contact, which removes
+  the F8 series compliance and probably needs an implicit filament side: a project, not taken.
+- footprint from PDB 5JLH / 5H53 (our measurement): 5.4-6.4 nm axial, 56-68 deg azimuthal, contacts at r 3.6-3.8 nm,
+  two same-strand subunits (Fujii & Namba 2017); CM loop / HLH / loop 2 form a ~1.2-2.4 nm triangle.
+- 2026-09-12 (rigid rod, site latch 512): triad and single spring gave the same handed roll per eps (ratio 0.991).
+What is lost without the triad: only an explicit patch geometry; torque transmission is carried by the dock.
+
+**Stroke skew: same scheme as before.** `-stroke-skew` -> `EPS_STROKE_DEG` -> `ChiralSiteSystem.strokeSkew`
+(bindAzim += mirror*eps at ADP.Pi->ADP) is byte-identical to main and unchanged since 3769ff6; the surface bond reads
+bindAzim for the F8 anchor and the head-chain dock builds its target from it. So eps -1.25 IS active in every
+`-head-chain` run. The HEAD CHAIN banner's "stroke skew NOT applied" refers only to an unused head-chain stroke-axis
+rotation (hp[3] = 0). Other channels off: conv skew 0, registry inert, EPS_BIND 0, f8-tan 0.
+
+**Flexible filament (SoftBox-pairs `-pairs`).** BoA's deflection benchmark pins both ends, so it mostly measures link
+stretch, not bending (ratio 0.043 at fracMoveTorq 0.003 vs 0.046 at 0). Thermal tuning with Gittes cosine modes
+(`scripts/filament_modes.py`) on a bare 24-seg chain: {fracMove 0.1, fracR 1.0, fracMoveTorq 0.003} => Lp ~9.7 um
+(row in `params/pairs_table.tsv`). Energy per DOF: fracR 1 + rotational noise on all segments is equipartition-
+consistent; default noise (BRotCoeff ends, 0 interior) runs bending cold (0.69 kT/2 interior). Not changed.
+`flexT` gliding (d1600, 24 seg, 7x3 um, eps -1.25, rupture off, saturating ATP, 0.3 s, lawns 02/03/04): LS v
+4.95 / 5.39 / 5.68 um/s, avgBound 8.5 / 10.9 / 10.6, 0 invalid; Lp_n modes 4-8 8-14 um, smooth (lag-1 +0.27..+0.41);
+height: middle 24-32 nm, leading end 53-80 nm, trailing 37-62 nm. Roll +1.12 / -1.71 / -0.39 turns
+(+0.75 / -1.01 / -0.23 turns/um): no consistent sign.
+
+**Process rule adopted:** before any new campaign, diff its flags against the parent arm; removed or changed realism
+features go to jba as decisions, not script comments or table caveats.
+
 ### 2026-10-12 — low-ATP "jam" is a slow CREEP; anchors; k_ATP 5 at 20 uM glides in Beausang's range; twirl NOT resolved
 
 Handoff for a fresh session: `docs/twirling/HANDOFF_2026-10-12.md`. All runs SiteNormal GPU (experimental site-normal
@@ -32,6 +187,21 @@ would favour faster; no number found. DEFAULT UNCHANGED (2.4) -- jba decision pe
 ~0.73 turns^2/s (~1 turn rms in 0.77 s). If real it is ~11 turns/um, ~5x tighter than experiment. LEAD (unchecked): with
 ~25 heads bound the filament still rolls ~1 turn/s diffusively => bound heads barely restrain roll. Resolving 0.3 turns/s
 at 3 sigma needs ~150 s simulated; the mirror (eps sign) pair on the same lawns is the affordable test.
+**Roll NOISE is motor-set, not solvent-set (added 2026-10-12, later).** Roll diffusion D (MSD/2t after 0.1 s, turns^2/s):
+2 mM d400 (3 bound) 4-9; 20 uM k5 d400 (22-26 bound, 10.8 ms attachments) 0.3-2, typ. 0.7; 10 uM k5 d400 (34 bound)
+0.065; 10 uM k2.4 d400 variants (41-56 bound) 0.005-0.04; d800 (100 bound) 0.01-0.02. Free 2.1 um rod at eta 0.01:
+~30 turns^2/s (estimate, r = 3.5 nm assumed, unchecked) => bound heads CAGE the roll (D falls with lag at 10 uM); the
+earlier "bound heads barely restrain roll" lead is RETRACTED. Head count vs attachment time not separated (10 uM d200,
+26 bound: 0.01-0.02). Roll increments do not track forward increments (r from -0.7 to +0.6 in 50 ms blocks). Beausang's
+selection (near-constant omega, >=180 deg, >=1.6 s) implies D <~ 0.01 turns^2/s, i.e. the many-heads regime.
+**Lower-noise twirl options (jba prefers long runs over short mirror pairs):** (1) more heads bound for longer -- longer
+filament, higher density; (2) mirror pair on the same lawns; (3) roll-clamp torque + measured roll mobility; (4)
+two-headed myosin (model change). Precision on turns/um after 5 s, one lawn: ~+-1.3 at 10 uM k2.4, ~+-3.8 at 20 uM k5
+d400, vs Beausang ~2. 5 s = 40M steps ~ 44 h alone.
+**QUEUED (detached, survives the session):** `TWIRL_SWIVEL/long4um_d600_katp5_atp20/queue.sh` -- 4.212 um rigid rod
+(`-filsegs 1 -rigid-len-segs 24 -filx 0.5`; the length flag is IGNORED without the explicit `-filsegs 1 -filx`),
+d600, 20 uM, k5, rupture off, 2.0 s (16M steps), seeds 20260901..04, two at a time (01+02, then 03+04); re-running the
+script skips finished lawns and resumes unfinished ones (backs up outputs first). Started 2026-10-12 12:39 PDT.
 **Infrastructure.** (1) HOST OOM: four concurrent long runs grow to ~8 GB each (-Xmx12G) on the 31 GB host; the kernel
 killed lawn 01 (exit 137) at 0.40 s. Run <= 3 at once or find the growth. (2) GPU throughput is shared: 1 run ~250
 steps/s, 4 runs ~90 each, 7 runs ~50 each -- concurrency buys nothing. (3) `-resume` works but REWRITES

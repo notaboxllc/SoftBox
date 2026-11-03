@@ -58,6 +58,9 @@ public final class DiffusionHarness {
     // device transfers) instead of the GPU TaskGraph. Dev/debug validation mode; the GPU
     // production path is untouched (cpu=false leaves every code path byte-for-byte as before).
     static boolean cpu = false;
+    static boolean energyTally = false;  // -energy: per-DOF implied-energy equipartition tally in -chain runs
+    static double rotAll = Double.NaN;   // -rotall <scale>: chain rotational Brownian scale on EVERY segment (1 = FDT); default v1 (ends BRotCoeff, interior 0)
+    static String pairsTable = null;   // -pairs-table [file]: PAIRS coefficients by (monomers, dt/eta)
     // Lp-chain defaults (match v1: monomerCt=32, ~48 µm contour). alpha matched to v1 -pf for x-val.
     static final int LP_NSEG = 539, LP_STEPS = 60000, LP_CAD = 50;
     static double RELAX_TAU = 5.0;   // -relax <n>: load phase runs n relaxation times
@@ -85,9 +88,15 @@ public final class DiffusionHarness {
                 FilamentStore.OV_FRACMOVE = Double.parseDouble(args[++i]);
                 FilamentStore.OV_FRACR    = Double.parseDouble(args[++i]);
                 FilamentStore.OV_FMT      = Double.parseDouble(args[++i]); }
+            else if (args[i].equals("-pairs-table")) {   // look up (fracMove, fracR, fracMoveTorq) by (monomers, dt/eta)
+                pairsTable = (i + 1 < args.length && !args[i + 1].startsWith("-")) ? args[++i] : PairsTable.DEFAULT_FILE; }
+            else if (args[i].equals("-energy")) { energyTally = true; }
+            else if (args[i].equals("-rotall")) { rotAll = Double.parseDouble(args[++i]); }
             else if (args[i].equals("-cpu")) { cpu = true; }
             else pos.add(args[i]);
         }
+        if (pairsTable != null)
+            System.out.println("PAIRS chain: -pairs-table " + pairsTable + ": " + PairsTable.install(pairsTable, monoCt(), Constants.aeta, dt));
         if (characterize) { runCharacterize(dt); return; }
         if (lpOnly) {
             int nSeg = pos.size() >= 1 ? Integer.parseInt(pos.get(0)) : LP_NSEG;
@@ -572,7 +581,7 @@ public final class DiffusionHarness {
             //   rotationally would make adjacent joints zigzag (2a-FIX). End segments get
             //   BRotCoeff=0.5 (v1 default, Env.java:583) — the 2b fidelity fix (was 1.0).
             boolean interior = (k > 0 && k < nSeg - 1);
-            s.brownRotScale.set(k, interior ? 0f : (float) Constants.BRotCoeff);
+            s.brownRotScale.set(k, !Double.isNaN(rotAll) ? (float) rotAll : interior ? 0f : (float) Constants.BRotCoeff);
             // wire topology (no storage reshape): my end2 -> next.end1 (side 0); my end1 -> prev.end2 (side 1)
             if (k < nSeg - 1) { s.end2NbrSlot.set(k, k + 1); s.end2NbrSide.set(k, 0); }
             if (k > 0)        { s.end1NbrSlot.set(k, k - 1); s.end1NbrSide.set(k, 1); }
@@ -607,9 +616,14 @@ public final class DiffusionHarness {
         fw.writeFrame(s, 0.0);
 
         int frame = 0;
+        double[][] eAcc = new double[nSeg - 1][3]; int eN = 0;   // -energy: per joint {axial link, transverse link, bend} implied energy sums
         for (int step = 0; step < chainM; step++) {
             s.counts.set(1, step);
             stepper.execute();
+            if (energyTally && step >= chainM / 2 && (step + 1) % 1000 == 0) {
+                stepper.pull(s.coord, s.uVec);
+                jointEnergies(s, nSeg, dt, eAcc); eN++;
+            }
             if ((step + 1) % cad == 0) {
                 stepper.pull(s.coord, s.uVec);
                 if (hasNaN(s, nSeg)) { nan = true; break; }
@@ -623,6 +637,7 @@ public final class DiffusionHarness {
             }
         }
         double bendRms = bendCnt > 0 ? Math.sqrt(bendSumSq / bendCnt) : 0;
+        if (energyTally && eN > 0) reportEnergies(eAcc, eN, nSeg);
 
         // Stationarity: late-window mean gap must not exceed the post-transient middle window
         // (a slow detachment grows; a healthy thermal joint is stationary). Skip the first quarter
@@ -652,6 +667,53 @@ public final class DiffusionHarness {
             System.out.println("BAIL-OUT: connectivity check failed — suspect the end*NbrSide decode (A1 trap). Commit nothing.");
             System.exit(1);
         }
+    }
+
+    /**
+     * -energy: implied energy per degree of freedom at each joint, from the stiffness the PAIRS law applies at that
+     * instant (ChainBendingForceSystem.chainForces). Link spring k = fracMove / (dt * moveC), moveC = summed mobility of
+     * the two link points along the strain direction: axial uses the parallel drags, transverse the perpendicular drags
+     * plus the rotational lever L^2/(4 gamma_rot). Bending k_b = fracMoveTorq / (dt * (1/gr_i + 1/gr_j)) per radian.
+     * Equipartition (an energy-derived force with matched noise) predicts 1/2 kT per component: axial 1, transverse 2,
+     * bend 2. Diagnostic only; nothing feeds back into the dynamics.
+     */
+    private static void jointEnergies(FilamentStore s, int nSeg, double dt, double[][] acc) {
+        int N = s.n;
+        double fm = s.chainParams.get(1), fmt = s.chainParams.get(3), r = Constants.actinMonoRadius;
+        for (int i = 0; i < nSeg - 1; i++) {
+            int j = i + 1;
+            double hi = 0.5 * s.segLength.get(i), hj = 0.5 * s.segLength.get(j);
+            double ux = s.uVecX(i), uy = s.uVecY(i), uz = s.uVecZ(i), vx = s.uVecX(j), vy = s.uVecY(j), vz = s.uVecZ(j);
+            double lx = s.coordX(i) + (hi - r) * ux, ly = s.coordY(i) + (hi - r) * uy, lz = s.coordZ(i) + (hi - r) * uz;   // link point on i
+            double px = s.coordX(j) - hj * vx, py = s.coordY(j) - hj * vy, pz = s.coordZ(j) - hj * vz;                     // j's end1 tip
+            double dx = (px - lx) * 1e-6, dy = (py - ly) * 1e-6, dz = (pz - lz) * 1e-6;                                 // metres
+            double da = dx * ux + dy * uy + dz * uz;
+            double dt2 = dx * dx + dy * dy + dz * dz - da * da;
+            double gxi = s.bTransGam.get(i), gxj = s.bTransGam.get(j), gyi = s.bTransGam.get(N + i), gyj = s.bTransGam.get(N + j);
+            double gri = s.bRotGam.get(N + i), grj = s.bRotGam.get(N + j);
+            double Li = 1e-6 * s.segLength.get(i), Lj = 1e-6 * s.segLength.get(j);
+            double kA = fm / (dt * (1 / gxi + 1 / gxj));
+            double kT_ = fm / (dt * (1 / gyi + Li * Li / (4 * gri) + 1 / gyj + Lj * Lj / (4 * grj)));
+            double c = Math.max(-1, Math.min(1, ux * vx + uy * vy + uz * vz));
+            double cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+            double th = ChainBendingForceSystem.angleFromSinCos(cx * cx + cy * cy + cz * cz, c);
+            double kB = fmt / (dt * (1 / gri + 1 / grj));
+            acc[i][0] += 0.5 * kA * da * da; acc[i][1] += 0.5 * kT_ * dt2; acc[i][2] += 0.5 * kB * th * th;
+        }
+    }
+
+    private static void reportEnergies(double[][] acc, int n, int nSeg) {
+        double h = 0.5 * Constants.kT; int[] comps = {1, 2, 2}; String[] nm = {"link axial (1)", "link transverse (2)", "bend (2)"};
+        System.out.printf("  ENERGY per component / (1/2 kT), %d samples (2nd half, every 1000 steps); 1.00 = equipartition%n", n);
+        for (int t = 0; t < 3; t++) {
+            double ends = (acc[0][t] + acc[nSeg - 2][t]) / (2.0 * n * comps[t] * h), in = 0;
+            for (int i = 1; i < nSeg - 2; i++) in += acc[i][t];
+            in /= ((nSeg - 3) * (double) n * comps[t] * h);
+            System.out.printf("    %-20s interior joints %7.3f   end joints %7.3f%n", nm[t], in, ends);
+        }
+        StringBuilder b = new StringBuilder("    bend profile (joint 0..): ");
+        for (int i = 0; i < nSeg - 1; i++) b.append(String.format(java.util.Locale.US, "%.2f ", acc[i][2] / (n * 2 * h)));
+        System.out.println(b);
     }
 
     private static double windowMean(java.util.List<Double> v, int from, int to) {

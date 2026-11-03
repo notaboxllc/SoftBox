@@ -86,7 +86,7 @@ public final class RollSpringSystem {
     }
 
     /** Roll of the HIGHER-slot segment's yVec (fy) about the OWNER axis (ou, oy) — signed angle in (−π,π]. */
-    private static double rollAngle(double oux, double ouy, double ouz, double oyx, double oyy, double oyz,
+    static double rollAngle(double oux, double ouy, double ouz, double oyx, double oyy, double oyz,
                                     double fyx, double fyy, double fyz) {
         // owner z = u × y (normalized; owner frame is orthonormal after DerivedGeometry, but normalize for safety)
         double ozx = ouy * oyz - ouz * oyy, ozy = ouz * oyx - oux * oyz, ozz = oux * oyy - ouy * oyx;

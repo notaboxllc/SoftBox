@@ -236,6 +236,20 @@ inferred from our own model?); if it improves a number, WHY, and is that why som
 does it cost in steps/s, dt and memory; and is this a structural CHOICE to be justified, or a parameter being
 FITTED to an assay? Prefer choice.
 
+## MODEL CANON — the site-normal gliding/twirl model is locked by a manifest (canon v3, 2026-11-03)
+**Source of truth: `softbox/ModelCanon.java`; rules: `docs/MODEL_CANON.md`.** Every `-run`/`-chain-equiv` of
+`SiteNormalLongGlideHarness` starts from the canonical preset, checks every manifest row against the values the run
+actually resolved (after `cfg()`), and **refuses to start on an undeclared deviation** (`-deviate <id>[,<id>]` to
+declare; `-canon none` = old behaviour, prints NON-CANONICAL). The manifest is printed in every log and written to
+`run_config.json` (`"canon"`). Canonical runs: `scripts/canon_glide.sh <lawn> <out> [assay flags]` (pass assay
+CONDITIONS only, never model flags). **After any edit to `softbox/` run `scripts/canon_gate.sh`** (golden trajectory,
+10k steps, bit-identical on this GPU/toolchain). **A model change is a jba decision:** edit/add the row, bump
+`ModelCanon.VERSION`, `canon_gate.sh -record`, journal it. A feature with no row is not part of the model; removing a
+row is a decision, never a side effect. v3 = head chain + rate capture + flexible PAIRS chain + roll spring, swing-plane
+tilt psi = -4 deg (Klebl 2025), eps = 0, capture scored against the psi-turned target. The model was promoted from the
+uncommitted `~/Code/SoftBox-pairs` copy to `main` on 2026-11-03; the sibling copies (SoftBox-dock/-weak/-weak-ep/-pairs)
+are read-only history.
+
 ## Increment sequence (proposed — increment 1 is the agreed ungated start; 2+ are provisional)
 0. Scaffold — dir, repo, frozen-v1 worktree, docs. **(done)**
 1. **Filament slice** — FilSegment component arrays + rigid-rod overdamped Langevin integration
