@@ -1,6 +1,6 @@
 # Model canon — the site-normal gliding / twirling model
 
-**Current: canon v3 (2026-11-03).** Source of truth: `softbox/ModelCanon.java`. This document gives the rules and
+**Current: canon v4 (2026-11-03).** Source of truth: `softbox/ModelCanon.java`. This document gives the rules and
 the reasons behind them. The table in the code is authoritative; this file never restates its values except in the
 version history below.
 
@@ -67,6 +67,18 @@ with jba (memory: never-silently-drop-features).
 
 ## Version history
 
+### v4 — 2026-11-03 (ψ sign from structure)
+
+- **ψ = +4°** (right-handed swing), was −4°. Decision by jba after the sign check under v3 below: both the myosin-5a
+  structure (Klebl; our 8R9V→8RBF measurement) and the docked myosin II structures (Beausang 2008) give a
+  right-handed swing. Both isoforms twirl left-handed in experiment.
+- **Twirl handedness is now an OUTPUT.** If the model twirls right-handed, it is reported as such: the swing tilt alone
+  does not account for the observed left-handed twirl, and another mechanism is missing. This is Beausang's own
+  conclusion. Their candidates are drag from rigor heads and step size relative to the actin helix.
+- Supersedes the 2026-10-08 ruling that handedness is an input, for the swing-tilt mechanism.
+- Golden re-recorded (`fixtures/canon/v4_lawn02_10k.golden`); gate PASS. Nothing else changed.
+- Reference lawns 02–04: `RUN_LOGS/motor_audit/campaigns_2026-11/CANON_V4/`.
+
 ### v3 — 2026-11-03 (first manifest; model promoted to `main`)
 
 The model was imported from the uncommitted `~/Code/SoftBox-pairs` working copy. The import was gated bit-identical to
@@ -88,9 +100,19 @@ Decided in v3:
     converter axis is fixed in the head, ψ rotates the whole docked head about its long axis.
   - **Sign:** the sign is an input (handedness is not predicted by this model; jba 2026-10-08). −4° gives the
     left-handed twirl seen for myosin II (Beausang 2008).
-  - **Open:** Klebl's swing is right-handed. A right-handed screw stays right-handed when the frame is swapped, so
-    the myosin-5a structure taken literally predicts a right-handed twirl, i.e. ψ > 0 in our convention. This is
-    raised with jba.
+  - **Sign checked (2026-11-03): the canonical sign is opposite to the structures.**
+    - Model: in the dock frame (`HeadChainSystem.siteCouple`), ψ < 0 turns the stroke axis so that
+      s·(u×n) < 0, a left-handed swing. That matches the measured left-handed twirl at ψ = −10°.
+    - Structure: on 8R9V→8RBF in the same frame, the lever tip moves +53 Å axially and +5.9 Å along u×n. That is a
+      right-handed swing, ψ ≈ +4.5 to +6.4°, which agrees with Klebl. The screw sense does not depend on which way
+      the polarity of u is assigned.
+    - Myosin II: Beausang 2008 (*Biophys J* 95:5820) says the docked myosin II structures move Lys843 "with a slight
+      (~20º) right-handed tilt", that "a tilt in the other direction would be required" for the left-handed twirl
+      they measured for myosin II (pitch 0.47 µm) and myosin V (1.7 µm), and so the twirl "is not explained by the
+      path of the power stroke". They also report only weak coupling between linear and angular velocity.
+    - So it is not an isoform difference: both isoforms have a right-handed swing and both twirl left-handed. Klebl
+      supports the *size* of ψ, not the left-handed sign. At −4° the canonical sign is a phenomenological input.
+      Decision with jba.
   - **Twirl is reported, not matched.** We compare with Beausang but do not fit to it.
 - **Stroke skew ε = 0** (`-stroke-skew`). Retired as a chirality input. The conserved-core contacts of 8R9V/8RBF do
   not move (−0.2°; docs/twirl/ACTIN_SITE_LATTICE_LITERATURE_BASIS.md). Under the head chain it gave no resolved

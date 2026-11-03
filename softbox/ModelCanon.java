@@ -33,11 +33,12 @@ import java.util.function.Supplier;
  * the RUNNER (GPU flags) are recorded but not checked: they are what a campaign varies.
  */
 final class ModelCanon {
-    static final String VERSION = "v3";
+    static final String VERSION = "v4";
     static final String DATE = "2026-11-03";
 
-    /** CANON V3 swing-plane tilt (deg). Sign = left-handed twirl (an input in this coarse model, not a prediction). */
-    static final double PSI_DEG = -4.0;
+    /** CANON V4 swing-plane tilt (deg). Sign from structure: right-handed swing (Klebl 2025; 8R9V->8RBF measured +4.5..6.4,
+     *  jba 2026-11-03). The twirl handedness is now an OUTPUT; Beausang 2008 measures left-handed for myosin II and V. */
+    static final double PSI_DEG = 4.0;
 
     static boolean ACTIVE = true;                       // -canon none => false
     static final Set<String> DEVIATE = new TreeSet<>();  // -deviate id,id,...
@@ -77,7 +78,7 @@ final class ModelCanon {
         new Row("f8_tip_fix", Kind.MODEL, "on", () -> on(ExplicitCompleteMatHarness.F8_TIP_FIX),
                 "bond acts at the geometric F8 tip (7 nm), not 20 nm HEAD_LEN"),
         new Row("swing_tilt_deg", Kind.MODEL, g(PSI_DEG), () -> g(ExplicitCompleteMatHarness.SWING_TILT_DEG),
-                "lever swing plane off the actin axis; Klebl 2025 (Nature 642:519) azimuthal lever displacement ~4 deg"),
+                "lever swing plane off the actin axis, right-handed; Klebl 2025 (Nature 642:519) 4 deg right-handed; sign from structure (v4)"),
         new Row("stroke_skew_deg", Kind.MODEL, "0", () -> g(SiteNormalLongGlideHarness.STROKE_SKEW_DEG),
                 "eps anchor shift retired (jba 2026-11-03); 8R9V/8RBF conserved-core contacts do not move (-0.2 deg)"),
         new Row("binding_skew_deg", Kind.MODEL, "0", () -> g(ExplicitCompleteMatHarness.EPS_BIND_DEG), "no chiral input at binding"),

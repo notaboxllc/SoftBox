@@ -1,0 +1,14 @@
+  ===== MODEL MANIFEST canon v4 (2026-11-03) : CANONICAL PRESET =====
+  MANIFEST KERNEL CHECK: kappa 23.4, dock 512, psi +4.00 deg, capture k_ori 22.38 pN.nm/rad^2 -- as packed
+  step    2000  t=0.0003 s    forward=-0.0059 um  |d|=0.0083  v_fit=-34.799  v_win=-34.799 um/s  avgBound=0.245 (now 1, max 1)  cap=1  det=0  strokes=1  active=0  inv=0/solv=0    ang=-0.0 deg roll=-0.0375 turns e2e=4.157 bend=4.7 z=[-0.0048,0.0255]
+    steric: motors in contact 0  sum Fz on filament +0.000 pN  Fx +0.000 pN  E 0.00 kT  | filament axis z 12.5 nm above lawn
+    twist: joint twist vs rest rms 1.46 deg  max 4.63 deg  end-to-end excess -20.91 deg
+  step    4000  t=0.0005 s    forward=-0.0041 um  |d|=0.0092  v_fit=+3.186  v_win=+3.186 um/s  avgBound=2.271 (now 5, max 6)  cap=7  det=2  strokes=4  active=0  inv=0/solv=0    ang=-0.3 deg roll=-0.0279 turns e2e=4.154 bend=5.8 z=[-0.0048,0.0382]
+    steric: motors in contact 0  sum Fz on filament +0.000 pN  Fx +0.000 pN  E 0.00 kT  | filament axis z 15.2 nm above lawn
+    twist: joint twist vs rest rms 1.01 deg  max 2.64 deg  end-to-end excess +4.87 deg
+  step    6000  t=0.0008 s    forward=+0.0013 um  |d|=0.0144  v_fit=+2.961  v_win=+2.961 um/s  avgBound=4.058 (now 8, max 9)  cap=12  det=4  strokes=9  active=0  inv=0/solv=0    ang=-0.4 deg roll=+0.0017 turns e2e=4.138 bend=4.9 z=[-0.0048,0.0382]
+    steric: motors in contact 0  sum Fz on filament +0.000 pN  Fx +0.000 pN  E 0.00 kT  | filament axis z 21.3 nm above lawn
+    twist: joint twist vs rest rms 1.32 deg  max 3.70 deg  end-to-end excess +1.17 deg
+  step    8000  t=0.0010 s    forward=+0.0019 um  |d|=0.0128  v_fit=+8.650  v_win=+8.650 um/s  avgBound=5.976 (now 13, max 13)  cap=18  det=5  strokes=18  active=0  inv=0/solv=0    ang=-0.5 deg roll=+0.0418 turns e2e=4.148 bend=4.6 z=[-0.0048,0.0382]
+    steric: motors in contact 0  sum Fz on filament +0.000 pN  Fx +0.000 pN  E 0.00 kT  | filament axis z 18.7 nm above lawn
+    twist: joint twist vs rest rms 1.89 deg  max 4.56 deg  end-to-end excess -3.62 deg

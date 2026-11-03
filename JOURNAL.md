@@ -1,5 +1,30 @@
 # Soft Box Project Journal
 
+### 2026-11-03 — CANON V4: psi = +4 deg, sign taken from structure; twirl handedness is now an output
+
+**Sign check (no sign error).**
+- Model: in `HeadChainSystem.siteCouple`, psi < 0 gives s.(u x n) < 0, a left-handed swing. That matches the
+  left-handed twirl measured at psi = -10 (flexP).
+- 8R9V -> 8RBF, same frame: the lever tip moves +53 A axially and +5.9 A along u x n, a RIGHT-handed swing,
+  psi = +4.5..6.4 deg. This agrees with Klebl 2025 ("4 deg right-handed") and does not depend on the polarity assigned to u.
+- Beausang 2008 (BJ 95:5820) made the same argument: the docked myosin II swing is ~20 deg right-handed (Lys843), yet
+  myosin II and V twirl left-handed (0.47 / 1.7 um pitch), so the twirl "is not explained by the path of the power
+  stroke". They also report only weak coupling between linear and angular velocity.
+- So this is not a difference between isoforms. At -4 deg, the v3 sign was a structural feature with its sign inverted.
+
+**Decision (jba).** Follow the structure: psi = +4 deg, canon v4. The twirl is reported as it comes out. A right-handed
+twirl would mean the swing tilt alone does not explain the experimental twirl.
+
+**Done.**
+- `ModelCanon` VERSION v4, PSI_DEG +4.
+- Golden `fixtures/canon/v4_lawn02_10k.golden` recorded; gate re-run PASS (bit-identical). The manifest kernel
+  check reads psi +4.00.
+- Lawns 02 -> 03 -> 04 launched sequentially (`CANON_V4/queue.sh`, 2.4M steps each, ~14 ms/step, ~9.3 h per lawn).
+- Linear expectation from flexP (k ~ 0.33 turns/um/deg): about -1.3 turns/um, i.e. right-handed. This is NOT a gate:
+  flexT at psi = 0 was +0.78 / -0.99 / -0.24, so a +4 deg effect is near the per-lawn noise.
+
+**Open.** Rigor rupture is still off (decide before the low-ATP canon). Not committed; main is unpushed.
+
 ### 2026-11-03 — CANON V3: model promoted to main under a manifest; psi = -4 deg (Klebl 2025), eps = 0, capture fix
 
 **Why.** The current model (head chain, rate capture, flexible PAIRS chain, roll spring, swing tilt) lived only in
