@@ -84,13 +84,13 @@ psi = -10 deg is a deliberately large positive control, not a structural value.
 |---|---|---|---|---|---|
 | 02 | +0.78 | +3.02 | +2.24 | 5.40 (4.95) | 10.6 (8.4) |
 | 03 | -0.99 | +3.23 | +4.22 | 5.92 (5.39) | 11.5 (10.9) |
-| 04 | -0.24 | +3.24* | +3.48* | (5.68) | (10.7) |
-\* lawn 04 provisional at t = 0.267 s (1.33 um glided, +4.31 turns); final values to follow.
+| 04 | -0.24 | +3.14 | +3.38 | 4.97 (5.68) | 8.6 (10.7) |
+(lawn 04 final: 0.3 s, 1.50 um glided, +4.72 turns.)
 
-- **Resolved at the lawn level:** mean paired d = +3.3 +/- 0.6 turns/um (~5.8 sigma, n = 3); same sign on all lawns;
+- **Resolved at the lawn level:** mean paired d = +3.28 +/- 0.57 turns/um (5.7 sigma, n = 3); same sign on all lawns;
   flexP lawn-to-lawn spread ~0.1 turns/um, against flexT's ~+/-0.9 (flexT's roll is quenched lawn noise). Rolls
   accumulate steadily from ~0.03 s (probe phase monotone), where flexT wanders and jumps.
-- **Tilt, not engagement:** lawn 04 had FEWER bound heads than flexT at ~0.25 s (8.4 vs 10.7) and the same twirl.
+- **Tilt, not engagement:** lawn 04 had FEWER bound heads than flexT (8.6 vs 10.7) and the same twirl.
 - **Gliding unharmed:** velocity within +/-0.5 um/s of flexT, 0 invalid / solver failures; height (lawn 03 middle
   23-29 nm, lawn 04 middle 31-38 nm, ends higher) and Lp at modes 4-8 (9-19 um) as in flexT.
 - **So the current model is not roll-suppressed:** given a sideways stroke component it twirls; the eps scheme alone
@@ -111,7 +111,7 @@ NMII-parameterised at saturating ATP and eta 0.01; every one of our filaments tw
 (2026-11-03): the numerical psi is for structural/MD work; the coarse model is not asked to supply it.
 
 Runs: `RUN_LOGS/motor_audit/campaigns_2026-10/RATE_GLIDE_D800/flexP_fil24_d1600_lawn0{2,3,4}`, viewer
-`threejs_rate_flexP_fil24_d1600_lawn0{2,3,4}`. Open: lawn 04 final; whether the twirl is linear in psi (a
+`threejs_rate_flexP_fil24_d1600_lawn0{2,3,4}`. Open: whether the twirl is linear in psi (a
 psi = -5 arm would test it); low-ATP several-second runs (awaiting jba's choices on [ATP], k_ATP, rupture).
 
 ### 2026-11-02 — TRIAD vs DOCK: triad stays OFF (decision, jba); stroke skew verified unchanged; flexible chain tuned
