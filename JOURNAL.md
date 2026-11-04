@@ -1,5 +1,21 @@
 # Soft Box Project Journal
 
+### 2026-11-03 (later) — CANON V5: k_ATP = 5 /uM/s; low-ATP condition 20 uM; first low-ATP pilots on the current model
+
+**Decision (jba).** 20 uM ATP, the top of Beausang's 5-20 uM, and k_ATP 5 /uM/s.
+- Evidence (JOURNAL 2026-10-12): Capitanio 2012 raw data (PMC6565606), single-molecule fast skeletal myosin at 15 uM,
+  76 /s at zero load; vs 2.4 for solution acto-S1 (Ritchie 1993).
+- Canon v5: preset `-atp-k 5`, row 5. The v5 golden's step, twist and steric lines are identical to v4 (k_ATP is inert at
+  saturating ATP).
+- The running v4 saturating queue: lawn 02 is on the v4 binary; lawns 03 and 04 will start on v5. The physics is
+  identical at saturating ATP, but their manifest will read v5.
+
+**Pilot 10 uM / k 2.4 (old rate), d1600, lawn 02, 160k steps (20 ms).** Bound heads climbed 9 -> 189 and were still
+rising (cap 233, det 44). Forward travel was +7 nm; v_win fell 3.5 -> 0.35 um/s. Not at steady state, but heading for a
+rigor jam: each head waits ~40 ms for ATP. Cost: 23 ms/step sharing the GPU.
+**Pilots now running:** 20 uM / k 5 (atpOn 100 /s) at d400 and d1600, lawn 02, 480k steps (60 ms), sharing the GPU
+with the queue (~30 ms/step).
+
 ### 2026-11-03 — CANON V4: psi = +4 deg, sign taken from structure; twirl handedness is now an output
 
 **Sign check (no sign error).**

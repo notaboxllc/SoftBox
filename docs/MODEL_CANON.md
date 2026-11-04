@@ -1,6 +1,6 @@
 # Model canon — the site-normal gliding / twirling model
 
-**Current: canon v4 (2026-11-03).** Source of truth: `softbox/ModelCanon.java`. This document gives the rules and
+**Current: canon v5 (2026-11-03).** Source of truth: `softbox/ModelCanon.java`. This document gives the rules and
 the reasons behind them. The table in the code is authoritative; this file never restates its values except in the
 version history below.
 
@@ -66,6 +66,17 @@ Before launching any new arm, diff its flags against the parent arm. Any feature
 with jba (memory: never-silently-drop-features).
 
 ## Version history
+
+### v5 — 2026-11-03 (ATP binding rate from single-molecule data)
+
+- **k_ATP = 5 /µM/s**, was 2.4. Decision by jba, first raised in JOURNAL 2026-10-12.
+  - **Basis:** Capitanio 2012 raw data (PMC6565606), single-molecule fast skeletal myosin at 15 µM ATP: detachment
+    76 /s at zero load, so about 5 /µM/s, flat under assisting load. 2.4 was solution acto-S1 (Ritchie 1993 via
+    Deacon 2012). Beausang's 25 mM KCl would, if anything, favour faster.
+  - Set through the preset (`-atp-k 5`), so `ChiralSiteHarness` campaign defaults and their record ids are unchanged.
+- **Used only with `-atp-uM`.** At saturating ATP (frozen 2e4 /s) it is inert. The v5 golden's step, twist and steric
+  lines are identical to v4's; only the manifest lines differ.
+- Low-[ATP] reference condition chosen by jba: 20 µM (atpOn 100 /s), the top of Beausang's 5–20 µM.
 
 ### v4 — 2026-11-03 (ψ sign from structure)
 

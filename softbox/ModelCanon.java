@@ -33,7 +33,7 @@ import java.util.function.Supplier;
  * the RUNNER (GPU flags) are recorded but not checked: they are what a campaign varies.
  */
 final class ModelCanon {
-    static final String VERSION = "v4";
+    static final String VERSION = "v5";
     static final String DATE = "2026-11-03";
 
     /** CANON V4 swing-plane tilt (deg). Sign from structure: right-handed swing (Klebl 2025; 8R9V->8RBF measured +4.5..6.4,
@@ -47,7 +47,7 @@ final class ModelCanon {
 
     /** Canonical flags, prepended to the user's command line. Everything else canonical is already a code default. */
     static final String[] PRESET = {
-            "-eta", "0.01", "-dt", "1.25e-7",
+            "-eta", "0.01", "-dt", "1.25e-7", "-atp-k", "5",
             "-head-chain", "-swing-tilt", String.valueOf(PSI_DEG), "-stroke-skew", "0",
             "-rate-bind", "1e6", "-swivel-dock", "-head-floor", "-f8-tip-fix",
             "-stroke-window", "-115,-45", "-convaz-nocomp",
@@ -108,8 +108,8 @@ final class ModelCanon {
         new Row("release_tau_us", Kind.MODEL, "30", () -> g(SiteNormalLongGlideHarness.RELEASE_TAU_US), "catch-slip reads a 30 us bond-force average (2026-10-27)"),
         new Row("rigor_rupture", Kind.MODEL, "off", () -> on(ChiralSiteHarness.RUPTURE),
                 "OPEN (jba): off in every glide/twirl run since the head chain; decide before low-ATP canon"),
-        new Row("atp_k_per_uM_s", Kind.MODEL, "2.4", () -> ChiralSiteHarness.ATP_LEGACY_LINEAR ? "legacy-linear" : g(ChiralSiteHarness.ATP_K_PER_UM_S),
-                "acto-S1 ATP binding, Ritchie 1993 via Deacon 2012 (used only with -atp-uM)"),
+        new Row("atp_k_per_uM_s", Kind.MODEL, "5", () -> ChiralSiteHarness.ATP_LEGACY_LINEAR ? "legacy-linear" : g(ChiralSiteHarness.ATP_K_PER_UM_S),
+                "single-molecule fast skeletal myosin, Capitanio 2012 raw data (PMC6565606): 76 /s at 15 uM, zero load (v5; was 2.4 solution acto-S1, Ritchie 1993); used only with -atp-uM"),
         new Row("s2_catch", Kind.MODEL, "1 1", () -> g(SiteNormalLongGlideHarness.S2_CATCH) + " " + g(SiteNormalLongGlideHarness.S2_LOADCATCH), "inert"),
         // ---- motor body, S2, lawn
         new Row("motor_steric", Kind.MODEL, "off", () -> on(ExplicitCompleteMatHarness.MOTOR_STERIC), "no motor-actin sterics (jba 2026-10-28)"),

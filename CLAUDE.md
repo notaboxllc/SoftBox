@@ -236,7 +236,7 @@ inferred from our own model?); if it improves a number, WHY, and is that why som
 does it cost in steps/s, dt and memory; and is this a structural CHOICE to be justified, or a parameter being
 FITTED to an assay? Prefer choice.
 
-## MODEL CANON — the site-normal gliding/twirl model is locked by a manifest (canon v4, 2026-11-03)
+## MODEL CANON — the site-normal gliding/twirl model is locked by a manifest (canon v5, 2026-11-03)
 **Source of truth: `softbox/ModelCanon.java`; rules: `docs/MODEL_CANON.md`.** Every `-run`/`-chain-equiv` of
 `SiteNormalLongGlideHarness` starts from the canonical preset, checks every manifest row against the values the run
 actually resolved (after `cfg()`), and **refuses to start on an undeclared deviation** (`-deviate <id>[,<id>]` to
@@ -248,7 +248,8 @@ CONDITIONS only, never model flags). **After any edit to `softbox/` run `scripts
 row is a decision, never a side effect. v3 = head chain + rate capture + flexible PAIRS chain + roll spring, swing-plane
 tilt psi = -4 deg (Klebl 2025), eps = 0, capture scored against the psi-turned target. **v4 = psi +4 deg: the sign comes
 from structure (right-handed swing in myosin-5a and myosin II), so twirl handedness is an OUTPUT; experiment
-(Beausang 2008) is left-handed for myosin II and V.** The model was promoted from the
+(Beausang 2008) is left-handed for myosin II and V. v5 = k_ATP 5 /uM/s (Capitanio 2012 single-molecule raw
+data; was 2.4), inert at saturating ATP; low-ATP reference condition 20 uM.** The model was promoted from the
 uncommitted `~/Code/SoftBox-pairs` copy to `main` on 2026-11-03; the sibling copies (SoftBox-dock/-weak/-weak-ep/-pairs)
 are read-only history.
 
