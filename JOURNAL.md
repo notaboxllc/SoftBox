@@ -1,5 +1,65 @@
 # Soft Box Project Journal
 
+### 2026-11-04 — Low-ATP pilots, canon v4 reference lawns, mechanism survey; LOWATP_PAIR campaign parked
+
+Full handoff (results, conventions, launch procedure, open items): `docs/twirling/HANDOFF_2026-11-04.md`.
+
+**Headline.** Every run so far twirls RIGHT-handed (negative turns/um), at saturating ATP and at 20 uM. Experiment is
+left-handed: Beausang 2008, myosin II, about +2.1 turns/um in our convention. This is what canon v4 predicts, since the
+structural swing (psi +4) is right-handed. Lowering ATP has not brought in a left-handed mechanism, but the low-ATP
+evidence is about 1-1.5 sigma on one lawn.
+
+**Canon v4 reference, saturating ATP, d1600, 0.3 s** (`campaigns_2026-11/CANON_V4`):
+- lawn 02: 5.04 um/s, avgBound 10.2, **-1.67 turns/um**, height p50 38.5 nm;
+- lawn 03: 5.27 um/s, avgBound 10.6, **-1.07 turns/um**, height p50 40.5 nm;
+- invalid 0 on both.
+The predicted value was about -1.3. Lawn 04 is running; at 0.196 s it reads -0.41 turns/um.
+
+**Low-ATP pilots, 20 uM, k_ATP 5, lawn 02** (`CANON_V4/pilot`).
+- At 60 ms:
+  - d100 / 200 nm ceiling floats off (avgBound 0.8, height 82 nm);
+  - d400 / 200 nm: avgBound 21.6, height 27.5 nm;
+  - d100 and d200 with a 45 nm ceiling (declared `-deviate z_slab`; jba: lower the ceiling, add no force) sit at
+    22.5 nm, but touch the ceiling 30 % of the time.
+- Extended to 0.5 s (resumed once, stitched):
+  - d400 / 200 nm: avgBound 33.8, 0.51 um/s, roll -0.70 turns, **-2.3 turns/um**, height p50 22.5 nm, ceiling contact 0 %;
+  - d200 / 45 nm: avgBound 16.1, 0.58 um/s, -0.57 turns, **-1.7 turns/um**, height 21.5 nm, ceiling contact 24 %.
+- In both extended runs, all detachments were ATP-driven and invalid was 0.
+- The thermal roll spread at 0.5 s is about 0.4-0.6 turns, and both runs are on one lawn: a hint only.
+- Correction: I earlier told jba the height was "15 nm". That read the absolute `z_now_nm`; the lawn is about 7 nm
+  below z = 0.
+
+**Mechanism survey (subagent, all model generations).**
+- No twirl mechanism has been resolved at low ATP across independent lawns.
+- No low-ATP zero-chirality control has ever been run.
+- long4um d600 20 uM (pre-head-chain, 4 lawns, 2 s) gave +2.53 / -11.33 / +22.76 / -0.67 turns/um: null, never
+  journaled until now.
+- Eps (stroke skew) has lost its lever arm under the head chain. bindAzim now reaches only the F8 anchor (about
+  0.08 nm per stroke) and the dock target, rotated about the filament axis in series with kappa 23.4: at most about
+  0.5 pN.nm per head.
+- Recommendation accepted by jba: do not revisit eps.
+
+**Resume pitfalls found.**
+- `-resume` resets the roll, avgBound and capture accumulators, and rewrites the trajectory and episodes; fwd is
+  continuous.
+- It also restarts viewer-frame numbering at 0, overwriting earlier frames. Fix planned: frame index = t / VIZ_STRIDE
+  (not applied yet).
+
+**New tools (uncommitted).**
+- `scripts/park_queue.sh`: unattended queue and watchdog; resumes from checkpoints, at most 3 JVMs, refuses without
+  the recorder, never kills anything.
+- `scripts/stitch_resume.py`: joins resumed segments so roll is cumulative.
+
+**Decision (jba): "run the pair at d400".** `campaigns_2026-11/LOWATP_PAIR/jobs.txt`:
+- 20 uM, d400, 3 s, canon v5, rupture off.
+- psi +4 (canon) vs psi 0 (`-swing-tilt 0 -deviate swing_tilt_deg`), paired on lawns 02-04.
+- psi 0 is the missing null control and isolates helix-step and rigor-drag twirl (Beausang's candidates).
+- `psi4_lawn02` continues the d400 pilot from step 4,000,000.
+- About 11 days for all six runs. Not yet launched: the pre-launch steps (frame fix, gate, migration) wait for lawn 04
+  to finish.
+
+**Open.** Push v5 to main? Rigor rupture (off)? Should 45 nm become canon? How long is jba away (chain lawns 05/06)?
+
 ### 2026-11-03 (later) — CANON V5: k_ATP = 5 /uM/s; low-ATP condition 20 uM; first low-ATP pilots on the current model
 
 **Decision (jba).** 20 uM ATP, the top of Beausang's 5-20 uM, and k_ATP 5 /uM/s.
