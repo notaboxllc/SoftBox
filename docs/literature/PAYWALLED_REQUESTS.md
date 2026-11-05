@@ -10,6 +10,17 @@ low-[ATP] gliding, and Beausang comparison conditions. Drop PDFs in `docs/litera
 read them. Citations marked *(from memory)* should be checked against the journal page. Some older Biophys J / PNAS /
 JBC papers may already be free on PMC or the publisher site. Try that first.
 
+## Priority 0: twirl handedness vs [ATP] (added 2026-11-04)
+
+0. **Nishizaka T, Yagi T, Tanaka Y, Ishiwata S (1993).** *Right-handed rotation of an actin filament in an in vitro motile
+   system.* Nature 361:269–271. doi 10.1038/361269a0, PMID 8423853. Subscription only (Europe PMC); abstract read.
+   - **Why:** this is the only high-ATP sign measurement, and it is RIGHT-handed. Our saturating-ATP canon twirl is also
+     right-handed. Beausang 2008 quotes it as both 1 mM and 2 mM MgATP.
+   - **Extract:** the exact [MgATP], HMM density, temperature and salt; how handedness was inferred from the superhelix
+     (viewing convention); whether a rotation rate or pitch can be estimated; how many filaments, and whether any
+     coiled the other way.
+   - Companion: Tanaka Y, Ishijima A, Ishiwata S (1992) *BBA* 1159:94–98 (superhelix formation; same group).
+
 ## Priority 1: rigor / strongly-bound detachment vs load direction (the open rupture question)
 
 1. **Capitanio M, Canepari M, Maffei M, Beneventi D, Monico C, Vanzi F, Bottinelli R, Pavone FS (2012).**

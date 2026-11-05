@@ -58,6 +58,16 @@ The predicted value was about -1.3. Lawn 04 is running; at 0.196 s it reads -0.4
 - About 11 days for all six runs. Not yet launched: the pre-launch steps (frame fix, gate, migration) wait for lawn 04
   to finish.
 
+**Literature, Nishizaka 1993 (read 2026-11-04: abstract, plus Beausang's and Vilfan's discussion; full text
+paywalled).**
+- With HMM at 1-2 mM MgATP, a supercoiling assay shows a RIGHT-handed torque. So our saturating-ATP right-handed twirl
+  AGREES in sign with the only high-ATP experiment.
+- The conflict with experiment is only at low ATP (Beausang, left-handed, 5-20 uM).
+- Beausang (rigor drag) and Vilfan 2009 (target-zone binding with an opposite-helicity stroke) both propose an
+  ATP-dependent crossover from right-handed to left-handed. That makes the low-ATP psi4/psi0 pair the discriminating
+  experiment.
+- Also from Beausang: only about 20 % of their filaments twirled (94 left, 3 right), at 0.1-0.5 um/s.
+
 **Open.** Push v5 to main? Rigor rupture (off)? Should 45 nm become canon? How long is jba away (chain lawns 05/06)?
 
 ### 2026-11-03 (later) — CANON V5: k_ATP = 5 /uM/s; low-ATP condition 20 uM; first low-ATP pilots on the current model
