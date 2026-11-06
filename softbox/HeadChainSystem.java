@@ -246,14 +246,14 @@ public final class HeadChainSystem {
     /**
      * For bound motors: the target head frame from the LATCHED site (same reconstruction as siteCoupleStep):
      * aT = -n cos(tilt) + u sin(tilt), cT = sgnS normalize(aT x u) [so sT = u, the stroke axis docks barbed-ward],
-     * optionally turned by the stroke skew eps about aT. The exact reaction of the dock torque (start of step) goes to the
+     * optionally turned by the swing-plane tilt psi about aT. The exact reaction of the dock torque (start of step) goes to the
      * segment torque slot bondData[d+9..11]. Replaces siteCoupleStep AND matHeadDock.
-     * hp: [0] kappaP (N.m/rad^2) [1] kB (N.m/rad^2) [2] tilt (rad) [3] stroke skew (rad)
+     * hp: [0] kappaP (N.m/rad^2) [1] kB (N.m/rad^2) [2] tilt (rad) [3] swing-plane tilt psi (rad)
      */
     public static void siteCouple(IntArray boundSeg, FloatArray bindAzim, FloatArray filUVec, FloatArray filYVec,
                                   FloatArray bondData, DoubleArray hc, DoubleArray hp, DoubleArray snP, IntArray counts) {
         int N = counts.get(0), nSeg = counts.get(3);
-        double mirror = snP.get(1), epsBind = snP.get(2), kB = hp.get(1), tilt = hp.get(2), eps = hp.get(3);
+        double mirror = snP.get(1), epsBind = snP.get(2), kB = hp.get(1), tilt = hp.get(2), psi = hp.get(3);
         for (@Parallel int m = 0; m < N; m++) {
             hc.set(15*N+m, 0.0);
             int s = boundSeg.get(m);
@@ -271,9 +271,9 @@ public final class HeadChainSystem {
             double kx = ty*uz - tz*uy, ky = tz*ux - tx*uz, kz = tx*uy - ty*ux;
             double kl = Math.sqrt(kx*kx + ky*ky + kz*kz); if (!(kl > 1e-12)) continue;
             kx = sg*kx/kl; ky = sg*ky/kl; kz = sg*kz/kl;
-            if (eps != 0.0) {
-                double rx = rotC(kx, ky, kz, eps*tx, eps*ty, eps*tz, 0), ry = rotC(kx, ky, kz, eps*tx, eps*ty, eps*tz, 1),
-                       rz = rotC(kx, ky, kz, eps*tx, eps*ty, eps*tz, 2);
+            if (psi != 0.0) {
+                double rx = rotC(kx, ky, kz, psi*tx, psi*ty, psi*tz, 0), ry = rotC(kx, ky, kz, psi*tx, psi*ty, psi*tz, 1),
+                       rz = rotC(kx, ky, kz, psi*tx, psi*ty, psi*tz, 2);
                 kx = rx; ky = ry; kz = rz;
             }
             s3(hc, 9, N, m, tx, ty, tz); s3(hc, 12, N, m, kx, ky, kz); hc.set(15*N+m, 1.0);

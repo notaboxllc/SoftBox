@@ -1,5 +1,36 @@
 # Soft Box Project Journal
 
+### 2026-11-05 — Campaign switched to 10 uM (LOWATP10_PAIR, launched); 20 uM psi0 at 1.29 s; zone + literature
+
+**Decision (jba).** Run the psi4/psi0 pair at **10 uM** instead of 20 uM, lawns 02-04, d400, 3 s, canon v5, rupture
+off. Reason: Beausang 2008 analysed filaments at 0.1-0.25 um/s (their polTIRF could not follow >0.25 um/s, >15 uM),
+while 20 uM glides at 0.5 um/s here. Beausang did NOT report a larger twirl at lower speed: the pitch was insensitive
+to velocity and ATP over 5-20 uM. No rate constant changed (jba suggested one; declined under the no-tuning rule).
+Predicted v at 10 uM is about 0.25 um/s (about 5 nm per ATP-limited attachment), untested on this motor. Expected
+resolution: +-1.16 turns/um per lawn, +-0.67 pooled; Beausang's +2.1 at about 3 sigma; psi effect (-1.3) about
+1.4 sigma. Launched 23:57 with `scripts/park_queue.sh RUN_LOGS/motor_audit/campaigns_2026-11/LOWATP10_PAIR`;
+about 6.7 days of GPU.
+
+**20 uM psi0 (LOWATP_PAIR), stopped at t = 1.29 s by jba decision** (checkpoints kept, resumable; `STOPPED.txt`).
+- **Low-ATP gliding works on the current motor**, rupture off: 0.49 / 0.55 um/s, about 30 bound, height p50 23 nm,
+  every detachment ATP-driven, invalid 0, stationary over five 0.26 s blocks. The 2026-10-19 dock/steric motor
+  stalled at this condition (rigor drag cancelled the stroke). Which later change removed the brake is not known;
+  an episode impulse decomposition on the current `episodes.tsv` would say.
+- **Twirl: none resolved.** +0.80 / +0.11 turns/um (lawn 02 from t = 5 ms; a +0.2 turn landing transient in the
+  first ms). Per-lawn SE +-0.87 from the roll diffusion (D about 5 rad^2/s at 60 ms lags). Pooled +0.57 +- 0.61.
+  Same lawn, 0-0.5 s: psi4 pilot -2.3 vs psi0 -0.07 (about 1 sigma).
+
+**Capture zone and attachment rate** (`docs/twirling/LATTICE_AUDIT_2026-11-05.md`): the zone is about 85 deg wide
+(alpha_eff about 0.5) in every run. Cause: head freedom via the S2 swivel and hinge, NOT the missing sterics (S2 and
+lever clear the actin). k_A about 22 /s at low ATP; duty ratio not the barrier. Lattice: correct handedness, half of
+native density.
+**Literature** (`docs/twirl/HMM_BINDING_AZIMUTH_LITERATURE_2026-11-05.md`): no gliding-assay measurement of binding
+azimuth exists. Vilfan's narrow zone comes from Steffen 2001, which used S1 on a bead (no S2). The indirect evidence
+favours a broad zone for tethered heads.
+
+**Code (physics-neutral, canon_gate PASS v5):** frame index = t / VIZ_STRIDE so a `-resume` continues numbering;
+`HeadChainSystem.siteCouple` local `eps` renamed `psi` (hp[3] is the swing tilt).
+
 ### 2026-11-04 — Low-ATP pilots, canon v4 reference lawns, mechanism survey; LOWATP_PAIR campaign parked
 
 Full handoff (results, conventions, launch procedure, open items): `docs/twirling/HANDOFF_2026-11-04.md`.

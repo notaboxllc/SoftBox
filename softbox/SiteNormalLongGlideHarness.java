@@ -1558,7 +1558,7 @@ public class SiteNormalLongGlideHarness {
                     ring.addLast(frameJson(G, e, t*DT, true));
                     while (ring.size() > HIRES_HALF) ring.pollFirst();
                 }
-                if (t % VIZ_STRIDE == 0) { writeFrame(vizDir, vizFrames++, frameJson(G, e, t*DT, false)); }
+                if (t % VIZ_STRIDE == 0) { writeFrame(vizDir, (int) (t / VIZ_STRIDE), frameJson(G, e, t*DT, false)); vizFrames++; }   // index from t: a -resume continues the numbering
             }
             if (CULL_PROBE > 0 && t % CULL_PROBE == 0) cullProbe(G, e, t);
             if (LAWN_HIST > 0 && t % LAWN_HIST == 0) lawnHist(G, e, t, true);
